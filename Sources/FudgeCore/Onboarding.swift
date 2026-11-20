@@ -77,10 +77,6 @@ public enum AccessibilityPermission {
         "Some extensions read the text you've selected, or paste into the app you were using. macOS asks you to allow "
         + "that under Privacy & Security → Accessibility."
 
-    /// System Settings → Privacy & Security → Accessibility.
-    public static let paneURL = URL(
-        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
-
     /// What Open Accessibility Settings does.
     public enum Request: Equatable, Sendable {
         /// macOS's own prompt, which also puts fudge in the pane's list. It has its own Open System Settings button.

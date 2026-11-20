@@ -88,8 +88,5 @@ import Testing
 @Test func openAccessibilitySettingsPromptsFirstThenOpensThePane() {
     #expect(AccessibilityPermission.request(promptShown: false) == .prompt)
     #expect(AccessibilityPermission.request(promptShown: true) == .openPane)
-    #expect(
-        AccessibilityPermission.paneURL.absoluteString
-            == "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
     #expect(AccessibilityPermission.reason.contains("paste"), "Paste needs it too")
 }

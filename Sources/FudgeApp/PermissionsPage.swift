@@ -39,7 +39,7 @@ final class AccessibilityStatus {
             promptShown = true
             isTrusted = access.isTrusted(prompt: true)
         case .openPane:
-            openPane(AccessibilityPermission.paneURL)
+            openPane(AccessibilitySettingsAlert.paneURL)
         }
     }
 }
