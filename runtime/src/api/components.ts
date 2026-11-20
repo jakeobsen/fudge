@@ -124,7 +124,8 @@ export const MenuBarExtra = Object.assign(host("MenuBarExtra"), {
 function field(type: string, empty: unknown): FunctionComponent<Props> {
     const Host = host(type);
     const Field: FunctionComponent<Props> = (props) => {
-        const record = useFormField(props.id, props.value, props.defaultValue, empty);
+        const store = props.storeValue === true && type !== "Form.PasswordField";
+        const record = useFormField(props.id, props.value, props.defaultValue, empty, store);
         const onChange = props.onChange as ((value: unknown) => void) | undefined;
         return createElement(Host, {
             ...props,
