@@ -23,7 +23,7 @@ public enum CurrencyConversion {
     nonisolated(unsafe) private static let separator = try! NSRegularExpression(
         pattern: #"(?<=\s)(?:to|in|=)(?=\s)"#)
     nonisolated(unsafe) private static let quantityPattern = try! NSRegularExpression(
-        pattern: #"^([^\d\s.,-]*)\s*(-?[\d.,]*\d(?:[eE][+-]?\d+)?)\s*([^\d\s.,-]*)$"#)
+        pattern: #"^([^\d\s.,-]*)\s*(-?[\d.,'’]*\d(?:[eE][+-]?\d+)?)\s*([^\d\s.,-]*)$"#)
 
     /// The conversion `text` asks for, or nil. The amount is read like the calculator's numbers, in `format` (by
     /// default the locale's); `locale` says which krone or krona `kr` is.
