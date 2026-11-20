@@ -110,6 +110,7 @@ private struct Rig {
     ) async throws {
         try await paste.paste(
             PasteboardContents.forPaste(text: text, html: nil, file: nil), closeMainWindow: closeMainWindow,
+            origin: .userInitiated,
             hideWindow: {
                 log.events.append("hide")
                 // The panel is really gone a moment later; ⌘V must wait for that.
@@ -220,8 +221,8 @@ private struct Rig {
     let access = FakeAccess(Log())
     access.trusted = false
     let gate = AccessibilityGate(access: access)
-    #expect(!gate.isTrusted())
-    #expect(!gate.isTrusted())
+    #expect(!gate.isTrusted(origin: .userInitiated))
+    #expect(!gate.isTrusted(origin: .userInitiated))
     #expect(access.prompts == [true, false])
 }
 

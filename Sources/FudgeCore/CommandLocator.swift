@@ -111,6 +111,8 @@ public enum LaunchCommandError: Error, Equatable, CustomStringConvertible {
     case missingArgument(argument: String, command: String)
     case missingPreferences(extensionTitle: String, names: [String])
     case notAllowed(extensionTitle: String)
+    /// A background call can't ask "Allow A to open B?"; the question comes when the user opens the caller.
+    case permissionNeeded(extensionTitle: String)
     case disabled(command: String)
 
     public var description: String {
@@ -125,6 +127,8 @@ public enum LaunchCommandError: Error, Equatable, CustomStringConvertible {
         case .missingPreferences(let title, let names):
             "\"\(title)\" needs these preferences set: \(names.joined(separator: ", "))"
         case .notAllowed(let title): "Not allowed to launch commands of \"\(title)\""
+        case .permissionNeeded(let title):
+            "Not allowed to launch commands of \"\(title)\" yet: Fudge asks the user when they open this command"
         case .disabled(let command): "Command \"\(command)\" is disabled"
         }
     }

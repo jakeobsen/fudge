@@ -16,11 +16,11 @@ final class AccessibilitySettingsOffer {
 
     /// Shows the alert on a later turn of the main actor, so the refused call is answered first and never waits on
     /// the user.
-    func offer() {
-        Task { self.present() }
+    func offer(origin: CallOrigin) {
+        Task { self.present(origin: origin) }
     }
 
-    private func present() {
+    private func present(origin: CallOrigin) {
         let alert = NSAlert()
         alert.messageText = AccessibilitySettingsAlert.title
         alert.informativeText = AccessibilitySettingsAlert.text
@@ -36,7 +36,7 @@ final class AccessibilitySettingsOffer {
             return
         }
         // A modal behind another app would block fudge until found; this follows a refused paste or selection.
-        NSApp.activateFromUserAction()
+        NSApp.activateFromUserAction(origin: origin)
         Self.answer(alert.runModal())
     }
 

@@ -103,7 +103,9 @@ private func reader(
     let selection = reader(accessibility, keys, FakePasteboard(userClipboard))
 
     for frontmost in [FrontmostApplication(pid: fudgePid, bundleIdentifier: "dev.fudge"), nil] {
-        await #expect(throws: SelectionError.noSelectedText) { try await selection.read(from: frontmost) }
+        await #expect(throws: SelectionError.noSelectedText) {
+            try await selection.read(from: frontmost, origin: .userInitiated)
+        }
     }
     #expect(accessibility.asked.isEmpty)
     #expect(keys.posted.isEmpty)
@@ -115,7 +117,8 @@ private func reader(
     let keys = FakeKeys()
     let pasteboard = FakePasteboard(userClipboard)
 
-    #expect(try await reader(accessibility, keys, pasteboard).read(from: app) == "selected words")
+    #expect(
+        try await reader(accessibility, keys, pasteboard).read(from: app, origin: .userInitiated) == "selected words")
     #expect(accessibility.asked == [42])
     #expect(keys.posted.isEmpty)
     #expect(pasteboard.replaced == 0)
@@ -129,7 +132,8 @@ private func reader(
         let keys = FakeKeys()
         keys.onCopy = { pasteboard.appCopies([[text("from chrome"), .init(type: "public.html", data: Data())]]) }
 
-        #expect(try await reader(accessibility, keys, pasteboard).read(from: app) == "from chrome")
+        #expect(
+            try await reader(accessibility, keys, pasteboard).read(from: app, origin: .userInitiated) == "from chrome")
         #expect(keys.posted == [42])
         #expect(pasteboard.current == userClipboard)
         #expect(pasteboard.replaced == 1)
@@ -148,7 +152,7 @@ private func reader(
         }
     }
 
-    #expect(try await reader(FakeAccessibility(), keys, pasteboard).read(from: app) == "late")
+    #expect(try await reader(FakeAccessibility(), keys, pasteboard).read(from: app, origin: .userInitiated) == "late")
     #expect(pasteboard.current == userClipboard)
 }
 
@@ -167,8 +171,8 @@ private func reader(
     }
     let selection = reader(FakeAccessibility(), keys, pasteboard)
 
-    async let first = selection.read(from: app)
-    async let second = selection.read(from: app)
+    async let first = selection.read(from: app, origin: .userInitiated)
+    async let second = selection.read(from: app, origin: .userInitiated)
     #expect(try await [first, second].sorted() == ["copy 1", "copy 2"])
     #expect(pasteboard.current == userClipboard)
 }
@@ -184,7 +188,9 @@ private func reader(
     let pasteboard = FakePasteboard(password)
     let keys = FakeKeys()
     keys.onCopy = { pasteboard.appCopies([[text("from chrome")]]) }
-    #expect(try await reader(FakeAccessibility(), keys, pasteboard).read(from: app) == "from chrome")
+    #expect(
+        try await reader(FakeAccessibility(), keys, pasteboard).read(from: app, origin: .userInitiated) == "from chrome"
+    )
     #expect(pasteboard.current == PasteboardContents(items: []))
     #expect(pasteboard.replaced == 1)
 
@@ -193,14 +199,16 @@ private func reader(
     let clearing = FakeKeys()
     clearing.onCopy = { cleared.appCopies([]) }
     await #expect(throws: SelectionError.noSelectedText) {
-        try await reader(FakeAccessibility(), clearing, cleared, copyTimeout: .milliseconds(50)).read(from: app)
+        try await reader(FakeAccessibility(), clearing, cleared, copyTimeout: .milliseconds(50)).read(
+            from: app, origin: .userInitiated)
     }
     #expect(cleared.current == PasteboardContents(items: []))
 
     // A copy that touches nothing leaves the password where it is, so the password manager's own clear still runs.
     let untouched = FakePasteboard(password)
     await #expect(throws: SelectionError.noSelectedText) {
-        try await reader(FakeAccessibility(), FakeKeys(), untouched, copyTimeout: .milliseconds(50)).read(from: app)
+        try await reader(FakeAccessibility(), FakeKeys(), untouched, copyTimeout: .milliseconds(50)).read(
+            from: app, origin: .userInitiated)
     }
     #expect(untouched.current == password)
     #expect(untouched.replaced == 0)
@@ -219,7 +227,8 @@ private func reader(
     let keys = FakeKeys()
     keys.onCopy = { pasteboard.appCopies([[text("from figma")]]) }
 
-    #expect(try await reader(FakeAccessibility(), keys, pasteboard).read(from: app) == "from figma")
+    #expect(
+        try await reader(FakeAccessibility(), keys, pasteboard).read(from: app, origin: .userInitiated) == "from figma")
     // The big types are gone, and so is the item left with none.
     #expect(
         pasteboard.current
@@ -231,7 +240,8 @@ private func reader(
     let keys = FakeKeys()
 
     await #expect(throws: SelectionError.noSelectedText) {
-        try await reader(FakeAccessibility(), keys, pasteboard, copyTimeout: .milliseconds(50)).read(from: app)
+        try await reader(FakeAccessibility(), keys, pasteboard, copyTimeout: .milliseconds(50)).read(
+            from: app, origin: .userInitiated)
     }
     #expect(keys.posted == [42])
     #expect(pasteboard.current == userClipboard)
@@ -246,7 +256,8 @@ private func reader(
     keys.onCopy = { pasteboard.appCopies([[.init(type: "public.png", data: Data([1]))]]) }
 
     await #expect(throws: SelectionError.noSelectedText) {
-        try await reader(FakeAccessibility(), keys, pasteboard, copyTimeout: .milliseconds(50)).read(from: app)
+        try await reader(FakeAccessibility(), keys, pasteboard, copyTimeout: .milliseconds(50)).read(
+            from: app, origin: .userInitiated)
     }
     #expect(pasteboard.current == PasteboardContents(items: []))
 }
@@ -259,7 +270,9 @@ private func reader(
     let selection = reader(accessibility, keys, pasteboard)
 
     for _ in 0..<3 {
-        await #expect(throws: SelectionError.accessibilityNeeded) { try await selection.read(from: app) }
+        await #expect(throws: SelectionError.accessibilityNeeded) {
+            try await selection.read(from: app, origin: .userInitiated)
+        }
     }
     #expect(accessibility.prompts == [true, false, false])
     #expect(accessibility.asked.isEmpty)

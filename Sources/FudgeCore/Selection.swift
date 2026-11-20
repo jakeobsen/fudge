@@ -66,24 +66,28 @@ public enum AccessibilityCheck: Equatable, Sendable {
 /// The first refusal in a run asks for macOS's prompt. macOS shows it only when fudge isn't in the Accessibility list
 /// yet: an entry that's off, or one left by an older build's signature, gets no prompt. So a second refusal means the
 /// prompt didn't help, and the gate tells the app to offer the Accessibility pane itself, once per run (FUD-47).
-/// Refusals after that just refuse.
+/// Refusals after that just refuse. All of that is for calls the user started (SPEC-045): a background call only
+/// checks, with no prompt and no offer, and leaves both for the next user-initiated refusal.
 @MainActor
 public final class AccessibilityGate {
     private let access: any AccessibilityAccess
-    private let offerSettings: @MainActor () -> Void
+    private let offerSettings: @MainActor (CallOrigin) -> Void
     private var prompted = false
     private var offered = false
 
-    /// `offerSettings` is called by `isTrusted()` when `check()` says to offer the Accessibility pane. It mustn't
-    /// block: the refused call is answered right after it returns.
-    public init(access: any AccessibilityAccess, offerSettings: @escaping @MainActor () -> Void = {}) {
+    /// `offerSettings` is called by `isTrusted(origin:)` when `check(origin:)` says to offer the Accessibility pane,
+    /// with the call's origin. It mustn't block: the refused call is answered right after it returns.
+    public init(access: any AccessibilityAccess, offerSettings: @escaping @MainActor (CallOrigin) -> Void = { _ in }) {
         self.access = access
         self.offerSettings = offerSettings
     }
 
-    /// Whether fudge may use the Accessibility API and post key events, and on a refusal, whether it's time to offer
-    /// the Accessibility pane. Only the first refusal asks for macOS's prompt.
-    public func check() -> AccessibilityCheck {
+    /// Whether Fudge may use the Accessibility API and post key events, and on a refusal, whether it's time to offer
+    /// the Accessibility pane. Only the first user-initiated refusal asks for macOS's prompt.
+    public func check(origin: CallOrigin) -> AccessibilityCheck {
+        guard origin.mayComeForward else {
+            return access.isTrusted(prompt: false) ? .trusted : .refused(offerSettings: false)
+        }
         if access.isTrusted(prompt: !prompted) { return .trusted }
         guard prompted else {
             prompted = true
@@ -94,14 +98,14 @@ public final class AccessibilityGate {
         return .refused(offerSettings: true)
     }
 
-    /// `check()` for the callers, which only need a yes or no. When it's time to offer the Accessibility pane, this
-    /// tells the app.
-    public func isTrusted() -> Bool {
-        switch check() {
+    /// `check(origin:)` for the callers, which only need a yes or no. When it's time to offer the Accessibility pane,
+    /// this tells the app.
+    public func isTrusted(origin: CallOrigin) -> Bool {
+        switch check(origin: origin) {
         case .trusted:
             return true
         case .refused(let offer):
-            if offer { offerSettings() }
+            if offer { offerSettings(origin) }
             return false
         }
     }
@@ -213,9 +217,9 @@ public final class SelectedText {
         self.pollInterval = pollInterval
     }
 
-    public func read(from frontmost: FrontmostApplication?) async throws -> String {
+    public func read(from frontmost: FrontmostApplication?, origin: CallOrigin) async throws -> String {
         guard let frontmost, frontmost.pid != ownPid else { throw SelectionError.noSelectedText }
-        guard gate.isTrusted() else { throw SelectionError.accessibilityNeeded }
+        guard gate.isTrusted(origin: origin) else { throw SelectionError.accessibilityNeeded }
         if let text = await accessibility.selectedText(pid: frontmost.pid), !text.isEmpty { return text }
         let previous = fallback
         let copying = Task {

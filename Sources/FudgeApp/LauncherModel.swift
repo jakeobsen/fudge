@@ -105,7 +105,8 @@ final class LauncherModel {
     @ObservationIgnored var show: () -> Void = {}
     /// Opens the Settings window on an extension's preferences, or on its default page for nil; set by the app
     /// delegate.
-    @ObservationIgnored var openSettings: (String?) -> Void = { _ in }
+    /// Opens Settings for a call from `origin`; only a user-initiated one opens it (SPEC-045).
+    @ObservationIgnored var openSettings: (String?, CallOrigin) -> Void = { _, _ in }
     /// Shows a FilePicker's open panel and returns the chosen paths, or nil when cancelled; set by the app delegate.
     @ObservationIgnored var openPanel: (FilePickerOptions) async -> [String]? = { _ in nil }
     /// Downloads the exchange rates again at once (↵ on the "Couldn't download exchange rates" card).
@@ -117,7 +118,8 @@ final class LauncherModel {
     /// Whether the launcher panel is on screen; set by the app delegate.
     @ObservationIgnored var isVisible: () -> Bool = { false }
     /// Asks the user to confirm (title, message, primary, dismiss, destructive); set by the app delegate.
-    @ObservationIgnored var confirm: (AlertRequest) async -> Bool = { _ in false }
+    /// Asks the user, for a call from `origin`; a background call gets `CallOrigin.unaskedAnswer` without an alert.
+    @ObservationIgnored var confirm: (AlertRequest, CallOrigin) async -> Bool = { _, _ in false }
 
     struct AlertRequest {
         var title: String
@@ -137,6 +139,8 @@ final class LauncherModel {
     @ObservationIgnored private var background: [String: String] = [:]
     /// No-view commands that `launchCommand` started in the background, by session. They leave the panel alone.
     @ObservationIgnored private var quietSessions: [String: QuietSession] = [:]
+    /// HUDs for background calls that were refused without asking, each shown once per run.
+    @ObservationIgnored private var backgroundNotices = OncePerRun()
 
     struct QuietSession {
         var title: String
@@ -377,7 +381,8 @@ final class LauncherModel {
         guard let calculator else { return }
         let text = withQuestion ? calculator.questionAndAnswer : calculator.copyText
         Task {
-            _ = try? await SystemCalls.handle("clipboard.copy", .object(["text": .string(text)]))
+            _ = try? await SystemCalls.handle(
+                "clipboard.copy", .object(["text": .string(text)]), origin: .userInitiated)
         }
         hide()
         showHUD("Copied to Clipboard")
@@ -1157,7 +1162,7 @@ final class LauncherModel {
     /// Opens the Settings window, on an extension's preferences or on its default page, and hides the panel.
     private func showSettings(extension name: String?) {
         hide()
-        openSettings(name)
+        openSettings(name, .userInitiated)
     }
 
     /// ⌘, opens Settings on its default page; ⌘⇧, on the extension of the command that's selected in root search
@@ -1530,7 +1535,7 @@ final class LauncherModel {
         case .quit:
             recordLaunch(item)
             Task {
-                if await confirm(Self.quitRequest) { NSApp.terminate(nil) }
+                if await confirm(Self.quitRequest, .userInitiated) { NSApp.terminate(nil) }
             }
         case .command(let extensionName, let commandName, _, _):
             guard let installed = extensions[extensionName],
@@ -1611,7 +1616,7 @@ final class LauncherModel {
                 message: "Set \(names) in the Settings window, then run the command again."
             )
         )
-        openSettings(name)
+        openSettings(name, .userInitiated)
     }
 
     /// Starts a prepared command in the extension host: the one way commands launch, from root search and from
@@ -1676,7 +1681,7 @@ final class LauncherModel {
     ) -> Result<String, MenuBarController.LaunchFailed> {
         let prepared = prepareLaunch(of: installed, command: command, userInitiated: false)
         guard prepared.preferences.missing.isEmpty else {
-            if userInitiated { openSettings(installed.manifest.name) }
+            if userInitiated { openSettings(installed.manifest.name, .userInitiated) }
             let names = prepared.preferences.missing.map { $0.title ?? $0.name }.joined(separator: ", ")
             return .failure(.init(message: "set \(names) in the Settings window first"))
         }
@@ -1727,7 +1732,9 @@ final class LauncherModel {
             request, caller: callerName, in: Array(extensions.values), settings: settings)
         let targetID = FudgeSettings.commandID(extension: target.installed.manifest.name, command: target.command.name)
         try CommandLocator.checkMode(target.command, type: request.type, isActiveInMenuBar: menuBar.isActive(targetID))
-        if target.isOtherExtension { try await checkPermission(of: caller, toOpen: target) }
+        if target.isOtherExtension {
+            try await checkPermission(of: caller, toOpen: target, origin: origin(of: session))
+        }
 
         let userInitiated = request.type == .userInitiated
         let answer = { self.send(.rpcResult(session: session, id: id, result: .null, error: nil)) }
@@ -1777,16 +1784,45 @@ final class LauncherModel {
         }
     }
 
-    /// The first time an extension opens another extension's command, the user decides, once for that pair.
-    private func checkPermission(of caller: InstalledExtension, toOpen target: LaunchTarget) async throws {
+    /// Where a session's calls come from (SPEC-045): a menu-bar session as its lifecycle says, a background
+    /// `launchCommand`'s as background, and the command the user opened as user-initiated.
+    private func origin(of session: String) -> CallOrigin {
+        if menuBar.owns(session) { return menuBar.origin(of: session) }
+        if quietSessions[session] != nil { return .background }
+        return .userInitiated
+    }
+
+    /// `openExtensionPreferences()` from a command the user isn't using: Settings won't come to the front for it.
+    static let backgroundSettingsError =
+        "Fudge opens Settings only for a command you're using: open the command from Fudge first."
+
+    /// The first time an extension opens another extension's command, the user decides, once for that pair. Only
+    /// a call from a session the user is using may ask (`LaunchPermissions.step`); a background one is refused
+    /// without saving anything, so the question comes when the user next opens the caller, and a HUD says so once
+    /// per pair per run.
+    private func checkPermission(
+        of caller: InstalledExtension, toOpen target: LaunchTarget, origin: CallOrigin
+    ) async throws {
         let file = paths.launchPermissionsFile
         var permissions = LaunchPermissions.load(from: file)
         let callerName = caller.manifest.name
         let targetName = target.installed.manifest.name
         let allowed: Bool
-        if let answer = permissions.answer(caller: callerName, target: targetName) {
-            allowed = answer
-        } else {
+        switch LaunchPermissions.step(
+            answer: permissions.answer(caller: callerName, target: targetName), origin: origin)
+        {
+        case .allowed:
+            allowed = true
+        case .refused:
+            allowed = false
+        case .refusedUnasked:
+            if backgroundNotices.first("launch:\(callerName)/\(targetName)") {
+                showHUD(
+                    LaunchPermissions.unaskedNotice(
+                        callerTitle: caller.manifest.title, targetTitle: target.installed.manifest.title))
+            }
+            throw LaunchCommandError.permissionNeeded(extensionTitle: target.installed.manifest.title)
+        case .ask:
             allowed = await confirm(
                 AlertRequest(
                     title:
@@ -1795,7 +1831,7 @@ final class LauncherModel {
                     primary: "Allow",
                     dismiss: "Don't Allow",
                     destructive: false
-                ))
+                ), origin)
             // Read again: another call may have stored an answer while this one waited.
             permissions = LaunchPermissions.load(from: file)
             permissions.record(allowed, caller: callerName, target: targetName)
@@ -1990,7 +2026,12 @@ final class LauncherModel {
         case .rpc(let session, let id, let method, let params):
             switch method {
             case "preferences.openExtension", "preferences.openCommand":
-                if let extensionName = sessionExtensions[session] { openSettings(extensionName) }
+                // Settings comes to the front, so only for a command the user is using (SPEC-045).
+                guard origin(of: session).mayComeForward else {
+                    send(.rpcResult(session: session, id: id, result: nil, error: Self.backgroundSettingsError))
+                    break
+                }
+                if let extensionName = sessionExtensions[session] { openSettings(extensionName, .userInitiated) }
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
             case "form.storeValues":
                 storeFormValues(params, session: session)
@@ -1999,14 +2040,16 @@ final class LauncherModel {
                 windowCall(method, params, session: session)
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
             case "alert.confirm":
+                let origin = origin(of: session)
                 Task {
-                    let confirmed = await confirm(Self.alertRequest(params))
+                    let confirmed = await confirm(Self.alertRequest(params), origin)
                     send(.rpcResult(session: session, id: id, result: .bool(confirmed), error: nil))
                 }
             case "clipboard.paste":
+                let origin = origin(of: session)
                 Task {
                     do {
-                        try await SystemCalls.paste(params, hideWindow: { await self.hideForPaste() })
+                        try await SystemCalls.paste(params, origin: origin, hideWindow: { await self.hideForPaste() })
                         send(.rpcResult(session: session, id: id, result: .null, error: nil))
                     } catch {
                         send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
@@ -2028,9 +2071,10 @@ final class LauncherModel {
                     }
                 }
             default:
+                let origin = origin(of: session)
                 Task {
                     do {
-                        let result = try await SystemCalls.handle(method, params)
+                        let result = try await SystemCalls.handle(method, params, origin: origin)
                         send(.rpcResult(session: session, id: id, result: result, error: nil))
                     } catch {
                         send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
