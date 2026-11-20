@@ -14,6 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: SettingsWindowController!
     private let hud = HUDWindow()
     private var keyMonitor: Any?
+    private var exchangeRates: ExchangeRateUpdater!
+    private let exchangeRateSchedule = ExchangeRateSchedule()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = Self.mainMenu()
@@ -27,6 +29,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.showHUD = { [weak self] title in self?.hud.show(title) }
         model.isVisible = { [weak self] in self?.panel.isVisible ?? false }
         model.confirm = { [weak self] request in await self?.confirm(request) ?? false }
+        // The calculator's exchange rates: the cached ones now, downloads only while the setting is on.
+        exchangeRates = ExchangeRateUpdater(
+            fetcher: ECBRatesFetcher(), cacheFile: paths.exchangeRatesFile,
+            enabled: FudgeSettings.load(from: paths.settingsFile).currencyRates)
+        model.currency = exchangeRates.state
+        exchangeRates.onChange = { [weak self] in
+            guard let self else { return }
+            self.model.currency = self.exchangeRates.state
+        }
+        model.retryExchangeRates = { [weak self] in
+            guard let self else { return }
+            Task { await self.exchangeRates.updateIfNeeded(now: Date(), explicit: true) }
+        }
+        settingsModel.currencyRatesChanged = { [weak self] on in
+            guard let self else { return }
+            Task { await self.exchangeRates.setEnabled(on, now: Date()) }
+        }
         panel.onEscape = { [weak self] in self?.model.escape() }
         panel.onResign = { [weak self] in
             // An alert sheet takes the keyboard; that's not the user leaving.
@@ -45,6 +64,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+
+        // Snapshots never download; the app checks the rates now and every hour.
+        exchangeRateSchedule.start(exchangeRates)
 
         // ⌘K, ⌘↵ and the extensions' shortcuts, before the search field sees them.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -198,7 +220,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// `--snapshot <file.png> [--query <text>] [--activate]`: renders the panel, saves a picture of it and quits.
 /// `--activate` presses ↵ after typing the query, then waits for the result. In the command that opened,
 /// `--search <text>` types into its search field, `--dropdown <value>` picks a value in its search bar dropdown,
-/// `--actions` presses ⌘K, and `--open-dropdown` presses ⌘P.
+/// `--actions` presses ⌘K, and `--open-dropdown` presses ⌘P, or in a Form opens its first Dropdown (`--open-tags`: its
+/// first TagPicker).
 /// `--snapshot <file.png> --settings [<extension>]` renders the Settings window instead.
 /// For checking the layout without looking at the screen.
 @MainActor
@@ -210,6 +233,7 @@ struct Snapshot {
     let dropdown: String?
     let actions: Bool
     let openDropdown: Bool
+    let openTags: Bool
     let settings: Bool
     let settingsExtension: String?
 
@@ -226,6 +250,7 @@ struct Snapshot {
         activate = arguments.contains("--activate")
         actions = arguments.contains("--actions")
         openDropdown = arguments.contains("--open-dropdown")
+        openTags = arguments.contains("--open-tags")
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1
@@ -284,9 +309,14 @@ struct Snapshot {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { model.toggleActionPanel() }
         }
         if openDropdown {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { model.toggleDropdownPanel() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                if !model.openFirstFormPicker(.dropdown) { model.toggleDropdownPanel() }
+            }
         }
-        let waits = actions || openDropdown || inCommand
+        if openTags {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { _ = model.openFirstFormPicker(.tagPicker) }
+        }
+        let waits = actions || openDropdown || openTags || inCommand
         DispatchQueue.main.asyncAfter(deadline: .now() + (waits ? 3.5 : activate ? 3 : 1)) {
             guard let view = panel.contentView else { exit(1) }
             save(view)
