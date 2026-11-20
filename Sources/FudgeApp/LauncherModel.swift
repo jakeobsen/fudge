@@ -420,7 +420,7 @@ final class LauncherModel {
             try host.send(
                 .launch(
                     session: session, entry: entry.path, mode: mode, launchProps: LaunchProps(),
-                    preferences: preferences)
+                    preferences: preferences, environment: environment)
             )
         } catch {
             screen = .failure(Failure(title: "Can't run \(title)", message: String(describing: error)))
