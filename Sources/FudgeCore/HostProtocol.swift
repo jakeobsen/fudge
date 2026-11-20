@@ -73,6 +73,45 @@ public struct LaunchProps: Sendable, Equatable, Encodable {
     }
 }
 
+/// Facts about a launch that the runtime needs for `environment`, LocalStorage and Cache.
+public struct LaunchEnvironment: Sendable, Equatable, Encodable {
+    public var extensionName: String
+    public var commandName: String
+    public var commandMode: String
+    public var assetsPath: String
+    public var supportPath: String
+    public var cachePath: String
+    public var localStoragePath: String
+    public var ownerOrAuthorName: String
+    /// "light" or "dark".
+    public var appearance: String
+    public var isDevelopment: Bool
+
+    /// The environment for `command` of `installed`, with fudge's folders for it (created if missing).
+    public static func make(
+        for installed: InstalledExtension,
+        command: ExtensionManifest.Command,
+        paths: FudgePaths,
+        appearance: String
+    ) -> LaunchEnvironment {
+        let name = installed.manifest.name
+        let support = paths.supportDirectory(forExtension: name)
+        try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        return LaunchEnvironment(
+            extensionName: name,
+            commandName: command.name,
+            commandMode: command.mode,
+            assetsPath: installed.assetsDirectory.path,
+            supportPath: support.path,
+            cachePath: paths.cacheDirectory(forExtension: name).path,
+            localStoragePath: paths.localStorageFile(forExtension: name).path,
+            ownerOrAuthorName: installed.manifest.ownerOrAuthorName,
+            appearance: appearance,
+            isDevelopment: false
+        )
+    }
+}
+
 /// Messages from the app to the extension host.
 public enum AppMessage: Sendable, Equatable, Encodable {
     case ping(id: Int)
@@ -81,7 +120,8 @@ public enum AppMessage: Sendable, Equatable, Encodable {
         entry: String,
         mode: String,
         launchProps: LaunchProps,
-        preferences: [String: JSONValue] = [:]
+        preferences: [String: JSONValue] = [:],
+        environment: LaunchEnvironment? = nil
     )
     case event(session: String, node: Int, path: [String], args: [JSONValue])
     case pop(session: String)
@@ -89,7 +129,7 @@ public enum AppMessage: Sendable, Equatable, Encodable {
     case rpcResult(session: String, id: Int, result: JSONValue?, error: String?)
 
     enum Keys: String, CodingKey {
-        case type, id, session, entry, mode, launchProps, preferences, node, path, args, result, error
+        case type, id, session, entry, mode, launchProps, preferences, environment, node, path, args, result, error
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -98,13 +138,14 @@ public enum AppMessage: Sendable, Equatable, Encodable {
         case .ping(let id):
             try container.encode("ping", forKey: .type)
             try container.encode(id, forKey: .id)
-        case .launch(let session, let entry, let mode, let launchProps, let preferences):
+        case .launch(let session, let entry, let mode, let launchProps, let preferences, let environment):
             try container.encode("launch", forKey: .type)
             try container.encode(session, forKey: .session)
             try container.encode(entry, forKey: .entry)
             try container.encode(mode, forKey: .mode)
             try container.encode(launchProps, forKey: .launchProps)
             try container.encode(preferences, forKey: .preferences)
+            try container.encodeIfPresent(environment, forKey: .environment)
         case .event(let session, let node, let path, let args):
             try container.encode("event", forKey: .type)
             try container.encode(session, forKey: .session)

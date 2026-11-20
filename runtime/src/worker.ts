@@ -9,7 +9,7 @@ import Module from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
 import React, { createElement, type FunctionComponent } from "react";
 import * as jsxRuntime from "react/jsx-runtime";
-import { setLaunchContext } from "./api/launch.ts";
+import { placeholderEnvironment, setLaunchContext, type LaunchEnvironment } from "./api/launch.ts";
 import { createApiModule } from "./api/module.ts";
 import { NavigationRoot, type NavigationHandle } from "./api/navigation.ts";
 import { connect, settle } from "./bridge.ts";
@@ -21,6 +21,7 @@ export type WorkerData = {
     mode: CommandMode;
     launchProps: LaunchProps;
     preferences: Record<string, unknown>;
+    environment: Partial<LaunchEnvironment>;
 };
 
 const port = parentPort;
@@ -57,8 +58,12 @@ process.on("uncaughtException", (error) => report(error, false));
 process.on("unhandledRejection", (reason) => report(reason, false));
 connect((request) => post(request));
 
-const { entry, mode, launchProps, preferences } = workerData as WorkerData;
-setLaunchContext({ preferences });
+const { entry, mode, launchProps, preferences, environment } = workerData as WorkerData;
+setLaunchContext({
+    preferences,
+    environment: { ...placeholderEnvironment, commandMode: mode, ...environment },
+    launchProps,
+});
 let root: Root | null = null;
 const navigation: NavigationHandle = { current: null };
 

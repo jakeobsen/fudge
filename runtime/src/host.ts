@@ -40,6 +40,7 @@ function launch(message: Extract<AppMessage, { type: "launch" }>): void {
         mode: message.mode,
         launchProps: message.launchProps ?? {},
         preferences: message.preferences ?? {},
+        environment: message.environment ?? {},
     };
     const worker = new Worker(workerUrl, { workerData, stdout: true, stderr: true });
     const session: Session = { worker, done: false };

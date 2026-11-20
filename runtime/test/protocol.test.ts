@@ -30,6 +30,7 @@ test("launch needs a session, an entry and a known mode", () => {
         mode: "view",
         launchProps: { arguments: { a: "1" } },
         preferences: { loud: true },
+        environment: { extensionName: "x", supportPath: "/s" },
     };
     assert.deepEqual(parse(launch), { ok: true, message: launch });
     assert.equal((parse({ ...launch, preferences: "nope" }) as { message: { preferences?: object } }).message.preferences, undefined);

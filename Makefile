@@ -86,7 +86,8 @@ raycast-types:
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
 	(cd "$$tmp" && npm pack --silent '@raycast/api@$(RAYCAST_API_VERSION)' >/dev/null && tar -xzf raycast-api-*.tgz); \
 	test "$$(node -p "require('$$tmp/package/package.json').license")" = MIT; \
-	cp "$$tmp/package/types/index.d.ts" runtime/vendor/raycast-api/index.d.ts
+	cp "$$tmp/package/types/index.d.ts" runtime/vendor/raycast-api/index.d.ts; \
+	printf '%s\n' '$(RAYCAST_API_VERSION)' > runtime/vendor/raycast-api/VERSION
 	@cd runtime && npm run --silent generate
 	@printf '→ copied the type definitions of @raycast/api %s and regenerated the files derived from them\n' '$(RAYCAST_API_VERSION)'
 
