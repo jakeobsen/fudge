@@ -117,6 +117,14 @@ func readsCodesSymbolsAndKr(_ query: String, _ locale: Locale, _ from: String, _
     #expect(CurrencyConversion.parse("1,500 eur in usd", locale: enUS)?.amount == 1500)
 }
 
+@Test func amountsCanHaveAnExponent() throws {
+    #expect(CurrencyConversion.parse("2.5e3 usd in eur", locale: enUS)?.amount == 2500)
+    #expect(CurrencyConversion.parse("2,5E3 usd in eur", locale: enDK)?.amount == 2500)
+    #expect(CurrencyConversion.parse("$1e-2 to eur", locale: enUS)?.amount == 0.01)
+    #expect(try #require(calculate("2.5e3 usd in eur", enUS, ready)).answer == "€2,274.80")
+    #expect(try #require(calculate("2.5e3 usd in eur", enDK, ready)).answer == "2.274,80\u{A0}€")
+}
+
 @Test(arguments: [
     "100 xyz to eur", "usd to eur", "100 usd", "100 usd to", "100 usd eur to", "€ to usd", "100 € $ to eur",
 ])
