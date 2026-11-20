@@ -188,12 +188,22 @@ private func reader(
     #expect(pasteboard.current == PasteboardContents(items: []))
     #expect(pasteboard.replaced == 1)
 
-    // The same when the copy fails.
+    // The same when the app clears the pasteboard but copies no text.
+    let cleared = FakePasteboard(password)
+    let clearing = FakeKeys()
+    clearing.onCopy = { cleared.appCopies([]) }
+    await #expect(throws: SelectionError.noSelectedText) {
+        try await reader(FakeAccessibility(), clearing, cleared, copyTimeout: .milliseconds(50)).read(from: app)
+    }
+    #expect(cleared.current == PasteboardContents(items: []))
+
+    // A copy that touches nothing leaves the password where it is, so the password manager's own clear still runs.
     let untouched = FakePasteboard(password)
     await #expect(throws: SelectionError.noSelectedText) {
         try await reader(FakeAccessibility(), FakeKeys(), untouched, copyTimeout: .milliseconds(50)).read(from: app)
     }
-    #expect(untouched.current == PasteboardContents(items: []))
+    #expect(untouched.current == password)
+    #expect(untouched.replaced == 0)
 }
 
 @Test @MainActor func typesOver50MBAreSkipped() async throws {
@@ -216,7 +226,7 @@ private func reader(
             == PasteboardContents(items: [[text("caption")], [.init(type: "public.png", data: Data(count: 1024))]]))
 }
 
-@Test @MainActor func fallbackThatCopiesNothingRestoresAndRejects() async {
+@Test @MainActor func fallbackThatTouchesNothingLeavesThePasteboardAloneAndRejects() async {
     let pasteboard = FakePasteboard(userClipboard)
     let keys = FakeKeys()
 
@@ -225,7 +235,9 @@ private func reader(
     }
     #expect(keys.posted == [42])
     #expect(pasteboard.current == userClipboard)
-    #expect(pasteboard.replaced == 1)
+    // Not written back: that would add a clipboard-history entry for nothing.
+    #expect(pasteboard.replaced == 0)
+    #expect(pasteboard.changeCount == 7)
 }
 
 @Test @MainActor func fallbackThatCopiesNoPlainTextRestoresAndRejects() async {

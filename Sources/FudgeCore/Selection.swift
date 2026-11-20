@@ -161,8 +161,12 @@ public final class SelectedText {
     private func copy(from pid: Int32) async throws -> String {
         let restore = Self.restoration(of: pasteboard.contents())
         let changeCount = pasteboard.changeCount
-        // Written back before the promise settles, whether or not the copy worked.
-        defer { pasteboard.replace(with: restore) }
+        // Written back before the promise settles, whether or not the copy worked. When nothing touched the
+        // pasteboard, it's left alone: writing it back would only add a clipboard-history entry, drop types over the
+        // limit, and restart a password manager's clear timer for nothing.
+        defer {
+            if pasteboard.changeCount != changeCount { pasteboard.replace(with: restore) }
+        }
 
         keys.postCopy(to: pid)
         let deadline = ContinuousClock.now + copyTimeout
