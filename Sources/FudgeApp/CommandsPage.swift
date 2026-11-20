@@ -12,6 +12,14 @@ struct CommandsPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let problem = model.settingsProblem {
+                Label(problem, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 12)
+            }
             TextField("Search Commands", text: $search)
                 .textFieldStyle(.roundedBorder)
                 .padding(12)

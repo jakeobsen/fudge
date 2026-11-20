@@ -70,10 +70,26 @@ public struct FudgeSettings: Sendable, Equatable {
     }
 
     /// Reads `file`. A missing or broken file, or a value of the wrong type, reads as the default.
+    /// `settings.json` exists but isn't a JSON object (a typo in a hand edit, say), so fudge won't write to it.
+    public struct Unreadable: Error, Equatable {}
+
+    /// Whether `save(to:)` may write `file`: it's missing, empty, or a JSON object.
+    public static func isWritable(_ file: URL) -> Bool {
+        (try? existingObject(at: file)) != nil
+    }
+
+    /// The JSON object in `file`; empty when the file is missing or blank. Throws `Unreadable` for anything else.
+    private static func existingObject(at file: URL) throws -> [String: Any] {
+        guard FileManager.default.fileExists(atPath: file.path) else { return [:] }
+        guard let data = try? Data(contentsOf: file) else { throw Unreadable() }
+        if String(decoding: data, as: UTF8.self).allSatisfy(\.isWhitespace) { return [:] }
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw Unreadable() }
+        return object
+    }
+
+    /// Reads `file`. A missing or unreadable file reads as the defaults.
     public static func load(from file: URL) -> FudgeSettings {
-        guard let data = try? Data(contentsOf: file),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return FudgeSettings() }
+        guard let object = try? existingObject(at: file) else { return FudgeSettings() }
         var settings = FudgeSettings(hotkey: object["hotkey"] as? String)
         for case (let id, let entry as [String: Any]) in object["commands"] as? [String: Any] ?? [:] {
             settings.commands[id] = CommandSettings(
@@ -87,14 +103,10 @@ public struct FudgeSettings: Sendable, Equatable {
     }
 
     /// Writes to `file` atomically. Keys fudge doesn't know, at any level, are kept; only non-default values are
-    /// written, and entries left empty are removed.
+    /// written, and entries left empty are removed. A file that isn't a JSON object is left alone: this throws
+    /// `Unreadable` rather than replace the user's text with fudge's keys.
     public func save(to file: URL) throws {
-        var object: [String: Any] = [:]
-        if let data = try? Data(contentsOf: file),
-            let existing = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        {
-            object = existing
-        }
+        var object = try Self.existingObject(at: file)
         object["hotkey"] = hotkey
 
         var commandObjects = object["commands"] as? [String: Any] ?? [:]

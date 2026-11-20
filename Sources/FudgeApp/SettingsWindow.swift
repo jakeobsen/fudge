@@ -21,6 +21,8 @@ final class SettingsModel {
     private(set) var hotkeyMessages: [String: String] = [:]
     /// A short message under a command's alias: why it was refused.
     private(set) var aliasMessages: [String: String] = [:]
+    /// Set while `settings.json` isn't a JSON object, so changes can't be saved; the Commands page says so.
+    private(set) var settingsProblem: String?
     /// The launcher's own hotkey, which commands can't take; set by the app delegate.
     @ObservationIgnored var launcherHotkey = HotKeySpec.default
     /// Suspend and resume fudge's global hotkeys around a recording, so pressing one records it.
@@ -48,6 +50,7 @@ final class SettingsModel {
             $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending
         }
         fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        settingsProblem = FudgeSettings.isWritable(paths.settingsFile) ? nil : unreadableMessage
         if selected != Self.commandsPage, !extensions.contains(where: { $0.manifest.name == selected }) {
             selected = Self.commandsPage
         }
@@ -83,7 +86,7 @@ final class SettingsModel {
             return
         }
         let old = fudgeSettings.commands[commandID]?.hotkey
-        setHotkey(spec.text, for: commandID)
+        guard setHotkey(spec.text, for: commandID) else { return }
         if applyHotkeys().contains(commandID) {
             setHotkey(old, for: commandID)
             _ = applyHotkeys()
@@ -98,19 +101,34 @@ final class SettingsModel {
         _ = applyHotkeys()
     }
 
-    private func setHotkey(_ text: String?, for commandID: String) {
+    @discardableResult
+    private func setHotkey(_ text: String?, for commandID: String) -> Bool {
         change { $0.commands[commandID, default: .init()].hotkey = text }
     }
 
-    /// Changes `settings.json`, read again first so hand edits made meanwhile aren't overwritten.
-    private func change(_ edit: (inout FudgeSettings) -> Void) {
+    /// Changes `settings.json`, read again first so hand edits made meanwhile aren't overwritten. Returns false,
+    /// leaving the file and `fudgeSettings` as they were, when the file can't be written.
+    @discardableResult
+    private func change(_ edit: (inout FudgeSettings) -> Void) -> Bool {
         fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
-        edit(&fudgeSettings)
+        var edited = fudgeSettings
+        edit(&edited)
         do {
-            try fudgeSettings.save(to: paths.settingsFile)
+            try edited.save(to: paths.settingsFile)
+            fudgeSettings = edited
+            settingsProblem = nil
+            return true
+        } catch is FudgeSettings.Unreadable {
+            settingsProblem = unreadableMessage
         } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't save settings: \(error)\n".utf8))
+            settingsProblem = "Couldn't save settings: \(error.localizedDescription)"
         }
+        return false
+    }
+
+    private var unreadableMessage: String {
+        let path = (paths.settingsFile.path as NSString).abbreviatingWithTildeInPath
+        return "\(path) isn't valid JSON, so fudge won't change it. Fix or remove it, then try again."
     }
 
     // MARK: - Aliases and enabled
@@ -133,7 +151,9 @@ final class SettingsModel {
             return false
         }
         aliasMessages[commandID] = nil
-        change { $0.commands[commandID, default: .init()].alias = alias.isEmpty ? nil : alias }
+        guard change({ $0.commands[commandID, default: .init()].alias = alias.isEmpty ? nil : alias }) else {
+            return false
+        }
         _ = applyHotkeys()
         return true
     }
