@@ -97,8 +97,7 @@ fudge is a keyboard launcher for macOS, built to run extensions written for Rayc
 - `AGPL-3.0-or-later` everywhere. Files taken from MIT-licensed upstream keep their notice next to them. New dependencies must be AGPL-compatible.
 - Third-party GitHub Actions are pinned to commit SHAs, with the version in a trailing comment.
 - **A probe or hand check that launches a second fudge** which creates status items, windows or preferences runs from a copy of the bundle with a **different bundle id**, e.g. `plutil -replace CFBundleIdentifier -string io.github.jakeobsen.fudge.probe <copy>/Contents/Info.plist`. Builds with the same bundle id share the real app's preferences, whatever `HOME` or `FUDGE_SUPPORT_DIR` says, and that's how a probe once hid the user's menu bar icon. `--snapshot` runs are exempt: they create no status item, take no keyboard and write no preferences.
-- fudge makes no network connections of its own: no updater, telemetry or crash reporting. There are two exceptions: the https images extensions ask for, loaded on their behalf through `URLSessionImageFetcher`; and, opt-in, with currency conversion turned on, the ECB's daily exchange rates (`ECBRatesFetcher`). With the Extension Store turned on (opt-in too), the store extension downloads from GitHub (github.com and its image servers) and npm from registry.npmjs.org, never from Raycast.
-- **Text in the app says what a feature does**, without network caveats ("the only connection fudge makes", what a server sees). Those belong in the README's and this file's Network sections. The one exception is a consent the user asked to give, such as the Extension Store's sheet.
+- **Help text, in the app and the README, is brief and says what a feature does, for an end user.**
 
 ## CI and releases
 
