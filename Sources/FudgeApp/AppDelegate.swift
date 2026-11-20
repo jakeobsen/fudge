@@ -37,6 +37,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let window = event.window
             let handled = MainActor.assumeIsolated {
                 guard let self, window === self.panel else { return false }
+                // While an input method is composing (Japanese, Chinese, …), its keys are its own: ↑↓ pick a
+                // candidate, Esc cancels and ↵ confirms.
+                if (self.panel.firstResponder as? NSTextView)?.hasMarkedText() == true { return false }
                 return self.model.handleKey(pressed)
             }
             return handled ? nil : event

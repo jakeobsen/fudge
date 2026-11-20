@@ -93,6 +93,8 @@ private func item(_ title: String, subtitle: String? = nil, keywords: [String] =
     #expect(items.map(\.subtitle) == ["Greeter", "Greeter"])
     #expect(items[0].keywords == ["hello"])
     #expect(items[0].iconFile?.lastPathComponent == "icon.png")
+    #expect(items[0].arguments.isEmpty)
+    #expect(items[1].arguments.map(\.name) == ["who"])
     #expect(
         items[1].kind
             == .command(extension: "greeter", command: "quiet", mode: "no-view", entry: installed.entry(for: "quiet"))
