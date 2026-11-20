@@ -14,11 +14,17 @@ fudge is a keyboard launcher for macOS, built to run extensions written for Rayc
   - `FudgeCore` is shared code, and the only target with tests.
 
   Put logic in `FudgeCore`, where it can be tested. Keep the app and the tool thin.
-- **The extension host lives in `runtime/`.** It's written in TypeScript. Tests run the `.ts` files directly through Node's type stripping, and esbuild bundles `src/host.ts` into `runtime/dist/host.cjs` for the app. The host talks to the app over stdin/stdout, one JSON message per line (`src/protocol.ts`).
+- **The extension host lives in `runtime/`.** It's written in TypeScript. Tests run the `.ts` files directly through Node's type stripping, and esbuild bundles `src/host.ts` and `src/worker.ts` into `runtime/dist/` as ES modules, with production React.
+  - **The protocol.** The app talks to `host.ts` over stdin/stdout, one JSON message per line, as typed and parsed in `src/protocol.ts`. Messages about a running command carry the `session` id the app chose when launching it. stdout carries nothing but the protocol: in the host, `console.log` goes to stderr, and a worker's output arrives as `log` messages.
+  - **One worker thread per launch.** `worker.ts` intercepts `Module._load` so that `require("@raycast/api" | "react" | "react/jsx-runtime" | "react/jsx-dev-runtime")` gets the host's own modules. The extension and the renderer must share one React, or hooks break.
+  - **The renderer** (`src/renderer/`) is a React 19 host config. Host instances are plain objects named after the component (`List.Item`, `ActionPanel.Section`, …). Commits are coalesced into one snapshot per event-loop turn, and only the top navigation view (a `$view` instance) is sent.
+  - **Snapshot encoding.** Functions are sent as `{ "$fn": path }`, and the app calls one back with the node id and that path. Dates are sent as `{ "$date": iso }`. Element props (`actions`, `detail`, …) are rendered as `$slot` children and sent as nodes inside props.
+  - **`@raycast/api` is `src/api/`.** `index.ts` exports what's implemented. `module.ts` wraps it so that any other Raycast export is a stub that throws `NotAvailableError` naming the API (e.g. `Clipboard.copy isn't available in fudge yet`). The list of Raycast's exports is `src/api/raycast-exports.generated.ts`. Regenerate it with `npm run generate` after `make raycast-types`; `npm run typecheck` fails while it's stale.
+  - **Calls into the app** go through `src/bridge.ts` (`callApp(method, params)`), which sends an `rpc` message and waits for the app's `rpcResult`.
 - **The Makefile assembles the app bundle** (`make app`):
   - the `FudgeApp` binary becomes `Contents/MacOS/Fudge`
   - `App/Info.plist` gets the version from `git describe`
-  - the host bundle goes into `Contents/Resources/runtime/`
+  - the host and worker bundles go into `Contents/Resources/runtime/`
   - the bundle is signed ad hoc
 - **`runtime/vendor/raycast-api/index.d.ts` is Raycast's own type definitions** (MIT, notice alongside). It's the contract fudge implements. `make raycast-types` copies it unmodified from the `@raycast/api` release named by `RAYCAST_API_VERSION`. Never edit it by hand.
 
@@ -26,7 +32,7 @@ fudge is a keyboard launcher for macOS, built to run extensions written for Rayc
 
 - **Names must differ by more than case.** macOS file systems are case-insensitive, so no two products or targets may differ only by case. The tool's product is `fudge`, which is why the app's product is `FudgeApp`.
 - **Runtime TypeScript must be erasable syntax only** (`erasableSyntaxOnly`), because tests run it through type stripping. That rules out enums, namespaces, parameter properties and JSX in `.ts` files. Relative imports carry the `.ts` extension.
-- **`runtime/package.json` is `"type": "module"`**, so the CommonJS bundle has to be named `.cjs`.
+- **Compiled extension commands are CommonJS.** The worker loads them with `require`, which is the only way `Module._load` can hand them fudge's modules.
 - **npm may block install scripts.** esbuild works without its postinstall step, so don't approve it just to silence the warning.
 
 ## Commands

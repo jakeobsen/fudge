@@ -94,7 +94,9 @@ export function createRoot(options: RootOptions): Root {
         },
         snapshot,
         unmount() {
-            reconciler.updateContainer(null, fiberRoot, null, null);
+            // Synchronously, so effect cleanups have run when this returns.
+            reconciler.updateContainerSync(null, fiberRoot, null, null);
+            reconciler.flushSyncWork();
         },
     };
 }

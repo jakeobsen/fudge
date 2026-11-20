@@ -27,7 +27,7 @@ help:
 	@printf '  test           Run the Swift and extension host tests.\n'
 	@printf '  lint           Check Swift formatting and type-check the extension host.\n'
 	@printf '  fmt            Format all Swift code.\n'
-	@printf '  raycast-types  Copy the type definitions of @raycast/api %s into runtime/vendor.\n' '$(RAYCAST_API_VERSION)'
+	@printf '  raycast-types  Copy the type definitions of @raycast/api %s into runtime/vendor and list its exports.\n' '$(RAYCAST_API_VERSION)'
 	@printf '  clean          Remove build output.\n'
 
 runtime/node_modules: runtime/package.json runtime/package-lock.json
@@ -46,7 +46,7 @@ app: build
 	@cp '$(SWIFT_BIN)/FudgeApp' '$(APP)/Contents/MacOS/Fudge'
 	@cp App/Info.plist '$(APP)/Contents/Info.plist'
 	@plutil -replace CFBundleShortVersionString -string '$(VERSION)' '$(APP)/Contents/Info.plist'
-	@cp runtime/dist/host.cjs '$(APP)/Contents/Resources/runtime/'
+	@cp runtime/dist/host.js runtime/dist/worker.js '$(APP)/Contents/Resources/runtime/'
 	@codesign --force --sign - '$(APP)' 2>/dev/null
 	@printf '→ built %s (%s, %s)\n' '$(APP)' '$(VERSION)' '$(CONFIG)'
 
@@ -74,7 +74,8 @@ raycast-types:
 	(cd "$$tmp" && npm pack --silent '@raycast/api@$(RAYCAST_API_VERSION)' >/dev/null && tar -xzf raycast-api-*.tgz); \
 	test "$$(node -p "require('$$tmp/package/package.json').license")" = MIT; \
 	cp "$$tmp/package/types/index.d.ts" runtime/vendor/raycast-api/index.d.ts
-	@printf '→ copied the type definitions of @raycast/api %s\n' '$(RAYCAST_API_VERSION)'
+	@cd runtime && npm run --silent generate
+	@printf '→ copied the type definitions of @raycast/api %s and regenerated the export list\n' '$(RAYCAST_API_VERSION)'
 
 clean:
 	@rm -rf build .build runtime/dist
