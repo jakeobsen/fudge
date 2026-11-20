@@ -6,6 +6,7 @@ export { Color, Icon, Image, ImageMask, LaunchType, PopToRootType } from "./cons
 export { useNavigation } from "./navigation.ts";
 export { getPreferenceValues, openCommandPreferences, openExtensionPreferences } from "./preferences.ts";
 export { environment } from "./environment.ts";
+export { launchCommand } from "./launch-command.ts";
 export {
     Cache,
     LocalStorage,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseAppMessage, revive } from "../src/protocol.ts";
+import { encode, parseAppMessage, revive } from "../src/protocol.ts";
 
 const parse = (value: unknown) => parseAppMessage(typeof value === "string" ? value : JSON.stringify(value));
 
@@ -62,4 +62,27 @@ test("revive turns $date markers back into Dates, deeply", () => {
     assert.equal(revived[0].due.toISOString(), "2026-01-02T00:00:00.000Z");
     assert.equal(revived[1], "x");
     assert.deepEqual(revived[2], { $date: 5 }, "only string dates are revived");
+});
+
+test("encode marks Dates and Buffers, deeply, and revive undoes it", () => {
+    const value = {
+        at: new Date("2026-01-02T00:00:00.000Z"),
+        list: [Buffer.from("hi"), new Uint8Array([1, 2]), Number.NaN, undefined, () => 1],
+        url: new URL("https://example.com/a"),
+        gone: undefined,
+        invalid: new Date("nope"),
+    };
+    const encoded = encode(value);
+    assert.deepEqual(encoded, {
+        at: { $date: "2026-01-02T00:00:00.000Z" },
+        list: [{ $buffer: "aGk=" }, { $buffer: "AQI=" }, null, null, null],
+        url: "https://example.com/a",
+        invalid: null,
+    });
+    const revived = revive(JSON.parse(JSON.stringify(encoded))) as { at: Date; list: [Buffer, Buffer] };
+    assert.equal(revived.at.toISOString(), "2026-01-02T00:00:00.000Z");
+    assert.ok(Buffer.isBuffer(revived.list[0]));
+    assert.equal(revived.list[0].toString("utf8"), "hi");
+    assert.deepEqual([...revived.list[1]], [1, 2]);
+    assert.throws(() => encode({ big: 1n }), TypeError);
 });
