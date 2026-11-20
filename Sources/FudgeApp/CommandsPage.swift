@@ -83,6 +83,7 @@ struct CommandsPage: View {
                 isOn: Binding(get: { model.isEnabled(extension: name) }, set: { model.setEnabled($0, extension: name) })
             )
             .labelsHidden()
+            .accessibilityLabel("Enabled, \(installed.manifest.title)")
             .frame(width: 60)
         }
         .opacity(model.isEnabled(extension: name) ? 1 : 0.45)
@@ -113,6 +114,7 @@ struct CommandsPage: View {
                 "", isOn: Binding(get: { model.isEnabled(command: id) }, set: { model.setEnabled($0, command: id) })
             )
             .labelsHidden()
+            .accessibilityLabel("Enabled, \(command.title)")
             .frame(width: 60)
         }
         // A disabled command, or one of a disabled extension, is dimmed.
