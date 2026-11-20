@@ -66,6 +66,14 @@ final class SettingsModel {
 }
 
 /// The Settings window: extensions on the left, the selected one's preferences on the right.
+/// The Settings window, which can refuse the keyboard: snapshots render it without taking anyone's typing.
+final class SettingsNSWindow: NSWindow {
+    var refusesKey = false
+
+    override var canBecomeKey: Bool { !refusesKey && super.canBecomeKey }
+    override var canBecomeMain: Bool { !refusesKey && super.canBecomeMain }
+}
+
 @MainActor
 final class SettingsWindowController {
     private let model: SettingsModel
@@ -86,6 +94,7 @@ final class SettingsWindowController {
     func renderOffscreen(extension name: String?) {
         prepare(extension: name)
         guard let window else { return }
+        (window as? SettingsNSWindow)?.refusesKey = true
         window.alphaValue = 0
         window.ignoresMouseEvents = true
         window.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
@@ -96,7 +105,7 @@ final class SettingsWindowController {
         model.reload()
         if let name { model.selected = name }
         if window == nil {
-            let window = NSWindow(
+            let window = SettingsNSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 720, height: 480),
                 styleMask: [.titled, .closable, .resizable, .miniaturizable],
                 backing: .buffered,

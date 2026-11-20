@@ -136,3 +136,11 @@ private let applicationItem = RootItem.application(
     #expect(filtered.first?.entries.map(\.title) == ["Move to Trash"])
     #expect(ActionPanelReader.filter(sections, query: " ") == sections)
 }
+
+@Test func theCalculatorCardCopiesItsAnswer() {
+    let entries = ActionPanelReader.flat(RootActions.calculatorSections())
+    #expect(entries.map(\.title) == ["Copy Answer", "Copy Question and Answer"])
+    #expect(entries.map(\.shortcut?.description) == ["↵", "⇧⌘C"])
+    #expect(entries.map(\.target) == [.root(.copyAnswer), .root(.copyQuestionAndAnswer)])
+    #expect(ActionPanelReader.primary(RootActions.calculatorSections())?.title == "Copy Answer", "↵ copies")
+}

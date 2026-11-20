@@ -277,12 +277,33 @@ private struct RootResults: View {
     let model: LauncherModel
 
     var body: some View {
-        if model.results.isEmpty {
+        if model.results.isEmpty, model.calculator == nil {
             Text("No results").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 2) {
+                        if let calculator = model.calculator {
+                            Text("Calculator")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                            CalculatorCard(
+                                result: calculator, selected: model.selectedItem == LauncherModel.calculatorID
+                            )
+                            .id(LauncherModel.calculatorID)
+                            .onRowClick(
+                                select: {
+                                    model.selectedItem = LauncherModel.calculatorID
+                                    // A click can leave the first responder outside the search field.
+                                    model.restoreKeyboard()
+                                },
+                                open: { model.activate() }
+                            )
+                            .padding(.bottom, 6)
+                        }
                         ForEach(model.results) { item in
                             Row(
                                 icon: Image(nsImage: model.icon(for: item)),
@@ -314,6 +335,49 @@ private struct RootResults: View {
         case .command: "Command"
         case .settings: "fudge"
         }
+    }
+}
+
+/// Root search's Calculator card: the question and the answer side by side, an arrow between them, and a label
+/// under each.
+private struct CalculatorCard: View {
+    let result: CalculatorResult
+    let selected: Bool
+
+    var body: some View {
+        HStack(spacing: 0) {
+            side(result.question, label: result.questionLabel, size: 24)
+            // The dividing line, broken around the arrow.
+            VStack(spacing: 10) {
+                Rectangle().fill(Color.primary.opacity(0.15)).frame(width: 1)
+                Image(systemName: "arrow.right").font(.system(size: 18, weight: .medium)).foregroundStyle(.secondary)
+                Rectangle().fill(Color.primary.opacity(0.15)).frame(width: 1)
+            }
+            .frame(width: 32)
+            side(result.answer, label: result.answerLabel, size: 28)
+        }
+        .frame(height: 118)
+        .background(Color.primary.opacity(selected ? 0.13 : 0.07), in: RoundedRectangle(cornerRadius: 12))
+        .contentShape(Rectangle())
+    }
+
+    private func side(_ text: String, label: String, size: CGFloat) -> some View {
+        VStack(spacing: 12) {
+            Text(text)
+                .font(.system(size: size, weight: .bold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.4)
+                // Both sides the same height, so the two labels line up.
+                .frame(height: 38)
+            Text(label)
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(1)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Color.primary.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
+        }
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity)
     }
 }
 
