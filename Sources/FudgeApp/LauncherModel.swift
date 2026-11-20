@@ -108,6 +108,8 @@ final class LauncherModel {
     @ObservationIgnored var openSettings: (String?) -> Void = { _ in }
     /// Shows a FilePicker's open panel and returns the chosen paths, or nil when cancelled; set by the app delegate.
     @ObservationIgnored var openPanel: (FilePickerOptions) async -> [String]? = { _ in nil }
+    /// Downloads the exchange rates again at once (↵ on the "Couldn't download exchange rates" card).
+    @ObservationIgnored var retryExchangeRates: () -> Void = {}
     /// Shows a HUD message; set by the app delegate.
     @ObservationIgnored var showHUD: (String) -> Void = { _ in }
     /// Whether the launcher panel is on screen; set by the app delegate.
@@ -199,7 +201,7 @@ final class LauncherModel {
     }
 
     private func refreshResults() {
-        calculator = Calculator.evaluate(rootQuery, locale: .current, now: Date(), timeZone: .current)
+        calculator = evaluateCalculator()
         results = RootSearch.rank(items, query: rootQuery, history: history)
         selectedItem = calculator != nil ? Self.calculatorID : results.first?.id
     }
@@ -208,6 +210,31 @@ final class LauncherModel {
 
     /// The Calculator card's answer to the root query, when it's a calculation. The card is the first row.
     private(set) var calculator: CalculatorResult?
+
+    /// What the calculator knows about exchange rates, from the app's `ExchangeRateUpdater`. A change redraws the
+    /// card, so "Downloading exchange rates…" turns into the answer when the rates arrive.
+    var currency: CurrencyState = .off {
+        didSet {
+            guard currency != oldValue, case .root = screen else { return }
+            let wasSelected = selectedItem == Self.calculatorID
+            calculator = evaluateCalculator()
+            if calculator == nil, wasSelected { selectedItem = results.first?.id }
+        }
+    }
+
+    private func evaluateCalculator() -> CalculatorResult? {
+        Calculator.evaluate(rootQuery, locale: .current, now: Date(), timeZone: .current, currency: currency)
+    }
+
+    /// ↵ on the Calculator card: copy its answer, or what the card offers instead (turning currency on, retrying).
+    private func activateCalculator() {
+        switch calculator?.enter {
+        case .copy: copyCalculatorAnswer()
+        case .turnOnCurrencyConversion: showSettings(extension: nil)
+        case .retryExchangeRates: retryExchangeRates()
+        case .nothing, nil: break
+        }
+    }
 
     /// The `selectedItem` of the Calculator card.
     static let calculatorID = "calculator"
@@ -352,7 +379,9 @@ final class LauncherModel {
     /// view's own.
     var currentActions: [ActionSection] {
         if case .root = screen {
-            if selectedItem == Self.calculatorID { return RootActions.calculatorSections() }
+            if selectedItem == Self.calculatorID {
+                return RootActions.calculatorSections(for: calculator?.enter ?? .copy)
+            }
             return RootActions.sections(for: selectedRootItem)
         }
         guard let command, let view = command.view else { return [] }
@@ -903,6 +932,10 @@ final class LauncherModel {
             copyCalculatorAnswer()
         case .copyQuestionAndAnswer:
             copyCalculatorAnswer(withQuestion: true)
+        case .turnOnCurrencyConversion:
+            showSettings(extension: nil)
+        case .retryExchangeRates:
+            retryExchangeRates()
         }
     }
 
@@ -1057,7 +1090,7 @@ final class LauncherModel {
         switch screen {
         case .root:
             if selectedItem == Self.calculatorID {
-                copyCalculatorAnswer()
+                activateCalculator()
                 return
             }
             guard let item = selectedRootItem else { return }

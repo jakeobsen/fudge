@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The app that was frontmost when a FilePicker's open panel activated fudge; it gets the keyboard back when the
     /// launcher hides.
     private var appToRestore: NSRunningApplication?
+    private var exchangeRates: ExchangeRateUpdater!
+    private let exchangeRateSchedule = ExchangeRateSchedule()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = Self.mainMenu()
@@ -31,6 +33,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.isVisible = { [weak self] in self?.panel.isVisible ?? false }
         model.confirm = { [weak self] request in await self?.confirm(request) ?? false }
         model.openPanel = { [weak self] options in await self?.chooseFiles(options) }
+        // The calculator's exchange rates: the cached ones now, downloads only while the setting is on.
+        exchangeRates = ExchangeRateUpdater(
+            fetcher: ECBRatesFetcher(), cacheFile: paths.exchangeRatesFile,
+            enabled: FudgeSettings.load(from: paths.settingsFile).currencyRates)
+        model.currency = exchangeRates.state
+        exchangeRates.onChange = { [weak self] in
+            guard let self else { return }
+            self.model.currency = self.exchangeRates.state
+        }
+        model.retryExchangeRates = { [weak self] in
+            guard let self else { return }
+            Task { await self.exchangeRates.updateIfNeeded(now: Date(), explicit: true) }
+        }
+        settingsModel.currencyRatesChanged = { [weak self] on in
+            guard let self else { return }
+            Task { await self.exchangeRates.setEnabled(on, now: Date()) }
+        }
         panel.onEscape = { [weak self] in self?.model.escape() }
         panel.onResign = { [weak self] in
             // An alert sheet takes the keyboard; that's not the user leaving.
@@ -49,6 +68,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+
+        // Snapshots never download; the app checks the rates now and every hour.
+        exchangeRateSchedule.start(exchangeRates)
 
         // ⌘K, ⌘↵ and the extensions' shortcuts, before the search field sees them.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
