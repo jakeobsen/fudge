@@ -41,3 +41,8 @@ fudge is a keyboard launcher for macOS, built to run extensions written for Rayc
 - `AGPL-3.0-or-later` everywhere. Files taken from MIT-licensed upstream keep their notice next to them. New dependencies must be AGPL-compatible.
 - Third-party GitHub Actions are pinned to commit SHAs, with the version in a trailing comment.
 - fudge makes no network connections of its own: no updater, telemetry or crash reporting.
+
+## CI and releases
+
+- **CI** (`.github/workflows/ci.yml`) runs `make lint` and `make test` on pull requests and pushes to `mainline`. `swift test` compiles every target, so the app's code is checked, but the app bundle is not assembled.
+- **The release workflow** (`.github/workflows/release.yml`) is the only place the app bundle gets built. It runs on a pushed `v*` tag: tests, then `make app CONFIG=release VERSION=<tag>`, then the bundle zipped with `ditto` and uploaded as a workflow artifact.
