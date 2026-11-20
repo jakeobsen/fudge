@@ -64,7 +64,17 @@ Any command can have its own hotkey. Open **Settings…** on the **Commands** pa
 
 fudge refuses a shortcut that's its own (⌥Space) or another command's, and one another app has registered. That last check is best-effort: macOS doesn't report system shortcuts such as ⌘Space or ⌃↑, so one of those can be recorded but never fire. Hotkeys are kept in `settings.json` under `commands`, e.g. `{ "commands": { "scratch/scratch-folders": { "hotkey": "option+s" } } }`. fudge keeps anything else you put in that file.
 
-Extensions' preferences are under **Settings…** in the fudge menu bar menu, or ⌘, in the fudge window. You can also search root search for "fudge Settings". To go straight to a command's extension, select the command and press ⌘⇧, (or ⌘K, then **Configure Extension**). A command that needs a preference you haven't set opens that window instead of running.
+**Settings…** in the fudge menu bar menu, ⌘, in the fudge window, and "fudge Settings" in root search open the Settings window on its **General** page. Extensions' preferences are in the same window, under each extension. To go straight to a command's extension, select the command and press ⌘⇧, (or ⌘K, then **Configure Extension**). A command that needs a preference you haven't set opens that window instead of running.
+
+### Calculator and currency
+
+Type a calculation in root search and the answer shows above the results: arithmetic (`5+5/10*39`), units (`13kg to lbs`), time zones (`3pm cet in pst`) and currencies (`100 usd to eur`, `€100 in usd`, `100 € in kr`). ↵ copies the answer.
+
+Currency conversion is off until you turn it on under **Settings… → General**, because it needs exchange rates from the network. Until then, a currency query shows a card saying so, and ↵ on it opens that page.
+
+### Network
+
+fudge makes no connections of its own, with one exception you turn on yourself: with currency conversion on, it downloads the European Central Bank's daily reference rates (`https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml`). It downloads that one public file when you turn the setting on, then when the rates are a day old, at most once every 12 hours. Like any download, the server sees your IP address, and nothing else is sent: no cookies and no identifier beyond `fudge/<version>` as the user agent. The rates are kept in `exchange-rates.json` in the support folder. Turning the setting off stops the downloads. Extensions make their own connections, as they do in Raycast.
 
 ### Selected text and Finder items
 
