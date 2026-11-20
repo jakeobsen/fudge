@@ -76,6 +76,45 @@ private let pictures = #"""
     #expect(GridItemContent(.object(["color": .null])) == nil)
 }
 
+@Test func picturesFollowFitButIconsAreDrawnWhole() throws {
+    let items = ListContent(try node(pictures), searchText: "").items
+    #expect(
+        items.map { $0.content?.drawing } == [.icon, .picture, .picture, .icon, .color, .color],
+        "an emoji, a file path, an asset, a fileIcon, then two colors")
+
+    func drawing(_ json: JSONValue) -> GridItemContent.Drawing? { GridItemContent(json)?.drawing }
+    // Pictures: an asset, a file path, a remote image, themed assets, and a source that has a fallback.
+    #expect(drawing(.string("dunes.png")) == .picture)
+    #expect(drawing(.string("/Users/me/Pictures/coast.jpg")) == .picture)
+    #expect(drawing(.string("~/Pictures/coast.jpg")) == .picture)
+    #expect(drawing(.string("https://example.com/coast.png")) == .picture)
+    let themed = JSONValue.object(["light": .string("a.png"), "dark": .string("a@dark.png")])
+    #expect(drawing(.object(["source": themed])) == .picture)
+    #expect(drawing(.object(["source": .string("missing.png"), "fallback": .string("🙂")])) == .picture)
+    // Icons: a file's or an application's icon, Raycast's icons (tinted too), and emoji.
+    #expect(drawing(.object(["fileIcon": .string("/Applications")])) == .icon)
+    #expect(drawing(.object(["fileIcon": .string("/Applications/Safari.app")])) == .icon)
+    #expect(drawing(.string("hammer-16")) == .icon)
+    #expect(drawing(.object(["source": .string("hammer-16"), "tintColor": .string("raycast-orange")])) == .icon)
+    #expect(drawing(.object(["source": .object(["light": .string("sun-16"), "dark": .string("moon-16")])])) == .icon)
+    #expect(drawing(.string("🙂")) == .icon)
+    #expect(drawing(.object(["value": .string("🙂"), "tooltip": .string("Smile")])) == .icon)
+    // Colors.
+    #expect(drawing(.object(["color": .string("#000000")])) == .color)
+}
+
+@Test func onlyPicturesAndColorsFillTheCell() {
+    let picture = GridItemContent(kind: .image(.string("dunes.png")))
+    let icon = GridItemContent(kind: .image(.object(["fileIcon": .string("/Applications")])))
+    let color = GridItemContent(kind: .color(.string("#ff3b30")))
+    #expect(picture.fills(.fill))
+    #expect(!picture.fills(.contain))
+    #expect(!icon.fills(.fill), "Fill never crops an icon")
+    #expect(!icon.fills(.contain))
+    #expect(color.fills(.fill))
+    #expect(color.fills(.contain))
+}
+
 @Test func aGridFiltersAndShowsItsEmptyViewAsAListDoes() throws {
     let grid = ListContent(try node(pictures), searchText: "sand")
     #expect(grid.items.map(\.title) == ["Dunes"], "matched by keyword")
@@ -106,6 +145,25 @@ private let pictures = #"""
         let odd = try node(#"{"id":1,"type":"Grid","props":{"columns":\#(columns)},"children":[]}"#)
         #expect(GridSectionLayout(grid: odd).columns == clamped)
     }
+    // Clamped while still a Double, so nothing traps in the conversion to Int.
+    func columns(_ value: Double, itemSize: String? = nil) -> Int {
+        var props: [String: JSONValue] = ["columns": .number(value)]
+        if let itemSize { props["itemSize"] = .string(itemSize) }
+        return GridSectionLayout(grid: UINode(id: 1, type: "Grid", props: props)).columns
+    }
+    #expect(columns(1e300) == 8)
+    #expect(columns(-1e300) == 1)
+    #expect(columns(.infinity) == 8)
+    #expect(columns(-.infinity) == 1)
+    #expect(columns(-3) == 1)
+    #expect(columns(9) == 8)
+    #expect(columns(3.7) == 3)
+    #expect(columns(.nan) == 5, "NaN counts as not set: the default")
+    #expect(columns(.nan, itemSize: "large") == 3, "NaN counts as not set: the item size's column count")
+    #expect(columns(.nan, itemSize: "small") == 8)
+    let section = UINode(id: 2, type: "Grid.Section", props: ["columns": .number(.nan)])
+    #expect(GridSectionLayout(columns: 3).overridden(by: section).columns == 3, "a NaN section keeps the Grid's")
+
     let unknown = try node(
         #"{"id":1,"type":"Grid","props":{"fit":"stretch","inset":"xl","aspectRatio":"2/1"},"children":[]}"#)
     #expect(GridSectionLayout(grid: unknown) == GridSectionLayout(), "unknown values keep the defaults")
@@ -218,6 +276,37 @@ private let partial = [Section(count: 7, columns: 5)]
     #expect(!moves(.right, 5, (0, 5)), "all the text selected")
     #expect(!moves(.left, 5, (3, 2)), "a selection that ends at the end")
     #expect(!moves(.right, 5, nil), "text, but no known cursor")
+}
+
+@Test func arrowRuleModifiers() {
+    func moves(_ arrow: GridNavigation.Move, _ modifiers: Set<String>, length: Int = 0) -> Bool {
+        GridNavigation.arrowMovesSelection(arrow, modifiers: modifiers, textLength: length, selection: (length, 0))
+    }
+    // Arrow keys always carry fn and numpad; those, and caps lock, don't count.
+    for arrow in [GridNavigation.Move.left, .right, .up, .down] {
+        #expect(moves(arrow, ["fn", "numpad"]), "\(arrow) with fn and numpad")
+        #expect(moves(arrow, ["fn", "numpad", "capslock"]), "\(arrow) with caps lock on")
+    }
+    #expect(moves(.right, ["fn", "numpad"], length: 5), "cursor at the end")
+    // ⇧, ⌥, ⌘ and ⌃ leave ← and → to the field, even when it's empty or the cursor is at the end.
+    for modifier in ["shift", "opt", "cmd", "ctrl"] {
+        #expect(!moves(.left, ["fn", "numpad", modifier]), "← with \(modifier)")
+        #expect(!moves(.right, ["fn", "numpad", modifier], length: 5), "→ with \(modifier)")
+        #expect(moves(.down, ["fn", "numpad", modifier]), "↓ with \(modifier) still moves")
+    }
+    #expect(GridNavigation.fieldModifiers == ["shift", "opt", "cmd", "ctrl"])
+}
+
+@Test func noArrowMovesTheSelectionWhileAnInputMethodIsComposing() {
+    for arrow in [GridNavigation.Move.left, .right, .up, .down] {
+        #expect(
+            !GridNavigation.arrowMovesSelection(
+                arrow, modifiers: ["fn", "numpad"], composing: true, textLength: 2, selection: (2, 0)),
+            "\(arrow) picks a candidate")
+        #expect(
+            GridNavigation.arrowMovesSelection(
+                arrow, modifiers: ["fn", "numpad"], composing: false, textLength: 2, selection: (2, 0)))
+    }
 }
 
 @Test func aGridAsksForMoreTwoRowsFromTheEnd() throws {

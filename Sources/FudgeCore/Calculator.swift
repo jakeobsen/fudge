@@ -43,39 +43,42 @@ public enum Calculator {
     public static let maximumLength = 200
 
     /// `currency` is what fudge knows about exchange rates; a currency query gets a card even without them, saying
-    /// why it can't answer.
+    /// why it can't answer. Numbers are read and shown in `format`, by default `locale`'s (`NumberFormat.system`);
+    /// `locale` still names times, dates, currencies and the spelled-out answer.
     public static func evaluate(
-        _ query: String, locale: Locale, now: Date, timeZone: TimeZone, currency: CurrencyState = .off
+        _ query: String, locale: Locale, format: NumberFormat? = nil, now: Date, timeZone: TimeZone,
+        currency: CurrencyState = .off
     ) -> CalculatorResult? {
         guard query.count <= maximumLength, !query.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
-        let commaIsDecimal = locale.decimalSeparator == ","
+        let format = format ?? .system(locale)
         if let conversion = TimeZoneConversion.evaluate(query, now: now, timeZone: timeZone) {
             return timeZoneResult(query, conversion, locale: locale)
         }
-        if let conversion = CurrencyConversion.parse(query, locale: locale) {
-            return currencyResult(query, conversion, currency: currency, locale: locale, now: now)
+        if let conversion = CurrencyConversion.parse(query, locale: locale, format: format) {
+            return currencyResult(query, conversion, currency: currency, locale: locale, format: format, now: now)
         }
-        if let conversion = UnitConversion.evaluate(query, commaIsDecimal: commaIsDecimal), conversion.value.isFinite {
-            let number = format(conversion.value, locale: locale, for: .card)
-            let plain = format(conversion.value, locale: locale, for: .copy)
+        if let conversion = UnitConversion.evaluate(query, format: format), conversion.value.isFinite {
+            let number = self.format(conversion.value, locale: locale, format: format, for: .card)
+            let plain = self.format(conversion.value, locale: locale, format: format, for: .copy)
             return CalculatorResult(
                 kind: .units, question: query, questionLabel: conversion.from.name,
                 answer: "\(number) \(conversion.to.symbol)", answerLabel: conversion.to.name,
                 copyText: "\(plain) \(conversion.to.symbol)")
         }
-        if let value = Arithmetic.evaluate(query, commaIsDecimal: commaIsDecimal) {
+        if let value = Arithmetic.evaluate(query, format: format) {
             // Spelled out only while the answer is written out: past 1e15 the words would name another number.
             let label = Swift.abs(value) < 1e15 ? spelledOut(value) : "Result"
             return CalculatorResult(
                 kind: .arithmetic, question: query, questionLabel: "Expression",
-                answer: format(value, locale: locale, for: .card), answerLabel: label,
-                copyText: format(value, locale: locale, for: .copy))
+                answer: self.format(value, locale: locale, format: format, for: .card), answerLabel: label,
+                copyText: self.format(value, locale: locale, format: format, for: .copy))
         }
         return nil
     }
 
     private static func currencyResult(
-        _ query: String, _ conversion: CurrencyConversion.Query, currency: CurrencyState, locale: Locale, now: Date
+        _ query: String, _ conversion: CurrencyConversion.Query, currency: CurrencyState, locale: Locale,
+        format: NumberFormat, now: Date
     ) -> CalculatorResult {
         let from = CurrencyConversion.pluralName(conversion.from)
         let to = CurrencyConversion.pluralName(conversion.to)
@@ -99,8 +102,9 @@ public enum Calculator {
         }
         return CalculatorResult(
             kind: .currency, question: query, questionLabel: from,
-            answer: CurrencyConversion.format(value, code: conversion.to, locale: locale), answerLabel: to,
-            copyText: CurrencyConversion.copyText(value, code: conversion.to, locale: locale),
+            answer: CurrencyConversion.format(value, code: conversion.to, locale: locale, format: format),
+            answerLabel: to,
+            copyText: CurrencyConversion.copyText(value, code: conversion.to, locale: locale, format: format),
             footnote: rates.freshness(now: now, locale: locale))
     }
 
@@ -158,17 +162,21 @@ public enum Calculator {
         return min(copyDigits, max(10, integerDigits))
     }
 
-    /// A number in `locale`, as the card shows it or as it's copied (`Use`). Absolute values from 1e-6 up to 1e15
-    /// are written out; others in the locale's scientific notation. A last digit of 5 rounds up.
-    public static func format(_ value: Double, locale: Locale, for use: Use) -> String {
+    /// A number in `locale` with `format`'s separators (by default the locale's), as the card shows it or as it's
+    /// copied (`Use`). Absolute values from 1e-6 up to 1e15 are written out; others in scientific notation. A last
+    /// digit of 5 rounds up.
+    public static func format(_ value: Double, locale: Locale, format: NumberFormat? = nil, for use: Use) -> String {
+        let format = format ?? .system(locale)
         let formatter = NumberFormatter()
         formatter.locale = locale
+        formatter.decimalSeparator = String(format.decimal)
+        formatter.groupingSeparator = format.grouping
         let magnitude = Swift.abs(value)
         formatter.numberStyle = value != 0 && (magnitude < 1e-6 || magnitude >= 1e15) ? .scientific : .decimal
         formatter.usesSignificantDigits = true
         formatter.maximumSignificantDigits = use == .card ? cardDigits(for: value) : copyDigits
         formatter.roundingMode = .halfUp
-        formatter.usesGroupingSeparator = use == .card && formatter.numberStyle == .decimal
+        formatter.usesGroupingSeparator = use == .card && formatter.numberStyle == .decimal && !format.grouping.isEmpty
         return formatter.string(from: NSNumber(value: value == 0 ? 0 : value)) ?? String(value)
     }
 

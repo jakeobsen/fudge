@@ -75,6 +75,11 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("local-storage/\(name).json")
     }
 
+    /// The https images extensions showed, kept by `RemoteImageCache`.
+    public var imageCacheDirectory: URL {
+        supportDirectory.appendingPathComponent("image-cache", isDirectory: true)
+    }
+
     /// Installed extensions, one folder each.
     /// The before-import backups (`Backup.apply`): plain archives of the state an import replaced.
     public var backupsDirectory: URL {
