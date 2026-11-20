@@ -67,6 +67,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.model.reload()
             self.applyCommandHotkeys()
         }
+        settingsModel.stopExtensionStore = { [weak self] in
+            await self?.model.unloadSessions(ofExtension: ExtensionStore.extensionName)
+        }
         settingsModel.currencyRatesChanged = { [weak self] on in
             guard let self else { return }
             Task { await self.exchangeRates.setEnabled(on, now: Date()) }

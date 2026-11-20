@@ -10,6 +10,7 @@ fudge is an independent project. It is not affiliated with or endorsed by Raycas
 - `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for fudge; `--into <folder>` installs it in that extensions folder instead. A running fudge picks up an extension you install, rebuild or remove within a second, with nothing to reload.
 - `Sources/FudgeCore`: code shared by the app and the tool.
 - `runtime/`: the extension host. This is the Node.js program that runs extensions. The app talks to it over stdin/stdout.
+- `runtime/store-extension/`: the Extension Store, an extension bundled with fudge that lists and installs the extensions published in github.com/raycast/extensions.
 
 ## Building
 
@@ -124,6 +125,15 @@ Extensions can paste into the app you were in (`Clipboard.paste`, the Paste acti
 - If you copy something within that second, fudge leaves your new copy alone.
 - If your clipboard held a password that a password manager marked as concealed, fudge leaves the clipboard empty instead of putting the password back, for the same reason as above.
 - Apps that read the clipboard late, such as virtual machines or remote desktops that sync it, may paste what fudge put back instead of the content.
+
+### The Extension Store
+
+With the Extension Store turned on in **Settings… → General**, the **Extension Store** command lists the extensions published in github.com/raycast/extensions. Search them, or pick a category in the dropdown; **Installed** shows the ones you installed from it.
+
+- ↵ installs one, after saying which version of the repository it comes from. ⌘U updates one marked **Update available**, and ⌃X uninstalls it, to the Trash.
+- ⌘D shows an extension's details and README. ⌘R updates the list, which otherwise happens when you open the store and the list is a day old.
+- The store needs Git. If it's missing, install Apple's Command Line Tools: run `xcode-select --install` in Terminal.
+- It never touches extensions you installed with `fudge build` yourself.
 
 ## License
 
