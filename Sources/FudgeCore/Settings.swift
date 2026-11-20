@@ -10,6 +10,8 @@ public struct FudgeSettings: Sendable, Equatable {
     public var commands: [String: CommandSettings]
     /// By extension name.
     public var extensions: [String: ExtensionSettings]
+    /// Download exchange rates from the European Central Bank for the calculator. Off unless set.
+    public var currencyRates: Bool
 
     public struct CommandSettings: Sendable, Equatable {
         /// In `HotKeySpec` text form.
@@ -37,11 +39,13 @@ public struct FudgeSettings: Sendable, Equatable {
     }
 
     public init(
-        hotkey: String? = nil, commands: [String: CommandSettings] = [:], extensions: [String: ExtensionSettings] = [:]
+        hotkey: String? = nil, commands: [String: CommandSettings] = [:], extensions: [String: ExtensionSettings] = [:],
+        currencyRates: Bool = false
     ) {
         self.hotkey = hotkey
         self.commands = commands
         self.extensions = extensions
+        self.currencyRates = currencyRates
     }
 
     /// A command's key in `commands`: "<extension name>/<command name>".
@@ -90,7 +94,8 @@ public struct FudgeSettings: Sendable, Equatable {
     /// Reads `file`. A missing or unreadable file reads as the defaults.
     public static func load(from file: URL) -> FudgeSettings {
         guard let object = try? existingObject(at: file) else { return FudgeSettings() }
-        var settings = FudgeSettings(hotkey: object["hotkey"] as? String)
+        var settings = FudgeSettings(
+            hotkey: object["hotkey"] as? String, currencyRates: object["currencyRates"] as? Bool ?? false)
         for case (let id, let entry as [String: Any]) in object["commands"] as? [String: Any] ?? [:] {
             settings.commands[id] = CommandSettings(
                 hotkey: entry["hotkey"] as? String, alias: entry["alias"] as? String, enabled: entry["enabled"] as? Bool
@@ -108,6 +113,7 @@ public struct FudgeSettings: Sendable, Equatable {
     public func save(to file: URL) throws {
         var object = try Self.existingObject(at: file)
         object["hotkey"] = hotkey
+        object["currencyRates"] = currencyRates ? true : nil
 
         var commandObjects = object["commands"] as? [String: Any] ?? [:]
         let commandIDs = Set(commandObjects.keys).union(commands.keys)

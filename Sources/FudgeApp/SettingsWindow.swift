@@ -9,7 +9,8 @@ import SwiftUI
 final class SettingsModel {
     private(set) var extensions: [InstalledExtension] = []
     var selected: String?
-    /// The Commands page's entry in the sidebar; extension names can't start with ":".
+    /// The General and Commands pages' entries in the sidebar; extension names can't start with ":".
+    static let generalPage = ":general"
     static let commandsPage = ":commands"
     /// Every installed extension, for the Commands page.
     private(set) var allExtensions: [InstalledExtension] = []
@@ -51,9 +52,31 @@ final class SettingsModel {
         }
         fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
         settingsProblem = FudgeSettings.isWritable(paths.settingsFile) ? nil : unreadableMessage
-        if selected != Self.commandsPage, !extensions.contains(where: { $0.manifest.name == selected }) {
-            selected = Self.commandsPage
+        if selected != Self.generalPage, selected != Self.commandsPage,
+            !extensions.contains(where: { $0.manifest.name == selected })
+        {
+            selected = Self.generalPage
         }
+    }
+
+    // MARK: - General
+
+    /// Whether the calculator downloads exchange rates (`currencyRates` in `settings.json`).
+    var currencyRates: Bool { fudgeSettings.currencyRates }
+    /// Tells the exchange rate updater; set by the app delegate.
+    @ObservationIgnored var currencyRatesChanged: (Bool) -> Void = { _ in }
+
+    func setCurrencyRates(_ on: Bool) {
+        // Read the file again first, so hand edits made meanwhile aren't overwritten.
+        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        guard fudgeSettings.currencyRates != on else { return }
+        fudgeSettings.currencyRates = on
+        do {
+            try fudgeSettings.save(to: paths.settingsFile)
+        } catch {
+            FileHandle.standardError.write(Data("fudge: couldn't save settings: \(error)\n".utf8))
+        }
+        currencyRatesChanged(on)
     }
 
     // MARK: - Command hotkeys
@@ -272,8 +295,8 @@ final class SettingsWindowController {
 
     private func prepare(extension name: String?) {
         model.reload()
-        // "fudge Settings" and Settings… open on the Commands page; Configure Extension on the extension's own.
-        model.selected = name ?? SettingsModel.commandsPage
+        // "fudge Settings" and Settings… open on the General page; Configure Extension on the extension's own.
+        model.selected = name ?? SettingsModel.generalPage
         if window == nil {
             let window = SettingsNSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 880, height: 520),
@@ -305,6 +328,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $model.selected) {
+                Label("General", systemImage: "gearshape").tag(SettingsModel.generalPage)
                 Label("Commands", systemImage: "command").tag(SettingsModel.commandsPage)
                 Section("Extensions") {
                     ForEach(model.extensions, id: \.manifest.name) { installed in
@@ -314,7 +338,9 @@ struct SettingsView: View {
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
-            if model.selected == SettingsModel.commandsPage {
+            if model.selected == SettingsModel.generalPage {
+                GeneralPage(model: model)
+            } else if model.selected == SettingsModel.commandsPage {
                 CommandsPage(model: model)
             } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {
                 ExtensionPreferencesForm(model: model, installed: installed)

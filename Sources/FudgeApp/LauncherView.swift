@@ -29,10 +29,27 @@ struct LauncherView: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            if model.dropdownPanel != nil, let command = model.command, let dropdown = command.list?.dropdown {
-                DropdownPanelView(model: model, dropdown: dropdown, assets: command.assets, focus: $focus)
+            if model.dropdownPanel?.source == .searchBar, let command = model.command, command.list?.dropdown != nil {
+                DropdownPanelView(model: model, assets: command.assets, focus: $focus)
                     .padding(.trailing, 14)
                     .padding(.top, 50)
+            }
+        }
+        // A Form field's panel opens under the field, or above it when there's no room below.
+        .overlayPreferenceValue(FormFieldBounds.self) { bounds in
+            if let node = model.formPanelField, let anchor = bounds[node], let command = model.command {
+                GeometryReader { proxy in
+                    let field = proxy[anchor]
+                    let x = max(8, min(field.minX, proxy.size.width - 288))
+                    let panel = DropdownPanelView(model: model, assets: command.assets, focus: $focus)
+                    if proxy.size.height - field.maxY >= 260 {
+                        panel.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            .padding(.leading, x).padding(.top, field.maxY + 4)
+                    } else {
+                        panel.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                            .padding(.leading, x).padding(.bottom, proxy.size.height - field.minY + 4)
+                    }
+                }
             }
         }
         // The panel's hidden title bar would otherwise push everything down by its height.
@@ -359,16 +376,27 @@ private struct CalculatorCard: View {
     var body: some View {
         HStack(spacing: 0) {
             side(result.question, label: result.questionLabel, size: 24)
-            // The dividing line, broken around the arrow.
+            // The dividing line, broken around the arrow, and stopping above the footnote.
             VStack(spacing: 10) {
                 Rectangle().fill(Color.primary.opacity(0.15)).frame(width: 1)
                 Image(systemName: "arrow.right").font(.system(size: 18, weight: .medium)).foregroundStyle(.secondary)
                 Rectangle().fill(Color.primary.opacity(0.15)).frame(width: 1)
             }
+            .padding(.bottom, result.footnote == nil ? 0 : 22)
             .frame(width: 32)
             side(result.answer, label: result.answerLabel, size: 28)
         }
         .frame(height: 118)
+        // How fresh a currency conversion's rates are, small and grey under the arrow.
+        .overlay(alignment: .bottom) {
+            if let footnote = result.footnote {
+                Text(footnote)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.bottom, 8)
+            }
+        }
         .background(Color.primary.opacity(selected ? 0.13 : 0.07), in: RoundedRectangle(cornerRadius: 12))
         .contentShape(Rectangle())
     }
