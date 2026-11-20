@@ -94,6 +94,10 @@ public enum RootAction: Sendable, Equatable {
     case configureExtension(String)
     /// Shows an application in Finder.
     case showInFinder(URL)
+    /// Copies the Calculator card's answer.
+    case copyAnswer
+    /// Copies the Calculator card's question and answer, as `question = answer`.
+    case copyQuestionAndAnswer
 }
 
 /// The action panel of a root search item, and fudge's keys for the Settings window.
@@ -103,7 +107,16 @@ public enum RootActions {
     /// ⌘⇧, opens it on the extension of the command that's selected or running.
     public static let configureExtensionShortcut = KeyShortcut(key: ",", modifiers: ["cmd", "shift"])
     public static let showInFinderShortcut = KeyShortcut(key: "f", modifiers: ["cmd", "shift"])
+    public static let copyQuestionAndAnswerShortcut = KeyShortcut(key: "c", modifiers: ["cmd", "shift"])
     static let enter = KeyShortcut(key: "return", modifiers: [])
+
+    /// The entries for the Calculator card, the first one being what ↵ does.
+    public static func calculatorSections() -> [ActionSection] {
+        section([
+            ("Copy Answer", enter, .copyAnswer),
+            ("Copy Question and Answer", copyQuestionAndAnswerShortcut, .copyQuestionAndAnswer),
+        ])
+    }
 
     /// The entries for `item`, the first one being what ↵ does.
     public static func sections(for item: RootItem?) -> [ActionSection] {
@@ -120,7 +133,11 @@ public enum RootActions {
             case .settings:
                 [("Open Settings", enter, .open)]
             }
-        return [
+        return section(entries)
+    }
+
+    private static func section(_ entries: [(String, KeyShortcut, RootAction)]) -> [ActionSection] {
+        [
             ActionSection(
                 title: nil,
                 entries: entries.enumerated().map { index, entry in

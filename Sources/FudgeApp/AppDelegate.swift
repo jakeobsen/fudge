@@ -32,6 +32,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.hidePanel()
         }
 
+        // A snapshot renders off-screen and quits. It installs no status item or hotkey, and nothing in it takes
+        // the keyboard, so it can't put a second icon in the menu bar or catch anyone's typing.
+        if let snapshot = Snapshot(arguments: CommandLine.arguments) {
+            panel.refusesKey = true
+            if snapshot.settings {
+                snapshot.take(of: settingsWindow)
+            } else {
+                snapshot.take(of: panel, model: model)
+            }
+            return
+        }
+
         // ⌘K, ⌘↵ and the extensions' shortcuts, before the search field sees them.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let pressed = Self.shortcut(for: event) else { return event }
@@ -53,14 +65,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             FileHandle.standardError.write(Data("fudge: couldn't register the shortcut \(spec)\n".utf8))
         }
         installStatusItem(shortcut: hotKey == nil ? nil : spec)
-
-        if let snapshot = Snapshot(arguments: CommandLine.arguments) {
-            if snapshot.settings {
-                snapshot.take(of: settingsWindow)
-            } else {
-                snapshot.take(of: panel, model: model)
-            }
-        }
     }
 
     private func installStatusItem(shortcut: HotKeySpec?) {
@@ -211,7 +215,19 @@ struct Snapshot {
         }
     }
 
+    /// Whether `arguments` ask for a snapshot. `main.swift` decides the activation policy with it, before launch.
+    static func isRequested(_ arguments: [String]) -> Bool {
+        arguments.contains("--snapshot")
+    }
+
     private func save(_ view: NSView) -> Never {
+        // The proof that the run touched nobody's keyboard: all four must be false.
+        if let window = view.window {
+            let state =
+                "snapshot-state active=\(NSApp.isActive) appActive=\(NSRunningApplication.current.isActive) "
+                + "key=\(window.isKeyWindow) canBecomeKey=\(window.canBecomeKey)\n"
+            FileHandle.standardError.write(Data(state.utf8))
+        }
         guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { exit(1) }
         view.cacheDisplay(in: view.bounds, to: bitmap)
         try? bitmap.representation(using: .png, properties: [:])?.write(to: file)
