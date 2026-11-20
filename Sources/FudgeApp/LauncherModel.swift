@@ -161,12 +161,107 @@ final class LauncherModel {
         return values.compactMap { if case .string(let keyword) = $0 { keyword } else { nil } }
     }
 
-    /// The first action of the selected row (or of the view itself): what ↵ does.
-    var primaryAction: UINode? {
-        guard case .command(let command) = screen, let view = command.view else { return nil }
+    /// The actions for what's selected: the selected row's, else the view's own.
+    var currentActions: [ActionSection] {
+        guard case .command(let command) = screen, let view = command.view else { return [] }
         let row = commandItems.first { $0.id == command.selectedNode } ?? commandItems.first
-        let panel = row?.node("actions") ?? view.node("actions")
-        return panel?.first { $0.type == "Action" && $0.hasCallback("onAction") }
+        return ActionPanelReader.sections(of: row?.node("actions") ?? view.node("actions"))
+    }
+
+    /// What ↵ does.
+    var primaryAction: ActionEntry? { ActionPanelReader.primary(currentActions) }
+
+    /// What ⌘↵ does.
+    var secondaryAction: ActionEntry? { ActionPanelReader.secondary(currentActions) }
+
+    // MARK: - The action panel (⌘K)
+
+    struct ActionPanelState: Equatable {
+        /// The submenus opened, outermost first.
+        var path: [Int] = []
+        var query = ""
+        var selected: Int?
+    }
+
+    private(set) var actionPanel: ActionPanelState?
+
+    /// The entries the open action panel shows: the current submenu's, filtered by its search.
+    var actionPanelSections: [ActionSection] {
+        guard let actionPanel else { return [] }
+        var sections = currentActions
+        for id in actionPanel.path {
+            guard let submenu = ActionPanelReader.flat(sections).first(where: { $0.id == id })?.submenu else {
+                return []
+            }
+            sections = submenu
+        }
+        return ActionPanelReader.filter(sections, query: actionPanel.query)
+    }
+
+    var actionPanelQuery: String {
+        get { actionPanel?.query ?? "" }
+        set {
+            guard actionPanel != nil else { return }
+            actionPanel?.query = newValue
+            // Read before writing: assigning while reading actionPanel is an exclusivity violation.
+            let first = ActionPanelReader.flat(actionPanelSections).first?.id
+            actionPanel?.selected = first
+        }
+    }
+
+    func toggleActionPanel() {
+        if actionPanel != nil {
+            actionPanel = nil
+        } else if !currentActions.isEmpty {
+            actionPanel = ActionPanelState(selected: ActionPanelReader.flat(currentActions).first?.id)
+        }
+    }
+
+    func moveActionSelection(by offset: Int) {
+        let entries = ActionPanelReader.flat(actionPanelSections)
+        guard !entries.isEmpty else { return }
+        let index = entries.firstIndex { $0.id == actionPanel?.selected } ?? 0
+        actionPanel?.selected = entries[max(0, min(entries.count - 1, index + offset))].id
+    }
+
+    func runSelectedAction() {
+        if let entry = ActionPanelReader.flat(actionPanelSections).first(where: { $0.id == actionPanel?.selected }) {
+            run(entry)
+        }
+    }
+
+    /// Runs an action, or opens a submenu in the action panel.
+    func run(_ entry: ActionEntry) {
+        guard case .command(let command) = screen else { return }
+        if let submenu = entry.submenu {
+            var state = actionPanel ?? ActionPanelState()
+            state.path.append(entry.id)
+            state.query = ""
+            state.selected = ActionPanelReader.flat(submenu).first?.id
+            actionPanel = state
+            return
+        }
+        actionPanel = nil
+        send(.event(session: command.session, node: entry.id, path: ["onAction"], args: []))
+    }
+
+    /// Keys that the launcher handles itself: ⌘K, ⌘↵ and the actions' shortcuts.
+    /// Returns false for everything else, which then goes to the focused field.
+    func handleKey(_ pressed: KeyShortcut) -> Bool {
+        if pressed == KeyShortcut(key: "k", modifiers: ["cmd"]) {
+            toggleActionPanel()
+            return true
+        }
+        guard actionPanel == nil, case .command = screen else { return false }
+        if pressed == KeyShortcut(key: "return", modifiers: ["cmd"]) {
+            if let secondaryAction { run(secondaryAction) }
+            return true
+        }
+        guard !pressed.modifiers.isEmpty, let entry = ActionPanelReader.action(for: pressed, in: currentActions) else {
+            return false
+        }
+        run(entry)
+        return true
     }
 
     private func commandSearchChanged(_ command: CommandScreen) {
@@ -207,17 +302,28 @@ final class LauncherModel {
         switch screen {
         case .root:
             if let item = results.first(where: { $0.id == selectedItem }) { open(item) }
-        case .command(let command):
-            if let action = primaryAction {
-                send(.event(session: command.session, node: action.id, path: ["onAction"], args: []))
-            }
+        case .command:
+            if let primaryAction { run(primaryAction) }
         case .failure:
             screen = .root
         }
     }
 
-    /// Esc: pop a pushed view, clear the search, leave the command, then hide.
+    /// Esc: close the action panel (a submenu at a time), pop a pushed view, clear the search,
+    /// leave the command, then hide.
     func escape() {
+        if var panel = actionPanel {
+            if panel.path.isEmpty {
+                actionPanel = nil
+            } else {
+                panel.path.removeLast()
+                panel.query = ""
+                actionPanel = panel
+                let first = ActionPanelReader.flat(actionPanelSections).first?.id
+                actionPanel?.selected = first
+            }
+            return
+        }
         switch screen {
         case .root:
             if rootQuery.isEmpty { hide() } else { searchText = "" }
@@ -521,6 +627,7 @@ final class LauncherModel {
 
     /// Unloads the visible command, if any, and shows root search.
     private func leaveCommand() {
+        actionPanel = nil
         if case .command(let command) = screen { send(.unload(session: command.session)) }
         screen = .root
         status = nil

@@ -10,6 +10,7 @@
 
 import { createElement, isValidElement, type FunctionComponent, type ReactNode } from "react";
 import { SLOT } from "../renderer/serialize.ts";
+import { builtInActions } from "./actions.ts";
 import { useNavigation } from "./navigation.ts";
 import { RAYCAST_ENUMS } from "./raycast-enums.generated.ts";
 
@@ -62,15 +63,17 @@ function Push({ target, onPush, onPop, ...props }: Props) {
 Push.displayName = "Action.Push";
 
 const ActionHost = host("Action");
+const Submenu = host("ActionPanel.Submenu");
 
 export const Action = Object.assign(ActionHost, {
     Style: ActionStyle,
     Push,
+    ...builtInActions(ActionHost, Submenu),
 });
 
 export const ActionPanel = Object.assign(host("ActionPanel"), {
     Section: host("ActionPanel.Section"),
-    Submenu: host("ActionPanel.Submenu"),
+    Submenu,
     /** @deprecated Raycast's old name for Action. */
     Item: Action,
 });
