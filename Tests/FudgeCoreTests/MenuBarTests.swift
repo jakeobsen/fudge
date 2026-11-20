@@ -334,3 +334,52 @@ private func sample(title: String = "Add", isLoading: Bool = false) -> UINode {
     lifecycle.launchFailed()
     #expect(lifecycle.phase == .idle)
 }
+
+@Test func picksWaitOnlyWhileAnInstanceIsStillToRender() {
+    var lifecycle = MenuBarLifecycle()
+    #expect(!lifecycle.awaitsFirstRender, "idle: nothing will render, so a pick is dropped")
+    lifecycle.launched("s1", userInitiated: true)
+    #expect(lifecycle.awaitsFirstRender, "the clicked instance hasn't rendered yet")
+    _ = lifecycle.failed("s1")
+    #expect(!lifecycle.awaitsFirstRender, "it failed before rendering: its picks go")
+    _ = lifecycle.exited("s1")
+    #expect(!lifecycle.awaitsFirstRender, "and no relaunch is coming")
+
+    lifecycle.launched("s2", userInitiated: true)
+    #expect(step { lifecycle.exited("s2") } == nil)
+    #expect(!lifecycle.awaitsFirstRender, "it exited before rendering, with nothing queued")
+
+    lifecycle.launched("s3", userInitiated: false)
+    _ = lifecycle.rendered("s3", isLoading: false)
+    #expect(!lifecycle.awaitsFirstRender, "it has rendered: picks go to it straight away")
+    _ = lifecycle.takeUnload()
+    #expect(step { lifecycle.request(.click) } == .queued)
+    #expect(lifecycle.awaitsFirstRender, "a launch is queued behind the unloading instance")
+    #expect(step { lifecycle.exited("s3") } == .click)
+    lifecycle.launched("s4", userInitiated: true)
+    #expect(lifecycle.awaitsFirstRender, "the queued launch started and hasn't rendered")
+}
+
+@Test func theMenuBarStoreNeverOverwritesAFileItCantRead() throws {
+    let file = try Fixtures.temporaryDirectory().appendingPathComponent("menu-bar.json")
+    #expect(MenuBarStore.isWritable(file), "a missing file is fine")
+    try Data("  \n".utf8).write(to: file)
+    #expect(MenuBarStore.isWritable(file), "a blank one too")
+
+    for broken in ["not json", "[1, 2]", #"{"active": "a/one"}"#, "null"] {
+        try Data(broken.utf8).write(to: file)
+        #expect(!MenuBarStore.isWritable(file), "\(broken)")
+        #expect(MenuBarStore.load(from: file) == MenuBarStore(), "read as nothing active")
+        #expect(throws: MenuBarStore.Unreadable()) { try MenuBarStore(active: ["x/y"]).save(to: file) }
+        #expect(try Data(contentsOf: file) == Data(broken.utf8), "left byte for byte")
+    }
+    #expect(MenuBarStore.Unreadable().description.hasSuffix("Fix or remove it, then try again."))
+
+    try Data(#"{"active": ["a/one"], "futureKey": {"kept": true}}"#.utf8).write(to: file)
+    var store = MenuBarStore.load(from: file)
+    try store.activate("b/two")
+    try store.save(to: file)
+    let json = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]
+    #expect(json?["active"] as? [String] == ["a/one", "b/two"])
+    #expect((json?["futureKey"] as? [String: Bool]) == ["kept": true], "keys it doesn't know are kept")
+}

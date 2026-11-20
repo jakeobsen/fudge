@@ -1123,7 +1123,11 @@ final class LauncherModel {
         case .configureExtension(let name):
             showSettings(extension: name)
         case .deactivateMenuBarItem(let id):
-            menuBar.deactivate(id)
+            do {
+                try menuBar.deactivate(id)
+            } catch {
+                showFailureToast("Can't deactivate the menu bar item", message: String(describing: error))
+            }
         case .showInFinder(let url):
             hide()
             SystemCalls.showInFinder(url.path)

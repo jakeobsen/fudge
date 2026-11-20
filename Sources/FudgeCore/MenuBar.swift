@@ -82,6 +82,30 @@ public struct MenuBarStore: Sendable, Equatable {
         return true
     }
 
+    /// The file holds something fudge can't read, so it leaves it as it is rather than overwrite it.
+    public struct Unreadable: Error, Equatable, CustomStringConvertible {
+        public init() {}
+        public var description: String {
+            "fudge can't read menu-bar.json, so it leaves the file as it is. Fix or remove it, then try again."
+        }
+    }
+
+    /// Whether `save(to:)` may write `file`: it's missing or blank, or a JSON object whose `active`, if any, is a
+    /// list. Anything else would be lost by saving over it.
+    public static func isWritable(_ file: URL) -> Bool {
+        (try? existingObject(at: file)) != nil
+    }
+
+    /// The JSON object in `file`; empty when the file is missing or blank. Throws `Unreadable` for anything else.
+    private static func existingObject(at file: URL) throws -> [String: Any] {
+        guard FileManager.default.fileExists(atPath: file.path) else { return [:] }
+        guard let data = try? Data(contentsOf: file) else { throw Unreadable() }
+        if String(decoding: data, as: UTF8.self).allSatisfy(\.isWhitespace) { return [:] }
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw Unreadable() }
+        if let active = object["active"], !(active is [Any]) { throw Unreadable() }
+        return object
+    }
+
     /// Reads the file tolerantly: a missing or unreadable file has nothing active, and only strings count.
     public static func load(from file: URL) -> MenuBarStore {
         guard let data = try? Data(contentsOf: file),
@@ -92,10 +116,13 @@ public struct MenuBarStore: Sendable, Equatable {
         return MenuBarStore(active: active.compactMap { $0 as? String }.filter { seen.insert($0).inserted })
     }
 
-    /// Writes the file atomically.
+    /// Writes the file atomically, keeping keys it doesn't know. Throws `Unreadable`, leaving the file as it is, when
+    /// it holds something `load` couldn't read.
     public func save(to file: URL) throws {
+        var object = try Self.existingObject(at: file)
+        object["active"] = active
         let data = try JSONSerialization.data(
-            withJSONObject: ["active": active], options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+            withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: file, options: .atomic)
     }
@@ -165,6 +192,15 @@ public struct MenuBarLifecycle: Sendable, Equatable {
     public var session: String? {
         if case .loaded(let session) = phase { return session }
         return nil
+    }
+
+    /// Whether an instance is still to render its first tree: the loaded one, while it hasn't rendered or failed, or
+    /// the launch queued meanwhile. Picks made in the last tree wait for that render; without one, they're dropped,
+    /// so a later launch never runs an old pick.
+    public var awaitsFirstRender: Bool {
+        if queued != nil { return true }
+        if case .loaded = phase { return !hasRendered && !failed }
+        return false
     }
 
     /// Whether `session` is the loaded instance, with a render the menu can pick from.

@@ -153,8 +153,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         run(item, .launchCommand(userInitiated: userInitiated))
     }
 
-    /// Removes the command's item and unloads it.
-    func deactivate(_ id: String) {
+    /// Removes the command's item and unloads it. Throws `MenuBarStore.Unreadable` when `menu-bar.json` can't be
+    /// read, leaving everything as it is: the change couldn't be saved.
+    func deactivate(_ id: String) throws {
+        guard MenuBarStore.isWritable(paths.menuBarFile) else { throw MenuBarStore.Unreadable() }
         store.deactivate(id)
         save()
         if let item = active[id] { remove(item) }
@@ -164,6 +166,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         // Root search, hotkeys and launchCommand already leave disabled commands out.
         guard settings.isEnabled(commandID: id) else { return nil }
         if !store.isActive(id) {
+            // An activation that couldn't be saved would be gone at the next launch, so it's refused.
+            guard MenuBarStore.isWritable(paths.menuBarFile) else { throw MenuBarStore.Unreadable() }
             try store.activate(id)
             save()
         }
@@ -268,6 +272,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             } else if item.lifecycle.isUserInitiated, item.lifecycle.session == session {
                 host.showHUD("\(item.command.title) failed — \(message)")
             }
+            if fatal { dropPicksUnlessAwaited(item, session: session) }
 
         case .eventSettled:
             guard let item else { return }
@@ -280,6 +285,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             let next = item.lifecycle.exited(session)
             if item.lifecycle.lastRefreshFailed { draw(item) }
             if let next { launch(item, userInitiated: next.isUserInitiated) }
+            dropPicksUnlessAwaited(item, session: session)
 
         default:
             break
@@ -290,6 +296,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     func hostStopped() {
         let stopped = sessions
         sessions.removeAll()
+        // Picks made before the host stopped are never replayed into whatever starts next.
+        for item in active.values where !item.picks.isEmpty { dropPicks(item, session: nil) }
         for (session, id) in stopped {
             guard let item = active[id], let next = item.lifecycle.exited(session) else { continue }
             launch(item, userInitiated: next.isUserInitiated)
@@ -313,6 +321,18 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
     }
 
+    /// Drops the picks waiting for a first render once no instance is still to render one
+    /// (`MenuBarLifecycle.awaitsFirstRender`), so a later launch never runs them.
+    private func dropPicksUnlessAwaited(_ item: Active, session: String) {
+        if !item.picks.isEmpty, !item.lifecycle.awaitsFirstRender { dropPicks(item, session: session) }
+    }
+
+    private func dropPicks(_ item: Active, session: String?) {
+        let titles = item.picks.map { "\"\($0.title)\"" }.joined(separator: ", ")
+        item.picks.removeAll()
+        host.log(session ?? item.id, "info", "dropped picks of \(titles): no instance is still to render them")
+    }
+
     private func sendAction(_ item: Active, session: String, node: Int, event: String) {
         item.lifecycle.eventSent(session)
         host.send(.event(session: session, node: node, path: ["onAction"], args: [.object(["type": .string(event)])]))
@@ -327,7 +347,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         let type = isRight ? "right-click" : "left-click"
         if let session = target.session, item.lifecycle.isLive(session) {
             sendAction(item, session: session, node: target.item.node, event: type)
-        } else if item.lifecycle.phase != .idle || item.lifecycle.queued != nil {
+        } else if item.lifecycle.awaitsFirstRender {
             item.picks.append((target.item.path, target.item.title, type))
         } else {
             host.log(item.id, "info", "dropped a pick of \"\(target.item.title)\": the command isn't running")
