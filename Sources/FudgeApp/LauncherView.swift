@@ -43,8 +43,14 @@ struct LauncherView: View {
         // The model decides which argument field has the keyboard (Tab, ⇧Tab, a required one left empty); a click
         // into a field tells it.
         .onChange(of: model.arguments.focus) { _, index in
-            focus = argumentField(index)
-            placeCursorAtEnd(of: index.map { model.arguments.value(at: $0) } ?? model.searchText)
+            let field = argumentField(index)
+            focus = field
+            if field == nil {
+                // A dropdown argument: no text field may keep the keyboard, or typing would go into it.
+                launcherPanel?.makeFirstResponder(nil)
+            } else {
+                placeCursorAtEnd(of: index.map { model.arguments.value(at: $0) } ?? model.searchText)
+            }
         }
         .onChange(of: focus) { _, field in
             switch field {
@@ -71,9 +77,7 @@ struct LauncherView: View {
         guard !text.isEmpty, attempts > 0 else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
             let length = (text as NSString).length
-            // Not NSApp.keyWindow: the panel doesn't activate fudge, and that's nil while fudge isn't active.
-            let panel = NSApp.windows.first { $0 is LauncherPanel }
-            if let editor = panel?.firstResponder as? NSTextView, editor.string == text,
+            if let editor = launcherPanel?.firstResponder as? NSTextView, editor.string == text,
                 editor.selectedRange() == NSRange(location: 0, length: length)
             {
                 editor.setSelectedRange(NSRange(location: length, length: 0))
@@ -81,6 +85,12 @@ struct LauncherView: View {
                 placeCursorAtEnd(of: text, attempts: attempts - 1)
             }
         }
+    }
+
+    /// The panel this view is in. Not NSApp.keyWindow: the panel doesn't activate fudge, and that's nil while fudge
+    /// isn't the active app.
+    private var launcherPanel: NSWindow? {
+        NSApp.windows.first { $0 is LauncherPanel }
     }
 
     /// Root search shows the selected command's argument fields after the query.
@@ -109,8 +119,13 @@ struct LauncherView: View {
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .frame(width: 18, height: 18)
+                    let generation = model.argumentsGeneration
                     ForEach(Array(model.arguments.arguments.enumerated()), id: \.offset) { index, argument in
-                        ArgumentField(model: model, index: index, argument: argument, focus: $focus)
+                        ArgumentField(
+                            model: model, generation: generation, index: index, argument: argument, focus: $focus
+                        )
+                        // New fields when the arguments start over, so the old ones' late writes go nowhere.
+                        .id("\(generation).\(index)")
                     }
                     Spacer(minLength: 0)
                 }
@@ -124,14 +139,15 @@ struct LauncherView: View {
         .frame(height: 58)
     }
 
-    /// The search field. With argument fields after it, it's only as wide as its text, so they follow the query.
-    /// It's the same view either way, so it keeps the keyboard when the fields come and go.
+    /// The search field. With argument fields after it, it's only as wide as its text, so they follow the query,
+    /// and it's what gives way when the bar is full. It's the same view either way, so it keeps the keyboard when
+    /// the fields come and go.
     private var searchField: some View {
         let text = model.searchText.isEmpty ? model.placeholder : model.searchText
-        return Text(verbatim: String(text.prefix(40)))
+        // A hidden copy of the text sets the width: its ideal width, or less when that doesn't fit.
+        return Text(verbatim: text)
             .font(.system(size: 20))
             .lineLimit(1)
-            .fixedSize(horizontal: showsArguments, vertical: false)
             .padding(.trailing, showsArguments ? 6 : 0)
             .hidden()
             .frame(maxWidth: showsArguments ? nil : .infinity, alignment: .leading)
@@ -154,6 +170,8 @@ struct LauncherView: View {
                         return .handled
                     }
             }
+            // Offered the whole width first, less what the fixed-size argument fields need.
+            .layoutPriority(1)
     }
 
     @ViewBuilder private var content: some View {
@@ -305,6 +323,7 @@ private struct Row: View {
 /// placeholder or value. A required one left empty at ↵ is outlined in red until it gets a value.
 private struct ArgumentField: View {
     @Bindable var model: LauncherModel
+    let generation: Int
     let index: Int
     let argument: ExtensionManifest.Argument
     var focus: FocusState<LauncherView.Field?>.Binding
@@ -333,10 +352,11 @@ private struct ArgumentField: View {
     }
 
     private var textField: some View {
-        let binding = Binding(get: { value }, set: { model.setArgument($0, at: index) })
+        let binding = Binding(get: { value }, set: { model.setArgument($0, at: index, generation: generation) })
         let shown = argument.type == "password" ? String(repeating: "•", count: value.count) : value
-        // Sized by a hidden copy of its text, so it grows as the user types, up to a limit.
-        return Text(verbatim: String((shown.count > placeholder.count ? shown : placeholder).prefix(24)))
+        // Sized by a hidden copy of its text, so it grows as the user types, up to a limit that keeps three
+        // fields and some of the query in the bar.
+        return Text(verbatim: String((shown.count > placeholder.count ? shown : placeholder).prefix(18)))
             .lineLimit(1)
             .fixedSize()
             .padding(.trailing, 4)
@@ -363,7 +383,7 @@ private struct ArgumentField: View {
         return Menu {
             ForEach(options, id: \.value) { option in
                 Button(option.title) {
-                    model.setArgument(option.value, at: index)
+                    model.setArgument(option.value, at: index, generation: generation)
                     model.focusArgument(index)
                 }
             }

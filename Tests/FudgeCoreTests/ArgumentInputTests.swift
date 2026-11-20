@@ -99,6 +99,7 @@ private func press(_ key: KeyShortcut, in input: inout ArgumentInput) -> Argumen
     _ = press(up, in: &input)
     #expect(input.value(at: 0) == "b")
     #expect(press(enter, in: &input) == .submit)
+    #expect(press(KeyShortcut(key: "enter", modifiers: []), in: &input) == .submit, "keypad Enter too")
     #expect(press(delete, in: &input) == .handled)
     #expect(input.value(at: 0) == "", "⌫ clears a dropdown's value")
 

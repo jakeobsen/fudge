@@ -74,7 +74,7 @@ public struct ArgumentInput: Sendable, Equatable {
         /// Not an argument key; it goes on to the focused field.
         case ignored
         case handled
-        /// Launch the command (↵ on a dropdown argument; text fields submit on their own).
+        /// Launch the command (↵ or keypad Enter on a dropdown argument; text fields submit on their own).
         case submit
     }
 
@@ -112,7 +112,7 @@ public struct ArgumentInput: Sendable, Equatable {
             }
             focusPrevious()
             return .handled
-        case KeyShortcut(key: "return", modifiers: []):
+        case KeyShortcut(key: "return", modifiers: []), KeyShortcut(key: "enter", modifiers: []):
             return isDropdown ? .submit : .ignored
         default:
             return .ignored

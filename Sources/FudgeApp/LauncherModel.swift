@@ -58,9 +58,7 @@ final class LauncherModel {
         case failure(Failure)
     }
 
-    private(set) var screen: Screen = .root {
-        didSet { syncArguments() }
-    }
+    private(set) var screen: Screen = .root
     private(set) var results: [RootItem] = []
     var selectedItem: String? {
         didSet { syncArguments() }
@@ -69,6 +67,9 @@ final class LauncherModel {
     private(set) var arguments = ArgumentInput()
     /// The root item `arguments` belongs to.
     @ObservationIgnored private var argumentsItem: String?
+    /// Counts the times `arguments` started over. Each field's edits carry the count it was drawn with, so a late
+    /// write from a field that's gone can't refill the new ones.
+    private(set) var argumentsGeneration = 0
     /// A line for the bottom bar, e.g. "Running Create Scratch…".
     private(set) var status: String?
 
@@ -186,16 +187,23 @@ final class LauncherModel {
     // MARK: - Arguments
 
     /// Gives a command selected in root search empty argument fields, and drops them when the selection moves on
-    /// or root search goes away.
+    /// or the command's arguments change (Reload Extensions). They're kept while a command or a failure is on
+    /// screen, so a launch that couldn't start doesn't lose what was typed; a launch clears them.
     private func syncArguments() {
-        var item: RootItem?
-        if case .root = screen { item = selectedRootItem }
-        guard item?.id != argumentsItem else { return }
-        argumentsItem = item?.id
-        arguments = ArgumentInput(arguments: item?.arguments ?? [])
+        let item = selectedRootItem
+        guard item?.id != argumentsItem || (item?.arguments ?? []) != arguments.arguments else { return }
+        resetArguments(for: item)
     }
 
-    func setArgument(_ value: String, at index: Int) {
+    private func resetArguments(for item: RootItem?) {
+        argumentsItem = item?.id
+        arguments = ArgumentInput(arguments: item?.arguments ?? [])
+        argumentsGeneration += 1
+    }
+
+    /// The user edited an argument field drawn for `generation`.
+    func setArgument(_ value: String, at index: Int, generation: Int) {
+        guard generation == argumentsGeneration else { return }
         arguments.set(value, at: index)
     }
 
@@ -664,6 +672,9 @@ final class LauncherModel {
             // A required argument left empty takes the keyboard instead.
             if case .command = item.kind, !arguments.checkRequired() { return }
             open(item)
+            // The launch couldn't start (e.g. a required preference is unset). The values stay for the next try,
+            // and the failure's search field gets the keyboard.
+            if case .failure = screen { arguments.focus = nil }
         case .command:
             if let primaryAction { run(primaryAction) }
         case .failure:
@@ -758,8 +769,10 @@ final class LauncherModel {
                 preferences: preferences.values,
                 environment: environment
             )
-            // A no-view command leaves root search on screen: its fields start empty again.
-            if argumentsItem == item.id { arguments = ArgumentInput(arguments: item.arguments) }
+            // The fields start empty again, for a no-view command (root search stays on screen) and for when a
+            // view command returns to root search; not when the extension host couldn't run it.
+            if case .failure = screen { return }
+            if argumentsItem == item.id { resetArguments(for: item) }
         }
     }
 
