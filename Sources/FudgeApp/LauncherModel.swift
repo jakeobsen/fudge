@@ -137,6 +137,10 @@ final class LauncherModel {
             return rootQuery
         }
         set {
+            // SwiftUI's TextField writes its unchanged text back now and then, three times on ↵ before onSubmit.
+            // Taken as a new search, that would move the selection back to the first item. The action panel's
+            // and the dropdown's search fields ignore such writes for the same reason.
+            guard newValue != searchText else { return }
             switch screen {
             case .command(var command):
                 command.searchText = newValue
@@ -355,7 +359,9 @@ final class LauncherModel {
     var dropdownPanelQuery: String {
         get { dropdownPanel?.query ?? "" }
         set {
-            guard dropdownPanel != nil, let command, let dropdown = command.list?.dropdown else { return }
+            guard dropdownPanel != nil, newValue != dropdownPanelQuery, let command,
+                let dropdown = command.list?.dropdown
+            else { return }
             dropdownPanel?.query = newValue
             let first = dropdownPanelSections.flatMap(\.items).first?.value
             dropdownPanel?.selected = first
@@ -473,7 +479,7 @@ final class LauncherModel {
     var actionPanelQuery: String {
         get { actionPanel?.query ?? "" }
         set {
-            guard actionPanel != nil else { return }
+            guard actionPanel != nil, newValue != actionPanelQuery else { return }
             actionPanel?.query = newValue
             // Read before writing: assigning while reading actionPanel is an exclusivity violation.
             let first = ActionPanelReader.flat(actionPanelSections).first?.id
