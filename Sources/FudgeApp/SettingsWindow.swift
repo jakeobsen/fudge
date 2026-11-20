@@ -75,15 +75,9 @@ final class SettingsModel {
     @ObservationIgnored var currencyRatesChanged: (Bool) -> Void = { _ in }
 
     func setCurrencyRates(_ on: Bool) {
-        // Read the file again first, so hand edits made meanwhile aren't overwritten.
-        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
-        guard fudgeSettings.currencyRates != on else { return }
-        fudgeSettings.currencyRates = on
-        do {
-            try fudgeSettings.save(to: paths.settingsFile)
-        } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't save settings: \(error)\n".utf8))
-        }
+        // A settings.json that can't be written is refused, with the banner, and nothing is turned on.
+        guard FudgeSettings.load(from: paths.settingsFile).currencyRates != on, change({ $0.currencyRates = on })
+        else { return }
         currencyRatesChanged(on)
     }
 
@@ -229,6 +223,18 @@ final class SettingsModel {
             reload()
             extensionStoreChanged()
         }
+    }
+
+    // MARK: - Pop to Root Search
+
+    /// How long the panel stays hidden before it opens on root search again (`resetAfterSeconds`).
+    var resetAfter: PanelResetSetting { fudgeSettings.resetAfter }
+    /// Tells the launcher; set by the app delegate.
+    @ObservationIgnored var resetAfterChanged: (PanelResetSetting) -> Void = { _ in }
+
+    func setResetAfter(_ setting: PanelResetSetting) {
+        guard change({ $0.resetAfter = setting }) else { return }
+        resetAfterChanged(setting)
     }
 
     // MARK: - Command hotkeys

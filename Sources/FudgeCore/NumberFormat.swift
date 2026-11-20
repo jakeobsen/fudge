@@ -25,21 +25,29 @@ public struct NumberFormat: Sendable, Equatable {
         return NumberFormat(decimal: Character(decimal), grouping: grouping == decimal ? "" : grouping)
     }
 
-    /// The grouping separator a typed number may contain: `.` or `,`. Any other (a space, `’`) is only shown: a space
-    /// already separates tokens (`2 pi`), and nobody types `’`.
-    public var typedGrouping: Character? {
-        guard grouping.count == 1, let separator = grouping.first, separator == "." || separator == ",",
-            separator != decimal
-        else { return nil }
-        return separator
+    /// The characters a typed number may group with, which reading drops: the format's grouping separator, with
+    /// `'` and `’` counted as one (de_CH writes `'`, a typed one may come out curly). None for a space grouping (fr_FR's
+    /// U+202F): a space separates tokens (`2 pi`).
+    public var typedGrouping: Set<Character> {
+        guard grouping.count == 1, let separator = grouping.first, separator != decimal,
+            !separator.isWhitespace
+        else { return [] }
+        return Self.apostrophes.contains(separator) ? Self.apostrophes : [separator]
     }
 
+    private static let apostrophes: Set<Character> = ["'", "\u{2019}"]
+
+    /// Every grouping character a typed number can contain in some format, so the tokenizer and the conversions'
+    /// patterns keep it inside the number and `number(_:)` decides.
+    public static let groupingCharacters: Set<Character> = [".", ",", "'", "\u{2019}"]
+
     /// A number as typed: digits with this format's separators, an optional leading `-`, and an optional exponent
-    /// (`1,5E3`). Nil when it isn't one in this format, never another reading:
+    /// (`1,5E3`). Nil when it isn't one in this format:
     /// - the decimal separator starts the fraction, and there's at most one (`,5` is 0.5 with "1.234,5");
-    /// - the grouping separator is allowed only in the integer part, in proper groups: 1–3 digits, then groups of
-    ///   exactly 3 (`1.000`, `12.345.678,9`), and it's dropped when reading;
-    /// - anything else is no number: `1.5`, `3.14`, `1.00`, `1.000.00` and `.5` with "1.234,5", `1,5` with "1,234.5".
+    /// - the grouping separator (`typedGrouping`) is dropped wherever it stands between two digits, with no group
+    ///   sizes checked: `0.1234` is 1234 and `1.5` is 15 with "1.234,5", `1,5` is 15 with "1,234.5";
+    /// - a grouping separator that isn't between two digits (`.5`, `5.`, `1..2` with "1.234,5"), or any other
+    ///   character, means it's no number.
     public func number(_ literal: String) -> Double? {
         var text = Substring(literal)
         let negative = text.first == "-"
@@ -47,25 +55,30 @@ public struct NumberFormat: Sendable, Equatable {
         let exponentStart = text.firstIndex { $0 == "e" || $0 == "E" } ?? text.endIndex
         let exponent = text[exponentStart...]
         let parts = text[..<exponentStart].split(separator: decimal, omittingEmptySubsequences: false)
-        guard parts.count <= 2 else { return nil }
-        let fraction = parts.count == 2 ? parts[1] : ""
-        guard let integer = digits(ofInteger: parts[0]), fraction.allSatisfy(Self.isDigit),
-            !(integer.isEmpty && fraction.isEmpty)
+        guard parts.count <= 2, let integer = digits(parts[0]),
+            let fraction = parts.count == 2 ? digits(parts[1]) : "", !(integer.isEmpty && fraction.isEmpty)
         else { return nil }
         let normalized = (integer.isEmpty ? "0" : integer) + (fraction.isEmpty ? "" : "." + fraction)
         guard let value = Double(normalized + exponent) else { return nil }
         return negative ? -value : value
     }
 
-    /// The integer part's digits, without its grouping, or nil when it isn't grouped properly.
-    private func digits(ofInteger integer: Substring) -> String? {
-        if integer.allSatisfy(Self.isDigit) { return String(integer) }
-        guard let grouping = typedGrouping else { return nil }
-        let groups = integer.split(separator: grouping, omittingEmptySubsequences: false)
-        guard (1...3).contains(groups[0].count), groups.dropFirst().allSatisfy({ $0.count == 3 }),
-            groups.allSatisfy({ $0.allSatisfy(Self.isDigit) })
-        else { return nil }
-        return groups.joined()
+    /// `part`'s digits, with each grouping separator that stands between two digits dropped; nil for anything else.
+    private func digits(_ part: Substring) -> String? {
+        let characters = Array(part)
+        var result = ""
+        for (index, character) in characters.enumerated() {
+            if Self.isDigit(character) {
+                result.append(character)
+            } else if typedGrouping.contains(character), index > 0, index + 1 < characters.count,
+                Self.isDigit(characters[index - 1]), Self.isDigit(characters[index + 1])
+            {
+                continue
+            } else {
+                return nil
+            }
+        }
+        return result
     }
 
     private static func isDigit(_ character: Character) -> Bool {
