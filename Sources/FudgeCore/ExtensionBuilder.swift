@@ -1,0 +1,219 @@
+import Foundation
+
+/// An extension in fudge's extensions folder.
+public struct InstalledExtension: Sendable, Equatable {
+    public var manifest: ExtensionManifest
+    public var directory: URL
+
+    public init(manifest: ExtensionManifest, directory: URL) {
+        self.manifest = manifest
+        self.directory = directory
+    }
+
+    /// The compiled command, a CommonJS file the extension host can load.
+    public func entry(for command: String) -> URL {
+        directory.appendingPathComponent("dist").appendingPathComponent("\(command).cjs")
+    }
+
+    public var assetsDirectory: URL {
+        directory.appendingPathComponent("assets", isDirectory: true)
+    }
+
+    public static func load(from directory: URL) throws -> InstalledExtension {
+        InstalledExtension(
+            manifest: try ExtensionManifest.load(from: directory.appendingPathComponent("package.json")),
+            directory: directory
+        )
+    }
+
+    /// Every installed extension, sorted by title. Folders that fail to load are skipped.
+    public static func all(in extensionsDirectory: URL) -> [InstalledExtension] {
+        let folders =
+            (try? FileManager.default.contentsOfDirectory(
+                at: extensionsDirectory,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+        return
+            folders
+            .compactMap { try? load(from: $0) }
+            .sorted { $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending }
+    }
+}
+
+public enum BuildError: Error, Equatable, CustomStringConvertible {
+    case invalidName(String)
+    case invalidCommandName(String)
+    case noCommands
+    case missingEntry(command: String, searched: [String])
+
+    public var description: String {
+        switch self {
+        case .invalidName(let name):
+            "the extension name \"\(name)\" must be kebab-case (a-z, 0-9 and -)"
+        case .invalidCommandName(let name):
+            "the command name \"\(name)\" must be kebab-case (a-z, 0-9 and -)"
+        case .noCommands:
+            "the extension declares no commands"
+        case .missingEntry(let command, let searched):
+            "no source file for the command \"\(command)\" (looked for \(searched.joined(separator: ", ")))"
+        }
+    }
+}
+
+/// Compiles a Raycast extension from its source folder and installs it.
+///
+/// The source folder is never written to. When the extension's dependencies
+/// aren't installed there, they're installed into a temporary folder that
+/// esbuild finds through `NODE_PATH`.
+public struct ExtensionBuilder: Sendable {
+    /// Modules the extension host provides, so they stay out of the bundle.
+    public static let providedModules = ["@raycast/api", "react", "react/jsx-runtime", "react/jsx-dev-runtime"]
+    static let sourceExtensions = ["tsx", "ts", "jsx", "js"]
+
+    public var esbuild: URL
+    public var log: @Sendable (String) -> Void
+
+    public init(esbuild: URL, log: @escaping @Sendable (String) -> Void = { _ in }) {
+        self.esbuild = esbuild
+        self.log = log
+    }
+
+    @discardableResult
+    public func build(source: URL, into extensionsDirectory: URL) throws -> InstalledExtension {
+        let files = FileManager.default
+        let manifest = try ExtensionManifest.load(from: source.appendingPathComponent("package.json"))
+        guard ExtensionManifest.isValidName(manifest.name) else { throw BuildError.invalidName(manifest.name) }
+        guard !manifest.commands.isEmpty else { throw BuildError.noCommands }
+        let entries = try manifest.commands.map { command in
+            guard ExtensionManifest.isValidName(command.name) else {
+                throw BuildError.invalidCommandName(command.name)
+            }
+            return try Self.entry(for: command.name, in: source)
+        }
+
+        let scratch = files.temporaryDirectory.appendingPathComponent("fudge-build-\(UUID().uuidString)")
+        try files.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? files.removeItem(at: scratch) }
+
+        var environment: [String: String] = [:]
+        if manifest.hasDependencies, !files.fileExists(atPath: source.appendingPathComponent("node_modules").path) {
+            log("installing dependencies")
+            environment["NODE_PATH"] = try Self.installDependencies(of: source, into: scratch).path
+        }
+
+        try files.createDirectory(at: extensionsDirectory, withIntermediateDirectories: true)
+        let staging = extensionsDirectory.appendingPathComponent(".staging-\(manifest.name)-\(UUID().uuidString)")
+        defer { try? files.removeItem(at: staging) }
+        try files.createDirectory(at: staging, withIntermediateDirectories: true)
+
+        log("compiling \(entries.count) command\(entries.count == 1 ? "" : "s")")
+        let compiled = try Shell.run(
+            esbuild,
+            Self.esbuildArguments(entries: entries, source: source, output: staging.appendingPathComponent("dist")),
+            in: source,
+            environment: environment
+        )
+        let warnings = compiled.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !warnings.isEmpty { log(warnings) }
+
+        try files.copyItem(
+            at: source.appendingPathComponent("package.json"),
+            to: staging.appendingPathComponent("package.json")
+        )
+        let assets = source.appendingPathComponent("assets")
+        if files.fileExists(atPath: assets.path) {
+            try files.copyItem(at: assets, to: staging.appendingPathComponent("assets"))
+        }
+
+        let destination = extensionsDirectory.appendingPathComponent(manifest.name, isDirectory: true)
+        try Self.replace(destination, with: staging)
+        return InstalledExtension(manifest: manifest, directory: destination)
+    }
+
+    static func entry(for command: String, in source: URL) throws -> URL {
+        let candidates = sourceExtensions.map { "src/\(command).\($0)" }
+        for candidate in candidates {
+            let url = source.appendingPathComponent(candidate)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        throw BuildError.missingEntry(command: command, searched: candidates)
+    }
+
+    static func esbuildArguments(entries: [URL], source: URL, output: URL) -> [String] {
+        entries.map(\.path) + [
+            "--bundle",
+            "--platform=node",
+            "--format=cjs",
+            "--target=node22",
+            "--jsx=automatic",
+            "--outdir=\(output.path)",
+            "--outbase=\(source.appendingPathComponent("src").path)",
+            "--out-extension:.js=.cjs",
+            "--define:process.env.NODE_ENV=\"production\"",
+            "--legal-comments=none",
+            "--log-level=warning",
+        ] + providedModules.map { "--external:\($0)" }
+    }
+
+    /// Installs the extension's dependencies under `scratch` and returns the `node_modules` folder.
+    static func installDependencies(of source: URL, into scratch: URL) throws -> URL {
+        let files = FileManager.default
+        let project = scratch.appendingPathComponent("dependencies", isDirectory: true)
+        try files.createDirectory(at: project, withIntermediateDirectories: true)
+        var hasLockfile = false
+        for name in ["package.json", "package-lock.json", "npm-shrinkwrap.json", ".npmrc"] {
+            let file = source.appendingPathComponent(name)
+            guard files.fileExists(atPath: file.path) else { continue }
+            try files.copyItem(at: file, to: project.appendingPathComponent(name))
+            if name.hasSuffix(".json"), name != "package.json" { hasLockfile = true }
+        }
+        // Install scripts stay off: the bundle only needs the packages' JavaScript.
+        try Shell.run(
+            URL(fileURLWithPath: "/usr/bin/env"),
+            ["npm", hasLockfile ? "ci" : "install", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"],
+            in: project
+        )
+        return project.appendingPathComponent("node_modules", isDirectory: true)
+    }
+
+    /// Moves `staging` to `destination`, replacing what's there.
+    static func replace(_ destination: URL, with staging: URL) throws {
+        let files = FileManager.default
+        guard files.fileExists(atPath: destination.path) else {
+            try files.moveItem(at: staging, to: destination)
+            return
+        }
+        let old = destination.deletingLastPathComponent()
+            .appendingPathComponent(".old-\(destination.lastPathComponent)-\(UUID().uuidString)")
+        try files.moveItem(at: destination, to: old)
+        do {
+            try files.moveItem(at: staging, to: destination)
+        } catch {
+            try? files.moveItem(at: old, to: destination)
+            throw error
+        }
+        try? files.removeItem(at: old)
+    }
+
+    /// Finds esbuild: `$FUDGE_ESBUILD`, then next to `executable` (as inside Fudge.app), then on `$PATH`.
+    public static func locateEsbuild(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        executable: URL? = Bundle.main.executableURL
+    ) -> URL? {
+        let files = FileManager.default
+        if let override = environment["FUDGE_ESBUILD"], !override.isEmpty {
+            return URL(fileURLWithPath: override)
+        }
+        if let executable {
+            let sibling = executable.resolvingSymlinksInPath().deletingLastPathComponent().appendingPathComponent(
+                "esbuild")
+            if files.isExecutableFile(atPath: sibling.path) { return sibling }
+        }
+        for directory in (environment["PATH"] ?? "").split(separator: ":") {
+            let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent("esbuild")
+            if files.isExecutableFile(atPath: candidate.path) { return candidate }
+        }
+        return nil
+    }
+}

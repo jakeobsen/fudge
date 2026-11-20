@@ -21,11 +21,17 @@ fudge is a keyboard launcher for macOS, built to run extensions written for Rayc
   - **Snapshot encoding.** Functions are sent as `{ "$fn": path }`, and the app calls one back with the node id and that path. Dates are sent as `{ "$date": iso }`. Element props (`actions`, `detail`, …) are rendered as `$slot` children and sent as nodes inside props.
   - **`@raycast/api` is `src/api/`.** `index.ts` exports what's implemented. `module.ts` wraps it so that any other Raycast export is a stub that throws `NotAvailableError` naming the API (e.g. `Clipboard.copy isn't available in fudge yet`). The list of Raycast's exports is `src/api/raycast-exports.generated.ts`. Regenerate it with `npm run generate` after `make raycast-types`; `npm run typecheck` fails while it's stale.
   - **Calls into the app** go through `src/bridge.ts` (`callApp(method, params)`), which sends an `rpc` message and waits for the app's `rpcResult`.
+- **`fudge build <folder>` installs an extension** (`ExtensionBuilder` in `FudgeCore`).
+  - It reads `package.json` (`ExtensionManifest`) and compiles every command's `src/<name>.{tsx,ts,jsx,js}` with esbuild into `<extensions>/<name>/dist/<name>.cjs`. The modules the host provides (`ExtensionBuilder.providedModules`) stay external.
+  - It copies `package.json` and `assets/` alongside, then swaps the whole folder into place.
+  - It never writes into the source folder. When the source has no `node_modules`, it installs the dependencies into a temporary folder (`npm ci --ignore-scripts`) and points esbuild at it with `NODE_PATH`.
+  - Extensions live in `FudgePaths.extensionsDirectory`: `~/Library/Application Support/fudge/extensions`, or under `$FUDGE_SUPPORT_DIR`.
 - **The Makefile assembles the app bundle** (`make app`):
   - the `FudgeApp` binary becomes `Contents/MacOS/Fudge`
+  - the `fudge` tool and esbuild's native binary go into `Contents/Helpers/`, where `ExtensionBuilder.locateEsbuild` finds esbuild next to the tool
   - `App/Info.plist` gets the version from `git describe`
   - the host and worker bundles go into `Contents/Resources/runtime/`
-  - the bundle is signed ad hoc
+  - the helpers and the bundle are signed ad hoc
 - **`runtime/vendor/raycast-api/index.d.ts` is Raycast's own type definitions** (MIT, notice alongside). It's the contract fudge implements. `make raycast-types` copies it unmodified from the `@raycast/api` release named by `RAYCAST_API_VERSION`. Never edit it by hand.
 
 ## Gotchas
@@ -33,11 +39,12 @@ fudge is a keyboard launcher for macOS, built to run extensions written for Rayc
 - **Names must differ by more than case.** macOS file systems are case-insensitive, so no two products or targets may differ only by case. The tool's product is `fudge`, which is why the app's product is `FudgeApp`.
 - **Runtime TypeScript must be erasable syntax only** (`erasableSyntaxOnly`), because tests run it through type stripping. That rules out enums, namespaces, parameter properties and JSX in `.ts` files. Relative imports carry the `.ts` extension.
 - **Compiled extension commands are CommonJS.** The worker loads them with `require`, which is the only way `Module._load` can hand them fudge's modules.
+- **Swift tests that build extensions need esbuild** from `runtime/node_modules`. `make test` installs it; without it, `swift test` skips those tests.
 - **npm may block install scripts.** esbuild works without its postinstall step, so don't approve it just to silence the warning.
 
 ## Commands
 
-`make app` · `make run` · `make test` · `make lint` · `make fmt` · `make raycast-types`
+`make app` · `make run` · `make install-extension DIR=<folder>` · `make test` · `make lint` · `make fmt` · `make raycast-types`
 
 ## Conventions
 

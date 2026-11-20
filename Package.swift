@@ -14,6 +14,6 @@ let package = Package(
         .target(name: "FudgeCore"),
         .executableTarget(name: "FudgeApp", dependencies: ["FudgeCore"]),
         .executableTarget(name: "FudgeCLI", dependencies: ["FudgeCore"]),
-        .testTarget(name: "FudgeCoreTests", dependencies: ["FudgeCore"]),
+        .testTarget(name: "FudgeCoreTests", dependencies: ["FudgeCore"], exclude: ["Fixtures"]),
     ]
 )

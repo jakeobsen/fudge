@@ -1,0 +1,28 @@
+{
+  "name": "greeter",
+  "title": "Greeter",
+  "description": "A fixture extension for fudge's builder tests.",
+  "icon": "icon.png",
+  "commands": [
+    { "name": "greet", "title": "Greet", "mode": "view", "keywords": ["hello"] },
+    {
+      "name": "quiet",
+      "title": "Quiet",
+      "mode": "no-view",
+      "arguments": [{ "name": "who", "type": "text", "placeholder": "who", "required": false }]
+    }
+  ],
+  "preferences": [
+    { "name": "loud", "type": "checkbox", "title": "Loud", "label": "shout", "default": true, "required": false },
+    {
+      "name": "style",
+      "type": "dropdown",
+      "title": "Style",
+      "default": "warm",
+      "data": [
+        { "title": "Warm", "value": "warm" },
+        { "title": "Cool", "value": "cool" }
+      ]
+    }
+  ]
+}
