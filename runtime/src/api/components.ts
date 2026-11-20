@@ -14,6 +14,7 @@ import { builtInActions } from "./actions.ts";
 import { FormValuesContext, useFormField, type FormRegistry } from "./form-state.ts";
 import { useNavigation } from "./navigation.ts";
 import { RAYCAST_ENUMS } from "./raycast-enums.generated.ts";
+import { mark, NOT_DRAWN } from "./stubs.ts";
 
 type Props = Record<string, unknown> & { children?: ReactNode };
 
@@ -160,3 +161,31 @@ export const Form = Object.assign(FormView, {
     /** @deprecated Use Form.TagPicker.Item. */
     TagPickerItem: FormTagPickerItem,
 });
+
+// Components the extension host renders but the app can't draw yet. The compat scan counts every use of one, or
+// of a member of one (`Grid.Item`, `Form.Dropdown.Item`), as missing ("not-drawn"). Whoever teaches the app to
+// draw one removes it from this list in the same PR. Where the app would draw them:
+// - Form.Dropdown, TagPicker, DatePicker and FilePicker: `FormContent.field` (Sources/FudgeCore/FormContent.swift)
+//   reads them as `.unsupported`, and `FormScreen` (Sources/FudgeApp/FormScreen.swift) shows that.
+// - Form.LinkAccessory: `FormContent` skips it, and nothing reads a Form's `searchBarAccessory`.
+// - Grid: `LauncherModel` and `LauncherView` (Sources/FudgeApp/) have screens for List, Form and Detail only.
+const notDrawn: Record<string, object> = {
+    Grid,
+    "Form.Dropdown": Form.Dropdown,
+    "Form.TagPicker": Form.TagPicker,
+    "Form.DatePicker": Form.DatePicker,
+    "Form.FilePicker": Form.FilePicker,
+    "Form.LinkAccessory": Form.LinkAccessory,
+};
+for (const [name, component] of Object.entries(notDrawn)) markNotDrawn(component, name);
+
+/** Marks a component and its sub-components, which old names also reach directly (`FormDropdownItem`). */
+function markNotDrawn(component: object, name: string): void {
+    if (Object.isFrozen(component)) return;
+    mark(component, NOT_DRAWN, name);
+    for (const [key, member] of Object.entries(component)) {
+        if (/^[A-Z]/.test(key) && (typeof member === "function" || typeof member === "object") && member !== null) {
+            markNotDrawn(member, `${name}.${key}`);
+        }
+    }
+}

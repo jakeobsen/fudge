@@ -5,7 +5,7 @@
 import { createElement, useEffect, useState, type FunctionComponent } from "react";
 import { closeMainWindow, showHUD, showToast, Toast } from "./feedback.ts";
 import { RAYCAST_ENUMS } from "./raycast-enums.generated.ts";
-import { NotAvailableError } from "./stubs.ts";
+import { mark, NotAvailableError, UNAVAILABLE } from "./stubs.ts";
 import { Clipboard, getApplications, open, showInFinder, trash } from "./system.ts";
 import { useFormValues } from "./form-state.ts";
 
@@ -103,6 +103,7 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
             });
         }
         Unavailable.displayName = name;
+        mark(Unavailable, UNAVAILABLE, name);
         return Unavailable;
     };
 

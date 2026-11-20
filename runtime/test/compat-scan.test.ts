@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import * as implementation from "../src/api/index.ts";
 import { createApiModule } from "../src/api/module.ts";
-import { apiName, support, toJavaScript, uses } from "../scripts/compat/scan.ts";
+import { NOT_DRAWN, UNAVAILABLE } from "../src/api/stubs.ts";
+import { RAYCAST_UTILS_PATHS } from "../scripts/compat/raycast-utils.generated.ts";
+import { apiName, gaps, isExtensionSource, support, toJavaScript, uses } from "../scripts/compat/scan.ts";
+import { raycastDeclarations, vendoredTypes } from "../scripts/raycast-types.ts";
+
+const api = createApiModule() as Record<string, unknown>;
+const declared = raycastDeclarations(vendoredTypes());
 
 test("finds what a module uses from @raycast/api, however it's imported", async () => {
     const source = `
@@ -30,7 +37,6 @@ test("finds what a module uses from @raycast/api, however it's imported", async 
 });
 
 test("decides whether fudge provides an API path", () => {
-    const api = createApiModule() as Record<string, unknown>;
     assert.equal(support(api, "Clipboard.copy"), "implemented");
     assert.equal(support(api, "Action.CopyToClipboard"), "implemented");
     assert.equal(support(api, "Toast.Style.Failure"), "implemented");
@@ -38,11 +44,116 @@ test("decides whether fudge provides an API path", () => {
     assert.equal(support(api, "Action.NoSuchAction"), "missing");
     assert.equal(support(api, "AI.ask"), "missing", "a stub");
     assert.equal(support(api, "Clipboard.noSuchFunction"), "missing");
-    assert.equal(support(api, "NotARaycastExport"), "unknown");
+    assert.equal(support(api, "NotARaycastExport"), "not-raycast");
 });
 
 test("names the API a path is about", () => {
     assert.equal(apiName("Clipboard.copy"), "Clipboard.copy");
     assert.equal(apiName("environment.commandName.length"), "environment.commandName");
     assert.equal(apiName("Image.Mask.Circle"), "Image.Mask.Circle");
+});
+
+test("a stub is missing wherever the path reaches it, lowercase members included", () => {
+    assert.equal(support(api, "Clipboard.paste"), "missing", "a stub member of an implemented namespace");
+    assert.equal(support(api, "pasteText"), "missing", "an implemented export that is a stub");
+    assert.equal(support(api, "getSelectedText"), "missing", "an export fudge doesn't implement");
+    assert.equal(support(api, "environment.commandName"), "implemented", "a getter that needs a running command");
+});
+
+test("an action that renders but fails when used is render-but-fail", () => {
+    for (const path of ["Action.Paste", "Action.CreateQuicklink", "Action.ToggleQuickLook", "Action.PickDate", "PasteAction"]) {
+        assert.equal(support(api, path, declared), "render-but-fail", path);
+    }
+    assert.equal(support(api, "Action.CopyToClipboard", declared), "implemented");
+});
+
+test("a component the app doesn't draw, and any member of one, is not-drawn", () => {
+    const paths = [
+        "Grid",
+        "Grid.Item",
+        "Grid.Dropdown.Item",
+        "Grid.Inset.Small",
+        "Form.Dropdown",
+        "Form.Dropdown.Item",
+        "Form.DropdownItem",
+        "FormDropdownItem",
+        "Form.TagPicker.Item",
+        "Form.DatePicker.Type.Date",
+        "Form.FilePicker",
+        "Form.LinkAccessory",
+    ];
+    for (const path of paths) assert.equal(support(api, path, declared), "not-drawn", path);
+    for (const path of ["Form", "Form.TextField", "Form.Checkbox", "List.Item", "Detail.Metadata.Label"]) {
+        assert.equal(support(api, path, declared), "implemented", path);
+    }
+});
+
+/** Every component and constant group in fudge's @raycast/api, by path. */
+function components(): Map<string, object> {
+    const found = new Map<string, object>();
+    const visit = (value: unknown, path: string) => {
+        if ((typeof value !== "function" && typeof value !== "object") || value === null || found.has(path)) return;
+        found.set(path, value);
+        for (const [key, member] of Object.entries(value)) if (/^[A-Z]/.test(key)) visit(member, `${path}.${key}`);
+    };
+    for (const [name, value] of Object.entries(implementation)) visit(value, name);
+    return found;
+}
+
+test("no component is both unavailable and not drawn", () => {
+    const both = [...components()].filter(([, value]) => NOT_DRAWN in value && UNAVAILABLE in value).map(([path]) => path);
+    assert.deepEqual(both, []);
+});
+
+test("Raycast's types declare every component fudge implements", () => {
+    const undeclared = [...components().keys()].filter((path) => !declared(path));
+    assert.deepEqual(undeclared, []);
+});
+
+test("paths Raycast doesn't declare are not-raycast, not gaps", () => {
+    const paths = ["Color.Gray", "Icon.Safari", "Toast.Style.SuccessMessage", "showToast.mockResolvedValue", "LocalStorage.__reset"];
+    for (const path of paths) assert.equal(support(api, path, declared), "not-raycast", path);
+    for (const path of ["Toast.Style.Failure", "Keyboard.Shortcut.Common.Copy", "environment.supportPath", "Image.Mask.Circle"]) {
+        assert.equal(declared(path), true, path);
+    }
+    assert.equal(declared("preferences.apiKey"), true, "the old `preferences` is a Record, so any key is declared");
+    assert.deepEqual(
+        gaps({ api: new Set(["Color.Gray", "Icon.Safari", "Clipboard.copy"]), utils: new Set() }, api, declared, {}),
+        { gaps: [], notRaycast: ["Color.Gray", "Icon.Safari"] },
+        "an extension with only not-raycast paths has no gaps",
+    );
+});
+
+test("an extension using a @raycast/utils export inherits its paths", () => {
+    const table = { useThing: ["Clipboard.paste", "Clipboard.copy", "Color.Gray"], useOther: ["Clipboard.paste"] };
+    assert.deepEqual(gaps({ api: new Set(), utils: new Set(["useThing", "useOther"]) }, api, declared, table).gaps, [
+        { api: "Clipboard.paste", kind: "via @raycast/utils", via: ["useOther", "useThing"] },
+    ]);
+    assert.deepEqual(
+        gaps({ api: new Set(["Clipboard.paste"]), utils: new Set(["useThing"]) }, api, declared, table).gaps,
+        [{ api: "Clipboard.paste", kind: "missing" }],
+        "a direct use counts as direct",
+    );
+    const oauth = gaps({ api: new Set(), utils: new Set(["OAuthService"]) }, api, declared, RAYCAST_UTILS_PATHS);
+    assert.ok(oauth.gaps.some((gap) => gap.api === "OAuth.PKCEClient" && gap.kind === "via @raycast/utils"));
+    assert.ok(RAYCAST_UTILS_PATHS.useAI?.includes("AI.ask"));
+});
+
+test("tests and mocks aren't extension code", () => {
+    for (const path of ["index.tsx", "lib/api.ts", "hooks/useThing.js", "components/List.jsx", "testing.ts", "contest/x.ts"]) {
+        assert.equal(isExtensionSource(path), true, path);
+    }
+    const skipped = [
+        "index.test.tsx",
+        "api.spec.ts",
+        "lib/api.test.js",
+        "__mocks__/raycast.ts",
+        "__tests__/index.tsx",
+        "test/helpers.ts",
+        "lib/tests/fixtures.ts",
+        "types.d.ts",
+        "node_modules/x/index.js",
+        "README.md",
+    ];
+    for (const path of skipped) assert.equal(isExtensionSource(path), false, path);
 });
