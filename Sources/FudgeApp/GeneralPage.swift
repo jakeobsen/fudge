@@ -45,12 +45,8 @@ struct GeneralPage: View {
             }
             Section("Calculator") {
                 Toggle(isOn: Binding(get: { model.currencyRates }, set: { model.setCurrencyRates($0) })) {
-                    Text("Currency conversion: download exchange rates from the European Central Bank once a day")
-                    Text(
-                        "Apart from the images extensions show, this is the only connection fudge makes on its own. It "
-                            + "downloads one public file; like any "
-                            + "download, the server sees your IP address, and nothing else is sent."
-                    )
+                    Text("Currency conversion")
+                    Text("fudge downloads exchange rates from the European Central Bank once a day.")
                 }
                 .toggleStyle(.checkbox)
                 Picker(
