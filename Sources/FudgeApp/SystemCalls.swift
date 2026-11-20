@@ -1,7 +1,8 @@
 import AppKit
 import FudgeCore
 
-/// Answers the extension API calls that need the system: clipboard, opening, the Trash, Finder and applications.
+/// Answers the extension API calls that need the system: clipboard, opening, the Trash, Finder, applications and the
+/// selection.
 @MainActor
 enum SystemCalls {
     struct Failure: Error, CustomStringConvertible {
@@ -10,8 +11,15 @@ enum SystemCalls {
 
     static let methods: Set<String> = [
         "clipboard.copy", "clipboard.clear", "clipboard.read", "open", "trash", "showInFinder",
-        "applications.list", "applications.default", "applications.frontmost",
+        "applications.list", "applications.default", "applications.frontmost", "selection.text",
+        "selection.finderItems",
     ]
+
+    private static let selectedText = SelectedText(
+        accessibility: SystemAccessibility(), keys: SystemCopyKey(), pasteboard: SystemPasteboard(),
+        ownPid: ProcessInfo.processInfo.processIdentifier)
+    private static let automation = SystemAutomationPermission()
+    private static let finder = FinderEvents()
 
     /// Runs `method`. Unknown methods throw.
     static func handle(_ method: String, _ params: JSONValue) async throws -> JSONValue {
@@ -55,8 +63,19 @@ enum SystemCalls {
                 throw Failure(description: "No application is frontmost")
             }
             return ApplicationResolver.application(at: url)
+        case "selection.text":
+            return .string(try await selectedText.read(from: frontmost()))
+        case "selection.finderItems":
+            let paths = try await FinderSelection.read(from: frontmost(), permission: automation, source: finder)
+            return .array(paths.map { .object(["path": .string($0)]) })
         default:
             throw Failure(description: "\(method) isn't available in fudge yet")
+        }
+    }
+
+    private static func frontmost() -> FrontmostApplication? {
+        NSWorkspace.shared.frontmostApplication.map {
+            FrontmostApplication(pid: $0.processIdentifier, bundleIdentifier: $0.bundleIdentifier)
         }
     }
 
