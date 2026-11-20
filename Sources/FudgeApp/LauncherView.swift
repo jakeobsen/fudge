@@ -241,11 +241,7 @@ struct LauncherView: View {
 
     private var primaryLabel: String? {
         switch model.screen {
-        case .root:
-            guard let item = model.results.first(where: { $0.id == model.selectedItem }) else { return nil }
-            if case .application = item.kind { return "Open Application" }
-            return "Open Command"
-        case .command:
+        case .root, .command:
             return model.primaryAction?.title
         case .failure:
             return "Back"
@@ -283,8 +279,11 @@ private struct RootResults: View {
     }
 
     private func kind(of item: RootItem) -> String {
-        if case .application = item.kind { return "Application" }
-        return "Command"
+        switch item.kind {
+        case .application: "Application"
+        case .command: "Command"
+        case .settings: "fudge"
+        }
     }
 }
 

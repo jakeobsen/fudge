@@ -34,8 +34,7 @@ enum SystemCalls {
             try SystemFiles.trash(params.strings("paths"))
             return .null
         case "showInFinder":
-            let url = URL(fileURLWithPath: (try params.required("path") as NSString).expandingTildeInPath)
-            NSWorkspace.shared.activateFileViewerSelecting([url])
+            showInFinder(try params.required("path"))
             return .null
         case "applications.list":
             if let path = params.string("path") { return .array(SystemFiles.applications(forOpening: path)) }
@@ -79,6 +78,12 @@ enum SystemCalls {
             item.setString("", forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
         }
         pasteboard.writeObjects([item])
+    }
+
+    /// Opens a Finder window with the file or folder at `path` (`~` expanded) selected.
+    static func showInFinder(_ path: String) {
+        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
     private static func read() -> JSONValue {

@@ -73,6 +73,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let reload = menu.addItem(
             withTitle: "Reload Extensions", action: #selector(reloadExtensions), keyEquivalent: "")
         reload.target = self
+        let settings = menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
+        settings.target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "fudge \(FudgeVersion.current)", action: nil, keyEquivalent: "")
         menu.addItem(withTitle: "Quit fudge", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -113,17 +115,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.orderOut(nil)
     }
 
+    /// The key as it types with no modifier at all, so ⌘⇧, is "," with cmd and shift. `charactersIgnoringModifiers`
+    /// still applies ⇧ and would give "<" (US) or ";" (Danish). Read through the keyboard layout, punctuation
+    /// follows the user's layout rather than the key's position.
     private nonisolated static func shortcut(for event: NSEvent) -> KeyShortcut? {
-        guard let key = KeyShortcut.key(forKeyCode: event.keyCode, characters: event.charactersIgnoringModifiers) else {
-            return nil
-        }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         var modifiers: Set<String> = []
         if flags.contains(.command) { modifiers.insert("cmd") }
         if flags.contains(.control) { modifiers.insert("ctrl") }
         if flags.contains(.option) { modifiers.insert("opt") }
         if flags.contains(.shift) { modifiers.insert("shift") }
-        return KeyShortcut(key: key, modifiers: modifiers)
+        let unmodified = event.characters(byApplyingModifiers: []).flatMap { $0.isEmpty ? nil : $0 }
+        return KeyShortcut(
+            keyCode: event.keyCode, characters: unmodified ?? event.charactersIgnoringModifiers, modifiers: modifiers)
     }
 
     /// confirmAlert: a sheet on the panel when it's open, otherwise a standalone alert.
