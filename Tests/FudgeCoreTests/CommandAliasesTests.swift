@@ -43,6 +43,50 @@ private let label = ExtensionManifest.Argument(name: "label", type: "text", plac
     #expect(Array(typed.prefix(2)) == ["Scratch Folders", "Search Project Manager"], "alias prefixes before fuzzy")
 }
 
+@Test func anExactAliasThatIsAlsoACalculationComesFirstThenTheCard() {
+    let items = [
+        command("finder", "search", title: "Search Files"),
+        command("math", "times", title: "Times Table", alias: "2*3"),
+        command("math", "notes", title: "Math Notes"),
+    ]
+    let query = "2*3"
+    let calculator = Calculator.evaluate(
+        query, locale: Locale(identifier: "en_US"), now: Date(timeIntervalSince1970: 0),
+        timeZone: TimeZone(identifier: "UTC")!)
+    #expect(calculator?.answer == "6", "the query is a calculation too")
+    let results = RootSearch.rank(items, query: query, history: LaunchHistory())
+    let rows = RootSearch.rows(results, query: query, hasCalculator: calculator != nil)
+    #expect(rows.first == .item(items[1]), "the command first")
+    #expect(rows.dropFirst().first == .calculator, "the card second")
+    #expect(rows.filter { $0 == .item(items[1]) }.count == 1, "the command isn't listed again below the card")
+
+    let spaced = RootSearch.rows(results, query: " 2*3 ", hasCalculator: true)
+    #expect(spaced.map(\.id).prefix(2) == [items[1].id, RootRow.calculatorID], "surrounding spaces don't matter")
+}
+
+@Test func withoutAnExactAliasTheCardComesFirst() {
+    let items = [
+        command("math", "times", title: "Times Table", alias: "2*3x"),
+        command("math", "notes", title: "Math Notes"),
+    ]
+    let results = RootSearch.rank(items, query: "2*3", history: LaunchHistory())
+    let rows = RootSearch.rows(results, query: "2*3", hasCalculator: true)
+    #expect(rows.first == .calculator, "an alias prefix isn't exact")
+    #expect(rows.dropFirst().map(\.id) == results.map(\.id), "then the results as ranked")
+    #expect(RootSearch.rows(results, query: "2*3", hasCalculator: false).map(\.id) == results.map(\.id))
+    #expect(RootSearch.rows([], query: "", hasCalculator: false).isEmpty)
+}
+
+@Test func anExactAliasMatchIgnoresCase() {
+    let items = [
+        command("finder", "search", title: "Search Files"),
+        command("scratch", "scratch-folders", title: "Scratch Folders", alias: "SF"),
+    ]
+    #expect(RootSearch.exactAliasMatch(in: items, query: "sf")?.title == "Scratch Folders")
+    #expect(RootSearch.exactAliasMatch(in: items, query: "s") == nil, "a prefix")
+    #expect(RootSearch.exactAliasMatch(in: items, query: "  ") == nil, "nothing typed")
+}
+
 @Test func settingsDropDisabledCommandsAndGiveAliases() {
     var settings = FudgeSettings()
     settings.commands["scratch/create-scratch"] = .init(alias: "cs")

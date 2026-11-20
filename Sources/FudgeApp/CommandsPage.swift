@@ -95,6 +95,7 @@ struct CommandsPage: View {
 
     private func commandRow(_ command: ExtensionManifest.Command, of installed: InstalledExtension) -> some View {
         let id = FudgeSettings.commandID(extension: installed.manifest.name, command: command.name)
+        let enabled = model.isEnabled(command: id) && model.isEnabled(extension: installed.manifest.name)
         return HStack(spacing: 0) {
             HStack(spacing: 6) {
                 icon(command.icon ?? installed.manifest.icon, in: installed)
@@ -106,7 +107,7 @@ struct CommandsPage: View {
             .padding(.leading, 18)
             .frame(maxWidth: .infinity, alignment: .leading)
             Text("Command").foregroundStyle(.secondary).frame(width: 80, alignment: .leading)
-            AliasCell(model: model, commandID: id).frame(width: 110, alignment: .leading)
+            AliasCell(model: model, commandID: id, dimmed: !enabled).frame(width: 110, alignment: .leading)
             HotkeyCell(model: model, commandID: id).frame(width: 150, alignment: .leading)
             Toggle(
                 "", isOn: Binding(get: { model.isEnabled(command: id) }, set: { model.setEnabled($0, command: id) })
@@ -115,7 +116,7 @@ struct CommandsPage: View {
             .frame(width: 60)
         }
         // A disabled command, or one of a disabled extension, is dimmed.
-        .opacity(model.isEnabled(command: id) && model.isEnabled(extension: installed.manifest.name) ? 1 : 0.45)
+        .opacity(enabled ? 1 : 0.45)
         .rowStyle()
     }
 
@@ -138,6 +139,9 @@ extension View {
 private struct AliasCell: View {
     let model: SettingsModel
     let commandID: String
+    /// A disabled row's alias is dimmed here: the row's opacity doesn't reach the text field's AppKit drawing (seen
+    /// in snapshots).
+    let dimmed: Bool
     @State private var text = ""
     @FocusState private var editing: Bool
 
@@ -146,6 +150,7 @@ private struct AliasCell: View {
             TextField("Add Alias", text: $text)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(dimmed ? .secondary : .primary)
                 .focused($editing)
                 .onSubmit { model.setAlias(text, for: commandID) }
                 .onKeyPress(.escape) {

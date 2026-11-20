@@ -219,27 +219,24 @@ final class LauncherModel {
     private func refreshResults() {
         calculator = Calculator.evaluate(rootQuery, locale: .current, now: Date(), timeZone: .current)
         results = RootSearch.rank(items, query: rootQuery, history: history)
-        let typed = rootQuery.trimmingCharacters(in: .whitespaces).lowercased()
-        aliasMatch = typed.isEmpty ? nil : results.first { $0.alias?.lowercased() == typed }
-        selectedItem = aliasMatch?.id ?? (calculator != nil ? Self.calculatorID : results.first?.id)
+        selectedItem = rootRows.first?.id
     }
 
-    /// The command whose alias the query is exactly. It comes first, above the Calculator card.
-    private(set) var aliasMatch: RootItem?
+    /// Root search's rows in the order they're drawn and moved through (`RootSearch.rows`): a command whose alias
+    /// the query is exactly, then the Calculator card, then the other results.
+    var rootRows: [RootRow] {
+        RootSearch.rows(results, query: rootQuery, hasCalculator: calculator != nil)
+    }
 
     // MARK: - The calculator
 
-    /// The Calculator card's answer to the root query, when it's a calculation. The card is the first row.
+    /// The Calculator card's answer to the root query, when it's a calculation.
     private(set) var calculator: CalculatorResult?
 
     /// The `selectedItem` of the Calculator card.
-    static let calculatorID = "calculator"
+    static let calculatorID = RootRow.calculatorID
 
-    /// Root search's rows in order: the Calculator card, then the results.
-    private var rootRowIDs: [String] {
-        let rest = results.map(\.id).filter { $0 != aliasMatch?.id }
-        return (aliasMatch.map { [$0.id] } ?? []) + (calculator == nil ? [] : [Self.calculatorID]) + rest
-    }
+    private var rootRowIDs: [String] { rootRows.map(\.id) }
 
     /// Copies the calculator's answer (or the question and answer), then closes the panel with a HUD, as Raycast
     /// does. The clipboard is written the way extensions' `Clipboard.copy` writes it.

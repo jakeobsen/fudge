@@ -277,43 +277,47 @@ private struct RootResults: View {
     let model: LauncherModel
 
     var body: some View {
-        if model.results.isEmpty, model.calculator == nil {
+        let rows = model.rootRows
+        if rows.isEmpty {
             Text("No results").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 2) {
-                        // A query that's exactly a command's alias puts that command first, above the card.
-                        if let match = model.aliasMatch { row(match) }
-                        if let calculator = model.calculator {
-                            Text("Calculator")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                            CalculatorCard(
-                                result: calculator, selected: model.selectedItem == LauncherModel.calculatorID
-                            )
-                            .id(LauncherModel.calculatorID)
-                            .onRowClick(
-                                select: {
-                                    model.selectedItem = LauncherModel.calculatorID
-                                    // A click can leave the first responder outside the search field.
-                                    model.restoreKeyboard()
-                                },
-                                open: { model.activate() }
-                            )
-                            .padding(.bottom, 6)
-                        }
-                        ForEach(model.results.filter { $0.id != model.aliasMatch?.id }) { item in
-                            row(item)
+                        // In `RootSearch.rows`' order, which ↑↓ follows too.
+                        ForEach(rows) { rootRow in
+                            switch rootRow {
+                            case .item(let item): row(item)
+                            case .calculator: calculatorCard
+                            }
                         }
                     }
                     .padding(8)
                 }
                 .onChange(of: model.selectedItem) { _, id in proxy.scrollTo(id) }
             }
+        }
+    }
+
+    @ViewBuilder private var calculatorCard: some View {
+        if let calculator = model.calculator {
+            Text("Calculator")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+            CalculatorCard(result: calculator, selected: model.selectedItem == LauncherModel.calculatorID)
+                .id(LauncherModel.calculatorID)
+                .onRowClick(
+                    select: {
+                        model.selectedItem = LauncherModel.calculatorID
+                        // A click can leave the first responder outside the search field.
+                        model.restoreKeyboard()
+                    },
+                    open: { model.activate() }
+                )
+                .padding(.bottom, 6)
         }
     }
 

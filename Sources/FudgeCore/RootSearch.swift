@@ -81,6 +81,22 @@ public struct RootItem: Sendable, Equatable, Identifiable {
 }
 
 /// Ranks root items for a query: fuzzy match first, launch history second.
+/// One row of root search: a ranked item, or the Calculator card.
+public enum RootRow: Sendable, Equatable, Identifiable {
+    case item(RootItem)
+    case calculator
+
+    /// The Calculator card's id, as the selection holds it.
+    public static let calculatorID = "calculator"
+
+    public var id: String {
+        switch self {
+        case .item(let item): item.id
+        case .calculator: Self.calculatorID
+        }
+    }
+}
+
 public enum RootSearch {
     /// fudge's own items, searched alongside applications and commands.
     public static let builtInItems: [RootItem] = [.settings]
@@ -97,6 +113,23 @@ public enum RootSearch {
                 .alias
             return item
         }
+    }
+
+    /// Root search's rows in order: the command whose alias the query is exactly, then the Calculator card when the
+    /// query is a calculation, then the other `results` as ranked. The panel draws these, and ↑↓ moves through
+    /// them, so the two always agree.
+    public static func rows(_ results: [RootItem], query: String, hasCalculator: Bool) -> [RootRow] {
+        let match = exactAliasMatch(in: results, query: query)
+        var rows = match.map { [RootRow.item($0)] } ?? []
+        if hasCalculator { rows.append(.calculator) }
+        return rows + results.filter { $0.id != match?.id }.map(RootRow.item)
+    }
+
+    /// The result whose alias is exactly `query`, ignoring case and surrounding spaces.
+    public static func exactAliasMatch(in results: [RootItem], query: String) -> RootItem? {
+        let typed = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !typed.isEmpty else { return nil }
+        return results.first { $0.alias?.lowercased() == typed }
     }
 
     public static func rank(_ items: [RootItem], query: String, history: LaunchHistory, now: Date = Date())

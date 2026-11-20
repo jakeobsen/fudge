@@ -141,6 +141,8 @@ final class SettingsModel {
     @discardableResult
     func setAlias(_ text: String, for commandID: String) -> Bool {
         let alias = text.trimmingCharacters(in: .whitespaces)
+        // Check against the file as it is now, as `change` edits it, so an alias added by hand meanwhile counts.
+        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
         if !alias.isEmpty, let problem = CommandAliases.problem(with: alias, for: commandID, in: fudgeSettings) {
             aliasMessages[commandID] =
                 switch problem {
