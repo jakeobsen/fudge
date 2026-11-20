@@ -12,6 +12,7 @@ final class SettingsModel {
     /// The General and Commands pages' entries in the sidebar; extension names can't start with ":".
     static let generalPage = ":general"
     static let commandsPage = ":commands"
+    static let permissionsPage = ":permissions"
     /// Every installed extension, for the Commands page.
     private(set) var allExtensions: [InstalledExtension] = []
     /// `settings.json`, as the Commands page edits it.
@@ -36,6 +37,10 @@ final class SettingsModel {
     @ObservationIgnored var resumeHotkeys: () -> Void = {}
     /// Registers the command hotkeys from `settings.json`; returns the command ids the system refused.
     @ObservationIgnored var applyHotkeys: () -> Set<String> = { [] }
+    /// Accessibility's live status, for the Permissions page and onboarding; the app delegate sets the real one.
+    @ObservationIgnored var accessibility = AccessibilityStatus(access: FixedAccessibility(trusted: false))
+    /// Show Onboarding Again; set by the app delegate.
+    @ObservationIgnored var showOnboarding: () -> Void = {}
     private(set) var stored: [String: StoredPreferences] = [:]
     @ObservationIgnored private let store: PreferenceStore
     @ObservationIgnored private let paths: FudgePaths
@@ -58,7 +63,7 @@ final class SettingsModel {
         fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
         settingsProblem = FudgeSettings.isWritable(paths.settingsFile) ? nil : unreadableMessage
         loadLaunchPermissions()
-        if selected != Self.generalPage, selected != Self.commandsPage,
+        if selected != Self.generalPage, selected != Self.commandsPage, selected != Self.permissionsPage,
             !extensions.contains(where: { $0.manifest.name == selected })
         {
             selected = Self.generalPage
@@ -442,6 +447,7 @@ struct SettingsView: View {
         NavigationSplitView {
             List(selection: $model.selected) {
                 Label("General", systemImage: "gearshape").tag(SettingsModel.generalPage)
+                Label("Permissions", systemImage: "hand.raised").tag(SettingsModel.permissionsPage)
                 Label("Commands", systemImage: "command").tag(SettingsModel.commandsPage)
                 Section("Extensions") {
                     ForEach(model.extensions, id: \.manifest.name) { installed in
@@ -453,6 +459,8 @@ struct SettingsView: View {
         } detail: {
             if model.selected == SettingsModel.generalPage {
                 GeneralPage(model: model)
+            } else if model.selected == SettingsModel.permissionsPage {
+                PermissionsPage(model: model)
             } else if model.selected == SettingsModel.commandsPage {
                 CommandsPage(model: model)
             } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {

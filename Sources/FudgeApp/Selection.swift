@@ -9,9 +9,14 @@ import FudgeCore
 /// The Accessibility API.
 @MainActor
 final class SystemAccessibility: AccessibilityAccess {
+    /// Whether anything in this run has asked for macOS's prompt, so Open Accessibility Settings goes straight to
+    /// the pane (`AccessibilityPermission.request`).
+    private(set) static var promptShown = false
+
     func isTrusted(prompt: Bool) -> Bool {
+        if prompt { Self.promptShown = true }
         // The key is `kAXTrustedCheckOptionPrompt`.
-        AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": prompt] as CFDictionary)
+        return AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": prompt] as CFDictionary)
     }
 
     func selectedText(pid: Int32) async -> String? {
