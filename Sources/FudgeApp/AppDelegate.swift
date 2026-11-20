@@ -61,6 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             Task { await self.exchangeRates.setEnabled(on, now: Date()) }
         }
+        // The model reads the setting again, and the open query's card is evaluated again in the new format.
+        settingsModel.numberFormatChanged = { [weak self] in self?.model.applySettings() }
         panel.onEscape = { [weak self] in self?.model.escape() }
         panel.onResign = { [weak self] in
             // An alert sheet takes the keyboard; that's not the user leaving.
@@ -79,6 +81,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+
+        SystemCalls.accessibilitySettingsOffer = AccessibilitySettingsOffer(
+            panel: panel, restoreKeyboard: { [weak self] in self?.model.restoreKeyboard() })
 
         // Snapshots never download; the app checks the rates now and every hour.
         exchangeRateSchedule.start(exchangeRates)

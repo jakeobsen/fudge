@@ -82,6 +82,8 @@ The first time an extension opens another extension's command, fudge asks whethe
 
 Type a calculation in root search and the answer shows above the results: arithmetic (`5+5/10*39`), units (`13kg to lbs`), time zones (`3pm cet in pst`) and currencies (`100 usd to eur`, `€100 in usd`, `100 € in kr`). ↵ copies the answer.
 
+Numbers follow your Mac's number format, or the one you pick under **Settings… → General → Number format**: "1,234.5" or "1.234,5". In "1.234,5", `1.000 + 1` is 1.001, and `1.5` isn't a number, so it gets no answer rather than a wrong one.
+
 Currency conversion is off until you turn it on under **Settings… → General**, because it needs exchange rates from the network. Until then, a currency query shows a card saying so, and ↵ on it opens that page.
 
 ### Network
@@ -95,6 +97,8 @@ An extension's menu bar command puts its own item in the menu bar. Run it from r
 ### Selected text and Finder items
 
 Extensions can read the text selected in the app you were in, and the items selected in Finder. The first time, macOS asks you to allow fudge under **Privacy & Security → Accessibility** or **Automation**.
+
+macOS only asks when fudge isn't in the Accessibility list yet. If fudge is there but switched off, or the entry was left by an older build of fudge, nothing appears, and extensions are just refused. So when Accessibility is refused a second time, fudge shows its own alert, once per run, and **Open Accessibility Settings** takes you to the list. Switch fudge on there. If it's already on, select it, remove it with −, and add it again with +.
 
 When an app doesn't share its selection through Accessibility (often browsers and Electron apps such as VS Code), fudge copies it with ⌘C and puts back what was on your clipboard right after. That has some side effects:
 

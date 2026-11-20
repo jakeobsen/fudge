@@ -25,16 +25,16 @@ public enum CurrencyConversion {
     nonisolated(unsafe) private static let quantityPattern = try! NSRegularExpression(
         pattern: #"^([^\d\s.,-]*)\s*(-?[\d.,]*\d(?:[eE][+-]?\d+)?)\s*([^\d\s.,-]*)$"#)
 
-    /// The conversion `text` asks for, or nil. The amount is read like the calculator's numbers.
-    public static func parse(_ text: String, locale: Locale) -> Query? {
+    /// The conversion `text` asks for, or nil. The amount is read like the calculator's numbers, in `format` (by
+    /// default the locale's); `locale` says which krone or krona `kr` is.
+    public static func parse(_ text: String, locale: Locale, format: NumberFormat? = nil) -> Query? {
         let lowered = text.lowercased().trimmingCharacters(in: .whitespaces)
-        let commaIsDecimal = locale.decimalSeparator == ","
+        let format = format ?? .system(locale)
         let range = NSRange(lowered.startIndex..., in: lowered)
         for match in separator.matches(in: lowered, range: range) {
             guard let split = Range(match.range, in: lowered),
                 let (amount, from) = quantity(
-                    lowered[..<split.lowerBound].trimmingCharacters(in: .whitespaces), locale: locale,
-                    commaIsDecimal: commaIsDecimal),
+                    lowered[..<split.lowerBound].trimmingCharacters(in: .whitespaces), locale: locale, format: format),
                 let to = currency(lowered[split.upperBound...].trimmingCharacters(in: .whitespaces), locale: locale)
             else { continue }
             return Query(amount: amount, from: from, to: to)
@@ -43,11 +43,11 @@ public enum CurrencyConversion {
     }
 
     /// `100 usd`, `100usd`, `€100`, `100 €`: a number with one currency before or after it.
-    private static func quantity(_ text: String, locale: Locale, commaIsDecimal: Bool) -> (Double, String)? {
+    private static func quantity(_ text: String, locale: Locale, format: NumberFormat) -> (Double, String)? {
         guard let match = quantityPattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
             let before = Range(match.range(at: 1), in: text), let number = Range(match.range(at: 2), in: text),
             let after = Range(match.range(at: 3), in: text),
-            let amount = Arithmetic.number(String(text[number]), commaIsDecimal: commaIsDecimal), amount.isFinite
+            let amount = Arithmetic.number(String(text[number]), format: format), amount.isFinite
         else { return nil }
         let prefix = String(text[before])
         let suffix = String(text[after])
@@ -98,24 +98,30 @@ public enum CurrencyConversion {
         return formatter.maximumFractionDigits
     }
 
-    /// `value` as an amount of `code` in `locale`'s currency format: `€91.04` in en_US, `91,04 €` in da_DK.
-    public static func format(_ value: Double, code: String, locale: Locale) -> String {
+    /// `value` as an amount of `code` in `locale`'s currency format, with `format`'s separators (by default the
+    /// locale's): `€91.04` in en_US, `91,04 €` in da_DK.
+    public static func format(_ value: Double, code: String, locale: Locale, format: NumberFormat? = nil) -> String {
+        let format = format ?? .system(locale)
         let formatter = NumberFormatter()
         formatter.locale = locale
         formatter.numberStyle = .currency
         formatter.currencyCode = code
+        formatter.currencyDecimalSeparator = String(format.decimal)
+        formatter.currencyGroupingSeparator = format.grouping
+        formatter.usesGroupingSeparator = !format.grouping.isEmpty
         let digits = fractionDigits(code)
         formatter.minimumFractionDigits = digits
         formatter.maximumFractionDigits = digits
         return formatter.string(from: NSNumber(value: value)) ?? String(value)
     }
 
-    /// What ↵ copies: the number with the currency's digits and the locale's decimal separator, without a symbol
-    /// or grouping.
-    public static func copyText(_ value: Double, code: String, locale: Locale) -> String {
+    /// What ↵ copies: the number with the currency's digits and `format`'s decimal separator (by default the
+    /// locale's), without a symbol or grouping.
+    public static func copyText(_ value: Double, code: String, locale: Locale, format: NumberFormat? = nil) -> String {
         let formatter = NumberFormatter()
         formatter.locale = locale
         formatter.numberStyle = .decimal
+        formatter.decimalSeparator = String((format ?? .system(locale)).decimal)
         formatter.usesGroupingSeparator = false
         let digits = fractionDigits(code)
         formatter.minimumFractionDigits = digits
