@@ -45,6 +45,8 @@ final class LauncherModel {
         var form: FormContent?
         /// The values of the Form's fields as the user edits them, by node id.
         var fieldValues: [Int: FieldValue] = [:]
+        /// The values stored for this command's Form fields (`storeValue`), read when the Form first shows.
+        var storedFormValues: [String: JSONValue]?
         /// The Form field that had the keyboard last, by node id.
         var lastFormField: Int?
     }
@@ -276,11 +278,21 @@ final class LauncherModel {
         }
     }
 
-    /// A Form field took the keyboard.
+    /// A Form field took the keyboard: the one that had it hears `onBlur`, this one `onFocus`. Moments without a
+    /// field (the keyboard going back through nil, the action panel) don't count, so each fires once per change.
     func formFieldFocused(_ node: Int) {
         guard var command, command.lastFormField != node else { return }
+        let previous = command.lastFormField
         command.lastFormField = node
         screen = .command(command)
+        if let previous, let field = formField(previous), field.hasOnBlur {
+            let event = field.focusEvent("blur", value: fieldValue(previous) ?? .null)
+            send(.event(session: command.session, node: previous, path: ["onBlur"], args: [event]))
+        }
+        if let field = formField(node), field.hasOnFocus {
+            let event = field.focusEvent("focus", value: fieldValue(node) ?? .null)
+            send(.event(session: command.session, node: node, path: ["onFocus"], args: [event]))
+        }
     }
 
     // MARK: - Arguments
@@ -404,22 +416,62 @@ final class LauncherModel {
 
     // MARK: - Forms
 
-    /// Reads the top view's Form again, keeping what the user typed (see `FieldValue`).
+    /// Reads the top view's Form again, keeping what the user typed (see `FieldValue`). A field seen for the first
+    /// time starts on its `initialValue`, which may be a value stored for it (`storeValue`). When that isn't what the
+    /// extension's Form registered (a stored value, a dropdown's first item), the extension hears it through
+    /// `onChange`, as with the List's dropdown. A dropdown whose items arrive later takes the first one then.
     private func refreshForm(_ command: inout CommandScreen) {
         guard let view = command.view, view.type == "Form" else {
             command.form = nil
             command.fieldValues = [:]
+            command.storedFormValues = nil
             return
         }
         let form = FormContent(view)
+        if command.storedFormValues == nil {
+            command.storedFormValues = FormValueStore(directory: paths.formValuesDirectory)
+                .load(extension: command.extensionName, command: command.commandName)
+        }
         var values: [Int: FieldValue] = [:]
+        var changes: [(node: Int, value: JSONValue)] = []
         for field in form.fields where field.isEditable {
-            var value = command.fieldValues[field.id] ?? FieldValue(field.initialValue)
+            var value: FieldValue
+            if let existing = command.fieldValues[field.id] {
+                value = existing
+                if let first = field.firstItemValue(replacing: existing.value) {
+                    value = FieldValue(first)
+                    changes.append((field.id, first))
+                }
+            } else {
+                let initial = field.initialValue(stored: field.fieldId.flatMap { command.storedFormValues?[$0] })
+                value = FieldValue(initial)
+                if initial != field.registeredValue { changes.append((field.id, initial)) }
+            }
             value.render(controlled: field.value)
             values[field.id] = value
         }
         command.form = form
         command.fieldValues = values
+        for change in changes {
+            send(.event(session: command.session, node: change.node, path: ["onChange"], args: [change.value]))
+        }
+    }
+
+    /// The submitted form's values to keep (`form.storeValues`, sent by `Action.SubmitForm`): only for fields with
+    /// `storeValue`, never a PasswordField's, saved by extension, command and field `id`.
+    private func storeFormValues(_ params: JSONValue, session: String) {
+        guard case .command(var command) = screen, command.session == session, let form = command.form,
+            case .object(let object) = params, case .object(let submitted) = object["values"]
+        else { return }
+        try? FormValueStore(directory: paths.formValuesDirectory)
+            .save(form.valuesToStore(submitted), extension: command.extensionName, command: command.commandName)
+        command.storedFormValues = nil
+        screen = .command(command)
+    }
+
+    /// A Form field, by node id.
+    func formField(_ node: Int) -> FormContent.Field? {
+        command?.form?.fields.first { $0.id == node }
     }
 
     /// A Form field's value as shown.
@@ -484,34 +536,86 @@ final class LauncherModel {
         }
     }
 
-    // MARK: - The dropdown's panel (⌘P)
+    // MARK: - The dropdown's panel (⌘P), also a Form dropdown's and a TagPicker's
+
+    /// What the dropdown panel belongs to.
+    enum DropdownPanelSource: Equatable {
+        /// The List's search bar dropdown, at the top right.
+        case searchBar
+        /// A Form.Dropdown, by node id: the panel opens under it.
+        case formDropdown(Int)
+        /// A Form.TagPicker: the panel lists the items not picked yet, and picking adds one.
+        case tagPicker(Int)
+    }
 
     struct DropdownPanelState: Equatable {
+        var source: DropdownPanelSource = .searchBar
         var query = ""
         /// The highlighted item's value.
         var selected: String?
     }
 
-    /// The search bar dropdown's open panel: its own search field and items.
+    /// The open dropdown panel: its own search field and items.
     private(set) var dropdownPanel: DropdownPanelState?
     @ObservationIgnored private var dropdownSearchDebounce: Task<Void, Never>?
 
-    /// The items the open dropdown panel shows, filtered by its search text when fudge filters them.
+    /// The dropdown the open panel shows, for a search bar or Form dropdown.
+    private var panelDropdown: SearchBarDropdown? {
+        switch dropdownPanel?.source {
+        case .searchBar?: command?.list?.dropdown
+        case .formDropdown(let node)?: formField(node)?.options
+        case .tagPicker?, nil: nil
+        }
+    }
+
+    /// The items the open dropdown panel shows, filtered by its search text when fudge filters them. A TagPicker's
+    /// are the items not picked yet.
     var dropdownPanelSections: [SearchBarDropdown.Section] {
-        guard let dropdownPanel, let dropdown = command?.list?.dropdown else { return [] }
-        return dropdown.sections(matching: dropdownPanel.query)
+        guard let dropdownPanel else { return [] }
+        if case .tagPicker(let node) = dropdownPanel.source {
+            guard let field = formField(node) else { return [] }
+            let items = TagPicking.suggestions(
+                field.tags, chosen: TagPicking.values(fieldValue(node)), query: dropdownPanel.query)
+            return items.isEmpty ? [] : [SearchBarDropdown.Section(title: nil, items: items)]
+        }
+        return panelDropdown?.sections(matching: dropdownPanel.query) ?? []
+    }
+
+    /// The Form field whose panel is open (a Dropdown or TagPicker), if any.
+    var formPanelField: Int? {
+        switch dropdownPanel?.source {
+        case .formDropdown(let node)?, .tagPicker(let node)?: node
+        case .searchBar?, nil: nil
+        }
+    }
+
+    /// The open panel's search field placeholder.
+    var dropdownPanelPlaceholder: String {
+        if case .tagPicker = dropdownPanel?.source { return "Search tags…" }
+        return panelDropdown?.placeholder ?? "Search…"
+    }
+
+    var dropdownPanelIsLoading: Bool { panelDropdown?.isLoading == true }
+
+    /// Whether the open panel's item `value` is the current choice, for its checkmark.
+    func dropdownPanelChecks(_ value: String) -> Bool {
+        switch dropdownPanel?.source {
+        case .searchBar?: value == dropdownValue
+        case .formDropdown(let node)?: fieldValue(node) == .string(value)
+        case .tagPicker?, nil: false
+        }
     }
 
     var dropdownPanelQuery: String {
         get { dropdownPanel?.query ?? "" }
         set {
-            guard dropdownPanel != nil, newValue != dropdownPanelQuery, let command,
-                let dropdown = command.list?.dropdown
-            else { return }
+            guard dropdownPanel != nil, newValue != dropdownPanelQuery, let command else { return }
             dropdownPanel?.query = newValue
             let first = dropdownPanelSections.flatMap(\.items).first?.value
             dropdownPanel?.selected = first
-            dropdownSearchChanged(newValue, dropdown: dropdown, session: command.session)
+            if let dropdown = panelDropdown {
+                dropdownSearchChanged(newValue, dropdown: dropdown, session: command.session)
+            }
         }
     }
 
@@ -524,11 +628,38 @@ final class LauncherModel {
         }
     }
 
+    /// Opens a Form.Dropdown's panel under it (Space, ↵ or a click).
+    func openFormDropdown(_ node: Int) {
+        guard formField(node)?.kind == .dropdown else { return }
+        actionPanel = nil
+        let current: String? = if case .string(let value) = fieldValue(node) { value } else { nil }
+        dropdownPanel = DropdownPanelState(source: .formDropdown(node), selected: current)
+        syncDropdownPanel()
+    }
+
+    /// Opens the panel of the Form's first field of `kind` (a Dropdown or TagPicker), for snapshots. False when
+    /// there's none.
+    func openFirstFormPicker(_ kind: FormContent.Kind) -> Bool {
+        guard let field = command?.form?.fields.first(where: { $0.kind == kind }) else { return false }
+        formFieldFocused(field.id)
+        if kind == .tagPicker { openTagPicker(field.id) } else { openFormDropdown(field.id) }
+        return dropdownPanel != nil
+    }
+
+    /// Opens a TagPicker's list of items to pick, starting the search with what was typed, if anything.
+    func openTagPicker(_ node: Int, typing text: String = "") {
+        guard formField(node)?.kind == .tagPicker else { return }
+        actionPanel = nil
+        dropdownPanel = DropdownPanelState(source: .tagPicker(node), query: text)
+        syncDropdownPanel()
+    }
+
     func closeDropdownPanel() {
         guard let panel = dropdownPanel else { return }
+        let dropdown = panelDropdown
         dropdownPanel = nil
         // The dropdown's search text clears with it.
-        if !panel.query.isEmpty, let command, let dropdown = command.list?.dropdown {
+        if !panel.query.isEmpty, let command, let dropdown {
             dropdownSearchChanged("", dropdown: dropdown, session: command.session)
         }
     }
@@ -540,17 +671,69 @@ final class LauncherModel {
         dropdownPanel?.selected = items[max(0, min(items.count - 1, index + offset))].value
     }
 
-    /// Picks an item in the dropdown's panel and closes it.
+    /// Picks an item in the dropdown's panel: the search bar's or a Form dropdown's value, then the panel closes; or
+    /// another tag for a TagPicker, with the panel staying open for the next.
     func pickDropdownItem(_ value: String? = nil) {
-        guard let value = value ?? dropdownPanel?.selected else { return }
-        closeDropdownPanel()
-        selectDropdownValue(value)
+        guard let panel = dropdownPanel, let value = value ?? panel.selected else { return }
+        switch panel.source {
+        case .searchBar:
+            closeDropdownPanel()
+            selectDropdownValue(value)
+        case .formDropdown(let node):
+            closeDropdownPanel()
+            edit(field: node, to: .string(value))
+        case .tagPicker(let node):
+            guard let field = formField(node) else { return }
+            let chosen = TagPicking.adding(value, to: TagPicking.values(fieldValue(node)), items: field.tags)
+            edit(field: node, to: .array(chosen.map(JSONValue.string)))
+            dropdownPanel?.query = ""
+            // Read before writing: assigning while reading dropdownPanel is an exclusivity violation.
+            let next = dropdownPanelSections.flatMap(\.items).first?.value
+            dropdownPanel?.selected = next
+        }
     }
 
-    /// Keeps the open panel's highlight on an item that's still shown, as the extension's search results change.
+    /// ⌫ in the open panel's empty search field: for a TagPicker, takes the last tag off. Returns false otherwise.
+    func dropdownPanelDeleteBackward() -> Bool {
+        guard let panel = dropdownPanel, panel.query.isEmpty, case .tagPicker(let node) = panel.source else {
+            return false
+        }
+        let chosen = TagPicking.values(fieldValue(node))
+        guard let last = chosen.last else { return true }
+        removeTag(last, from: node)
+        return true
+    }
+
+    /// Takes a tag off a TagPicker (its ×, or ⌫).
+    func removeTag(_ value: String, from node: Int) {
+        let chosen = TagPicking.removing(value, from: TagPicking.values(fieldValue(node)))
+        edit(field: node, to: .array(chosen.map(JSONValue.string)))
+        if case .tagPicker(node)? = dropdownPanel?.source, dropdownPanel?.selected == nil {
+            let next = dropdownPanelSections.flatMap(\.items).first?.value
+            dropdownPanel?.selected = next
+        }
+    }
+
+    /// ↑↓ on a focused Form.Dropdown with its panel closed: the previous or next item, as Raycast does.
+    func stepFormDropdown(_ node: Int, by offset: Int) {
+        guard let items = formField(node)?.options?.items, !items.isEmpty else { return }
+        let current: String? = if case .string(let value) = fieldValue(node) { value } else { nil }
+        let index = items.firstIndex { $0.value == current }
+        let next = index.map { max(0, min(items.count - 1, $0 + offset)) } ?? (offset > 0 ? 0 : items.count - 1)
+        edit(field: node, to: .string(items[next].value))
+    }
+
+    /// Keeps the open panel's highlight on an item that's still shown, as the extension's search results change,
+    /// and closes it when what it belongs to is gone.
     private func syncDropdownPanel() {
-        guard dropdownPanel != nil else { return }
-        guard command?.list?.dropdown != nil else {
+        guard let panel = dropdownPanel else { return }
+        let present =
+            switch panel.source {
+            case .searchBar: command?.list?.dropdown != nil
+            case .formDropdown(let node): formField(node)?.kind == .dropdown
+            case .tagPicker(let node): formField(node)?.kind == .tagPicker
+            }
+        guard present else {
             dropdownPanel = nil
             return
         }
@@ -1263,6 +1446,9 @@ final class LauncherModel {
             switch method {
             case "preferences.openExtension", "preferences.openCommand":
                 if let extensionName = sessionExtensions[session] { openSettings(extensionName) }
+                send(.rpcResult(session: session, id: id, result: .null, error: nil))
+            case "form.storeValues":
+                storeFormValues(params, session: session)
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
             case "toast.show", "toast.hide", "hud.show", "window.close", "window.popToRoot", "searchBar.clear":
                 windowCall(method, params, session: session)

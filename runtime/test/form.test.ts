@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { createElement as h, useState } from "react";
 import { Action, ActionPanel, Form } from "../src/api/index.ts";
 import type { UINode } from "../src/renderer/serialize.ts";
+import { connect, type RpcRequest } from "../src/bridge.ts";
 import { find, mount, type Mounted } from "./support/mount.ts";
 
 function submitAction(onSubmit: (values: Record<string, unknown>) => void) {
@@ -96,4 +97,78 @@ test("a controlled field submits the extension's value, and an unmounted field d
     assert.deepEqual(submitted, [{ title: "SECOND", extra: "x" }, { title: "SECOND" }]);
     const field = find(mounted.snapshots.at(-1)!.view, "Form.TextField") as UINode;
     assert.equal(field.props.value, "SECOND", "the app sees the controlled value");
+});
+
+test("a Dropdown submits its string and a TagPicker its array, as the app reports them", async () => {
+    const submitted: unknown[] = [];
+    const mounted = await mount(
+        h(
+            Form,
+            { actions: submitAction((values) => submitted.push(values)) },
+            h(
+                Form.Dropdown,
+                { id: "lang" },
+                h(Form.Dropdown.Item, { value: "swift", title: "Swift" }),
+                h(Form.Dropdown.Section, { title: "Web" }, h(Form.Dropdown.Item, { value: "ts", title: "TypeScript" })),
+            ),
+            h(Form.TagPicker, { id: "tags" }, h(Form.TagPicker.Item, { value: "red", title: "Red" })),
+        ),
+    );
+    await submit(mounted);
+    // Until the app reports a choice, a Dropdown has none and a TagPicker is empty.
+    assert.deepEqual(submitted.at(-1), { tags: [] });
+    await type(mounted, "Form.Dropdown", "ts");
+    await type(mounted, "Form.TagPicker", ["red"]);
+    await submit(mounted);
+    assert.deepEqual(submitted.at(-1), { lang: "ts", tags: ["red"] });
+});
+
+test("onFocus and onBlur pass through to the extension with the app's FormEvent", async () => {
+    const heard: unknown[] = [];
+    const mounted = await mount(
+        h(
+            Form,
+            null,
+            h(Form.TextField, {
+                id: "name",
+                onFocus: (event: unknown) => heard.push(event),
+                onBlur: (event: unknown) => heard.push(event),
+            }),
+        ),
+    );
+    const field = find(mounted.first.view!, "Form.TextField")!;
+    assert.deepEqual(field.props.onFocus, { $fn: ["onFocus"] });
+    const focus = { target: { id: "name", value: "" }, type: "focus" };
+    const blur = { target: { id: "name", value: "typed" }, type: "blur" };
+    mounted.root.dispatch(field.id, ["onFocus"], [focus]);
+    mounted.root.dispatch(field.id, ["onBlur"], [blur]);
+    await mounted.settle();
+    assert.deepEqual(heard, [focus, blur]);
+});
+
+test("submitting sends the values of fields with storeValue to the app, never a password", async () => {
+    const sent: RpcRequest[] = [];
+    connect((request) => sent.push(request));
+    try {
+        const submitted: unknown[] = [];
+        const mounted = await mount(
+            h(
+                Form,
+                { actions: submitAction((values) => submitted.push(values)) },
+                h(Form.TextField, { id: "name", storeValue: true, defaultValue: "otter" }),
+                h(Form.TextField, { id: "plain", defaultValue: "x" }),
+                h(Form.PasswordField, { id: "secret", storeValue: true, defaultValue: "hunter2" }),
+                h(Form.TagPicker, { id: "tags", storeValue: true }, h(Form.TagPicker.Item, { value: "red", title: "Red" })),
+            ),
+        );
+        await type(mounted, "Form.TagPicker", ["red"]);
+        await submit(mounted);
+        assert.equal(submitted.length, 1, "the extension's onSubmit still runs");
+        assert.deepEqual(
+            sent.map((request) => [request.method, request.params]),
+            [["form.storeValues", { values: { name: "otter", tags: ["red"] } }]],
+        );
+    } finally {
+        connect(null);
+    }
 });

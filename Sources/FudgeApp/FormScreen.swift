@@ -42,6 +42,13 @@ struct FormScreen: View {
         .onChange(of: model.actionPanel == nil) { _, closed in
             if closed { focused = lastFocused }
         }
+        // So does a Dropdown's or TagPicker's panel. The launcher view moves its own focus as the panel closes, so
+        // this goes after it, through nil.
+        .onChange(of: model.dropdownPanel == nil) { _, closed in
+            guard closed, let field = lastFocused else { return }
+            focused = nil
+            DispatchQueue.main.async { focused = field }
+        }
     }
 
     private func focusFirstField() {
@@ -119,6 +126,53 @@ struct FormScreen: View {
             Toggle(field.text ?? "", isOn: bool(field))
                 .toggleStyle(.checkbox)
                 .focused($focused, equals: field.id)
+        case .dropdown:
+            FormDropdownField(model: model, field: field, isFocused: focused == field.id)
+                .focusable(true, interactions: .edit)
+                .focusEffectDisabled()
+                .focused($focused, equals: field.id)
+                .onKeyPress(keys: [.space, .return]) { _ in
+                    model.openFormDropdown(field.id)
+                    return .handled
+                }
+                .onKeyPress(.upArrow) {
+                    model.stepFormDropdown(field.id, by: -1)
+                    return .handled
+                }
+                .onKeyPress(.downArrow) {
+                    model.stepFormDropdown(field.id, by: 1)
+                    return .handled
+                }
+                .onTapGesture {
+                    focused = field.id
+                    model.openFormDropdown(field.id)
+                }
+                .anchorPreference(key: FormFieldBounds.self, value: .bounds) { [field.id: $0] }
+        case .tagPicker:
+            TagPickerField(model: model, field: field, isFocused: focused == field.id)
+                .focusable(true, interactions: .edit)
+                .focusEffectDisabled()
+                .focused($focused, equals: field.id)
+                .onKeyPress(keys: [.space, .return]) { _ in
+                    model.openTagPicker(field.id)
+                    return .handled
+                }
+                .onKeyPress(.delete) {
+                    if let last = TagPicking.values(model.fieldValue(field.id)).last {
+                        model.removeTag(last, from: field.id)
+                    }
+                    return .handled
+                }
+                // Typing starts the search for an item.
+                .onKeyPress(characters: .alphanumerics.union(.punctuationCharacters)) { press in
+                    model.openTagPicker(field.id, typing: press.characters)
+                    return .handled
+                }
+                .onTapGesture {
+                    focused = field.id
+                    model.openTagPicker(field.id)
+                }
+                .anchorPreference(key: FormFieldBounds.self, value: .bounds) { [field.id: $0] }
         case .unsupported(let type):
             Text("fudge can't show a \(type) yet.").foregroundStyle(.tertiary)
         case .description, .separator:
@@ -141,6 +195,144 @@ struct FormScreen: View {
             get: { model.fieldValue(field.id) == .bool(true) },
             set: { model.edit(field: field.id, to: .bool($0)) }
         )
+    }
+}
+
+/// Where each Form field is drawn, so its Dropdown or TagPicker panel can open under it (`LauncherView`).
+struct FormFieldBounds: PreferenceKey {
+    static var defaultValue: [Int: Anchor<CGRect>] { [:] }
+
+    static func reduce(value: inout [Int: Anchor<CGRect>], nextValue: () -> [Int: Anchor<CGRect>]) {
+        value.merge(nextValue()) { _, new in new }
+    }
+}
+
+/// The look shared by the Dropdown and TagPicker fields: a rounded box, outlined while it has the keyboard.
+private struct FieldBox: ViewModifier {
+    let isFocused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .padding(.horizontal, 8)
+            .frame(minHeight: 26)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6).strokeBorder(
+                    isFocused ? Color.accentColor.opacity(0.8) : Color.primary.opacity(0.12),
+                    lineWidth: isFocused ? 2 : 1)
+            )
+            .contentShape(Rectangle())
+    }
+}
+
+/// A Form.Dropdown: the chosen item's icon and title, opening a searchable list under it.
+private struct FormDropdownField: View {
+    let model: LauncherModel
+    let field: FormContent.Field
+    let isFocused: Bool
+
+    var body: some View {
+        let current: SearchBarDropdown.Item? =
+            if case .string(let value) = model.fieldValue(field.id) {
+                field.options?.items.first { $0.value == value }
+            } else { nil }
+        HStack(spacing: 6) {
+            if let current {
+                ExtensionImage(source: current.icon, assets: model.command?.assets, size: 14)
+                Text(current.title).lineLimit(1)
+            } else {
+                Text(field.placeholder ?? "Select…").foregroundStyle(.tertiary).lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            if field.options?.isLoading == true { ProgressView().controlSize(.mini) }
+            Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+        }
+        .modifier(FieldBox(isFocused: isFocused))
+    }
+}
+
+/// A Form.TagPicker: the chosen items as tokens with a ×, opening a list of the others to pick from.
+private struct TagPickerField: View {
+    let model: LauncherModel
+    let field: FormContent.Field
+    let isFocused: Bool
+
+    var body: some View {
+        let chosen = TagPicking.values(model.fieldValue(field.id)).compactMap { value in
+            field.tags.first { $0.value == value }
+        }
+        FlowLayout(spacing: 4) {
+            ForEach(chosen) { tag in
+                HStack(spacing: 4) {
+                    ExtensionImage(source: tag.icon, assets: model.command?.assets, size: 12)
+                    Text(tag.title).lineLimit(1)
+                    Button {
+                        model.removeTag(tag.value, from: field.id)
+                    } label: {
+                        Image(systemName: "xmark").font(.system(size: 8, weight: .bold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Remove \(tag.title)")
+                }
+                .padding(.horizontal, 6)
+                .frame(height: 20)
+                .background(Color.primary.opacity(0.1), in: RoundedRectangle(cornerRadius: 4))
+            }
+            if chosen.isEmpty {
+                Text(field.placeholder ?? "Add…").foregroundStyle(.tertiary).frame(height: 20)
+            }
+        }
+        .padding(.vertical, 3)
+        .modifier(FieldBox(isFocused: isFocused))
+    }
+}
+
+/// Lays its views out in rows, wrapping to the next row when one is full.
+private struct FlowLayout: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let rows = arrange(subviews, width: proposal.width ?? .infinity)
+        let height = rows.last.map { $0.y + $0.height } ?? 0
+        return CGSize(width: proposal.width ?? rows.map(\.width).max() ?? 0, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for row in arrange(subviews, width: bounds.width) {
+            for (index, x) in row.items {
+                subviews[index].place(
+                    at: CGPoint(x: bounds.minX + x, y: bounds.minY + row.y), proposal: .unspecified)
+            }
+        }
+    }
+
+    private struct Row {
+        var items: [(index: Int, x: CGFloat)] = []
+        var y: CGFloat = 0
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func arrange(_ subviews: Subviews, width: CGFloat) -> [Row] {
+        var rows: [Row] = [Row()]
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(.unspecified)
+            var row = rows.removeLast()
+            if !row.items.isEmpty, row.width + spacing + size.width > width {
+                let next = Row(y: row.y + row.height + spacing)
+                rows.append(row)
+                row = next
+            }
+            let x = row.items.isEmpty ? 0 : row.width + spacing
+            row.items.append((index, x))
+            row.width = x + size.width
+            row.height = max(row.height, size.height)
+            rows.append(row)
+        }
+        return rows
     }
 }
 
