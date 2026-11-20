@@ -156,3 +156,11 @@ export async function confirmAlert(options: AlertOptions): Promise<boolean> {
     (confirmed ? options.primaryAction : options.dismissAction)?.onAction?.();
     return confirmed === true;
 }
+
+/**
+ * Raycast sends the exception to the extension's developer through its servers. fudge has no servers and makes no
+ * network connections, so the exception goes to the log instead.
+ */
+export function captureException(exception: unknown): void {
+    console.error("captureException:", exception);
+}

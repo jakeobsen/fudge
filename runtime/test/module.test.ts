@@ -88,3 +88,20 @@ test("names that @raycast/api doesn't export stay undefined", () => {
     assert.ok(!("notARaycastExport" in api));
     assert.ok(Object.keys(api).includes("showToast"), "missing exports are enumerable, for esbuild's interop helpers");
 });
+
+test("Image.Mask, the old ImageMask, Color.Brown and captureException are there", () => {
+    const api = createApiModule() as Record<string, any>;
+    assert.equal(api.Image.Mask.Circle, "circle");
+    assert.equal(api.Image.Mask.RoundedRectangle, "roundedRectangle");
+    assert.deepEqual({ ...api.ImageMask }, { ...api.Image.Mask });
+    assert.deepEqual(Object.keys(api.Color.Brown), ["light", "dark"]);
+    const errors: unknown[][] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => errors.push(args);
+    try {
+        api.captureException(new Error("boom"));
+    } finally {
+        console.error = original;
+    }
+    assert.equal((errors[0]?.[1] as Error).message, "boom");
+});
