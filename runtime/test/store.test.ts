@@ -17,7 +17,15 @@ import {
     status,
     type StoreEntry,
 } from "../store-extension/src/catalog.ts";
-import { gitAvailable, storeEnvironment, StoreRepository, type GitResult, type Run } from "../store-extension/src/git.ts";
+import {
+    gitAvailable,
+    spawnProgram,
+    stopRunningGit,
+    storeEnvironment,
+    StoreRepository,
+    type GitResult,
+    type Run,
+} from "../store-extension/src/git.ts";
 import { filterImages, isGitHubImage } from "../store-extension/src/readme.ts";
 import { lockfileProblem, packageJSONProblem, sourceProblem, specProblem } from "../store-extension/src/sources.ts";
 import {
@@ -343,7 +351,7 @@ test("other images become their alt text; paths in the folder become GitHub's ra
 
 /** A fake runner: records each call and answers from `reply`. */
 function fakeRun(reply: (program: string, args: string[]) => Partial<GitResult> = () => ({})) {
-    const calls: { program: string; args: string[]; cwd?: string; timeout: number }[] = [];
+    const calls: { program: string; args: string[]; cwd?: string; timeout: number; stoppable?: boolean }[] = [];
     const run: Run = async (program, args, options) => {
         calls.push({ program, args, ...options });
         return { code: 0, stdout: "", stderr: "", ...reply(program, args) };
@@ -408,6 +416,29 @@ test("git ignores the user's own configuration and never prompts", () => {
     assert.equal(environment.GIT_CONFIG_GLOBAL, "/dev/null", "an insteadOf rule can't redirect the clone");
     assert.equal(environment.HOME, "/Users/someone");
     assert.equal(environment.PATH, "/usr/bin");
+});
+
+test("unloading the store stops its running git, and only that", async () => {
+    const started = Date.now();
+    const git = spawnProgram("/bin/sleep", ["5"], { timeout: 30_000, stoppable: true });
+    const other = spawnProgram("/bin/sleep", ["0.2"], { timeout: 30_000 });
+    stopRunningGit();
+    const result = await git;
+    assert.notEqual(result.code, 0);
+    assert.ok(Date.now() - started < 4000, "stopped, not run to the end");
+    assert.equal((await other).code, 0, "the CLI's build isn't stoppable");
+});
+
+test("every git call of the repository is stoppable, and a copy can be removed", async () => {
+    const root = await temporary();
+    const { run, calls } = fakeRun();
+    const repo = new StoreRepository(path.join(root, "repo"), { run });
+    await repo.commit().catch(() => undefined);
+    assert.ok(calls.every((call) => (call as { stoppable?: boolean }).stoppable === true));
+    await mkdir(path.join(root, "repo/.git"), { recursive: true });
+    assert.ok(await repo.exists());
+    await repo.remove();
+    assert.equal(await repo.exists(), false);
 });
 
 test("a failing git call surfaces its stderr", async () => {

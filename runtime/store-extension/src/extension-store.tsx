@@ -29,7 +29,7 @@ import {
     type Installed,
     type StoreEntry,
 } from "./catalog.ts";
-import { gitAvailable, StoreRepository } from "./git.ts";
+import { gitAvailable, stopRunningGit, StoreRepository } from "./git.ts";
 import { filterImages } from "./readme.ts";
 import { install, oneAtATime, readInstalled, uninstall, type StoreContext } from "./store.ts";
 
@@ -107,12 +107,16 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
             }
             try {
                 await load();
-            } catch (error) {
-                setLoadError(message(error));
+            } catch {
+                // A copy that can't be read (a clone stopped halfway) is downloaded again.
+                await repo.remove();
+                await refresh();
                 return;
             }
             if (await repo.needsRefresh(new Date())) await refresh();
         })();
+        // Unloading the store (leaving it, or turning it off) ends its git, which mustn't go on writing into `repo/`.
+        return stopRunningGit;
     }, [repo, load, refresh]);
 
     // The README of the selected extension, fetched on demand while the detail pane is open.

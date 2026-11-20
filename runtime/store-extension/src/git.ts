@@ -1,6 +1,6 @@
 // The store's local copy of github.com/raycast/extensions: a shallow, blobless, sparse clone made with the system git.
-import { spawn } from "node:child_process";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { spawn, type ChildProcess } from "node:child_process";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export const repositoryURL = "https://github.com/raycast/extensions.git";
@@ -11,8 +11,23 @@ export const shortTimeout = 30_000;
 export const refreshAge = 24 * 60 * 60 * 1000;
 
 export type GitResult = { code: number; stdout: string; stderr: string };
-/** Runs a program with an argument array, never through a shell. */
-export type Run = (program: string, args: string[], options: { cwd?: string; timeout: number }) => Promise<GitResult>;
+/** Runs a program with an argument array, never through a shell. A `stoppable` one ends with `stopRunningGit()`. */
+export type Run = (
+    program: string,
+    args: string[],
+    options: { cwd?: string; timeout: number; stoppable?: boolean },
+) => Promise<GitResult>;
+
+/** The git processes running now, which `stopRunningGit()` ends. */
+const running = new Set<ChildProcess>();
+
+/**
+ * Ends every git process the store started. The store calls it when it's unloaded, so a refresh can't go on writing
+ * into `repo/` after the store is closed, or while turning the store off deletes it.
+ */
+export function stopRunningGit(): void {
+    for (const child of running) child.kill("SIGTERM");
+}
 
 /**
  * The environment every program the store runs gets. Git never asks for a password (`GIT_TERMINAL_PROMPT=0`), and
@@ -24,15 +39,20 @@ export function storeEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.
 }
 
 /** `spawn` with no shell, a timeout, and `storeEnvironment()`. */
-export const spawnProgram: Run = (program, args, { cwd, timeout }) =>
+export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable }) =>
     new Promise((resolve) => {
         const child = spawn(program, args, { cwd, timeout, stdio: ["ignore", "pipe", "pipe"], env: storeEnvironment() });
+        if (stoppable) running.add(child);
         let stdout = "";
         let stderr = "";
         child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
         child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
-        child.on("error", (error) => resolve({ code: -1, stdout, stderr: error.message }));
+        child.on("error", (error) => {
+            running.delete(child);
+            resolve({ code: -1, stdout, stderr: error.message });
+        });
         child.on("close", (code, signal) => {
+            running.delete(child);
             if (code === null) stderr += `\n${path.basename(program)} stopped (${signal ?? "killed"}) after ${timeout / 1000} s`;
             resolve({ code: code ?? -1, stdout, stderr });
         });
@@ -72,9 +92,14 @@ export class StoreRepository {
     }
 
     async #exec(args: string[], timeout = shortTimeout, cwd = this.path): Promise<string> {
-        const result = await this.#run(this.#git, args, { cwd, timeout });
+        const result = await this.#run(this.#git, args, { cwd, timeout, stoppable: true });
         if (result.code !== 0) throw new GitError(result.stderr.trim() || `git ${args[0]} failed`);
         return result.stdout;
+    }
+
+    /** Deletes the copy, to clone it again when it can't be read (a clone stopped halfway, say). */
+    async remove(): Promise<void> {
+        await rm(this.path, { recursive: true, force: true });
     }
 
     async exists(): Promise<boolean> {
