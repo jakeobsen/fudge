@@ -439,7 +439,9 @@ struct SettingsView: View {
     @Bindable var model: SettingsModel
 
     var body: some View {
-        NavigationSplitView {
+        // The sidebar always shows and has no toggle, as in System Settings: it's the way to the other pages, and
+        // SwiftUI's toggle jumps across the title bar each time it collapses or expands the sidebar.
+        NavigationSplitView(columnVisibility: .constant(.all)) {
             List(selection: $model.selected) {
                 Label("General", systemImage: "gearshape").tag(SettingsModel.generalPage)
                 Label("Commands", systemImage: "command").tag(SettingsModel.commandsPage)
@@ -449,6 +451,8 @@ struct SettingsView: View {
                     }
                 }
             }
+            .toolbar(removing: .sidebarToggle)
+            // Keep this last: above `.toolbar(removing:)`, it's ignored and the sidebar comes out about 140 pt wide.
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
             if model.selected == SettingsModel.generalPage {
@@ -461,7 +465,9 @@ struct SettingsView: View {
                 Text("No extension has preferences.").foregroundStyle(.secondary)
             }
         }
-        .frame(minWidth: 620, minHeight: 400)
+        // The width it opens at: any narrower and the Commands table squeezes its Name column, truncating names and
+        // running a command's subtitle into the Type column.
+        .frame(minWidth: 880, minHeight: 400)
     }
 }
 
