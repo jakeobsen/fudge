@@ -14,6 +14,15 @@ public struct FudgeSettings: Sendable, Equatable {
     public var currencyRates: Bool
     /// How the calculator reads and shows numbers: the Mac's format unless set. An unknown value reads as the Mac's.
     public var numberFormat: NumberFormatSetting
+    /// The Extension Store's switch (`extensionStore`); it counts only with the consent date beside it.
+    public var extensionStore = false
+    /// When the user confirmed the Extension Store's consent sheet (`extensionStoreConsentAt`, ISO 8601).
+    public var extensionStoreConsentAt: String?
+
+    /// Whether the Extension Store is on: switched on through the consent sheet, which records the date.
+    public var isExtensionStoreOn: Bool {
+        extensionStore && extensionStoreConsentAt.flatMap(ISO8601DateFormatter().date(from:)) != nil
+    }
     /// How long the panel stays hidden before it opens on root search again (`resetAfterSeconds`).
     public var resetAfter: PanelResetSetting = .default
     /// Which screen the panel opens on (`showOnScreen`).
@@ -112,6 +121,8 @@ public struct FudgeSettings: Sendable, Equatable {
         var settings = FudgeSettings(
             hotkey: object["hotkey"] as? String, currencyRates: object["currencyRates"] as? Bool ?? false,
             numberFormat: (object["numberFormat"] as? String).flatMap(NumberFormatSetting.init(rawValue:)) ?? .system)
+        settings.extensionStore = object["extensionStore"] as? Bool ?? false
+        settings.extensionStoreConsentAt = object["extensionStoreConsentAt"] as? String
         settings.resetAfter = PanelResetSetting(settingsValue: object["resetAfterSeconds"])
         settings.showOnScreen = ShowOnScreen(settingsValue: object["showOnScreen"])
         settings.escapeBehavior = EscapeBehavior(settingsValue: object["escapeBehavior"])
@@ -134,6 +145,8 @@ public struct FudgeSettings: Sendable, Equatable {
         object["hotkey"] = hotkey
         object["currencyRates"] = currencyRates ? true : nil
         object["numberFormat"] = numberFormat == .system ? nil : numberFormat.rawValue
+        object["extensionStore"] = extensionStore ? true : nil
+        object["extensionStoreConsentAt"] = extensionStoreConsentAt
         object["resetAfterSeconds"] = resetAfter.settingsValue
         object["showOnScreen"] = showOnScreen.settingsValue
         object["escapeBehavior"] = escapeBehavior.settingsValue
