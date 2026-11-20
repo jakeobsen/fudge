@@ -172,3 +172,81 @@ private let tagPickerJSON = #"""
     let plain = try #require(try form(dropdownJSON).fields.first)
     #expect(!plain.hasOnFocus && !plain.hasOnBlur)
 }
+
+private func storedDropdown(items: String) throws -> FormContent.Field {
+    try #require(
+        try form(
+            #"{"id":2,"type":"Form.Dropdown","props":{"id":"color","storeValue":true},"children":["# + items + "]}"
+        )
+        .fields.first)
+}
+
+private func colorItem(_ id: Int, _ value: String) -> String {
+    #"{"id":\#(id),"type":"Form.Dropdown.Item","props":{"value":"\#(value)","title":"\#(value)"},"children":[]}"#
+}
+
+@Test func aStoredChoiceWaitsForItemsThatArriveLater() throws {
+    let blue: JSONValue = .string("blue")
+    // First render: no items yet. Nothing to choose, and the stored value waits.
+    let first = try storedDropdown(items: "").start(current: nil, stored: blue)
+    #expect(first == FieldStart(value: .null, reports: false, pending: blue))
+    // The items arrive, the stored one among them: it's taken ahead of the first item, and the extension hears it.
+    let loaded = try storedDropdown(items: colorItem(3, "red") + "," + colorItem(4, "blue"))
+    #expect(
+        loaded.start(current: first.value, stored: first.pending)
+            == FieldStart(value: blue, reports: true, pending: nil))
+
+    // Items that don't include it yet: the first item shows meanwhile, and the stored value keeps waiting.
+    let partial = try storedDropdown(items: colorItem(3, "red"))
+    let meanwhile = partial.start(current: .null, stored: blue)
+    #expect(meanwhile == FieldStart(value: .string("red"), reports: true, pending: blue))
+    #expect(loaded.start(current: meanwhile.value, stored: meanwhile.pending).value == blue, "taken when it arrives")
+
+    // Once nothing waits (the user changed the field, so the app dropped it), later items change nothing.
+    #expect(
+        loaded.start(current: .string("red"), stored: nil)
+            == FieldStart(value: .string("red"), reports: false, pending: nil))
+    // A controlled dropdown never waits: the extension decides.
+    let controlled = try #require(
+        try form(
+            #"{"id":2,"type":"Form.Dropdown","props":{"id":"color","storeValue":true,"value":"red"},"children":[]}"#
+        )
+        .fields.first)
+    #expect(controlled.start(current: nil, stored: blue).pending == nil)
+    // A value of the wrong type never waits.
+    #expect(try storedDropdown(items: "").start(current: nil, stored: .bool(true)).pending == nil)
+}
+
+@Test func storedTagsWaitForTheirItemsToo() throws {
+    func tags(_ items: [String]) throws -> FormContent.Field {
+        let children = items.enumerated().map { index, value in
+            #"{"id":\#(index + 3),"type":"Form.TagPicker.Item","props":{"value":"\#(value)","title":"\#(value)"},"children":[]}"#
+        }
+        let json =
+            #"{"id":2,"type":"Form.TagPicker","props":{"id":"tags","storeValue":true},"children":["#
+            + children.joined(separator: ",") + "]}"
+        return try #require(try form(json).fields.first)
+    }
+    let stored: JSONValue = .array([.string("b"), .string("c")])
+    let first = try tags([]).start(current: nil, stored: stored)
+    #expect(first == FieldStart(value: .array([]), reports: false, pending: stored))
+    let some = try tags(["a", "b"]).start(current: first.value, stored: first.pending)
+    #expect(some == FieldStart(value: .array([]), reports: false, pending: stored), "not all of them yet")
+    let all = try tags(["a", "b", "c"]).start(current: some.value, stored: some.pending)
+    #expect(all == FieldStart(value: stored, reports: true, pending: nil))
+}
+
+@Test func aFieldSeenTheFirstTimeStartsAsBefore() throws {
+    let dropdown = try storedDropdown(items: colorItem(3, "red") + "," + colorItem(4, "blue"))
+    #expect(
+        dropdown.start(current: nil, stored: .string("blue"))
+            == FieldStart(value: .string("blue"), reports: true, pending: nil))
+    #expect(dropdown.start(current: nil, stored: nil) == FieldStart(value: .string("red"), reports: true, pending: nil))
+    let text = try #require(
+        try form(#"{"id":2,"type":"Form.TextField","props":{"id":"name","defaultValue":"x"},"children":[]}"#).fields
+            .first)
+    #expect(text.start(current: nil, stored: nil) == FieldStart(value: .string("x"), reports: false, pending: nil))
+    #expect(
+        text.start(current: .string("typed"), stored: nil)
+            == FieldStart(value: .string("typed"), reports: false, pending: nil))
+}
