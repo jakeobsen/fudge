@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKey: HotKey?
     private var settingsWindow: SettingsWindowController!
     private let hud = HUDWindow()
+    private var keyMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         model = LauncherModel(paths: paths)
@@ -27,6 +28,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // An alert sheet takes the keyboard; that's not the user leaving.
             guard let self, self.panel.attachedSheet == nil else { return }
             self.hidePanel()
+        }
+
+        // ⌘K, ⌘↵ and the extensions' shortcuts, before the search field sees them.
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let pressed = Self.shortcut(for: event) else { return event }
+            let window = event.window
+            let handled = MainActor.assumeIsolated {
+                guard let self, window === self.panel else { return false }
+                return self.model.handleKey(pressed)
+            }
+            return handled ? nil : event
         }
 
         let settings = FudgeSettings.load(from: paths.settingsFile)
@@ -77,6 +89,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel.orderOut(nil)
     }
 
+    private nonisolated static func shortcut(for event: NSEvent) -> KeyShortcut? {
+        guard let key = KeyShortcut.key(forKeyCode: event.keyCode, characters: event.charactersIgnoringModifiers) else {
+            return nil
+        }
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        var modifiers: Set<String> = []
+        if flags.contains(.command) { modifiers.insert("cmd") }
+        if flags.contains(.control) { modifiers.insert("ctrl") }
+        if flags.contains(.option) { modifiers.insert("opt") }
+        if flags.contains(.shift) { modifiers.insert("shift") }
+        return KeyShortcut(key: key, modifiers: modifiers)
+    }
+
     /// confirmAlert: a sheet on the panel when it's open, otherwise a standalone alert.
     private func confirm(_ request: LauncherModel.AlertRequest) async -> Bool {
         let alert = NSAlert()
@@ -106,7 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 /// `--snapshot <file.png> [--query <text>] [--activate]`: renders the panel, saves a picture of it and quits.
-/// `--activate` presses ↵ after typing the query, then waits for the result.
+/// `--activate` presses ↵ after typing the query, then waits for the result; `--actions` then presses ⌘K.
 /// `--snapshot <file.png> --settings [<extension>]` renders the Settings window instead.
 /// For checking the layout without looking at the screen.
 @MainActor
@@ -114,6 +139,7 @@ struct Snapshot {
     let file: URL
     let query: String?
     let activate: Bool
+    let actions: Bool
     let settings: Bool
     let settingsExtension: String?
 
@@ -126,6 +152,7 @@ struct Snapshot {
             query = nil
         }
         activate = arguments.contains("--activate")
+        actions = arguments.contains("--actions")
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1
@@ -161,7 +188,10 @@ struct Snapshot {
         panel.orderFrontRegardless()
         if let query { model.searchText = query }
         if activate { model.activate() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + (activate ? 3 : 1)) {
+        if actions {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { model.toggleActionPanel() }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + (actions ? 3.5 : activate ? 3 : 1)) {
             guard let view = panel.contentView else { exit(1) }
             save(view)
         }

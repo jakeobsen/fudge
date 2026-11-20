@@ -39,3 +39,31 @@ export {
     showHUD,
     showToast,
 } from "./feedback.ts";
+export { Keyboard } from "./keyboard.ts";
+
+// Raycast's old names, still exported by @raycast/api.
+import { Action, ActionPanel, Form, List } from "./components.ts";
+export const ActionPanelItem = Action;
+export const ActionPanelSection = ActionPanel.Section;
+export const ActionPanelSubmenu = ActionPanel.Submenu;
+export const CopyToClipboardAction = Action.CopyToClipboard;
+export const OpenAction = Action.Open;
+export const OpenInBrowserAction = Action.OpenInBrowser;
+export const OpenWithAction = Action.OpenWith;
+export const PasteAction = Action.Paste;
+export const PushAction = Action.Push;
+export const ShowInFinderAction = Action.ShowInFinder;
+export const SubmitFormAction = Action.SubmitForm;
+export const TrashAction = Action.Trash;
+export const ListItem = List.Item;
+export const ListSection = List.Section;
+export const FormCheckbox = Form.Checkbox;
+export const FormDatePicker = Form.DatePicker;
+export const FormDropdown = Form.Dropdown;
+export const FormDropdownItem = Form.Dropdown.Item;
+export const FormDropdownSection = Form.Dropdown.Section;
+export const FormSeparator = Form.Separator;
+export const FormTagPicker = Form.TagPicker;
+export const FormTagPickerItem = Form.TagPicker.Item;
+export const FormTextArea = Form.TextArea;
+export const FormTextField = Form.TextField;

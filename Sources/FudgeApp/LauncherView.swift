@@ -4,7 +4,9 @@ import SwiftUI
 /// The launcher: a search field, the current screen, and a bar with the main action.
 struct LauncherView: View {
     @Bindable var model: LauncherModel
-    @FocusState private var searchFocused: Bool
+    @FocusState private var focus: Field?
+
+    enum Field { case search, actions }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -16,9 +18,17 @@ struct LauncherView: View {
             bottomBar
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .bottomTrailing) {
+            if model.actionPanel != nil {
+                ActionPanelView(model: model, focus: $focus)
+                    .padding(.trailing, 10)
+                    .padding(.bottom, 46)
+            }
+        }
         // The panel's hidden title bar would otherwise push everything down by its height.
         .ignoresSafeArea()
-        .onAppear { searchFocused = true }
+        .onAppear { focus = .search }
+        .onChange(of: model.actionPanel == nil) { _, closed in focus = closed ? .search : .actions }
     }
 
     private var searchBar: some View {
@@ -31,7 +41,7 @@ struct LauncherView: View {
             TextField(model.placeholder, text: $model.searchText)
                 .textFieldStyle(.plain)
                 .font(.system(size: 20))
-                .focused($searchFocused)
+                .focused($focus, equals: .search)
                 .onSubmit { model.activate() }
                 .onKeyPress(.upArrow) {
                     model.moveSelection(by: -1)
@@ -82,6 +92,18 @@ struct LauncherView: View {
                 Text(label).foregroundStyle(.primary)
                 KeyCap("↵")
             }
+            if !model.currentActions.isEmpty {
+                Divider().frame(height: 16)
+                Button {
+                    model.toggleActionPanel()
+                } label: {
+                    HStack(spacing: 6) {
+                        Text("Actions")
+                        KeyCap("⌘K")
+                    }
+                }
+                .buttonStyle(.plain)
+            }
         }
         .font(.system(size: 12))
         .padding(.horizontal, 14)
@@ -102,7 +124,7 @@ struct LauncherView: View {
             if case .application = item.kind { return "Open Application" }
             return "Open Command"
         case .command:
-            return model.primaryAction?.string("title")
+            return model.primaryAction?.title
         case .failure:
             return "Back"
         }
@@ -240,6 +262,99 @@ private struct FailureView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(20)
         }
+    }
+}
+
+/// The ⌘K panel: the actions for what's selected, searchable, with their shortcuts.
+private struct ActionPanelView: View {
+    @Bindable var model: LauncherModel
+    var focus: FocusState<LauncherView.Field?>.Binding
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 1) {
+                        ForEach(Array(model.actionPanelSections.enumerated()), id: \.offset) { index, section in
+                            if let title = section.title {
+                                Text(title)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.top, index == 0 ? 2 : 8)
+                            } else if index > 0 {
+                                Divider().padding(.vertical, 4)
+                            }
+                            ForEach(section.entries) { entry in
+                                ActionRow(entry: entry, selected: entry.id == model.actionPanel?.selected)
+                                    .id(entry.id)
+                                    .onTapGesture { model.run(entry) }
+                            }
+                        }
+                        if model.actionPanelSections.isEmpty {
+                            Text("No actions").foregroundStyle(.secondary).padding(8)
+                        }
+                    }
+                    .padding(6)
+                }
+                .onChange(of: model.actionPanel?.selected) { _, id in proxy.scrollTo(id) }
+            }
+            .frame(maxHeight: 280)
+            Divider()
+            TextField("Search for actions…", text: $model.actionPanelQuery)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13))
+                .focused(focus, equals: .actions)
+                .onSubmit { model.runSelectedAction() }
+                .onKeyPress(.upArrow) {
+                    model.moveActionSelection(by: -1)
+                    return .handled
+                }
+                .onKeyPress(.downArrow) {
+                    model.moveActionSelection(by: 1)
+                    return .handled
+                }
+                .onKeyPress(.escape) {
+                    model.escape()
+                    return .handled
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 36)
+        }
+        .frame(width: 340)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.12)))
+        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+    }
+}
+
+private struct ActionRow: View {
+    let entry: ActionEntry
+    let selected: Bool
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(entry.title)
+                .foregroundStyle(entry.destructive ? Color.red : Color.primary)
+                .lineLimit(1)
+            Spacer()
+            if entry.isLoading {
+                ProgressView().controlSize(.mini)
+            }
+            if let shortcut = entry.shortcut {
+                KeyCap(shortcut.description)
+            }
+            if entry.isSubmenu {
+                Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold)).foregroundStyle(
+                    .secondary)
+            }
+        }
+        .font(.system(size: 13))
+        .padding(.horizontal, 8)
+        .frame(height: 30)
+        .background(selected ? Color.primary.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle())
     }
 }
 

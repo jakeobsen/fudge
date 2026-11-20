@@ -14,7 +14,9 @@ export { NotAvailableError, notAvailable } from "./stubs.ts";
 
 const known = new Set(RAYCAST_EXPORTS);
 
-const wrappers = new WeakMap<object, unknown>();
+// Keyed by object, then by name: one object can be reached by two names
+// (List.Item and the old ListItem), and each name reports its own path.
+const wrappers = new WeakMap<object, Map<string, unknown>>();
 
 /**
  * Wraps an implemented component or namespace so that a capitalised member
@@ -24,17 +26,22 @@ const wrappers = new WeakMap<object, unknown>();
  */
 function withMissingMembers(value: unknown, name: string): unknown {
     if ((typeof value !== "function" && typeof value !== "object") || value === null) return value;
-    const cached = wrappers.get(value);
+    let byName = wrappers.get(value);
+    if (!byName) wrappers.set(value, (byName = new Map()));
+    const cached = byName.get(name);
     if (cached) return cached;
     const wrapper = new Proxy(value, {
         get(target, key, receiver) {
             const member = Reflect.get(target, key, receiver);
             if (typeof key !== "string" || !/^[A-Z]/.test(key)) return member;
+            // A proxy must hand back a frozen property exactly as it is (Keyboard.Shortcut, …).
+            const own = Reflect.getOwnPropertyDescriptor(target, key);
+            if (own && !own.configurable && own.writable === false) return member;
             if (member === undefined) return notAvailable(`${name}.${key}`);
             return withMissingMembers(member, `${name}.${key}`);
         },
     });
-    wrappers.set(value, wrapper);
+    byName.set(name, wrapper);
     return wrapper;
 }
 

@@ -44,9 +44,19 @@ test("implemented exports keep their behaviour and a stable identity", () => {
     assert.equal(createApiModule().List, api.List, "wrappers are shared");
 });
 
+test("frozen constants come through the module exactly as they are", () => {
+    const api = createApiModule() as typeof implementation;
+    assert.deepEqual(api.Keyboard.Shortcut.Common.Refresh, {
+        macOS: { modifiers: ["cmd"], key: "r" },
+        Windows: { modifiers: ["ctrl"], key: "r" },
+    });
+    assert.equal(api.Keyboard.Shortcut, implementation.Keyboard.Shortcut);
+    assert.equal(api.Icon.Trash, "trash-16");
+});
+
 test("a missing member of an implemented component names itself", () => {
     const api = createApiModule() as { Action: Record<string, unknown>; List: { Item: Record<string, unknown> } };
-    assert.throws(() => (api.Action.CopyToClipboard as () => void)(), /^NotAvailableError: Action\.CopyToClipboard isn't available in fudge yet$/);
+    assert.throws(() => (api.Action.Teleport as () => void)(), /^NotAvailableError: Action\.Teleport isn't available in fudge yet$/);
     assert.throws(() => (api.List.Item.Accessory as () => void)(), /List\.Item\.Accessory isn't available/);
     assert.equal(api.Action.displayName, "Action", "lowercase members aren't stubbed");
 });
