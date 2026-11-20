@@ -45,7 +45,14 @@ struct LauncherView: View {
                     let field = proxy[anchor]
                     let x = max(8, min(field.minX, proxy.size.width - 288))
                     let panel = formPanel(assets: command.assets)
-                    if proxy.size.height - field.maxY >= 260 {
+                    let below = proxy.size.height - field.maxY
+                    // The calendar has a fixed height, so it opens where it fits; a Dropdown's list can shrink.
+                    let opensBelow =
+                        model.datePanel != nil
+                        ? PanelPlacement.opensBelow(
+                            spaceBelow: below, spaceAbove: field.minY, height: DatePanelView.height)
+                        : below >= 260
+                    if opensBelow {
                         panel.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                             .padding(.leading, x).padding(.top, field.maxY + 4)
                     } else {

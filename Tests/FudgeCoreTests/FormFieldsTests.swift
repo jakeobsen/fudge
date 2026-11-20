@@ -458,3 +458,11 @@ private func colorItem(_ id: Int, _ value: String) -> String {
         text.start(current: .string("typed"), stored: nil)
             == FieldStart(value: .string("typed"), reports: false, pending: nil))
 }
+
+@Test func theCalendarOpensOnTheSideWithRoom() {
+    // Form Check's Due field (#2637): about 255 pt below, 191 above, for a 236 pt calendar.
+    #expect(PanelPlacement.opensBelow(spaceBelow: 255, spaceAbove: 191, height: 236))
+    #expect(PanelPlacement.opensBelow(spaceBelow: 200, spaceAbove: 150, height: 236), "neither fits: the bigger side")
+    #expect(!PanelPlacement.opensBelow(spaceBelow: 120, spaceAbove: 300, height: 236))
+    #expect(PanelPlacement.opensBelow(spaceBelow: 236, spaceAbove: 900, height: 236), "below is preferred when it fits")
+}

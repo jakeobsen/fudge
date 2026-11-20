@@ -311,6 +311,7 @@ private struct FormDateField: View {
     let model: LauncherModel
     let field: FormContent.Field
     var focused: FocusState<Int?>.Binding
+    @FocusState private var timeFocused: Bool
 
     var body: some View {
         let options = field.dates ?? DatePickerOptions()
@@ -356,6 +357,11 @@ private struct FormDateField: View {
                 .labelsHidden()
                 .datePickerStyle(.stepperField)
                 .fixedSize()
+                .focused($timeFocused)
+                // The time box takes the keys from here, so the calendar closes.
+                .onChange(of: timeFocused) { _, now in
+                    if now, isOpen { model.closeDatePanel() }
+                }
             }
             if date != nil {
                 Button {
@@ -375,10 +381,12 @@ private struct FormDateField: View {
 /// picks it. The keys (←→↑↓, ⇞⇟, ↵, Esc) go through `LauncherModel.handleKey`, since the field keeps the keyboard.
 struct DatePanelView: View {
     let model: LauncherModel
+    /// Its height with the margin under or over the field: the header, the weekdays and six weeks, padded.
+    static let height: CGFloat = 236
 
     var body: some View {
         if let panel = model.datePanel {
-            let today = Calendar.current.startOfDay(for: Date())
+            let calendar = Calendar.current
             VStack(spacing: 6) {
                 HStack(spacing: 10) {
                     Text(panel.calendar.day.formatted(.dateTime.month(.wide).year()))
@@ -410,7 +418,10 @@ struct DatePanelView: View {
                     ForEach(Array(panel.calendar.weeks().enumerated()), id: \.offset) { _, week in
                         GridRow {
                             ForEach(week) { day in
-                                cell(day, highlighted: day.date == panel.calendar.day, today: day.date == today)
+                                // By the day, not the instant: where DST starts at midnight, a day starts at 1:00.
+                                cell(
+                                    day, highlighted: calendar.isDate(day.date, inSameDayAs: panel.calendar.day),
+                                    today: calendar.isDateInToday(day.date))
                             }
                         }
                     }

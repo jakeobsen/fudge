@@ -94,3 +94,11 @@ public struct DateCalendar: Sendable, Equatable {
         return start
     }
 }
+
+/// Which side of its field a panel of a fixed height opens on: below when it fits there, or when there's at least as
+/// much room below as above; otherwise above.
+public enum PanelPlacement {
+    public static func opensBelow(spaceBelow: Double, spaceAbove: Double, height: Double) -> Bool {
+        spaceBelow >= height || spaceBelow >= spaceAbove
+    }
+}

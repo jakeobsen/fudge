@@ -765,6 +765,7 @@ final class LauncherModel {
     func openFormDropdown(_ node: Int) {
         guard formField(node)?.kind == .dropdown else { return }
         actionPanel = nil
+        datePanel = nil
         let current: String? = if case .string(let value) = fieldValue(node) { value } else { nil }
         dropdownPanel = DropdownPanelState(source: .formDropdown(node), selected: current)
         syncDropdownPanel()
@@ -787,6 +788,7 @@ final class LauncherModel {
     func openTagPicker(_ node: Int, typing text: String = "") {
         guard formField(node)?.kind == .tagPicker else { return }
         actionPanel = nil
+        datePanel = nil
         dropdownPanel = DropdownPanelState(source: .tagPicker(node), query: text)
         syncDropdownPanel()
     }
