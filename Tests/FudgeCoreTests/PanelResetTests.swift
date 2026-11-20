@@ -79,6 +79,20 @@ private final class FakeClock {
     #expect(!reset.takeDue(), "a panel left open isn't reset under the user")
 }
 
+@Test func aSuspendedCloseNeverResetsThatHide() {
+    let clock = FakeClock()
+    let reset = PanelReset(setting: .immediately, now: { clock.now })
+    reset.panelHidden()
+    reset.suspend()  // closeMainWindow({ popToRootType: Suspended })
+    clock.advance(.seconds(86_400))
+    #expect(!reset.takeDue(), "the command stays for when the panel opens again")
+
+    reset.panelShown()
+    reset.panelHidden()
+    clock.advance(.seconds(1))
+    #expect(reset.takeDue(), "the next hide counts as usual")
+}
+
 /// The launcher's state as far as a reset goes, with the paths that show the panel built as `LauncherModel`
 /// builds them: each puts its screen together inside `PanelReset.enter`, and shows the panel after.
 private final class FakePanel {
