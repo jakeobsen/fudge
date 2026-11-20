@@ -24,6 +24,17 @@ struct GeneralPage: View {
             }
             Section("Calculator") {
                 CurrencyRatesToggle(model: model)
+                Picker(
+                    selection: Binding(get: { model.numberFormat }, set: { model.setNumberFormat($0) })
+                ) {
+                    Text("Same as macOS (\(Calculator.format(1234.5, locale: .current, for: .card)))")
+                        .tag(NumberFormatSetting.system)
+                    Text("1,234.5").tag(NumberFormatSetting.dotDecimal)
+                    Text("1.234,5").tag(NumberFormatSetting.commaDecimal)
+                } label: {
+                    Text("Number format")
+                    Text("How the calculator reads the numbers you type, and writes its answers.")
+                }
             }
             Section("Search") {
                 LabeledContent {

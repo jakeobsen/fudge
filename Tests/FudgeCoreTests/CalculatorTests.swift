@@ -131,13 +131,13 @@ func floatingPointNoiseDoesNotShow(_ query: String, _ us: String, _ dk: String) 
 
 @Test func aNumberWithAnExponentIsOneToken() {
     // As the card writes it, in each locale.
-    #expect(Arithmetic.tokenize("1.152921505E18", commaIsDecimal: false) == [.number(1.152921505e18)])
-    #expect(Arithmetic.tokenize("1,152921505E18", commaIsDecimal: true) == [.number(1.152921505e18)])
-    #expect(Arithmetic.tokenize("3.333333333E-8", commaIsDecimal: false) == [.number(3.333333333e-8)])
+    #expect(Arithmetic.tokenize("1.152921505E18", format: .dotDecimal) == [.number(1.152921505e18)])
+    #expect(Arithmetic.tokenize("1,152921505E18", format: .commaDecimal) == [.number(1.152921505e18)])
+    #expect(Arithmetic.tokenize("3.333333333E-8", format: .dotDecimal) == [.number(3.333333333e-8)])
     #expect(Arithmetic.tokenize("1e-7") == [.number(1e-7)])
     #expect(Arithmetic.tokenize("6.02e+23") == [.number(6.02e23)])
     #expect(Arithmetic.tokenize("2e+1") == [.number(20)], "a digit after the sign: an exponent, as in code")
-    #expect(Arithmetic.tokenize("1,000e3", commaIsDecimal: false) == [.number(1e6)], "grouping before the exponent")
+    #expect(Arithmetic.tokenize("1,000e3", format: .dotDecimal) == [.number(1e6)], "grouping before the exponent")
     // No digit straight after the e (and sign), or a space inside: the constant e.
     #expect(Arithmetic.tokenize("2e") == [.number(2), .name("e")])
     #expect(Arithmetic.tokenize("2e + 1") == [.number(2), .name("e"), .symbol("+"), .number(1)])
@@ -163,10 +163,9 @@ func scientificNotationInEachLocale(_ query: String, _ value: Double, _ us: Stri
     let american = try #require(calculate(query, enUS))
     #expect(american.kind == .arithmetic)
     #expect(american.answer == us)
-    let result = try #require(Arithmetic.evaluate(query, commaIsDecimal: false))
+    let result = try #require(Arithmetic.evaluate(query, format: .dotDecimal))
     #expect(Swift.abs(result - value) <= Swift.abs(value) * 1e-12)
-    // en_DK reads `.` as a decimal point too, and writes `,`.
-    #expect(try #require(calculate(query, enDK)).answer == dk)
+    // en_DK's decimal separator is `,`.
     #expect(try #require(calculate(query.replacingOccurrences(of: ".", with: ","), enDK)).answer == dk)
 }
 
@@ -199,8 +198,9 @@ func scientificNotationWithoutACard(_ query: String) {
 @Test func readingCommasDependsOnTheLocale() throws {
     #expect(try #require(calculate("1,000+1", enUS)).answer == "1,001", "grouping where `.` is the decimal")
     #expect(try #require(calculate("1,234,567.5+0.5", enUS)).copyText == "1234568")
-    #expect(try #require(calculate("13,5*2", enUS)).answer == "27", "any other comma is a decimal point")
-    #expect(try #require(calculate("1,5+1.5", daDK)).answer == "3", "both are decimal points in da_DK")
+    #expect(calculate("13,5*2", enUS) == nil, "any other comma: no card, never a decimal point")
+    #expect(try #require(calculate("1,5+1", daDK)).answer == "2,5", "the decimal point in da_DK")
+    #expect(calculate("1,5+1.5", daDK) == nil, "`.` groups in da_DK, so `1.5` is no number")
 }
 
 @Test(arguments: [
