@@ -22,6 +22,8 @@ export {
     getApplications,
     getDefaultApplication,
     getFrontmostApplication,
+    getSelectedFinderItems,
+    getSelectedText,
     open,
     pasteText,
     showInFinder,
