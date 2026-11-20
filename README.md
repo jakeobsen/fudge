@@ -74,6 +74,10 @@ fudge doesn't start at login until you turn on **Open at Login** at the top of *
 
 Root search ranks what you open often first. **Clear Search History…** on the same page makes it forget, after asking.
 
+### Extensions that open other extensions
+
+The first time an extension opens another extension's command, fudge asks whether to allow it, and remembers the answer. To change or forget an answer, open **Settings…** → **General** → **Extensions that open other extensions**: pick **Allowed** or **Not allowed**, or click × to be asked again next time.
+
 ### Calculator and currency
 
 Type a calculation in root search and the answer shows above the results: arithmetic (`5+5/10*39`), units (`13kg to lbs`), time zones (`3pm cet in pst`) and currencies (`100 usd to eur`, `€100 in usd`, `100 € in kr`). ↵ copies the answer.

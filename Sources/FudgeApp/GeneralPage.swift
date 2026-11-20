@@ -2,7 +2,7 @@ import FudgeCore
 import SwiftUI
 
 /// The Settings window's General page: Open at Login, the launcher's hotkey, whether the calculator downloads
-/// exchange rates, and clearing root search's history.
+/// exchange rates, clearing root search's history, and which extensions may open other extensions' commands.
 struct GeneralPage: View {
     @Bindable var model: SettingsModel
     @State private var confirmingClear = false
@@ -60,6 +60,9 @@ struct GeneralPage: View {
                     Text("Root search ranks what you open often first.")
                 }
             }
+            if !model.launchPermissions.isEmpty || model.launchPermissionsUnreadable {
+                LaunchPermissionsSection(model: model)
+            }
         }
         .formStyle(.grouped)
         .onAppear { model.refreshLoginItem() }
@@ -68,6 +71,60 @@ struct GeneralPage: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Root search forgets which results you opened, and ranks them by name again.")
+        }
+    }
+}
+
+/// The answers to "Allow <A> to open <B>'s commands?": each can be changed, or forgotten so it's asked again.
+private struct LaunchPermissionsSection: View {
+    let model: SettingsModel
+
+    var body: some View {
+        Section {
+            if model.launchPermissionsUnreadable {
+                Text(LaunchPermissions.Unreadable().description).font(.callout).foregroundStyle(.red)
+            }
+            ForEach(model.launchPermissions) { entry in
+                HStack(spacing: 6) {
+                    name(entry.caller)
+                    Image(systemName: "arrow.right").foregroundStyle(.secondary).imageScale(.small)
+                    name(entry.target)
+                    Spacer()
+                    Picker(
+                        "",
+                        selection: Binding(
+                            get: { entry.allowed },
+                            set: { model.setLaunchPermission($0, caller: entry.caller, target: entry.target) })
+                    ) {
+                        Text("Allowed").tag(true)
+                        Text("Not allowed").tag(false)
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    Button {
+                        model.forgetLaunchPermission(caller: entry.caller, target: entry.target)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Forget: ask again the next time")
+                }
+                .disabled(model.launchPermissionsUnreadable)
+            }
+        } header: {
+            Text("Extensions that open other extensions")
+        } footer: {
+            Text("fudge asks the first time an extension opens another extension's commands.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    /// The extension's title, or its name in grey when it isn't installed.
+    @ViewBuilder private func name(_ extensionName: String) -> some View {
+        if let title = model.extensionTitle(extensionName) {
+            Text(title)
+        } else {
+            Text(extensionName).foregroundStyle(.secondary).help("Not installed")
         }
     }
 }

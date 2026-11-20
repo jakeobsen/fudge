@@ -57,6 +57,7 @@ final class SettingsModel {
         }
         fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
         settingsProblem = FudgeSettings.isWritable(paths.settingsFile) ? nil : unreadableMessage
+        loadLaunchPermissions()
         if selected != Self.generalPage, selected != Self.commandsPage,
             !extensions.contains(where: { $0.manifest.name == selected })
         {
@@ -106,6 +107,44 @@ final class SettingsModel {
 
     func openLoginItemsSettings() {
         loginItem.openSystemSettings()
+    }
+
+    // MARK: - Extensions that open other extensions
+
+    /// The answers to "Allow <A> to open <B>'s commands?" (`launch-permissions.json`).
+    private(set) var launchPermissions: [LaunchPermissions.Entry] = []
+    /// The file holds something fudge can't read, so the answers can't be changed here.
+    private(set) var launchPermissionsUnreadable = false
+
+    /// An installed extension's title, or nil when it isn't installed.
+    func extensionTitle(_ name: String) -> String? {
+        allExtensions.first { $0.manifest.name == name }?.manifest.title
+    }
+
+    func setLaunchPermission(_ allowed: Bool, caller: String, target: String) {
+        changeLaunchPermissions { $0.record(allowed, caller: caller, target: target) }
+    }
+
+    /// Forgets an answer, so the user is asked again next time.
+    func forgetLaunchPermission(caller: String, target: String) {
+        changeLaunchPermissions { $0.forget(caller: caller, target: target) }
+    }
+
+    private func loadLaunchPermissions() {
+        launchPermissions = LaunchPermissions.load(from: paths.launchPermissionsFile).entries
+        launchPermissionsUnreadable = LaunchPermissions.isUnreadable(paths.launchPermissionsFile)
+    }
+
+    /// Reads the file again first, so an answer given meanwhile isn't lost, then edits and saves it.
+    private func changeLaunchPermissions(_ edit: (inout LaunchPermissions) -> Void) {
+        var permissions = LaunchPermissions.load(from: paths.launchPermissionsFile)
+        edit(&permissions)
+        do {
+            try permissions.save(to: paths.launchPermissionsFile)
+        } catch {
+            FileHandle.standardError.write(Data("fudge: couldn't save launch permissions: \(error)\n".utf8))
+        }
+        loadLaunchPermissions()
     }
 
     // MARK: - The launcher's hotkey
