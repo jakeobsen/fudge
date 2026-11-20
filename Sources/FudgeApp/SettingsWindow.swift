@@ -20,8 +20,13 @@ final class SettingsModel {
     private(set) var recording: String?
     /// A short message under a command's hotkey: why a recording was refused.
     private(set) var hotkeyMessages: [String: String] = [:]
-    /// The launcher's own hotkey, which commands can't take; set by the app delegate.
-    @ObservationIgnored var launcherHotkey = HotKeySpec.default
+    /// The launcher's own hotkey, which commands can't take; kept current by the app delegate.
+    var launcherHotkey = HotKeySpec.default
+    /// The system refused the launcher's hotkey: another app has it, so it doesn't work.
+    var launcherHotkeyInUse = false
+    /// Registers a new launcher hotkey; false when the system refuses it, and the old one then stays registered.
+    /// Set by the app delegate.
+    @ObservationIgnored var registerLauncherHotkey: (HotKeySpec) -> Bool = { _ in true }
     /// Suspend and resume fudge's global hotkeys around a recording, so pressing one records it.
     @ObservationIgnored var suspendHotkeys: () -> Void = {}
     @ObservationIgnored var resumeHotkeys: () -> Void = {}
@@ -96,6 +101,49 @@ final class SettingsModel {
 
     func openLoginItemsSettings() {
         loginItem.openSystemSettings()
+    }
+
+    // MARK: - The launcher's hotkey
+
+    /// `recording` while the launcher's hotkey is being recorded, and its key in `hotkeyMessages`. Command ids always
+    /// have a "/", so it can't be one.
+    static let launcherRecording = ":launcher"
+
+    /// A key pressed while recording the launcher's hotkey; the Reset button passes `.clear`. A conflict, or a
+    /// shortcut the system refuses, keeps the old hotkey and says why.
+    func recordLauncherHotkey(_ key: HotKeyRecording) {
+        cancelRecording()
+        // Check against the file as it is now, so a command hotkey added by hand meanwhile counts.
+        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        switch key.launcherEdit(commands: fudgeSettings.commandHotkeys) {
+        case .keep:
+            return
+        case .refused(let conflict):
+            hotkeyMessages[Self.launcherRecording] = message(for: conflict)
+        case .set(let spec):
+            setLauncherHotkey(spec)
+        }
+    }
+
+    private func setLauncherHotkey(_ spec: HotKeySpec) {
+        hotkeyMessages[Self.launcherRecording] = nil
+        let old = launcherHotkey
+        guard registerLauncherHotkey(spec) else {
+            hotkeyMessages[Self.launcherRecording] = "This shortcut is in use by another app"
+            return
+        }
+        // Read the file again first, so hand edits made meanwhile aren't overwritten.
+        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        fudgeSettings.launcherHotkey = spec
+        do {
+            try fudgeSettings.save(to: paths.settingsFile)
+        } catch {
+            // What's registered must match the file, or the next launch would bring the old one back unannounced.
+            FileHandle.standardError.write(Data("fudge: couldn't save settings: \(error)\n".utf8))
+            _ = registerLauncherHotkey(old)
+            fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+            hotkeyMessages[Self.launcherRecording] = "Couldn't save settings"
+        }
     }
 
     // MARK: - Command hotkeys

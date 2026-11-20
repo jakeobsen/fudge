@@ -30,8 +30,12 @@ struct GeneralPage: View {
             }
             Section {
                 LabeledContent("Launcher hotkey") {
-                    Text("\(model.launcherHotkey.description); change it in settings.json")
-                        .foregroundStyle(.secondary)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        LauncherHotkeyCell(model: model)
+                        Button("Reset to \(HotKeySpec.default.description)") { model.recordLauncherHotkey(.clear) }
+                            .controlSize(.small)
+                            .disabled(model.launcherHotkey.sameKeys(as: .default) && !model.launcherHotkeyInUse)
+                    }
                 }
             }
             Section("Calculator") {
@@ -59,6 +63,33 @@ struct GeneralPage: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Root search forgets which results you opened, and ranks them by name again.")
+        }
+    }
+}
+
+/// The launcher's hotkey as keycaps; clicking records a new one, with the Commands page's rules. It can't be
+/// cleared: ⌫ resets it to ⌥Space, since without it fudge opens only from the menu bar item.
+private struct LauncherHotkeyCell: View {
+    let model: SettingsModel
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            if model.recording == SettingsModel.launcherRecording {
+                HotkeyRecordingPrompt { [model] key in model.recordLauncherHotkey(key) }
+            } else {
+                Button {
+                    model.startRecording(SettingsModel.launcherRecording)
+                } label: {
+                    Keycaps(spec: model.launcherHotkey)
+                }
+                .buttonStyle(.plain)
+                .help("Click, then press a new shortcut")
+            }
+            if let message = model.hotkeyMessages[SettingsModel.launcherRecording] {
+                Text(message).font(.system(size: 10)).foregroundStyle(.red)
+            } else if model.launcherHotkeyInUse {
+                Text("In use by another app").font(.system(size: 10)).foregroundStyle(.red)
+            }
         }
     }
 }
