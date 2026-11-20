@@ -104,6 +104,9 @@ public final class SelectedText {
     private let pollInterval: Duration
     /// macOS's Accessibility prompt is shown at most once per run.
     private var prompted = false
+    /// The fallback in progress. Fallbacks run one at a time: one taking its snapshot while another's copy is on the
+    /// pasteboard would restore the copied text instead of the user's clipboard.
+    private var fallback: Task<Void, Never>?
 
     public init(
         accessibility: any AccessibilityAccess,
@@ -128,7 +131,13 @@ public final class SelectedText {
             throw SelectionError.accessibilityNeeded
         }
         if let text = await accessibility.selectedText(pid: frontmost.pid), !text.isEmpty { return text }
-        return try await copy(from: frontmost.pid)
+        let previous = fallback
+        let copying = Task {
+            await previous?.value
+            return try await copy(from: frontmost.pid)
+        }
+        fallback = Task { _ = try? await copying.value }
+        return try await copying.value
     }
 
     /// The ⌘C fallback. Never posts ⌘V or ⌘X.

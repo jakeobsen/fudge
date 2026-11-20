@@ -148,6 +148,27 @@ private func reader(_ accessibility: FakeAccessibility, _ keys: FakeKeys, _ past
     #expect(pasteboard.current == userClipboard)
 }
 
+@Test @MainActor func overlappingFallbacksRunOneAtATime() async throws {
+    let pasteboard = FakePasteboard(userClipboard)
+    let keys = FakeKeys()
+    // Each copy lands a moment after its ⌘C, with the text of the selection at that time.
+    var copies = 0
+    keys.onCopy = {
+        copies += 1
+        let copied = "copy \(copies)"
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(5))
+            pasteboard.appCopies([[text(copied)]])
+        }
+    }
+    let selection = reader(FakeAccessibility(), keys, pasteboard)
+
+    async let first = selection.read(from: app)
+    async let second = selection.read(from: app)
+    #expect(try await [first, second].sorted() == ["copy 1", "copy 2"])
+    #expect(pasteboard.current == userClipboard)
+}
+
 @Test @MainActor func fallbackThatCopiesNothingRestoresAndRejects() async {
     let pasteboard = FakePasteboard(userClipboard)
     let keys = FakeKeys()
