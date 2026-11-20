@@ -117,12 +117,28 @@ func readsCodesSymbolsAndKr(_ query: String, _ locale: Locale, _ from: String, _
     #expect(CurrencyConversion.parse("1,500 eur in usd", locale: enUS)?.amount == 1500)
 }
 
+@Test func amountsAndAnswersFollowTheNumberFormat() throws {
+    func card(_ query: String, _ format: NumberFormat) -> CalculatorResult? {
+        Calculator.evaluate(query, locale: enUS, format: format, now: now, timeZone: copenhagen, currency: ready)
+    }
+    let dot = try #require(card("1,000 usd in eur", .dotDecimal))
+    #expect(dot.answer == "€909.92")
+    #expect(dot.copyText == "909.92")
+    let comma = try #require(card("1.000 usd in eur", .commaDecimal))
+    #expect(comma.answer == "€909,92", "the locale places the symbol, the format writes the number")
+    #expect(comma.copyText == "909,92")
+    #expect(try #require(card("10.000 eur in usd", .commaDecimal)).answer == "$10.990,00")
+    #expect(card("1,5 usd in eur", .dotDecimal)?.kind != .currency, "`1,5` is no number with 1,234.5")
+    #expect(card("1.5 usd in eur", .commaDecimal)?.kind != .currency, "`1.5` is no number with 1.234,5")
+}
+
 @Test func amountsCanHaveAnExponent() throws {
     #expect(CurrencyConversion.parse("2.5e3 usd in eur", locale: enUS)?.amount == 2500)
     #expect(CurrencyConversion.parse("2,5E3 usd in eur", locale: enDK)?.amount == 2500)
     #expect(CurrencyConversion.parse("$1e-2 to eur", locale: enUS)?.amount == 0.01)
     #expect(try #require(calculate("2.5e3 usd in eur", enUS, ready)).answer == "€2,274.80")
-    #expect(try #require(calculate("2.5e3 usd in eur", enDK, ready)).answer == "2.274,80\u{A0}€")
+    #expect(try #require(calculate("2,5e3 usd in eur", enDK, ready)).answer == "2.274,80\u{A0}€")
+    #expect(CurrencyConversion.parse("2.5e3 usd in eur", locale: enDK) == nil, "`.` groups in en_DK")
 }
 
 @Test(arguments: [
