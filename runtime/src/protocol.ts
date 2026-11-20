@@ -28,6 +28,8 @@ export type AppMessage =
           entry: string;
           mode: CommandMode;
           launchProps?: LaunchProps;
+          /** Resolved preference values for the command. */
+          preferences?: Record<string, unknown>;
       }
     | { type: "event"; session: string; node: number; path: string[]; args: unknown[] }
     | { type: "pop"; session: string }
@@ -85,7 +87,11 @@ export function parseAppMessage(line: string): Parsed {
                 return protocolError("`launch` needs a `mode` of `view` or `no-view`");
             }
             const launchProps = isObject(value.launchProps) ? (value.launchProps as LaunchProps) : undefined;
-            return { ok: true, message: { type: "launch", session: session!, entry: value.entry, mode: value.mode, launchProps } };
+            const preferences = isObject(value.preferences) ? value.preferences : undefined;
+            return {
+                ok: true,
+                message: { type: "launch", session: session!, entry: value.entry, mode: value.mode, launchProps, preferences },
+            };
         }
         case "event": {
             const problem = needsSession();

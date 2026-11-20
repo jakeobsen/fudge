@@ -76,14 +76,20 @@ public struct LaunchProps: Sendable, Equatable, Encodable {
 /// Messages from the app to the extension host.
 public enum AppMessage: Sendable, Equatable, Encodable {
     case ping(id: Int)
-    case launch(session: String, entry: String, mode: String, launchProps: LaunchProps)
+    case launch(
+        session: String,
+        entry: String,
+        mode: String,
+        launchProps: LaunchProps,
+        preferences: [String: JSONValue] = [:]
+    )
     case event(session: String, node: Int, path: [String], args: [JSONValue])
     case pop(session: String)
     case unload(session: String)
     case rpcResult(session: String, id: Int, result: JSONValue?, error: String?)
 
     enum Keys: String, CodingKey {
-        case type, id, session, entry, mode, launchProps, node, path, args, result, error
+        case type, id, session, entry, mode, launchProps, preferences, node, path, args, result, error
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -92,12 +98,13 @@ public enum AppMessage: Sendable, Equatable, Encodable {
         case .ping(let id):
             try container.encode("ping", forKey: .type)
             try container.encode(id, forKey: .id)
-        case .launch(let session, let entry, let mode, let launchProps):
+        case .launch(let session, let entry, let mode, let launchProps, let preferences):
             try container.encode("launch", forKey: .type)
             try container.encode(session, forKey: .session)
             try container.encode(entry, forKey: .entry)
             try container.encode(mode, forKey: .mode)
             try container.encode(launchProps, forKey: .launchProps)
+            try container.encode(preferences, forKey: .preferences)
         case .event(let session, let node, let path, let args):
             try container.encode("event", forKey: .type)
             try container.encode(session, forKey: .session)

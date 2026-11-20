@@ -35,7 +35,12 @@ function launch(message: Extract<AppMessage, { type: "launch" }>): void {
         send({ type: "protocolError", message: `session \`${id}\` is already running` });
         return;
     }
-    const workerData: WorkerData = { entry: message.entry, mode: message.mode, launchProps: message.launchProps ?? {} };
+    const workerData: WorkerData = {
+        entry: message.entry,
+        mode: message.mode,
+        launchProps: message.launchProps ?? {},
+        preferences: message.preferences ?? {},
+    };
     const worker = new Worker(workerUrl, { workerData, stdout: true, stderr: true });
     const session: Session = { worker, done: false };
     sessions.set(id, session);

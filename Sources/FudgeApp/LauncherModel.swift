@@ -41,6 +41,7 @@ final class LauncherModel {
 
     @ObservationIgnored private let paths: FudgePaths
     @ObservationIgnored private var items: [RootItem] = []
+    @ObservationIgnored private var extensions: [String: InstalledExtension] = [:]
     @ObservationIgnored private var history: LaunchHistory
     @ObservationIgnored private var host: ExtensionHost?
     @ObservationIgnored private var nextSession = 1
@@ -56,8 +57,9 @@ final class LauncherModel {
 
     /// Finds applications and installed extensions again.
     func reload() {
-        let extensions = InstalledExtension.all(in: paths.extensionsDirectory)
-        items = extensions.flatMap(RootItem.commands(of:)) + ApplicationIndex.scan()
+        let installed = InstalledExtension.all(in: paths.extensionsDirectory)
+        extensions = Dictionary(installed.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
+        items = installed.flatMap(RootItem.commands(of:)) + ApplicationIndex.scan()
         refreshResults()
     }
 
@@ -211,12 +213,31 @@ final class LauncherModel {
             NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
             searchText = ""
             hide()
-        case .command(_, _, let mode, let entry):
-            launch(item.title, entry: entry, mode: mode)
+        case .command(let extensionName, let commandName, let mode, let entry):
+            guard let installed = extensions[extensionName],
+                let command = installed.manifest.commands.first(where: { $0.name == commandName })
+            else {
+                screen = .failure(
+                    Failure(title: "Can't run \(item.title)", message: "The extension is no longer installed."))
+                return
+            }
+            let preferences = PreferenceResolver.resolve(
+                installed.manifest,
+                command: command,
+                stored: PreferenceStore(directory: paths.preferencesDirectory).load(extensionName)
+            )
+            guard preferences.missing.isEmpty else {
+                let names = preferences.missing.map { $0.title ?? $0.name }.joined(separator: ", ")
+                screen = .failure(
+                    Failure(title: "\(item.title) needs settings", message: "Set these preferences first: \(names).")
+                )
+                return
+            }
+            launch(item.title, entry: entry, mode: mode, preferences: preferences.values)
         }
     }
 
-    private func launch(_ title: String, entry: URL, mode: String) {
+    private func launch(_ title: String, entry: URL, mode: String, preferences: [String: JSONValue]) {
         let host: ExtensionHost
         do {
             host = try ensureHost()
@@ -233,7 +254,11 @@ final class LauncherModel {
             status = "Running \(title)…"
         }
         do {
-            try host.send(.launch(session: session, entry: entry.path, mode: mode, launchProps: LaunchProps()))
+            try host.send(
+                .launch(
+                    session: session, entry: entry.path, mode: mode, launchProps: LaunchProps(),
+                    preferences: preferences)
+            )
         } catch {
             screen = .failure(Failure(title: "Can't run \(title)", message: String(describing: error)))
         }

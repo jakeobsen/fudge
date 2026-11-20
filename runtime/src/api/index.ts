@@ -3,3 +3,4 @@
 
 export { Action, ActionPanel, Detail, Form, Grid, List } from "./components.ts";
 export { useNavigation } from "./navigation.ts";
+export { getPreferenceValues, openCommandPreferences, openExtensionPreferences } from "./preferences.ts";

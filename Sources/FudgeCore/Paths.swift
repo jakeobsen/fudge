@@ -30,6 +30,11 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("history.json")
     }
 
+    /// The preference values set for each extension.
+    public var preferencesDirectory: URL {
+        supportDirectory.appendingPathComponent("preferences", isDirectory: true)
+    }
+
     /// Installed extensions, one folder each.
     public var extensionsDirectory: URL {
         supportDirectory.appendingPathComponent("extensions", isDirectory: true)
