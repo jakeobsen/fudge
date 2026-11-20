@@ -282,6 +282,13 @@ final class SettingsWindowController {
         window?.makeKeyAndOrderFront(nil)
     }
 
+    /// Reads the installed extensions and settings again while the window is on screen; closed, it reads them
+    /// when it next opens.
+    func reloadIfShown() {
+        guard window?.isVisible == true else { return }
+        model.reload()
+    }
+
     /// Lays the window out off-screen and transparent, never key; only snapshots use this.
     func renderOffscreen(extension name: String?) {
         prepare(extension: name)

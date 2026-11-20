@@ -16,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var keyMonitor: Any?
     private var exchangeRates: ExchangeRateUpdater!
     private let exchangeRateSchedule = ExchangeRateSchedule()
+    /// Not in snapshot runs, which install nothing that outlives them.
+    private var extensionsWatcher: ExtensionsWatcher?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = Self.mainMenu()
@@ -103,6 +105,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.suspendHotkeys = { [weak self] in self?.registry.suspend() }
         settingsModel.resumeHotkeys = { [weak self] in self?.registry.resume() }
         settingsModel.applyHotkeys = { [weak self] in self?.applyCommandHotkeys() ?? [] }
+
+        // `fudge build` while fudge runs: the new, rebuilt or removed extension shows without a reload.
+        let watcher = ExtensionsWatcher(directory: paths.extensionsDirectory) { [weak self] in
+            self?.extensionsChanged()
+        }
+        do {
+            try watcher.start()
+        } catch {
+            FileHandle.standardError.write(Data("fudge: couldn't watch \(watcher.directory.path): \(error)\n".utf8))
+        }
+        extensionsWatcher = watcher
     }
 
     /// Applies `settings.json` to root search (aliases, disabled commands) and registers the hotkeys of the
@@ -111,8 +124,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     private func applyCommandHotkeys() -> Set<String> {
         model.applySettings()
+        return registerCommandHotkeys()
+    }
+
+    /// Registers the hotkeys of the installed, enabled commands, from the settings the model last read.
+    @discardableResult
+    private func registerCommandHotkeys() -> Set<String> {
         registry.apply(model.settings.availableHotkeys(installed: Set(model.installedCommandIDs)))
         return registry.refused
+    }
+
+    /// The extensions folder changed: an extension was installed, rebuilt or removed. Root search, the command
+    /// hotkeys and an open Settings window catch up; the applications aren't scanned again.
+    private func extensionsChanged() {
+        model.reloadExtensions()
+        registerCommandHotkeys()
+        settingsWindow.reloadIfShown()
     }
 
     private func installStatusItem(shortcut: HotKeySpec?) {
