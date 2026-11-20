@@ -42,6 +42,12 @@ struct GeneralPage: View {
                             .disabled(model.launcherHotkey.sameKeys(as: .default) && !model.launcherHotkeyInUse)
                     }
                 }
+                SettingsPopupRow(
+                    "Pop to Root Search",
+                    selection: Binding(get: { model.resetAfter }, set: { model.setResetAfter($0) }),
+                    options: PanelResetSetting.allCases.map { ($0, $0.title) },
+                    help: "How long after the window closes fudge goes back to root search."
+                )
             }
             Section("Calculator") {
                 Toggle(isOn: Binding(get: { model.currencyRates }, set: { model.setCurrencyRates($0) })) {
@@ -166,6 +172,37 @@ private struct LauncherHotkeyCell: View {
                 Text(message).font(.system(size: 10)).foregroundStyle(.red)
             } else if model.launcherHotkeyInUse {
                 Text("In use by another app").font(.system(size: 10)).foregroundStyle(.red)
+            }
+        }
+    }
+}
+
+/// A General-page row as Raycast lays it out: a label, a popup of choices, and an ⓘ whose tooltip explains it.
+struct SettingsPopupRow<Value: Hashable>: View {
+    let title: String
+    @Binding var selection: Value
+    let options: [(value: Value, title: String)]
+    let help: String
+
+    init(_ title: String, selection: Binding<Value>, options: [(Value, String)], help: String) {
+        self.title = title
+        _selection = selection
+        self.options = options.map { (value: $0.0, title: $0.1) }
+        self.help = help
+    }
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: 6) {
+                Picker(title, selection: $selection) {
+                    ForEach(options, id: \.value) { option in Text(option.title).tag(option.value) }
+                }
+                .labelsHidden()
+                .fixedSize()
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+                    .help(help)
+                    .accessibilityLabel(help)
             }
         }
     }

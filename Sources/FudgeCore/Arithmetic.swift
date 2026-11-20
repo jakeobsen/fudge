@@ -66,7 +66,7 @@ public enum Arithmetic {
                 index = text.index(after: index)
             } else if character.isNumber || ((character == "." || character == ",") && nextIsDigit(text, index)) {
                 var end = index
-                while end < text.endIndex, text[end].isNumber || text[end] == "." || text[end] == "," {
+                while end < text.endIndex, text[end].isNumber || NumberFormat.groupingCharacters.contains(text[end]) {
                     end = text.index(after: end)
                 }
                 end = exponentEnd(text, from: end)

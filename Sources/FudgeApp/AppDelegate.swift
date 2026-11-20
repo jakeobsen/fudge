@@ -61,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             Task { await self.exchangeRates.updateIfNeeded(now: Date(), explicit: true) }
         }
+        settingsModel.resetAfterChanged = { [weak self] setting in self?.model.panelReset.setting = setting }
         settingsModel.extensionStoreChanged = { [weak self] in
             guard let self else { return }
             self.model.reload()
@@ -198,7 +199,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.image = MenuBarIcon.image
 
         let menu = NSMenu()
-        let open = menu.addItem(withTitle: "Open fudge", action: #selector(showPanel), keyEquivalent: "")
+        let open = menu.addItem(withTitle: "Open fudge", action: #selector(openFromMenu), keyEquivalent: "")
         open.target = self
         openItem = open
         let reload = menu.addItem(
@@ -233,18 +234,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menu
     }
 
+    /// The launcher's hotkey: hides the panel, or shows it, starting over on root search after a long hide.
     private func togglePanel() {
-        if panel.isVisible { hidePanel() } else { showPanel() }
+        if panel.isVisible {
+            // A sheet on the panel (a `confirm`) is waiting for an answer: hiding it, and a reset after, would
+            // unload the command behind it.
+            guard panel.attachedSheet == nil else { return }
+            hidePanel()
+        } else {
+            model.resetIfDue()
+            showPanel()
+        }
     }
 
-    @objc private func showPanel() {
+    /// The menu bar item's "Open fudge", which shows the panel as the launcher's hotkey does.
+    @objc private func openFromMenu() {
+        if !panel.isVisible { model.resetIfDue() }
+        showPanel()
+    }
+
+    /// Every path that shows the panel ends here, after it has built its screen.
+    private func showPanel() {
+        model.panelReset.panelShown()
         panel.present()
         model.presented()
     }
 
+    /// Every path that hides the panel ends here: Esc, the hotkey, the model's `hide`, and the panel resigning key.
     private func hidePanel() {
         guard panel.isVisible else { return }
         panel.orderOut(nil)
+        model.panelReset.panelHidden()
         // A FilePicker's open panel made fudge the active app. Give the keyboard back to the app that had it, unless
         // the user has moved on to another one.
         if let app = appToRestore {

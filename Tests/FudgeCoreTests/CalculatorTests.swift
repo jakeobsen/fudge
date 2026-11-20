@@ -198,9 +198,9 @@ func scientificNotationWithoutACard(_ query: String) {
 @Test func readingCommasDependsOnTheLocale() throws {
     #expect(try #require(calculate("1,000+1", enUS)).answer == "1,001", "grouping where `.` is the decimal")
     #expect(try #require(calculate("1,234,567.5+0.5", enUS)).copyText == "1234568")
-    #expect(calculate("13,5*2", enUS) == nil, "any other comma: no card, never a decimal point")
+    #expect(try #require(calculate("13,5*2", enUS)).answer == "270", "a comma between digits is dropped")
     #expect(try #require(calculate("1,5+1", daDK)).answer == "2,5", "the decimal point in da_DK")
-    #expect(calculate("1,5+1.5", daDK) == nil, "`.` groups in da_DK, so `1.5` is no number")
+    #expect(try #require(calculate("1,5+1.5", daDK)).answer == "16,5", "`.` groups in da_DK, so `1.5` is 15")
 }
 
 @Test(arguments: [
