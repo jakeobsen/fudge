@@ -84,7 +84,7 @@ private struct LaunchPermissionsSection: View {
             if model.launchPermissionsUnreadable {
                 Text(LaunchPermissions.Unreadable().description).font(.callout).foregroundStyle(.red)
             }
-            ForEach(model.launchPermissions, id: \.self) { entry in
+            ForEach(model.launchPermissions) { entry in
                 HStack(spacing: 6) {
                     name(entry.caller)
                     Image(systemName: "arrow.right").foregroundStyle(.secondary).imageScale(.small)

@@ -236,6 +236,13 @@ private func request(_ params: String) throws -> LaunchRequest {
             .init(caller: "alpha", target: "zeta", allowed: true),
             .init(caller: "tools", target: "other", allowed: false),
         ], "sorted by caller, then target")
+    #expect(
+        LaunchPermissions.Entry(caller: "a", target: "b", allowed: true).id
+            == LaunchPermissions.Entry(caller: "a", target: "b", allowed: false).id,
+        "a changed answer keeps its row")
+    #expect(
+        LaunchPermissions.Entry(caller: "a", target: "bc", allowed: true).id
+            != LaunchPermissions.Entry(caller: "ab", target: "c", allowed: true).id)
 
     permissions.forget(caller: "alpha", target: "beta")
     permissions.forget(caller: "tools", target: "other")
@@ -269,6 +276,7 @@ private func request(_ params: String) throws -> LaunchRequest {
         }
         #expect(try Data(contentsOf: file) == Data(broken.utf8), "left byte for byte")
     }
+    #expect(LaunchPermissions.Unreadable().description.hasSuffix("Fix or remove it, then try again."))
 }
 
 @Test func aDisabledCommandOrExtensionIsRefused() throws {

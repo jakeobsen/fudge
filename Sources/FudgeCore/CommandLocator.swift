@@ -262,10 +262,13 @@ public struct LaunchPermissions: Sendable, Equatable, Codable {
     }
 
     /// One stored answer: whether `caller` may open `target`'s commands.
-    public struct Entry: Sendable, Hashable {
+    public struct Entry: Sendable, Hashable, Identifiable {
         public var caller: String
         public var target: String
         public var allowed: Bool
+
+        /// The caller and target, not the answer, so changing an answer updates its row instead of replacing it.
+        public var id: [String] { [caller, target] }
     }
 
     /// Every stored answer, sorted by caller, then target.
@@ -281,7 +284,8 @@ public struct LaunchPermissions: Sendable, Equatable, Codable {
     public struct Unreadable: Error, Equatable, CustomStringConvertible {
         public init() {}
         public var description: String {
-            "fudge can't read launch-permissions.json, so it leaves the file as it is and can't change these answers."
+            "fudge can't read launch-permissions.json, so it leaves the file as it is and can't change these answers. "
+                + "Fix or remove it, then try again."
         }
     }
 
