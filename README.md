@@ -70,6 +70,12 @@ Untick **Enabled** to turn a command off, or a whole extension. A command that's
 
 **Settings…** in the fudge menu bar menu, ⌘, in the fudge window, and "fudge Settings" in root search open the Settings window on its **General** page. Extensions' preferences are in the same window, under each extension. To go straight to a command's extension, select the command and press ⌘⇧, (or ⌘K, then **Configure Extension**). A command that needs a preference you haven't set opens that window instead of running.
 
+### First run
+
+The first time fudge starts, it walks you through a few choices: the launcher hotkey, Accessibility, Open at Login and currency conversion. Each takes effect at once, and **Settings…** has them all. Until you click **Start Using fudge** at the end, fudge shows these steps again at its next start, from where you left off.
+
+**Settings… → Permissions** shows whether fudge may use Accessibility, which extensions need to read the text you've selected or to paste. **Open Accessibility Settings** lets macOS ask you first; if it doesn't ask, click it again to open **System Settings → Privacy & Security → Accessibility** and turn fudge on there. **Show Onboarding Again** goes through the first-run choices again.
+
 ### Open at Login and search history
 
 fudge doesn't start at login until you turn on **Open at Login** at the top of **Settings… → General**. macOS then shows a "Login item added" notification, and lists fudge under **System Settings → General → Login Items**, where you can also turn it off; the switch shows what's set there. If macOS asks you to allow it first, the page says so and **Open Login Items** takes you there. The login item is tied to where the app is, so after moving fudge (to `/Applications`, say), turn Open at Login off and on again.

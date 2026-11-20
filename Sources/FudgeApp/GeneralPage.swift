@@ -15,32 +15,11 @@ struct GeneralPage: View {
                     .foregroundStyle(.red)
             }
             Section {
-                Toggle(
-                    "Open at Login",
-                    isOn: Binding(get: { model.loginItemState.isOn }, set: { model.setOpenAtLogin($0) })
-                )
-                .toggleStyle(.switch)
-                if let note = model.loginItemState.note {
-                    HStack {
-                        Text(note).foregroundStyle(.secondary)
-                        Spacer()
-                        if model.loginItemState.offersLoginItemsSettings {
-                            Button("Open Login Items") { model.openLoginItemsSettings() }
-                        }
-                    }
-                }
-                if let error = model.loginItemError {
-                    Text(error).foregroundStyle(.red)
-                }
+                OpenAtLoginControls(model: model)
             }
             Section {
                 LabeledContent("Launcher hotkey") {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        LauncherHotkeyCell(model: model)
-                        Button("Reset to \(HotKeySpec.default.description)") { model.recordLauncherHotkey(.clear) }
-                            .controlSize(.small)
-                            .disabled(model.launcherHotkey.sameKeys(as: .default) && !model.launcherHotkeyInUse)
-                    }
+                    LauncherHotkeyControls(model: model)
                 }
                 SettingsPopupRow(
                     "Pop to Root Search",
@@ -50,11 +29,7 @@ struct GeneralPage: View {
                 )
             }
             Section("Calculator") {
-                Toggle(isOn: Binding(get: { model.currencyRates }, set: { model.setCurrencyRates($0) })) {
-                    Text("Currency conversion")
-                    Text("fudge downloads exchange rates from the European Central Bank once a day.")
-                }
-                .toggleStyle(.switch)
+                CurrencyRatesToggle(model: model)
                 Picker(
                     selection: Binding(get: { model.numberFormat }, set: { model.setNumberFormat($0) })
                 ) {
@@ -146,6 +121,60 @@ private struct LaunchPermissionsSection: View {
             Text(title)
         } else {
             Text(extensionName).foregroundStyle(.secondary).help("Not installed")
+        }
+    }
+}
+
+// The controls below are General's, and onboarding's steps use the same ones, so both make the same model calls.
+
+/// The Open at Login switch, with macOS's approval note and Open Login Items when it asks for one.
+struct OpenAtLoginControls: View {
+    let model: SettingsModel
+
+    var body: some View {
+        Toggle(
+            "Open at Login",
+            isOn: Binding(get: { model.loginItemState.isOn }, set: { model.setOpenAtLogin($0) })
+        )
+        .toggleStyle(.switch)
+        if let note = model.loginItemState.note {
+            HStack {
+                Text(note).foregroundStyle(.secondary)
+                Spacer()
+                if model.loginItemState.offersLoginItemsSettings {
+                    Button("Open Login Items") { model.openLoginItemsSettings() }
+                }
+            }
+        }
+        if let error = model.loginItemError {
+            Text(error).foregroundStyle(.red)
+        }
+    }
+}
+
+/// The calculator's currency conversion switch, saying what it downloads and from where.
+struct CurrencyRatesToggle: View {
+    let model: SettingsModel
+
+    var body: some View {
+        Toggle(isOn: Binding(get: { model.currencyRates }, set: { model.setCurrencyRates($0) })) {
+            Text("Currency conversion")
+            Text("fudge downloads exchange rates from the European Central Bank once a day.")
+        }
+        .toggleStyle(.switch)
+    }
+}
+
+/// The launcher's hotkey and its Reset button.
+struct LauncherHotkeyControls: View {
+    let model: SettingsModel
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            LauncherHotkeyCell(model: model)
+            Button("Reset to \(HotKeySpec.default.description)") { model.recordLauncherHotkey(.clear) }
+                .controlSize(.small)
+                .disabled(model.launcherHotkey.sameKeys(as: .default) && !model.launcherHotkeyInUse)
         }
     }
 }
