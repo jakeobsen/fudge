@@ -40,10 +40,19 @@ public struct KeyShortcut: Sendable, Hashable, CustomStringConvertible {
     ]
 
     /// The Raycast key name for a key press: special keys by virtual key code, others by their character.
+    /// `characters` must be what the key types with no modifier at all, ⇧ included (AppKit's
+    /// `characters(byApplyingModifiers: [])`). `charactersIgnoringModifiers` still applies ⇧, so ⌘⇧, would arrive
+    /// as "<" on a US keyboard and ";" on a Danish one, and never match a shortcut written as `,`.
     public static func key(forKeyCode keyCode: UInt16, characters: String?) -> String? {
         if let special = specialKeys[keyCode] { return special }
         guard let character = characters?.lowercased(), character.count == 1 else { return nil }
         return character
+    }
+
+    /// A key press as a shortcut: the key named as in `key(forKeyCode:characters:)`, with the modifiers held.
+    public init?(keyCode: UInt16, characters: String?, modifiers: Set<String>) {
+        guard let key = Self.key(forKeyCode: keyCode, characters: characters) else { return nil }
+        self.init(key: key, modifiers: modifiers)
     }
 
     // Virtual key codes from HIToolbox's Events.h.
@@ -64,8 +73,64 @@ public struct ActionEntry: Sendable, Equatable, Identifiable {
     /// Set for submenus (possibly empty while it loads).
     public var submenu: [ActionSection]?
     public var isLoading: Bool
+    /// What running it does.
+    public var target: ActionTarget
 
     public var isSubmenu: Bool { submenu != nil }
+}
+
+/// What an action panel entry runs: an extension's `Action` node, or one of fudge's own actions in root search.
+public enum ActionTarget: Sendable, Equatable {
+    /// The node's `onAction`, in the running command.
+    case node(Int)
+    case root(RootAction)
+}
+
+/// fudge's own actions on a root search item.
+public enum RootAction: Sendable, Equatable {
+    /// What ↵ does: run the command, open the application, or open the Settings window.
+    case open
+    /// Opens the Settings window on an extension's preferences.
+    case configureExtension(String)
+    /// Shows an application in Finder.
+    case showInFinder(URL)
+}
+
+/// The action panel of a root search item, and fudge's keys for the Settings window.
+public enum RootActions {
+    /// ⌘, opens the Settings window on its default page.
+    public static let settingsShortcut = KeyShortcut(key: ",", modifiers: ["cmd"])
+    /// ⌘⇧, opens it on the extension of the command that's selected or running.
+    public static let configureExtensionShortcut = KeyShortcut(key: ",", modifiers: ["cmd", "shift"])
+    public static let showInFinderShortcut = KeyShortcut(key: "f", modifiers: ["cmd", "shift"])
+    static let enter = KeyShortcut(key: "return", modifiers: [])
+
+    /// The entries for `item`, the first one being what ↵ does.
+    public static func sections(for item: RootItem?) -> [ActionSection] {
+        guard let item else { return [] }
+        let entries: [(String, KeyShortcut, RootAction)] =
+            switch item.kind {
+            case .command(let extensionName, _, _, _):
+                [
+                    ("Open Command", enter, .open),
+                    ("Configure Extension", configureExtensionShortcut, .configureExtension(extensionName)),
+                ]
+            case .application(let url):
+                [("Open Application", enter, .open), ("Show in Finder", showInFinderShortcut, .showInFinder(url))]
+            case .settings:
+                [("Open Settings", enter, .open)]
+            }
+        return [
+            ActionSection(
+                title: nil,
+                entries: entries.enumerated().map { index, entry in
+                    ActionEntry(
+                        id: index + 1, title: entry.0, icon: nil, shortcut: entry.1, destructive: false, submenu: nil,
+                        isLoading: false, target: .root(entry.2))
+                }
+            )
+        ]
+    }
 }
 
 public struct ActionSection: Sendable, Equatable {
@@ -110,7 +175,8 @@ public enum ActionPanelReader {
                 shortcut: KeyShortcut(json: node.props["shortcut"]),
                 destructive: node.string("style") == "destructive",
                 submenu: nil,
-                isLoading: false
+                isLoading: false,
+                target: .node(node.id)
             )
         case "ActionPanel.Submenu":
             return ActionEntry(
@@ -120,7 +186,8 @@ public enum ActionPanelReader {
                 shortcut: KeyShortcut(json: node.props["shortcut"]),
                 destructive: false,
                 submenu: sections(in: node.children),
-                isLoading: node.bool("isLoading") == true
+                isLoading: node.bool("isLoading") == true,
+                target: .node(node.id)
             )
         default:
             return nil

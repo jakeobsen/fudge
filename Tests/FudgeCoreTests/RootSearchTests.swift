@@ -66,6 +66,30 @@ private func item(_ title: String, subtitle: String? = nil, keywords: [String] =
     #expect(ranked.map(\.title) == ["Greeting Cards", "Say Hello", "Create Scratch"])
 }
 
+@Test func theSettingsItemIsFoundByItsKeywordsOnly() {
+    let items = [item("Terminal"), item("Safari"), item("Mail"), item("Notes")] + RootSearch.builtInItems
+    for query in ["settings", "preferences", "config", "fudge", "Pref"] {
+        #expect(
+            RootSearch.rank(items, query: query, history: LaunchHistory(), now: now).first == .settings,
+            "found by \(query)")
+    }
+    for query in ["terminal", "safari", "mail", "notes", "xyz"] {
+        #expect(
+            !RootSearch.rank(items, query: query, history: LaunchHistory(), now: now).contains(.settings),
+            "not shown for \(query)")
+    }
+    #expect(RootItem.settings.title == "fudge Settings")
+    #expect(RootItem.settings.kind == .settings)
+}
+
+@Test func theSettingsItemRanksByHistoryLikeAnyOther() {
+    let items = [item("Fudge Factory")] + RootSearch.builtInItems
+    #expect(RootSearch.rank(items, query: "fudge", history: LaunchHistory(), now: now).first?.title == "Fudge Factory")
+    var history = LaunchHistory()
+    for _ in 0..<20 { history.record(RootItem.settings.id, at: now) }
+    #expect(RootSearch.rank(items, query: "fudge", history: history, now: now).first == .settings)
+}
+
 @Test func historyDecaysWithAge() {
     var history = LaunchHistory()
     history.record("a", at: now)
