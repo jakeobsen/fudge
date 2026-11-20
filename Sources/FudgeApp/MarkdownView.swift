@@ -136,6 +136,8 @@ private struct MarkdownImage: View {
     let alt: String
     let source: String
     let assets: URL?
+    /// The most room a markdown image takes, hinted or not.
+    static let bounds = CGSize(width: 560, height: 320)
 
     var body: some View {
         if let image {
@@ -148,11 +150,13 @@ private struct MarkdownImage: View {
                     Image(nsImage: image).resizable()
                 }
             }
-            if let size = hints.displaySize(natural: image.size) {
+            if let size = hints.displaySize(natural: image.size, fitting: Self.bounds) {
                 drawn.frame(width: size.width, height: size.height)
             } else {
                 drawn.aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: min(image.size.width, 560), maxHeight: 320, alignment: .leading)
+                    .frame(
+                        maxWidth: min(image.size.width, Self.bounds.width), maxHeight: Self.bounds.height,
+                        alignment: .leading)
             }
         } else {
             Label(alt.isEmpty ? source : alt, systemImage: "photo").font(.system(size: 13)).foregroundStyle(.secondary)

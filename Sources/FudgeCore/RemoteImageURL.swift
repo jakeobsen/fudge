@@ -136,6 +136,16 @@ public struct MarkdownImageHints: Equatable, Sendable {
 
     /// The size to draw an image whose own size is `natural`: both hints as given, or one of them with the other
     /// side scaled to keep the image's proportions. Nil when there's no size hint.
+    /// `displaySize`, scaled down (never up) to fit `bounds`, keeping its proportions, so a hint can't make an
+    /// image wider than the pane it's in.
+    public func displaySize(natural: CGSize, fitting bounds: CGSize) -> CGSize? {
+        guard let size = displaySize(natural: natural), size.width > 0, size.height > 0 else {
+            return displaySize(natural: natural)
+        }
+        let scale = min(1, bounds.width / size.width, bounds.height / size.height)
+        return CGSize(width: size.width * scale, height: size.height * scale)
+    }
+
     public func displaySize(natural: CGSize) -> CGSize? {
         switch (width, height) {
         case (let width?, let height?):

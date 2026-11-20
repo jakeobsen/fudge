@@ -47,12 +47,17 @@ final class RemoteImages {
         let loader = loader
         Task {
             let body = await loader.load(url)
+            // At most two decodes at once: a maximal image peaks at about 128 MB while it decodes.
+            await Self.decodeSlots.acquire()
             let image = await Task.detached { body.flatMap(Self.decode) }.value
+            await Self.decodeSlots.release()
             entry.image = image
             entry.failed = image == nil
         }
         return entry
     }
+
+    private static let decodeSlots = AsyncLimiter(limit: 2)
 
     /// Raster images as thumbnails; SVG through NSImage, which draws it.
     nonisolated private static func decode(_ body: Data) -> NSImage? {

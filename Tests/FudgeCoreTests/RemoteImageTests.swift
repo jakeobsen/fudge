@@ -388,3 +388,49 @@ extension AsyncThrowingStream where Element == Data, Failure == Error {
         }
     }
 }
+
+@Test func hintedSizesFitThePaneKeepingTheirProportions() {
+    let bounds = CGSize(width: 560, height: 320)
+    let natural = CGSize(width: 1000, height: 500)
+    let wide = CGSize(width: 560, height: 280)
+    #expect(MarkdownImageHints(width: 600).displaySize(natural: natural, fitting: bounds) == wide)
+    #expect(
+        MarkdownImageHints(width: 5000).displaySize(natural: natural, fitting: bounds) == wide,
+        "no wider than the pane")
+    #expect(
+        MarkdownImageHints(width: 100, height: 400).displaySize(natural: natural, fitting: bounds)
+            == CGSize(width: 80, height: 320), "height bounds it too")
+    #expect(
+        MarkdownImageHints(width: 64).displaySize(natural: natural, fitting: bounds) == CGSize(width: 64, height: 32),
+        "never scaled up")
+    #expect(MarkdownImageHints().displaySize(natural: natural, fitting: bounds) == nil, "no hint")
+}
+
+/// Counts how many hold a slot at once.
+private actor SlotCounter {
+    var now = 0
+    var most = 0
+    func enter() {
+        now += 1
+        most = max(most, now)
+    }
+    func leave() { now -= 1 }
+}
+
+@Test func theLimiterLetsOnlyItsLimitRunAtOnce() async {
+    let limiter = AsyncLimiter(limit: 2)
+    let counter = SlotCounter()
+    await withTaskGroup(of: Void.self) { group in
+        for _ in 0..<8 {
+            group.addTask {
+                await limiter.acquire()
+                await counter.enter()
+                try? await Task.sleep(for: .milliseconds(20))
+                await counter.leave()
+                await limiter.release()
+            }
+        }
+    }
+    #expect(await counter.most == 2)
+    #expect(await counter.now == 0)
+}
