@@ -36,7 +36,11 @@ test("launch needs a session, an entry and a known mode", () => {
     assert.equal((parse({ ...launch, preferences: "nope" }) as { message: { preferences?: object } }).message.preferences, undefined);
     assert.equal(parse({ ...launch, session: "" }).ok, false);
     assert.equal(parse({ ...launch, entry: undefined }).ok, false);
-    assert.equal(parse({ ...launch, mode: "menu-bar" }).ok, false);
+    assert.deepEqual(parse({ ...launch, mode: "menu-bar" }), { ok: true, message: { ...launch, mode: "menu-bar" } });
+    assert.deepEqual(parse({ ...launch, mode: "window" }), {
+        ok: false,
+        error: { type: "protocolError", message: "`launch` needs a `mode` of `view`, `no-view` or `menu-bar`" },
+    });
 });
 
 test("event needs a node and a path of strings; args default to none", () => {

@@ -55,6 +55,41 @@ private let inbox = """
     #expect(!droppedAgain, "nothing left to drop")
 }
 
+@Test func commandMetadataKeepsKeysItDoesntKnow() throws {
+    let file = try Fixtures.temporaryDirectory().appendingPathComponent("command-metadata.json")
+    try Data(#"{"a/b": {"subtitle": "x", "future": [1, "two"]}, "a/c": {"other": true}}"#.utf8).write(to: file)
+    var metadata = CommandMetadata.load(from: file)
+    #expect(metadata.subtitles == ["a/b": "x"])
+
+    metadata.setSubtitle(nil, extension: "a", command: "b")
+    metadata.setSubtitle("new", extension: "a", command: "c")
+    try metadata.save(to: file)
+    let written = try JSONDecoder().decode([String: JSONValue].self, from: Data(contentsOf: file))
+    #expect(
+        written == [
+            "a/b": .object(["future": .array([.number(1), .string("two")])]),
+            "a/c": .object(["other": .bool(true), "subtitle": .string("new")]),
+        ], "a reset keeps the entry's other keys")
+
+    let dropped = metadata.prune(keeping: ["a/c"])
+    #expect(dropped)
+    try metadata.save(to: file)
+    let pruned = try JSONDecoder().decode([String: JSONValue].self, from: Data(contentsOf: file))
+    #expect(Array(pruned.keys) == ["a/c"], "pruning drops the whole entry")
+}
+
+@Test func anEmptyListingPrunesNothing() {
+    var metadata = CommandMetadata(subtitles: ["a/b": "x"])
+    let dropped = metadata.prune(keeping: [])
+    #expect(!dropped, "an extensions folder that couldn't be read doesn't wipe the file")
+    #expect(metadata.subtitles == ["a/b": "x"])
+
+    var store = MenuBarStore(active: ["a/menu"])
+    let deactivated = store.prune(keeping: [])
+    #expect(!deactivated, "nor deactivate every menu bar item")
+    #expect(store.active == ["a/menu"])
+}
+
 @Test func commandMetadataReadsTheUpdateParams() throws {
     #expect(try CommandMetadata.subtitle(fromParams: .object(["subtitle": .string("x")])) == "x")
     #expect(try CommandMetadata.subtitle(fromParams: .object(["subtitle": .null])) == nil)
@@ -73,15 +108,16 @@ private let inbox = """
 @Test func rootItemsShowTheSetSubtitleThenTheManifestsThenTheExtensionTitle() throws {
     let inbox = try installed(inbox)
     let plain = RootItem.commands(of: inbox)
-    #expect(plain.map(\.title) == ["Unread Count", "Search Mail"], "menu-bar commands aren't root items yet")
-    #expect(plain.map(\.subtitle) == ["Inbox", "Mail"])
-    #expect(plain.map(\.extensionTitle) == ["Inbox", "Inbox"])
+    #expect(plain.map(\.title) == ["Unread Count", "Search Mail", "Status"])
+    #expect(plain.map(\.subtitle) == ["Inbox", "Mail", "Inbox"])
+    #expect(plain.map(\.extensionTitle) == ["Inbox", "Inbox", "Inbox"])
 
     var metadata = CommandMetadata()
     metadata.setSubtitle("3 unread", extension: "inbox", command: "unread")
     metadata.setSubtitle("Gmail", extension: "inbox", command: "search")
     metadata.setSubtitle("elsewhere", extension: "other", command: "unread")
-    #expect(RootItem.commands(of: inbox, metadata: metadata).map(\.subtitle) == ["3 unread", "Gmail"])
+    metadata.setSubtitle("2 new", extension: "inbox", command: "status")
+    #expect(RootItem.commands(of: inbox, metadata: metadata).map(\.subtitle) == ["3 unread", "Gmail", "2 new"])
 }
 
 @Test func rootSearchStillFindsACommandByItsExtensionTitleWhenItShowsAnotherSubtitle() throws {
@@ -89,6 +125,6 @@ private let inbox = """
     metadata.setSubtitle("3 unread", extension: "inbox", command: "unread")
     let items = RootItem.commands(of: try installed(inbox), metadata: metadata)
     let found = RootSearch.rank(items, query: "inbox", history: LaunchHistory()).map(\.title)
-    #expect(found == ["Search Mail", "Unread Count"])
+    #expect(found == ["Search Mail", "Status", "Unread Count"])
     #expect(RootSearch.rank(items, query: "unread", history: LaunchHistory()).first?.title == "Unread Count")
 }

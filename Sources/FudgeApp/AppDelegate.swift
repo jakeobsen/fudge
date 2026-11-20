@@ -141,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         installStatusItem()
         launcherHotkeyChanged()
+        model.menuBar.start()
         applyCommandHotkeys()
         settingsModel.registerLauncherHotkey = { [weak self] spec in
             guard let self else { return false }

@@ -77,6 +77,12 @@ public struct FudgeSettings: Sendable, Equatable {
             && commands[Self.commandID(extension: extensionName, command: command)]?.enabled != false
     }
 
+    /// `isEnabled` for a command id ("<extension name>/<command name>"), split at its first "/".
+    public func isEnabled(commandID id: String) -> Bool {
+        guard let slash = id.firstIndex(of: "/") else { return true }
+        return isEnabled(extension: String(id[..<slash]), command: String(id[id.index(after: slash)...]))
+    }
+
     /// The hotkeys to register: those of the commands in `installed` (command ids) that are enabled. Entries for
     /// commands that aren't installed are kept in the file but aren't available.
     public func availableHotkeys(installed: Set<String>) -> [String: HotKeySpec] {

@@ -93,6 +93,8 @@ public enum RootAction: Sendable, Equatable {
     case open
     /// Opens the Settings window on an extension's preferences.
     case configureExtension(String)
+    /// Removes an active menu-bar command's item and unloads it, by command id (`FudgeSettings.commandID`).
+    case deactivateMenuBarItem(String)
     /// Shows an application in Finder.
     case showInFinder(URL)
     /// Copies the Calculator card's answer.
@@ -132,16 +134,23 @@ public enum RootActions {
         }
     }
 
-    /// The entries for `item`, the first one being what ↵ does.
-    public static func sections(for item: RootItem?) -> [ActionSection] {
+    /// The entries for `item`, the first one being what ↵ does. A menu-bar command that's active in the menu bar
+    /// can also be deactivated.
+    public static func sections(for item: RootItem?, isActiveInMenuBar: Bool = false) -> [ActionSection] {
         guard let item else { return [] }
-        let entries: [(String, KeyShortcut, RootAction)] =
+        let entries: [(String, KeyShortcut?, RootAction)] =
             switch item.kind {
-            case .command(let extensionName, _, _, _):
-                [
-                    ("Open Command", enter, .open),
-                    ("Configure Extension", configureExtensionShortcut, .configureExtension(extensionName)),
-                ]
+            case .command(let extensionName, let commandName, let mode, _):
+                [("Open Command", enter, .open)]
+                    + (mode == "menu-bar" && isActiveInMenuBar
+                        ? [
+                            (
+                                "Deactivate Menu Bar Item", nil,
+                                .deactivateMenuBarItem(
+                                    FudgeSettings.commandID(extension: extensionName, command: commandName))
+                            )
+                        ] : [])
+                    + [("Configure Extension", configureExtensionShortcut, .configureExtension(extensionName))]
             case .application(let url):
                 [("Open Application", enter, .open), ("Show in Finder", showInFinderShortcut, .showInFinder(url))]
             case .settings:
@@ -154,7 +163,7 @@ public enum RootActions {
         return section(entries)
     }
 
-    private static func section(_ entries: [(String, KeyShortcut, RootAction)]) -> [ActionSection] {
+    private static func section(_ entries: [(String, KeyShortcut?, RootAction)]) -> [ActionSection] {
         [
             ActionSection(
                 title: nil,

@@ -60,6 +60,11 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("command-metadata.json")
     }
 
+    /// The menu-bar commands the user activated (`MenuBarStore`).
+    public var menuBarFile: URL {
+        supportDirectory.appendingPathComponent("menu-bar.json")
+    }
+
     /// The preference values set for each extension.
     public var preferencesDirectory: URL {
         supportDirectory.appendingPathComponent("preferences", isDirectory: true)

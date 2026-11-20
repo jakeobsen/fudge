@@ -88,12 +88,13 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         "command:\(extensionName)/\(command)"
     }
 
-    /// One item per view or no-view command of the extension, with the subtitles commands set for themselves.
+    /// One item per command of the extension (view, no-view and menu-bar), with the subtitles commands set for
+    /// themselves.
     public static func commands(of installed: InstalledExtension, metadata: CommandMetadata = CommandMetadata())
         -> [RootItem]
     {
         let manifest = installed.manifest
-        return manifest.commands.filter { $0.mode == "view" || $0.mode == "no-view" }.map { command in
+        return manifest.commands.filter { ["view", "no-view", "menu-bar"].contains($0.mode) }.map { command in
             let icon = (command.icon ?? manifest.icon).map { installed.assetsDirectory.appendingPathComponent($0) }
             return RootItem(
                 id: commandID(extension: manifest.name, command: command.name),

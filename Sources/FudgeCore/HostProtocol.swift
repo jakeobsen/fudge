@@ -193,6 +193,8 @@ public enum HostMessage: Sendable, Equatable, Decodable {
     case rpc(session: String, id: Int, method: String, params: JSONValue)
     case error(session: String, message: String, stack: String?, fatal: Bool)
     case log(session: String, level: String, message: String)
+    /// The worker's answer to an `event`, once its handler has returned or its promise has settled.
+    case eventSettled(session: String)
     case exit(session: String, reason: String)
     /// A message type this version of the app doesn't know.
     case unknown(type: String)
@@ -235,6 +237,8 @@ public enum HostMessage: Sendable, Equatable, Decodable {
                 level: try container.decode(String.self, forKey: .level),
                 message: try container.decode(String.self, forKey: .message)
             )
+        case "eventSettled":
+            self = .eventSettled(session: try container.decode(String.self, forKey: .session))
         case "exit":
             self = .exit(
                 session: try container.decode(String.self, forKey: .session),
@@ -249,7 +253,7 @@ public enum HostMessage: Sendable, Equatable, Decodable {
     public var session: String? {
         switch self {
         case .render(let session, _, _), .rpc(let session, _, _, _), .error(let session, _, _, _),
-            .log(let session, _, _), .exit(let session, _):
+            .log(let session, _, _), .eventSettled(let session), .exit(let session, _):
             session
         case .pong, .protocolError, .unknown:
             nil

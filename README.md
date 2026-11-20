@@ -68,7 +68,7 @@ fudge refuses a shortcut that's the launcher's or another command's, and one ano
 
 On the same page, a command can have an **Alias**: a short word such as `sf`. Click the Alias cell, type it, and press ↵ (Esc puts back what was there, and an empty alias removes it). An alias is 1 to 32 characters with no spaces, and two commands can't share one (letter case doesn't count). Typing the alias in root search puts its command first, above a calculator result. For a command with arguments, typing the alias and a space moves to its first argument field, and the rest of what you type goes there.
 
-Untick **Enabled** to turn a command off, or a whole extension. A command that's off isn't in root search, its hotkey doesn't fire, and other extensions can't launch it; its alias and hotkey are kept for when you turn it back on.
+Untick **Enabled** to turn a command off, or a whole extension. A command that's off isn't in root search, its hotkey doesn't fire, and other extensions can't launch it; its alias and hotkey are kept for when you turn it back on. A menu bar command that's off leaves the menu bar, and comes back when you turn it on again.
 
 **Settings…** in the fudge menu bar menu, ⌘, in the fudge window, and "fudge Settings" in root search open the Settings window on its **General** page. Extensions' preferences are in the same window, under each extension. To go straight to a command's extension, select the command and press ⌘⇧, (or ⌘K, then **Configure Extension**). A command that needs a preference you haven't set opens that window instead of running.
 
@@ -99,6 +99,10 @@ Currency conversion uses the European Central Bank's daily exchange rates. Turn 
 ### Extension Store
 
 Turn on **Extension Store** under **Settings… → General** to browse the extensions in Raycast's open-source extensions repository and install the ones you choose. Turning it off removes the store's downloaded list; the extensions you installed stay installed.
+
+### Menu bar commands
+
+An extension's menu bar command puts its own item in the menu bar. Run it from root search to turn it on, and the item stays there, across restarts, until you select the command in root search and pick **Deactivate Menu Bar Item** from ⌘K. Running it again from root search refreshes it and opens its menu. The command refreshes itself in the background at fudge's start and as often as its extension asks, and again each time you open its menu. When a background refresh fails, the item keeps what it showed last and its menu ends with "⚠ Last refresh failed". fudge shows at most 50 of these items.
 
 ### Selected text and Finder items
 
