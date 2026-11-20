@@ -11,8 +11,11 @@ public struct RootItem: Sendable, Equatable, Identifiable {
 
     public var id: String
     public var title: String
-    /// Shown dimmed after the title: the extension's title for commands.
+    /// Shown dimmed after the title. For a command: the subtitle it set with `updateCommandMetadata`, else its
+    /// manifest's, else its extension's title.
     public var subtitle: String?
+    /// A command's extension title, which search matches like the subtitle even when the row shows another one.
+    public var extensionTitle: String?
     public var keywords: [String]
     public var kind: Kind
     /// An image file for the row, if there is one (an extension's asset).
@@ -24,6 +27,7 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         id: String,
         title: String,
         subtitle: String? = nil,
+        extensionTitle: String? = nil,
         keywords: [String] = [],
         kind: Kind,
         iconFile: URL? = nil,
@@ -32,6 +36,7 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         self.id = id
         self.title = title
         self.subtitle = subtitle
+        self.extensionTitle = extensionTitle
         self.keywords = keywords
         self.kind = kind
         self.iconFile = iconFile
@@ -55,15 +60,19 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         "command:\(extensionName)/\(command)"
     }
 
-    /// One item per view or no-view command of the extension.
-    public static func commands(of installed: InstalledExtension) -> [RootItem] {
+    /// One item per view or no-view command of the extension, with the subtitles commands set for themselves.
+    public static func commands(of installed: InstalledExtension, metadata: CommandMetadata = CommandMetadata())
+        -> [RootItem]
+    {
         let manifest = installed.manifest
         return manifest.commands.filter { $0.mode == "view" || $0.mode == "no-view" }.map { command in
             let icon = (command.icon ?? manifest.icon).map { installed.assetsDirectory.appendingPathComponent($0) }
             return RootItem(
                 id: commandID(extension: manifest.name, command: command.name),
                 title: command.title,
-                subtitle: manifest.title,
+                subtitle: metadata.subtitle(extension: manifest.name, command: command.name) ?? command.subtitle
+                    ?? manifest.title,
+                extensionTitle: manifest.title,
                 keywords: command.keywords,
                 kind: .command(
                     extension: manifest.name,
@@ -111,10 +120,8 @@ public enum RootSearch {
         for keyword in item.keywords {
             if let score = Fuzzy.match(query, in: keyword)?.score, score - 5 > (best ?? .min) { best = score - 5 }
         }
-        if let subtitle = item.subtitle, let score = Fuzzy.match(query, in: subtitle)?.score,
-            score - 20 > (best ?? .min)
-        {
-            best = score - 20
+        for subtitle in [item.subtitle, item.extensionTitle].compactMap(\.self) {
+            if let score = Fuzzy.match(query, in: subtitle)?.score, score - 20 > (best ?? .min) { best = score - 20 }
         }
         return best
     }

@@ -141,6 +141,10 @@ final class LauncherModel {
     }
     /// The extension each session belongs to.
     @ObservationIgnored private var sessionExtensions: [String: String] = [:]
+    /// The command each session runs, by name.
+    @ObservationIgnored private var sessionCommands: [String: String] = [:]
+    /// The subtitles commands set for themselves (`updateCommandMetadata`).
+    @ObservationIgnored private var commandMetadata = CommandMetadata()
     @ObservationIgnored private var icons: [String: NSImage] = [:]
     @ObservationIgnored private let dropdownStore: SearchBarDropdown.Store
     @ObservationIgnored private var searchDebounce: Task<Void, Never>?
@@ -156,9 +160,41 @@ final class LauncherModel {
     func reload() {
         let installed = InstalledExtension.all(in: paths.extensionsDirectory)
         extensions = Dictionary(installed.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
-        items = installed.flatMap(RootItem.commands(of:)) + RootSearch.builtInItems + ApplicationIndex.scan()
+        loadCommandMetadata(installed)
+        items =
+            installed.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) } + RootSearch.builtInItems
+            + ApplicationIndex.scan()
         refreshResults()
         refreshCommandHotkeys()
+    }
+
+    /// Reads `command-metadata.json`, dropping the entries of commands that aren't installed.
+    private func loadCommandMetadata(_ installed: [InstalledExtension]) {
+        var metadata = CommandMetadata.load(from: paths.commandMetadataFile)
+        let ids = installed.flatMap { installed in
+            installed.manifest.commands.map {
+                FudgeSettings.commandID(extension: installed.manifest.name, command: $0.name)
+            }
+        }
+        if metadata.prune(keeping: Set(ids)) { try? metadata.save(to: paths.commandMetadataFile) }
+        commandMetadata = metadata
+    }
+
+    /// `updateCommandMetadata` from the command running in `session`: stores its subtitle, which root search
+    /// shows the next time it's drawn. The results keep their order and selection.
+    private func updateCommandMetadata(_ params: JSONValue, from session: String) throws {
+        guard let extensionName = sessionExtensions[session], let commandName = sessionCommands[session],
+            let installed = extensions[extensionName]
+        else { throw CommandMetadata.InvalidMetadata("the calling command isn't running") }
+        let subtitle = try CommandMetadata.subtitle(fromParams: params)
+        var metadata = commandMetadata
+        metadata.setSubtitle(subtitle, extension: extensionName, command: commandName)
+        try metadata.save(to: paths.commandMetadataFile)
+        commandMetadata = metadata
+        let fresh = Dictionary(
+            RootItem.commands(of: installed, metadata: metadata).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        items = items.map { fresh[$0.id] ?? $0 }
+        results = results.map { fresh[$0.id] ?? $0 }
     }
 
     // MARK: - Search
@@ -1302,6 +1338,7 @@ final class LauncherModel {
         let session = "s\(nextSession)"
         nextSession += 1
         sessionExtensions[session] = extensionName
+        sessionCommands[session] = command.name
         if command.mode == "view" {
             screen = .command(
                 CommandScreen(
@@ -1323,6 +1360,7 @@ final class LauncherModel {
             )
         } catch {
             sessionExtensions[session] = nil
+            sessionCommands[session] = nil
             quietSessions[session] = nil
             if !quiet { screen = .failure(Failure(title: "Can't run \(title)", message: String(describing: error))) }
             return String(describing: error)
@@ -1541,6 +1579,7 @@ final class LauncherModel {
 
         case .exit(let session, let reason):
             sessionExtensions[session] = nil
+            sessionCommands[session] = nil
             if let quiet = quietSessions.removeValue(forKey: session) {
                 // Unlike root search, a background launch's exit neither clears the query nor hides the panel.
                 if reason == "crashed", !quiet.failed { showHUD("\(quiet.title) failed") }
@@ -1577,6 +1616,13 @@ final class LauncherModel {
                 Task {
                     let confirmed = await confirm(Self.alertRequest(params))
                     send(.rpcResult(session: session, id: id, result: .bool(confirmed), error: nil))
+                }
+            case "command.updateMetadata":
+                do {
+                    try updateCommandMetadata(params, from: session)
+                    send(.rpcResult(session: session, id: id, result: .null, error: nil))
+                } catch {
+                    send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
                 }
             case "command.launch":
                 Task {
