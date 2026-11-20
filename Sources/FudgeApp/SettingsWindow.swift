@@ -392,11 +392,19 @@ final class SettingsWindowController {
         self.model = model
     }
 
-    /// Opens the window, optionally on one extension's preferences.
+    /// Opens the window, optionally on one extension's preferences, in front and key: from closed, from behind
+    /// other apps' windows, minimized, or on another Space (it comes to the current one). Every way into Settings
+    /// comes here. **Only for entries the user starts** (⌘,, Settings…, Configure Extension, a command's
+    /// `openExtensionPreferences`, an unset required preference): it takes focus from the app in front, so no
+    /// background path may reach it; `CommandLocator.checkMode` keeps background launches from opening Settings.
     func show(extension name: String? = nil) {
         prepare(extension: name)
-        NSApp.activate()
-        window?.makeKeyAndOrderFront(nil)
+        guard let window else { return }
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        NSApp.activateFromUserAction()
+        window.orderFrontRegardless()
+        window.makeKeyAndOrderFront(nil)
     }
 
     /// Reads the installed extensions and settings again while the window is on screen; closed, it reads them
@@ -457,9 +465,10 @@ struct SettingsView: View {
     @Bindable var model: SettingsModel
 
     var body: some View {
-        // The sidebar always shows and has no toggle, as in System Settings: it's the way to the other pages, and
-        // SwiftUI's toggle jumps across the title bar each time it collapses or expands the sidebar.
-        NavigationSplitView(columnVisibility: .constant(.all)) {
+        // A fixed 200 pt sidebar beside the page, not a NavigationSplitView: the split view's divider could be dragged
+        // until the sidebar collapsed, and with no toggle (it jumped across the title bar) nothing brought it back.
+        // There's no split view, so no divider and no collapsed state to restore.
+        HStack(spacing: 0) {
             List(selection: $model.selected) {
                 Label("General", systemImage: "gearshape").tag(SettingsModel.generalPage)
                 Label("Commands", systemImage: "command").tag(SettingsModel.commandsPage)
@@ -469,24 +478,41 @@ struct SettingsView: View {
                     }
                 }
             }
-            .toolbar(removing: .sidebarToggle)
-            // Keep this last: above `.toolbar(removing:)`, it's ignored and the sidebar comes out about 140 pt wide.
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
-        } detail: {
-            if model.selected == SettingsModel.generalPage {
-                GeneralPage(model: model)
-            } else if model.selected == SettingsModel.commandsPage {
-                CommandsPage(model: model)
-            } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {
-                ExtensionPreferencesForm(model: model, installed: installed)
-            } else {
-                Text("No extension has preferences.").foregroundStyle(.secondary)
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .background(SidebarMaterial())
+            .frame(width: 200)
+            Divider()
+            Group {
+                if model.selected == SettingsModel.generalPage {
+                    GeneralPage(model: model)
+                } else if model.selected == SettingsModel.commandsPage {
+                    CommandsPage(model: model)
+                } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {
+                    ExtensionPreferencesForm(model: model, installed: installed)
+                } else {
+                    Text("No extension has preferences.").foregroundStyle(.secondary)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         // The width it opens at: any narrower and the Commands table squeezes its Name column, truncating names and
         // running a command's subtitle into the Type column.
         .frame(minWidth: 880, minHeight: 400)
     }
+}
+
+/// The sidebar's translucent material, as a split view's sidebar has it.
+private struct SidebarMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }
 
 private struct ExtensionPreferencesForm: View {
