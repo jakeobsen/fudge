@@ -218,6 +218,9 @@ struct LauncherView: View {
                         model.moveSelection(by: 1)
                         return .handled
                     }
+                    .onKeyPress(keys: [.leftArrow, .rightArrow], phases: [.down, .repeat]) { press in
+                        gridArrow(press)
+                    }
                     .onKeyPress(.escape) {
                         model.escape()
                         return .handled
@@ -227,6 +230,20 @@ struct LauncherView: View {
             .layoutPriority(1)
     }
 
+    /// ← and → in a Grid move the selection when the field is empty or its cursor is at the end
+    /// (`GridNavigation.arrowMovesSelection`). Otherwise, and with ⇧, ⌥, ⌘ or ⌃ (text selection and word moves),
+    /// the field keeps them.
+    private func gridArrow(_ press: KeyPress) -> KeyPress.Result {
+        guard press.modifiers.intersection([.shift, .option, .command, .control]).isEmpty else { return .ignored }
+        // The field editor holds the cursor. The panel isn't always the key window, so it's found by type.
+        let editor = NSApp.windows.first { $0 is LauncherPanel }?.firstResponder as? NSTextView
+        let range = editor?.selectedRange()
+        let length = editor?.string.utf16.count ?? model.searchText.utf16.count
+        let move: GridNavigation.Move = press.key == .leftArrow ? .left : .right
+        return model.moveGridSelection(move, textLength: length, selection: range.map { ($0.location, $0.length) })
+            ? .handled : .ignored
+    }
+
     @ViewBuilder private var content: some View {
         switch model.screen {
         case .root:
@@ -234,6 +251,8 @@ struct LauncherView: View {
         case .command(let command):
             if let failure = command.failure {
                 FailureView(failure: failure)
+            } else if let list = command.list, case .grid = list.layout {
+                GridScreen(model: model, command: command, list: list)
             } else if let list = command.list {
                 ListScreen(model: model, command: command, list: list)
             } else if let form = command.form {
@@ -306,50 +325,19 @@ private struct RootResults: View {
     let model: LauncherModel
 
     var body: some View {
-        if model.results.isEmpty, model.calculator == nil {
+        let rows = model.rootRows
+        if rows.isEmpty {
             Text("No results").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 2) {
-                        if let calculator = model.calculator {
-                            Text("Calculator")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                            CalculatorCard(
-                                result: calculator, selected: model.selectedItem == LauncherModel.calculatorID
-                            )
-                            .id(LauncherModel.calculatorID)
-                            .onRowClick(
-                                select: {
-                                    model.selectedItem = LauncherModel.calculatorID
-                                    // A click can leave the first responder outside the search field.
-                                    model.restoreKeyboard()
-                                },
-                                open: { model.activate() }
-                            )
-                            .padding(.bottom, 6)
-                        }
-                        ForEach(model.results) { item in
-                            Row(
-                                icon: Image(nsImage: model.icon(for: item)),
-                                title: item.title,
-                                subtitle: item.subtitle,
-                                accessory: kind(of: item),
-                                selected: item.id == model.selectedItem,
-                                hotkey: model.commandHotkeys[item.id]
-                            )
-                            .id(item.id)
-                            .onRowClick(
-                                select: {
-                                    model.selectedItem = item.id
-                                    // A click can leave the first responder outside the search field.
-                                    model.restoreKeyboard()
-                                },
-                                open: { model.activate() })
+                        // In `RootSearch.rows`' order, which ↑↓ follows too.
+                        ForEach(rows) { rootRow in
+                            switch rootRow {
+                            case .item(let item): row(item)
+                            case .calculator: calculatorCard
+                            }
                         }
                     }
                     .padding(8)
@@ -357,6 +345,48 @@ private struct RootResults: View {
                 .onChange(of: model.selectedItem) { _, id in proxy.scrollTo(id) }
             }
         }
+    }
+
+    @ViewBuilder private var calculatorCard: some View {
+        if let calculator = model.calculator {
+            Text("Calculator")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+            CalculatorCard(result: calculator, selected: model.selectedItem == LauncherModel.calculatorID)
+                .id(LauncherModel.calculatorID)
+                .onRowClick(
+                    select: {
+                        model.selectedItem = LauncherModel.calculatorID
+                        // A click can leave the first responder outside the search field.
+                        model.restoreKeyboard()
+                    },
+                    open: { model.activate() }
+                )
+                .padding(.bottom, 6)
+        }
+    }
+
+    private func row(_ item: RootItem) -> some View {
+        Row(
+            icon: Image(nsImage: model.icon(for: item)),
+            title: item.title,
+            subtitle: item.subtitle,
+            accessory: kind(of: item),
+            selected: item.id == model.selectedItem,
+            alias: item.alias,
+            hotkey: model.commandHotkeys[item.id]
+        )
+        .id(item.id)
+        .onRowClick(
+            select: {
+                model.selectedItem = item.id
+                // A click can leave the first responder outside the search field.
+                model.restoreKeyboard()
+            },
+            open: { model.activate() })
     }
 
     private func kind(of item: RootItem) -> String {
@@ -439,6 +469,8 @@ private struct Row: View {
     let subtitle: String?
     let accessory: String?
     let selected: Bool
+    /// A command's alias, shown as an outlined tag after its title.
+    var alias: String?
     /// A command's hotkey, shown as keycaps after its title.
     var hotkey: HotKeySpec?
 
@@ -448,6 +480,14 @@ private struct Row: View {
             Text(title).lineLimit(1)
             if let subtitle {
                 Text(subtitle).foregroundStyle(.secondary).lineLimit(1)
+            }
+            if let alias {
+                Text(alias)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.secondary.opacity(0.6)))
             }
             if let hotkey { Keycaps(spec: hotkey).foregroundStyle(.secondary) }
             Spacer()

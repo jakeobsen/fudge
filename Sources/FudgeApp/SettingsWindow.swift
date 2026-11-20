@@ -20,8 +20,17 @@ final class SettingsModel {
     private(set) var recording: String?
     /// A short message under a command's hotkey: why a recording was refused.
     private(set) var hotkeyMessages: [String: String] = [:]
-    /// The launcher's own hotkey, which commands can't take; set by the app delegate.
-    @ObservationIgnored var launcherHotkey = HotKeySpec.default
+    /// A short message under a command's alias: why it was refused.
+    private(set) var aliasMessages: [String: String] = [:]
+    /// Set while `settings.json` isn't a JSON object, so changes can't be saved; the General and Commands pages say so.
+    private(set) var settingsProblem: String?
+    /// The launcher's own hotkey, which commands can't take; kept current by the app delegate.
+    var launcherHotkey = HotKeySpec.default
+    /// The system refused the launcher's hotkey: another app has it, so it doesn't work.
+    var launcherHotkeyInUse = false
+    /// Registers a new launcher hotkey; false when the system refuses it, and the old one then stays registered.
+    /// Set by the app delegate.
+    @ObservationIgnored var registerLauncherHotkey: (HotKeySpec) -> Bool = { _ in true }
     /// Suspend and resume fudge's global hotkeys around a recording, so pressing one records it.
     @ObservationIgnored var suspendHotkeys: () -> Void = {}
     @ObservationIgnored var resumeHotkeys: () -> Void = {}
@@ -47,6 +56,7 @@ final class SettingsModel {
             $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending
         }
         fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        settingsProblem = FudgeSettings.isWritable(paths.settingsFile) ? nil : unreadableMessage
         if selected != Self.generalPage, selected != Self.commandsPage,
             !extensions.contains(where: { $0.manifest.name == selected })
         {
@@ -72,6 +82,68 @@ final class SettingsModel {
             FileHandle.standardError.write(Data("fudge: couldn't save settings: \(error)\n".utf8))
         }
         currencyRatesChanged(on)
+    }
+
+    // MARK: - Open at Login and search history
+
+    /// fudge as a login item; the app delegate sets the real one, and snapshots a fake.
+    @ObservationIgnored var loginItem: any LoginItem = FixedLoginItem(.notRegistered)
+    /// The Open at Login switch, from the system's real status (`refreshLoginItem()`), never a stored value.
+    private(set) var loginItemState = LoginItemState(.notRegistered)
+    /// Why turning Open at Login on or off failed, until the next try.
+    private(set) var loginItemError: String?
+    /// Clears root search's launch history; set by the app delegate.
+    @ObservationIgnored var clearSearchHistory: () -> Void = {}
+
+    /// Reads the login item's status again: a change made in System Settings shows too.
+    func refreshLoginItem() {
+        loginItemState = LoginItemState(loginItem.status)
+    }
+
+    func setOpenAtLogin(_ on: Bool) {
+        (loginItemState, loginItemError) = LoginItemState.change(loginItem, to: on)
+    }
+
+    func openLoginItemsSettings() {
+        loginItem.openSystemSettings()
+    }
+
+    // MARK: - The launcher's hotkey
+
+    /// `recording` while the launcher's hotkey is being recorded, and its key in `hotkeyMessages`. Command ids always
+    /// have a "/", so it can't be one.
+    static let launcherRecording = ":launcher"
+
+    /// A key pressed while recording the launcher's hotkey; the Reset button passes `.clear`. A conflict, or a
+    /// shortcut the system refuses, keeps the old hotkey and says why.
+    func recordLauncherHotkey(_ key: HotKeyRecording) {
+        cancelRecording()
+        // Check against the file as it is now, so a command hotkey added by hand meanwhile counts.
+        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        switch key.launcherEdit(commands: fudgeSettings.commandHotkeys) {
+        case .keep:
+            return
+        case .refused(let conflict):
+            hotkeyMessages[Self.launcherRecording] = message(for: conflict)
+        case .set(let spec):
+            setLauncherHotkey(spec)
+        }
+    }
+
+    private func setLauncherHotkey(_ spec: HotKeySpec) {
+        hotkeyMessages[Self.launcherRecording] = nil
+        // A settings.json that isn't a JSON object is refused before anything is registered (the banner says why).
+        guard FudgeSettings.isWritable(paths.settingsFile) else {
+            settingsProblem = unreadableMessage
+            return
+        }
+        let old = launcherHotkey
+        guard registerLauncherHotkey(spec) else {
+            hotkeyMessages[Self.launcherRecording] = "This shortcut is in use by another app"
+            return
+        }
+        // What's registered must match the file, or the next launch would bring the old one back unannounced.
+        if !change({ $0.launcherHotkey = spec }) { _ = registerLauncherHotkey(old) }
     }
 
     // MARK: - Command hotkeys
@@ -104,7 +176,7 @@ final class SettingsModel {
             return
         }
         let old = fudgeSettings.commands[commandID]?.hotkey
-        setHotkey(spec.text, for: commandID)
+        guard setHotkey(spec.text, for: commandID) else { return }
         if applyHotkeys().contains(commandID) {
             setHotkey(old, for: commandID)
             _ = applyHotkeys()
@@ -119,15 +191,83 @@ final class SettingsModel {
         _ = applyHotkeys()
     }
 
-    private func setHotkey(_ text: String?, for commandID: String) {
-        // Read the file again first, so hand edits made meanwhile aren't overwritten.
+    @discardableResult
+    private func setHotkey(_ text: String?, for commandID: String) -> Bool {
+        change { $0.commands[commandID, default: .init()].hotkey = text }
+    }
+
+    /// Changes `settings.json`, read again first so hand edits made meanwhile aren't overwritten. Returns false,
+    /// leaving the file and `fudgeSettings` as they were, when the file can't be written.
+    @discardableResult
+    private func change(_ edit: (inout FudgeSettings) -> Void) -> Bool {
         fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
-        fudgeSettings.commands[commandID, default: .init()].hotkey = text
+        var edited = fudgeSettings
+        edit(&edited)
         do {
-            try fudgeSettings.save(to: paths.settingsFile)
+            try edited.save(to: paths.settingsFile)
+            fudgeSettings = edited
+            settingsProblem = nil
+            return true
+        } catch is FudgeSettings.Unreadable {
+            settingsProblem = unreadableMessage
         } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't save settings: \(error)\n".utf8))
+            settingsProblem = "Couldn't save settings: \(error.localizedDescription)"
         }
+        return false
+    }
+
+    private var unreadableMessage: String {
+        let path = (paths.settingsFile.path as NSString).abbreviatingWithTildeInPath
+        return "\(path) isn't valid JSON, so fudge won't change it. Fix or remove it, then try again."
+    }
+
+    // MARK: - Aliases and enabled
+
+    func alias(for commandID: String) -> String? {
+        fudgeSettings.commands[commandID]?.alias
+    }
+
+    /// Saves `text` as the command's alias; empty removes it. Returns false, with a message, when it's refused.
+    @discardableResult
+    func setAlias(_ text: String, for commandID: String) -> Bool {
+        let alias = text.trimmingCharacters(in: .whitespaces)
+        // Check against the file as it is now, as `change` edits it, so an alias added by hand meanwhile counts.
+        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        if !alias.isEmpty, let problem = CommandAliases.problem(with: alias, for: commandID, in: fudgeSettings) {
+            aliasMessages[commandID] =
+                switch problem {
+                case .length: "Use 1 to 32 characters"
+                case .spaces: "No spaces"
+                case .duplicate(let other): "Already used by \(title(ofCommand: other))"
+                }
+            return false
+        }
+        aliasMessages[commandID] = nil
+        guard change({ $0.commands[commandID, default: .init()].alias = alias.isEmpty ? nil : alias }) else {
+            return false
+        }
+        _ = applyHotkeys()
+        return true
+    }
+
+    func isEnabled(command commandID: String) -> Bool {
+        fudgeSettings.commands[commandID]?.enabled != false
+    }
+
+    func isEnabled(extension name: String) -> Bool {
+        fudgeSettings.extensions[name]?.enabled != false
+    }
+
+    /// Enables or disables a command: a disabled one leaves root search, and its hotkey stops working.
+    func setEnabled(_ enabled: Bool, command commandID: String) {
+        change { $0.commands[commandID, default: .init()].enabled = enabled ? nil : false }
+        _ = applyHotkeys()
+    }
+
+    /// Enables or disables every command of an extension.
+    func setEnabled(_ enabled: Bool, extension name: String) {
+        change { $0.extensions[name, default: .init()].enabled = enabled ? nil : false }
+        _ = applyHotkeys()
     }
 
     private func message(for conflict: HotKeyConflict) -> String {
@@ -222,11 +362,12 @@ final class SettingsWindowController {
 
     private func prepare(extension name: String?) {
         model.reload()
+        model.refreshLoginItem()
         // "fudge Settings" and Settings… open on the General page; Configure Extension on the extension's own.
         model.selected = name ?? SettingsModel.generalPage
         if window == nil {
             let window = SettingsNSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 720, height: 480),
+                contentRect: NSRect(x: 0, y: 0, width: 880, height: 520),
                 styleMask: [.titled, .closable, .resizable, .miniaturizable],
                 backing: .buffered,
                 defer: false
@@ -242,6 +383,12 @@ final class SettingsWindowController {
                 forName: NSWindow.willCloseNotification, object: window, queue: .main
             ) { _ in
                 MainActor.assumeIsolated { model.cancelRecording() }
+            }
+            // Coming back from System Settings → Login Items shows what was changed there.
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+            ) { _ in
+                MainActor.assumeIsolated { model.refreshLoginItem() }
             }
         }
     }
