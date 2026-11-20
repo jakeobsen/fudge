@@ -58,9 +58,17 @@ final class LauncherModel {
         case failure(Failure)
     }
 
-    private(set) var screen: Screen = .root
+    private(set) var screen: Screen = .root {
+        didSet { syncArguments() }
+    }
     private(set) var results: [RootItem] = []
-    var selectedItem: String?
+    var selectedItem: String? {
+        didSet { syncArguments() }
+    }
+    /// The arguments of the command selected in root search, with what the user entered into them.
+    private(set) var arguments = ArgumentInput()
+    /// The root item `arguments` belongs to.
+    @ObservationIgnored private var argumentsItem: String?
     /// A line for the bottom bar, e.g. "Running Create Scratch…".
     private(set) var status: String?
 
@@ -168,6 +176,32 @@ final class LauncherModel {
     private func refreshResults() {
         results = RootSearch.rank(items, query: rootQuery, history: history)
         selectedItem = results.first?.id
+    }
+
+    /// The item selected in root search.
+    var selectedRootItem: RootItem? {
+        results.first { $0.id == selectedItem }
+    }
+
+    // MARK: - Arguments
+
+    /// Gives a command selected in root search empty argument fields, and drops them when the selection moves on
+    /// or root search goes away.
+    private func syncArguments() {
+        var item: RootItem?
+        if case .root = screen { item = selectedRootItem }
+        guard item?.id != argumentsItem else { return }
+        argumentsItem = item?.id
+        arguments = ArgumentInput(arguments: item?.arguments ?? [])
+    }
+
+    func setArgument(_ value: String, at index: Int) {
+        arguments.set(value, at: index)
+    }
+
+    /// The user clicked into an argument field (an index) or the search field (nil).
+    func focusArgument(_ index: Int?) {
+        if arguments.focus != index { arguments.focus = index }
     }
 
     // MARK: - Command views
@@ -536,7 +570,8 @@ final class LauncherModel {
     }
 
     /// Keys that the launcher handles itself: ⌘K, the primary and secondary actions' keys, and the actions'
-    /// shortcuts; in views without a search field (Detail, Form) also ↵ and Esc.
+    /// shortcuts; in views without a search field (Detail, Form) also ↵ and Esc; in root search, the keys of the
+    /// argument fields (`ArgumentInput.handle`).
     /// Returns false for everything else, which then goes to the focused field.
     func handleKey(_ pressed: KeyShortcut) -> Bool {
         if pressed == KeyShortcut(key: "k", modifiers: ["cmd"]) {
@@ -548,6 +583,15 @@ final class LauncherModel {
         if pressed == commandP, dropdownPanel != nil {
             closeDropdownPanel()
             return true
+        }
+        if case .root = screen {
+            switch arguments.handle(pressed) {
+            case .ignored: return false
+            case .handled: return true
+            case .submit:
+                activate()
+                return true
+            }
         }
         guard actionPanel == nil, dropdownPanel == nil, let command, command.failure == nil else { return false }
         let hasSearchField = command.view == nil || command.list != nil
@@ -616,7 +660,10 @@ final class LauncherModel {
     func activate() {
         switch screen {
         case .root:
-            if let item = results.first(where: { $0.id == selectedItem }) { open(item) }
+            guard let item = selectedRootItem else { return }
+            // A required argument left empty takes the keyboard instead.
+            if case .command = item.kind, !arguments.checkRequired() { return }
+            open(item)
         case .command:
             if let primaryAction { run(primaryAction) }
         case .failure:
@@ -700,15 +747,19 @@ final class LauncherModel {
                 appearance: NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
                     ? "dark" : "light"
             )
+            let entered = argumentsItem == item.id ? arguments : ArgumentInput(arguments: item.arguments)
             launch(
                 item.title,
                 of: installed,
                 command: commandName,
                 entry: entry,
                 mode: mode,
+                launchProps: LaunchProps(arguments: entered.launchArguments),
                 preferences: preferences.values,
                 environment: environment
             )
+            // A no-view command leaves root search on screen: its fields start empty again.
+            if argumentsItem == item.id { arguments = ArgumentInput(arguments: item.arguments) }
         }
     }
 
@@ -718,6 +769,7 @@ final class LauncherModel {
         command commandName: String,
         entry: URL,
         mode: String,
+        launchProps: LaunchProps,
         preferences: [String: JSONValue],
         environment: LaunchEnvironment
     ) {
@@ -744,7 +796,7 @@ final class LauncherModel {
         do {
             try host.send(
                 .launch(
-                    session: session, entry: entry.path, mode: mode, launchProps: LaunchProps(),
+                    session: session, entry: entry.path, mode: mode, launchProps: launchProps,
                     preferences: preferences, environment: environment)
             )
         } catch {

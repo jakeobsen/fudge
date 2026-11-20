@@ -15,6 +15,8 @@ public struct RootItem: Sendable, Equatable, Identifiable {
     public var kind: Kind
     /// An image file for the row, if there is one (an extension's asset).
     public var iconFile: URL?
+    /// A command's `arguments`, entered in fields after the query.
+    public var arguments: [ExtensionManifest.Argument]
 
     public init(
         id: String,
@@ -22,7 +24,8 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         subtitle: String? = nil,
         keywords: [String] = [],
         kind: Kind,
-        iconFile: URL? = nil
+        iconFile: URL? = nil,
+        arguments: [ExtensionManifest.Argument] = []
     ) {
         self.id = id
         self.title = title
@@ -30,6 +33,7 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         self.keywords = keywords
         self.kind = kind
         self.iconFile = iconFile
+        self.arguments = arguments
     }
 
     public static func application(at url: URL, title: String) -> RootItem {
@@ -52,7 +56,8 @@ public struct RootItem: Sendable, Equatable, Identifiable {
                     mode: command.mode,
                     entry: installed.entry(for: command.name)
                 ),
-                iconFile: icon.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil }
+                iconFile: icon.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil },
+                arguments: command.arguments
             )
         }
     }
