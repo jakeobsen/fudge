@@ -121,14 +121,20 @@ enum ExtensionImages {
         return image
     }
 
-    /// An SF Symbol for one of Raycast's icons ("arrow-clockwise-16"), where one has the same name.
+    private static var symbols: [String: String] = [:]
+
+    /// The SF Symbol for one of Raycast's icons ("arrow-clockwise-16"). An icon newer than fudge's table, or one
+    /// whose symbol this macOS lacks, gets a symbol with the same name if there is one, else a placeholder.
     private static func symbol(forRaycastIcon icon: String) -> String? {
+        if let known = symbols[icon] { return known }
+        func exists(_ name: String) -> Bool { NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil }
         let base = String(icon.dropLast(3))
-        for candidate in [base.replacingOccurrences(of: "-", with: "."), base.replacingOccurrences(of: "-", with: "")]
-        where NSImage(systemSymbolName: candidate, accessibilityDescription: nil) != nil {
-            return candidate
-        }
-        return "circle.dashed"
+        let candidates =
+            [RaycastIcons.symbol(for: icon)].compactMap { $0 }
+            + [base.replacingOccurrences(of: "-", with: "."), base.replacingOccurrences(of: "-", with: "")]
+        let symbol = candidates.first(where: exists) ?? "circle.dashed"
+        symbols[icon] = symbol
+        return symbol
     }
 }
 
@@ -198,7 +204,11 @@ extension ExtensionColor {
             default: .labelColor
             }
         case .rgb(let red, let green, let blue, let alpha):
-            NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
+            NSColor(name: nil) { appearance in
+                let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                let (r, g, b) = ExtensionColor.readable(red: red, green: green, blue: blue, dark: dark)
+                return NSColor(srgbRed: r, green: g, blue: b, alpha: alpha)
+            }
         case .dynamic(let light, let dark):
             NSColor(name: nil) { appearance in
                 appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark.nsColor : light.nsColor

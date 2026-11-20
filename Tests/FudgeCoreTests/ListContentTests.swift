@@ -203,6 +203,31 @@ private let folders = #"""
     )
     #expect(ExtensionColor("#12345") == nil)
     #expect(ExtensionColor("nope") == nil)
+}
+
+@Test func readsHTMLColors() {
+    #expect(ExtensionColor("rgb(255, 0, 0)") == .rgb(red: 1, green: 0, blue: 0, alpha: 1))
+    #expect(ExtensionColor("rgba(0,255,0,0.5)") == .rgb(red: 0, green: 1, blue: 0, alpha: 0.5))
+    #expect(ExtensionColor("rgb(0 0 255 / 25%)") == .rgb(red: 0, green: 0, blue: 1, alpha: 0.25))
+    #expect(ExtensionColor("rgb(100%, 50%, 0%)") == .rgb(red: 1, green: 0.5, blue: 0, alpha: 1))
+    #expect(ExtensionColor("hsl(120, 100%, 50%)") == .rgb(red: 0, green: 1, blue: 0, alpha: 1))
+    #expect(ExtensionColor("hsla(240deg 100% 50% / 0.5)") == .rgb(red: 0, green: 0, blue: 1, alpha: 0.5))
+    #expect(ExtensionColor("hsl(0, 0%, 100%)") == .rgb(red: 1, green: 1, blue: 1, alpha: 1))
+    #expect(ExtensionColor("RebeccaPurple") == ExtensionColor("#663399"))
+    #expect(ExtensionColor("transparent") == .rgb(red: 0, green: 0, blue: 0, alpha: 0))
+    #expect(ExtensionColor("rgb(1, 2)") == nil)
+    #expect(ExtensionColor("cmyk(0, 0, 0, 0)") == nil)
+}
+
+@Test func keepsColorsReadable() {
+    let purple = (0.4, 0.2, 0.6)  // rebeccapurple
+    let onDark = ExtensionColor.readable(red: purple.0, green: purple.1, blue: purple.2, dark: true)
+    #expect(onDark.0 > purple.0 && onDark.1 > purple.1 && onDark.2 > purple.2, "lightened on dark")
+    let onLight = ExtensionColor.readable(red: purple.0, green: purple.1, blue: purple.2, dark: false)
+    #expect(onLight == purple, "already dark enough on light")
+    let yellow = ExtensionColor.readable(red: 1, green: 1, blue: 0, dark: false)
+    #expect(yellow.0 < 1 && yellow.2 == 0, "darkened on light")
+    #expect(ExtensionColor.readable(red: 1, green: 0.5, blue: 0, dark: true) == (1, 0.5, 0), "fine as it is")
     #expect(ExtensionColor(json: .object(["light": .string("#000")])) == nil)
 }
 
