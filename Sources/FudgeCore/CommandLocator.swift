@@ -119,7 +119,7 @@ public enum LaunchCommandError: Error, Equatable, CustomStringConvertible {
         case .extensionNotInstalled(let owner, let name): "Extension \"\(owner)/\(name)\" isn't installed"
         case .commandNotFound(let command, let name): "No command \"\(command)\" in extension \"\(name)\""
         case .notInBackground(let command): "\"\(command)\" can't be launched in the background"
-        case .menuBarNotSupported: "Menu bar commands aren't supported in fudge yet"
+        case .menuBarNotSupported: "Menu bar commands aren't supported in Fudge yet"
         case .missingArgument(let argument, let command):
             "Missing required argument \"\(argument)\" for \"\(command)\""
         case .missingPreferences(let title, let names):
@@ -284,7 +284,7 @@ public struct LaunchPermissions: Sendable, Equatable, Codable {
     public struct Unreadable: Error, Equatable, CustomStringConvertible {
         public init() {}
         public var description: String {
-            "fudge can't read launch-permissions.json, so it leaves the file as it is and can't change these answers. "
+            "Fudge can't read launch-permissions.json, so it leaves the file as it is and can't change these answers. "
                 + "Fix or remove it, then try again."
         }
     }

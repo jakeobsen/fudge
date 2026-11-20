@@ -148,7 +148,7 @@ private func request(_ params: String) throws -> LaunchRequest {
     for type in [LaunchRequest.LaunchType.userInitiated, .background] {
         #expect(throws: LaunchCommandError.menuBarNotSupported) { try CommandLocator.checkMode(status, type: type) }
     }
-    #expect(LaunchCommandError.menuBarNotSupported.description == "Menu bar commands aren't supported in fudge yet")
+    #expect(LaunchCommandError.menuBarNotSupported.description == "Menu bar commands aren't supported in Fudge yet")
 }
 
 @Test func aMissingRequiredArgumentShowsTheFieldsOrFailsInTheBackground() throws {

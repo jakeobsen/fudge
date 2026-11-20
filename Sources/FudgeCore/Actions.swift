@@ -149,7 +149,7 @@ public enum RootActions {
             case .reloadExtensions:
                 [("Reload Extensions", enter, .open)]
             case .quit:
-                [("Quit fudge", enter, .open)]
+                [("Quit Fudge", enter, .open)]
             }
         return section(entries)
     }

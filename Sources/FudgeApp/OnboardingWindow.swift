@@ -147,7 +147,7 @@ final class OnboardingWindowController {
             backing: .buffered,
             defer: false
         )
-        window.title = "Set Up fudge"
+        window.title = "Set Up Fudge"
         window.isReleasedWhenClosed = false
         window.contentView = view
         self.window = window
@@ -217,17 +217,17 @@ struct OnboardingView: View {
         case .welcome:
             VStack(alignment: .leading, spacing: 14) {
                 Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 72, height: 72)
-                title("Welcome to fudge")
-                Text("fudge is a keyboard launcher for your Mac, and it runs Raycast's extensions.")
+                title("Welcome to Fudge")
+                Text("Fudge is a Raycast-compatible keyboard launcher for your Mac.")
                 Text("A few choices first. You can change any of them later in Settings.")
                     .foregroundStyle(.secondary)
             }
         case .hotkey:
             VStack(alignment: .leading, spacing: 14) {
                 title("Launcher hotkey")
-                Text("Press it anywhere to open fudge. Click the keys to record another shortcut.")
+                Text("Press it anywhere to open Fudge. Click the keys to record another shortcut.")
                 Text(
-                    "⌘Space is Spotlight's. To use it for fudge, turn off Spotlight's shortcut in System Settings → "
+                    "⌘Space is Spotlight's. To use it for Fudge, turn off Spotlight's shortcut in System Settings → "
                         + "Keyboard → Keyboard Shortcuts first."
                 )
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -243,7 +243,7 @@ struct OnboardingView: View {
         case .openAtLogin:
             VStack(alignment: .leading, spacing: 14) {
                 title("Open at Login")
-                Text("Start fudge when you log in, so its hotkeys always work.")
+                Text("Start Fudge when you log in, so its hotkeys always work.")
                 SettingsGroup { OpenAtLoginControls(model: settings) }
             }
         case .currency:
@@ -273,7 +273,7 @@ struct OnboardingView: View {
         case .accessibility where !settings.accessibility.isTrusted:
             Button("Not Now") { model.next() }
         case .done:
-            Button("Start Using fudge") { model.finish() }.keyboardShortcut(.defaultAction)
+            Button("Start Using Fudge") { model.finish() }.keyboardShortcut(.defaultAction)
         default:
             Button("Continue") { model.next() }.keyboardShortcut(.defaultAction)
         }

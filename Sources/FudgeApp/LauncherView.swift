@@ -290,7 +290,7 @@ struct LauncherView: View {
             } else if let view = command.view, view.type == "Detail" {
                 DetailScreen(model: model, view: view, assets: command.assets)
             } else if let view = command.view {
-                Text("fudge can't show a \(view.type) yet.")
+                Text("Fudge can't show a \(view.type) yet.")
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -338,7 +338,7 @@ struct LauncherView: View {
         if case .command(let command) = model.screen {
             return command.view?.string("navigationTitle") ?? command.title
         }
-        return "fudge"
+        return "Fudge"
     }
 
     private var primaryLabel: String? {
@@ -423,7 +423,7 @@ private struct RootResults: View {
         switch item.kind {
         case .application: "Application"
         case .command: "Command"
-        case .settings, .reloadExtensions, .quit: "fudge"
+        case .settings, .reloadExtensions, .quit: "Fudge"
         }
     }
 }

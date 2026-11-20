@@ -97,7 +97,7 @@ private let applicationItem = RootItem.application(
     #expect(rootEntries(applicationItem) == ["Open Application ↵", "Show in Finder ⇧⌘F"])
     #expect(rootEntries(.settings) == ["Open Settings ↵"])
     #expect(rootEntries(.reloadExtensions) == ["Reload Extensions ↵"])
-    #expect(rootEntries(.quit) == ["Quit fudge ↵"])
+    #expect(rootEntries(.quit) == ["Quit Fudge ↵"])
     for item in [RootItem.reloadExtensions, .quit] {
         #expect(ActionPanelReader.flat(RootActions.sections(for: item)).map(\.target) == [.root(.open)])
     }

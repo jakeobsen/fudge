@@ -212,7 +212,7 @@ private struct Rig {
     #expect(rig.pasteboard.plainText() == "again", "left for the user to paste")
     #expect(
         PasteError.accessibilityNeeded.description
-            == "fudge needs Accessibility permission to paste. The content was copied instead; allow fudge in "
+            == "Fudge needs Accessibility permission to paste. The content was copied instead; allow Fudge in "
             + "System Settings → Privacy & Security → Accessibility.")
 }
 

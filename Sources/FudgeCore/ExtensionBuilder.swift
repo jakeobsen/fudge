@@ -65,7 +65,7 @@ public enum BuildError: Error, Equatable, CustomStringConvertible {
             "the extension would be installed at \(path), which is its own source folder or overlaps it; "
                 + "install it into another folder"
         case .notAnInstall(let path):
-            "\(path) isn't an extension fudge built, so it won't be replaced"
+            "\(path) isn't an extension Fudge built, so it won't be replaced"
         }
     }
 }
