@@ -404,7 +404,8 @@ export function renderEnums(enums: Enums): string {
     return lines.join("\n");
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+// Only when run as this script: bundled into another one (`compat-scan.js`), `import.meta.url` is that bundle's.
+if (process.argv[1] === fileURLToPath(import.meta.url) && import.meta.url.endsWith(".ts")) {
     const types = readFileSync(typesPath, "utf8");
     const outputs = [
         [exportsPath, renderExports(raycastExports(types), vendoredVersion())],

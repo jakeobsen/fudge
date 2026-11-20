@@ -73,6 +73,10 @@ app: build
 		|| { cat build/actool.log; printf 'actool did not write %s (it needs Xcode 26 or later; see its output above, also in build/actool.log)\n' '$(APP)/Contents/Resources/Assets.car'; exit 1; }
 	@plutil -replace CFBundleShortVersionString -string '$(VERSION)' '$(APP)/Contents/Info.plist'
 	@cp runtime/dist/host.js runtime/dist/worker.js '$(APP)/Contents/Resources/runtime/'
+	@# `fudge scan`'s scanner, and Raycast's types it reads, with their MIT notice.
+	@cp runtime/dist/compat-scan.js '$(APP)/Contents/Resources/runtime/'
+	@cp runtime/vendor/raycast-api/index.d.ts '$(APP)/Contents/Resources/runtime/raycast-api.d.ts'
+	@cp runtime/vendor/raycast-api/LICENSE '$(APP)/Contents/Resources/runtime/raycast-api.LICENSE'
 	@# The Extension Store is an extension bundled with the app, built like any other into a scratch folder and
 	@# moved to Contents/Resources/store-extension. Its source is runtime/store-extension; no source, no store.
 	@if [ -f runtime/store-extension/package.json ]; then \

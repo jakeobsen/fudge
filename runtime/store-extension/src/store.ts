@@ -27,6 +27,38 @@ export type StoreContext = {
 /** The CLI build is the longest step: npm may install the extension's packages first. */
 export const buildTimeout = 600_000;
 
+/** `fudge scan` reads the extension's source without building it. */
+export const scanTimeout = 120_000;
+
+/** What the install confirmation needs from `fudge scan <folder> --json`. */
+export type ScanReport = { supported: boolean; gaps: { api: string }[]; unreadable: string[] };
+
+/** The install confirmation's line about what works: from the scan, or saying the scan couldn't run. */
+export function compatibilityLine(report: ScanReport | undefined): string {
+    if (!report) return "fudge couldn't check what this extension uses.";
+    if (report.supported) return "fudge supports everything this extension uses.";
+    const names = [...new Set(report.gaps.map((gap) => gap.api))];
+    if (names.length === 0) return "fudge couldn't read all of this extension's source, so some of it may not work.";
+    const more = names.length > 5 ? `, and ${names.length - 5} more` : "";
+    return `This extension uses things fudge doesn't have yet: ${names.slice(0, 5).join(", ")}${more}. Some of its commands may not work.`;
+}
+
+/** Runs `$FUDGE_CLI scan <source> --json`. Undefined when it fails or says something unexpected. */
+export async function scanExtension(source: string, context: StoreContext): Promise<ScanReport | undefined> {
+    const run = context.run ?? spawnProgram;
+    try {
+        const result = await run(context.cli, ["scan", source, "--json"], { timeout: scanTimeout });
+        if (result.code !== 0) return undefined;
+        const report = JSON.parse(result.stdout) as Partial<ScanReport>;
+        if (typeof report.supported !== "boolean" || !Array.isArray(report.gaps) || !Array.isArray(report.unreadable)) {
+            return undefined;
+        }
+        return report as ScanReport;
+    } catch {
+        return undefined;
+    }
+}
+
 /** Where the store keeps what it installed. It survives turning the store off, unlike `repo/`. */
 export function installedFile(supportPath: string): string {
     return path.join(supportPath, "installed.json");
@@ -79,8 +111,8 @@ const exists = (target: string) =>
     );
 
 /**
- * Installs (or updates) `entry`: fetches its source, checks where its packages come from, asks, builds it with the
- * CLI into `extensionsDir`, and records it. Resolves false when the user cancels; throws `StoreError` when a step
+ * Installs (or updates) `entry`: fetches its source, checks where its packages come from, scans what it uses
+ * (`fudge scan`), asks, builds it with the CLI into `extensionsDir`, and records it. Resolves false when the user cancels; throws `StoreError` when a step
  * refuses or fails. A folder of that name that the store didn't install is never replaced.
  */
 export async function install(entry: StoreEntry, context: StoreContext): Promise<boolean> {
@@ -94,10 +126,11 @@ export async function install(entry: StoreEntry, context: StoreContext): Promise
     const problem = await sourceProblem(source);
     if (problem) throw new StoreError(`${entry.title} can't be installed. ${problem}.`);
 
+    const compatibility = compatibilityLine(await scanExtension(source, context));
     const commit = await context.repo.commit();
     const confirmed = await context.confirm(
         `${installed[name] ? "Update" : "Install"} ${entry.title}?`,
-        `From github.com/raycast/extensions at ${commit.slice(0, 7)}. It runs its own code on your Mac, like any app you install.`,
+        `From github.com/raycast/extensions at ${commit.slice(0, 7)}. It runs its own code on your Mac, like any app you install.\n\n${compatibility}`,
         installed[name] ? "Update" : "Install",
     );
     if (!confirmed) return false;

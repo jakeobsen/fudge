@@ -1,0 +1,5 @@
+{
+  "name": "scan-supported",
+  "title": "Scan Supported",
+  "commands": [{ "name": "index", "title": "List", "mode": "view" }]
+}
