@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var registry = HotKeyRegistry(registrar: hotKeys)
     private var settingsModel: SettingsModel!
     private var settingsWindow: SettingsWindowController!
+    private var onboardingWindow: OnboardingWindowController!
     /// The menu bar item's "Open fudge (⌥Space)".
     private var openItem: NSMenuItem?
     private let hud = HUDWindow()
@@ -38,7 +39,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Snapshot.isRequested(CommandLine.arguments)
             ? FixedLoginItem(Snapshot(arguments: CommandLine.arguments)?.loginItem ?? .notRegistered)
             : SMAppServiceLoginItem()
+        // Snapshots get a fixed Accessibility answer: no prompt, nothing read from the system.
+        settingsModel.accessibility =
+            Snapshot.isRequested(CommandLine.arguments)
+            ? AccessibilityStatus(
+                access: FixedAccessibility(trusted: Snapshot(arguments: CommandLine.arguments)?.accessibility ?? false),
+                openPane: { _ in })
+            : AccessibilityStatus(
+                access: SystemAccessibility(), promptShownElsewhere: { SystemAccessibility.promptShown })
         settingsWindow = SettingsWindowController(model: settingsModel)
+        onboardingWindow = OnboardingWindowController(settings: settingsModel, file: paths.onboardingFile)
+        onboardingWindow.openLauncher = { [weak self] in self?.showPanel() }
+        settingsModel.showOnboarding = { [weak self] in self?.onboardingWindow.showAgain() }
         model.hide = { [weak self] in self?.hidePanel() }
         model.show = { [weak self] in self?.showPanel() }
         model.openSettings = { [weak self] name in self?.settingsWindow.show(extension: name) }
@@ -84,7 +96,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // the keyboard, so it can't put a second icon in the menu bar or catch anyone's typing.
         if let snapshot = Snapshot(arguments: CommandLine.arguments) {
             panel.refusesKey = true
-            if snapshot.settings {
+            if snapshot.onboarding {
+                snapshot.take(of: onboardingWindow, file: paths.onboardingFile)
+            } else if snapshot.settings {
                 snapshot.take(of: settingsWindow)
             } else {
                 snapshot.take(of: panel, model: model)
@@ -154,6 +168,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             FileHandle.standardError.write(Data("fudge: couldn't watch \(watcher.directory.path): \(error)\n".utf8))
         }
         extensionsWatcher = watcher
+
+        // Onboarding opens at every launch until it's completed; only the real app's launch opens it.
+        let onboarding = Onboarding.load(from: paths.onboardingFile)
+        if !onboarding.isComplete { onboardingWindow.show(onboarding) }
     }
 
     /// Applies `settings.json` to root search (aliases, disabled commands) and registers the hotkeys of the
@@ -257,8 +275,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Every path that shows the panel ends here, after it has built its screen.
     private func showPanel() {
         model.panelReset.panelShown()
-        panel.present()
+        panel.present(on: chosenScreen())
         model.presented()
+    }
+
+    /// The screen "Show fudge on" picks (`PanelScreen`).
+    private func chosenScreen() -> NSScreen? {
+        let screens = NSScreen.screens
+        let setting = model.settings.showOnScreen
+        let window = setting == .activeWindow ? activeWindowFrame(primaryHeight: screens.first?.frame.height ?? 0) : nil
+        let index = PanelScreen.choose(
+            setting: setting, screens: screens.map(\.frame), mouse: NSEvent.mouseLocation, activeWindowFrame: window)
+        return index.map { screens[$0] }
+    }
+
+    /// The frontmost app's topmost window on screen, in Cocoa coordinates. Window bounds need no permission; nil
+    /// when there's no such window.
+    private func activeWindowFrame(primaryHeight: CGFloat) -> CGRect? {
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+            let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+                as? [[String: Any]]
+        else { return nil }
+        for window in windows
+        where (window[kCGWindowOwnerPID as String] as? pid_t) == pid && (window[kCGWindowLayer as String] as? Int) == 0
+        {
+            guard let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+                let rect = CGRect(dictionaryRepresentation: bounds)
+            else { continue }
+            return PanelScreen.cocoaFrame(windowListBounds: rect, primaryHeight: primaryHeight)
+        }
+        return nil
     }
 
     /// Every path that hides the panel ends here: Esc, the hotkey, the model's `hide`, and the panel resigning key.
@@ -352,7 +398,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// `--actions` presses ⌘K, and `--open-dropdown` presses ⌘P, or in a Form opens its first Dropdown (`--open-tags`: its
 /// first TagPicker; `--open-date`: its first DatePicker's calendar).
 /// `--snapshot <file.png> --settings [<extension>]` renders the Settings window instead, with a fake login item
-/// whose status `--login-item <status>` sets (`enabled`, `requiresApproval`, `notRegistered`, `notFound`).
+/// whose status `--login-item <status>` sets (`enabled`, `requiresApproval`, `notRegistered`, `notFound`), and a fake
+/// Accessibility answer that `--accessibility allowed|missing` sets (`missing` by default). `--settings :permissions`
+/// shows the Permissions page.
+/// `--snapshot <file.png> --onboarding [<step>]` renders the onboarding window, with the same fakes, on its pending
+/// steps from `onboarding.json`; with a step id, on every step from the start, at that one.
 /// For checking the layout without looking at the screen.
 @MainActor
 struct Snapshot {
@@ -369,6 +419,11 @@ struct Snapshot {
     let settingsExtension: String?
     /// `--login-item <status>`: what the General page's Open at Login shows (`notRegistered` by default).
     let loginItem: LoginItemStatus
+    /// `--accessibility allowed`: Accessibility shows as allowed (else not allowed).
+    let accessibility: Bool
+    /// `--onboarding [<step>]`: the onboarding window instead, optionally on one step.
+    let onboarding: Bool
+    let onboardingStep: OnboardingStep?
 
     init?(arguments: [String]) {
         guard let index = arguments.firstIndex(of: "--snapshot"), index + 1 < arguments.count else { return nil }
@@ -386,6 +441,9 @@ struct Snapshot {
         openTags = arguments.contains("--open-tags")
         openDate = arguments.contains("--open-date")
         loginItem = value("--login-item").flatMap(LoginItemStatus.init(rawValue:)) ?? .notRegistered
+        accessibility = value("--accessibility") == "allowed"
+        onboarding = arguments.contains("--onboarding")
+        onboardingStep = value("--onboarding").flatMap(OnboardingStep.init(rawValue:))
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1
@@ -398,6 +456,16 @@ struct Snapshot {
 
     func take(of controller: SettingsWindowController) {
         controller.renderOffscreen(extension: settingsExtension)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            guard let view = controller.contentView else { exit(1) }
+            save(view)
+        }
+    }
+
+    /// Renders onboarding: on `onboardingStep` among every step, else on the pending steps from `file`.
+    func take(of controller: OnboardingWindowController, file: URL) {
+        let onboarding = onboardingStep == nil ? Onboarding.load(from: file) : Onboarding()
+        guard controller.renderOffscreen(onboarding, step: onboardingStep) != nil else { exit(1) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             guard let view = controller.contentView else { exit(1) }
             save(view)
