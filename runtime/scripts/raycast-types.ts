@@ -27,22 +27,31 @@ export function raycastExports(types: string): string[] {
 
 export type Enums = Record<string, Record<string, string | number>>;
 
-/** Every enum, exported or not (`Action.Style` is the unexported `ActionStyle`), with its members' values. */
+/**
+ * Every enum, exported or not (`Action.Style` is the unexported `ActionStyle`), with its members' values. An enum
+ * declared inside a namespace is named after both (`Image.Mask` is `ImageMask`).
+ */
 export function raycastEnums(types: string): Enums {
     const code = types.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
     const enums: Enums = {};
-    for (const match of code.matchAll(/declare enum (\w+)\s*\{([^}]*)\}/g)) {
+    for (const match of code.matchAll(/(declare|export) enum (\w+)\s*\{([^}]*)\}/g)) {
+        let name = match[2]!;
+        if (match[1] === "export") {
+            const namespaces = [...code.slice(0, match.index).matchAll(/^\s*(?:export )?declare namespace (\w+)/gm)];
+            name = `${namespaces.at(-1)?.[1] ?? ""}${name}`;
+        }
         const members: Record<string, string | number> = {};
         let next = 0;
-        for (const entry of match[2]!.split(",")) {
-            const member = entry.trim().match(/^(\w+)\s*(?:=\s*("(?:[^"\\]|\\.)*"|-?\d+))?$/);
+        for (const entry of match[3]!.split(",")) {
+            // Members may be quoted: AI.Model has "OpenAI_GPT-5.4".
+            const member = entry.trim().match(/^(\w+|"(?:[^"\\]|\\.)*")\s*(?:=\s*("(?:[^"\\]|\\.)*"|-?\d+))?$/);
             if (!member) continue;
             const literal = member[2];
             const value = literal === undefined ? next : literal.startsWith('"') ? (JSON.parse(literal) as string) : Number(literal);
             if (typeof value === "number") next = value + 1;
-            members[member[1]!] = value;
+            members[member[1]!.startsWith('"') ? (JSON.parse(member[1]!) as string) : member[1]!] = value;
         }
-        enums[match[1]!] = members;
+        enums[name] = members;
     }
     return enums;
 }
@@ -68,7 +77,10 @@ export function renderEnums(enums: Enums): string {
     const lines = [header, "", "export const RAYCAST_ENUMS = {"];
     for (const name of Object.keys(enums).sort()) {
         lines.push(`    ${name}: {`);
-        for (const [member, value] of Object.entries(enums[name]!)) lines.push(`        ${member}: ${JSON.stringify(value)},`);
+        for (const [member, value] of Object.entries(enums[name]!)) {
+            const key = /^[A-Za-z_$][\w$]*$/.test(member) ? member : JSON.stringify(member);
+            lines.push(`        ${key}: ${JSON.stringify(value)},`);
+        }
         lines.push("    },");
     }
     lines.push("} as const;", "");
