@@ -7,7 +7,7 @@ fudge is an independent project. It is not affiliated with or endorsed by Raycas
 ## What's here
 
 - `Sources/FudgeApp`: the macOS app. It runs in the menu bar, without a Dock icon.
-- `Sources/FudgeCLI`: the `fudge` command-line tool.
+- `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for fudge.
 - `Sources/FudgeCore`: code shared by the app and the tool.
 - `runtime/`: the extension host. This is the Node.js program that runs extensions. The app talks to it over stdin/stdout.
 
@@ -20,6 +20,8 @@ make app     # build build/Fudge.app
 make run     # build it and open it
 make test    # run the Swift and extension host tests
 make lint    # check formatting and types
+
+make install-extension DIR=path/to/extension   # compile and install an extension
 ```
 
 `make help` lists every target.
