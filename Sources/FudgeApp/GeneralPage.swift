@@ -66,7 +66,7 @@ struct GeneralPage: View {
                     Text("Extension Store: browse and install extensions from github.com/raycast/extensions")
                     Text("Off until you turn it on. Turning it on explains what it downloads and asks you first.")
                 }
-                .toggleStyle(.checkbox)
+                .toggleStyle(.switch)
             }
             Section("Search") {
                 LabeledContent {
