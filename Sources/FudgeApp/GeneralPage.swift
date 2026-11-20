@@ -56,13 +56,6 @@ struct GeneralPage: View {
                     Text("How the calculator reads the numbers you type, and writes its answers.")
                 }
             }
-            Section("Extension Store") {
-                Toggle(isOn: Binding(get: { model.extensionStore }, set: { model.setExtensionStore($0) })) {
-                    Text("Extension Store: browse and install extensions from github.com/raycast/extensions")
-                    Text("Off until you turn it on. Turning it on explains what it downloads and asks you first.")
-                }
-                .toggleStyle(.switch)
-            }
             Section("Search") {
                 LabeledContent {
                     Button("Clear Search History…") { confirmingClear = true }
