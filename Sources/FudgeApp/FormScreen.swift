@@ -316,7 +316,7 @@ private struct FormDateField: View {
                 DatePicker(
                     "",
                     selection: Binding(get: { date }, set: { model.pickDate($0, for: field.id) }),
-                    in: (options.min ?? .distantPast)...(options.max ?? .distantFuture),
+                    in: options.range,
                     displayedComponents: options.type == .date ? [.date] : [.date, .hourAndMinute]
                 )
                 .labelsHidden()

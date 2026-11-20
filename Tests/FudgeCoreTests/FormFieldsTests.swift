@@ -205,6 +205,21 @@ private func date(_ iso: String) -> Date {
     #expect(FormDates.json(date("2026-11-20T12:30:00.000Z")) == .object(["$date": .string("2026-11-20T12:30:00.000Z")]))
 }
 
+@Test func aDatePickerWithMinAfterMaxIgnoresBothInsteadOfCrashing() throws {
+    let fields = try form(
+        #"""
+        {"id":2,"type":"Form.DatePicker","props":{"id":"due",
+          "min":{"$date":"2026-12-31T00:00:00.000Z"},"max":{"$date":"2026-11-01T00:00:00.000Z"}},"children":[]}
+        """#
+    ).fields
+    #expect(fields[0].dates == DatePickerOptions(type: .dateTime, min: nil, max: nil))
+    #expect(fields[0].dates?.range == Date.distantPast...Date.distantFuture)
+    let limited = DatePickerOptions(min: date("2026-11-01T00:00:00.000Z"), max: date("2026-12-31T00:00:00.000Z"))
+    #expect(limited.range == date("2026-11-01T00:00:00.000Z")...date("2026-12-31T00:00:00.000Z"))
+    let inverted = DatePickerOptions(min: date("2026-12-31T00:00:00.000Z"), max: date("2026-11-01T00:00:00.000Z"))
+    #expect(inverted.range == Date.distantPast...Date.distantFuture, "never an inverted range, which traps")
+}
+
 @Test func aDatePickerGivesMidnightOrWholeMinutesWithinItsLimits() {
     let picked = date("2026-11-20T14:37:42.500Z")  // 15:37:42 in Copenhagen
     let day = DatePickerOptions(type: .date)

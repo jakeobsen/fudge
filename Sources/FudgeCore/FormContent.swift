@@ -232,12 +232,24 @@ public struct DatePickerOptions: Sendable, Equatable {
         self.max = max
     }
 
+    /// An extension's `min` after its `max` allows no date at all; fudge then ignores both, rather than refuse every
+    /// pick.
     init(_ node: UINode) {
-        self.init(
-            type: node.string("type").flatMap(Kind.init(rawValue:)) ?? .dateTime,
-            min: FormDates.date(node.props["min"]),
-            max: FormDates.date(node.props["max"])
-        )
+        var min = FormDates.date(node.props["min"])
+        var max = FormDates.date(node.props["max"])
+        if let low = min, let high = max, low > high {
+            min = nil
+            max = nil
+        }
+        self.init(type: node.string("type").flatMap(Kind.init(rawValue:)) ?? .dateTime, min: min, max: max)
+    }
+
+    /// The dates the picker offers: from `min` to `max`, open where either is missing. Never an inverted range,
+    /// which would trap.
+    public var range: ClosedRange<Date> {
+        let low = min ?? .distantPast
+        let high = max ?? .distantFuture
+        return low <= high ? low...high : Date.distantPast...Date.distantFuture
     }
 }
 
