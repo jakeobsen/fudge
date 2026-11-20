@@ -39,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.openSettings = { [weak self] name in self?.settingsWindow.show(extension: name) }
         model.reloadAll = { [weak self] in self?.reloadExtensions() }
         settingsModel.clearSearchHistory = { [weak self] in self?.model.clearHistory() }
+        settingsModel.imported = { [weak self] in self?.afterImport() }
         model.showHUD = { [weak self] title in self?.hud.show(title) }
         model.isVisible = { [weak self] in self?.panel.isVisible ?? false }
         model.confirm = { [weak self] request in await self?.confirm(request) ?? false }
@@ -240,6 +241,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApp.activate()
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// An import replaced `settings.json`, the history and extensions' data: read everything again, and register
+    /// the imported hotkeys.
+    private func afterImport() {
+        model.reloadAfterImport()
+        let settings = FudgeSettings.load(from: paths.settingsFile)
+        _ = registry.setLauncher(settings.launcherHotkey)
+        launcherHotkeyChanged()
+        applyCommandHotkeys()
+        Task { await exchangeRates.setEnabled(settings.currencyRates, now: Date()) }
     }
 
     @objc private func reloadExtensions() {

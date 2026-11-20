@@ -169,6 +169,13 @@ final class LauncherModel {
         refreshResults()
     }
 
+    /// After an import: root search's ranking comes from the imported `history.json`, and everything else is
+    /// read again.
+    func reloadAfterImport() {
+        history = LaunchHistory.load(from: paths.historyFile)
+        reload()
+    }
+
     /// Finds applications and installed extensions again.
     func reload() {
         installedExtensions = InstalledExtension.all(in: paths.extensionsDirectory)

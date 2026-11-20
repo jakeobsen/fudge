@@ -78,6 +78,15 @@ Root search ranks what you open often first. **Clear Search History…** on the 
 
 The first time an extension opens another extension's command, fudge asks whether to allow it, and remembers the answer. To change or forget an answer, open **Settings…** → **General** → **Extensions that open other extensions**: pick **Allowed** or **Not allowed**, or click × to be asked again next time.
 
+### Backup: import and export
+
+**Settings… → General → Import / Export** saves everything you've set up in fudge to one file, and brings it back, on this Mac or another one.
+
+- **Export…** asks for a password (at least 8 characters), then where to save `fudge-backup-<date>.fudgebackup`. The file holds fudge's settings (hotkeys, aliases, which commands are on), the answers about extensions opening other extensions, root search's ranking, every extension's preferences and data, and the list of installed extensions. It's always encrypted with your password, because extensions keep passwords and tokens in there; fudge can't recover a forgotten one. The file opens only in fudge, not with Apple's `aea` tool. Extension data over 100 MB in total leaves out the biggest extensions' data, and the export says which.
+- **Import…** asks for the file and its password, shows what's in it, and replaces your settings and the data of the extensions in the backup; other extensions keep theirs. It then lists the extensions in the backup that aren't installed here, so you can reinstall them. It installs nothing itself.
+- **The extensions themselves aren't in a backup**, only the list, and neither are caches, the exchange rates or the Extension Store's switch (turn it on again yourself).
+- Before importing, fudge saves what it's about to replace in `backups/` in its support folder (`~/Library/Application Support/fudge/backups`), readable by you only. It keeps the last 3. You can import one of those with **Import…**; it needs no password.
+
 ### Calculator and currency
 
 Type a calculation in root search and the answer shows above the results: arithmetic (`5+5/10*39`), units (`13kg to lbs`), time zones (`3pm cet in pst`) and currencies (`100 usd to eur`, `€100 in usd`, `100 € in kr`). ↵ copies the answer.
