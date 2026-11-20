@@ -43,6 +43,18 @@ public struct MenuBarStore: Sendable, Equatable {
 
     public func isActive(_ id: String) -> Bool { active.contains(id) }
 
+    /// The active commands fudge puts in the menu bar: those in `installed` (command ids of menu-bar commands) that
+    /// `settings` has enabled, in the order they were activated. A disabled command, or one of a disabled extension,
+    /// stays active here, so turning it back on in Settings brings its item back.
+    public func shown(installed: Set<String>, settings: FudgeSettings) -> [String] {
+        active.filter { installed.contains($0) && settings.isEnabled(commandID: $0) }
+    }
+
+    /// A command's status item's autosave name. macOS keeps each status item's position and whether it's shown under
+    /// that name, so it must belong to the command: unnamed items are `Item-0`, `Item-1`, … in the order they're
+    /// made, and would take over another item's saved state.
+    public static func autosaveName(_ id: String) -> String { "menubar:\(id)" }
+
     /// Adds a command. Throws `LimitReached` when `limit` are active already; an active command is left as it is.
     public mutating func activate(_ id: String) throws {
         guard !active.contains(id) else { return }

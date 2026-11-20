@@ -187,17 +187,17 @@ final class LauncherModel {
         extensions = Dictionary(
             installedExtensions.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
         loadCommandMetadata(installedExtensions)
-        menuBar.update(installed: installedExtensions)
         applications = ApplicationIndex.scan()
         applySettings()
     }
 
-    /// Rebuilds root search from `settings.json`: commands that are disabled leave it, and the rest get their
-    /// aliases and hotkeys. Settings calls it after each change.
+    /// Rebuilds root search and the menu bar from `settings.json`: commands that are disabled leave them, and the rest
+    /// get their aliases and hotkeys. Settings calls it after each change.
     func applySettings() {
         settings = FudgeSettings.load(from: paths.settingsFile)
         let commands = installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
         items = RootSearch.applying(settings, to: commands) + RootSearch.builtInItems + applications
+        menuBar.update(installed: installedExtensions, settings: settings)
         refreshResults()
         refreshCommandHotkeys()
     }

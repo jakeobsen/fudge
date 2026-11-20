@@ -189,6 +189,37 @@ private func sample(title: String = "Add", isLoading: Bool = false) -> UINode {
     #expect(MenuBarStore.load(from: file) == MenuBarStore())
 }
 
+@Test func aDisabledMenuBarCommandLeavesTheMenuBarButStaysActive() throws {
+    let store = MenuBarStore(active: ["a/one", "b/two", "a/three", "gone/x"])
+    let installed: Set = ["a/one", "b/two", "a/three"]
+    #expect(store.shown(installed: installed, settings: FudgeSettings()) == ["a/one", "b/two", "a/three"])
+
+    var settings = FudgeSettings(commands: ["b/two": .init(enabled: false), "a/one": .init(enabled: true)])
+    #expect(store.shown(installed: installed, settings: settings) == ["a/one", "a/three"], "a disabled command")
+    settings.extensions["a"] = .init(enabled: false)
+    #expect(store.shown(installed: installed, settings: settings) == [], "a disabled extension")
+    #expect(store.active == ["a/one", "b/two", "a/three", "gone/x"], "all stay active, so they come back")
+    settings = FudgeSettings()
+    #expect(store.shown(installed: installed, settings: settings) == ["a/one", "b/two", "a/three"], "turned back on")
+    #expect(store.shown(installed: [], settings: settings) == [], "nothing installed, nothing shown")
+}
+
+@Test func isEnabledReadsACommandID() {
+    let settings = FudgeSettings(
+        commands: ["tools/off": .init(enabled: false), "tools/sub/x": .init(enabled: false)],
+        extensions: ["quiet": .init(enabled: false)])
+    #expect(settings.isEnabled(commandID: "tools/on"))
+    #expect(!settings.isEnabled(commandID: "tools/off"))
+    #expect(!settings.isEnabled(commandID: "quiet/anything"))
+    #expect(!settings.isEnabled(commandID: "tools/sub/x"), "split at the first slash")
+    #expect(settings.isEnabled(commandID: "no-slash"))
+}
+
+@Test func eachMenuBarCommandHasItsOwnAutosaveName() {
+    #expect(MenuBarStore.autosaveName("weather/menu") == "menubar:weather/menu")
+    #expect(MenuBarStore.autosaveName("a/one") != MenuBarStore.autosaveName("a/two"))
+}
+
 @Test func atMostFiftyMenuBarItemsCanBeActive() throws {
     var store = MenuBarStore()
     for index in 0..<MenuBarStore.limit { try store.activate("x/c\(index)") }

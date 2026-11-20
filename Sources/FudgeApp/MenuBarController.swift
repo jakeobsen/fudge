@@ -70,6 +70,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var sessions: [String: String] = [:]
     /// The installed menu-bar commands, by command id.
     private var installed: [String: (InstalledExtension, ExtensionManifest.Command)] = [:]
+    /// `settings.json`, for which commands are enabled.
+    private var settings = FudgeSettings()
     /// Snapshots never start: they put nothing in the menu bar.
     private var started = false
 
@@ -86,9 +88,12 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// Whether `session` is one of the menu bar's.
     func owns(_ session: String) -> Bool { sessions[session] != nil }
 
-    /// Takes in the installed extensions: at launch and on Reload Extensions. Commands that are no longer installed
-    /// are deactivated; the others pick up their new manifest.
-    func update(installed extensions: [InstalledExtension]) {
+    /// Takes in the installed extensions and the settings: at launch, on Reload Extensions and after each change in
+    /// Settings. Commands that are no longer installed are deactivated; the others pick up their new manifest. A
+    /// disabled command leaves the menu bar and stops refreshing, but stays active (`MenuBarStore.shown`), so turning
+    /// it back on puts it back, loading in the background.
+    func update(installed extensions: [InstalledExtension], settings: FudgeSettings) {
+        self.settings = settings
         installed = [:]
         for installedExtension in extensions {
             for command in installedExtension.manifest.commands where command.mode == "menu-bar" {
@@ -97,8 +102,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             }
         }
         if store.prune(keeping: Set(installed.keys)) { save() }
+        let shown = Set(store.shown(installed: Set(installed.keys), settings: settings))
         for (id, item) in active {
-            guard let (installedExtension, command) = installed[id] else {
+            guard shown.contains(id), let (installedExtension, command) = installed[id] else {
                 remove(item)
                 continue
             }
@@ -107,12 +113,19 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             item.command = command
             if intervalChanged { schedule(item) }
         }
+        if started { showMissing() }
     }
 
     /// Puts the active commands in the menu bar, each loading in the background. Called once, by the app.
     func start() {
         started = true
-        for id in store.active {
+        showMissing()
+    }
+
+    /// Puts each command `MenuBarStore.shown` names, and that isn't there yet, in the menu bar, loading it in the
+    /// background as at fudge's start.
+    private func showMissing() {
+        for id in store.shown(installed: Set(installed.keys), settings: settings) where active[id] == nil {
             guard let item = makeActive(id) else { continue }
             run(item, .startup)
         }
@@ -148,6 +161,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func activate(_ id: String) throws -> Active? {
+        // Root search, hotkeys and launchCommand already leave disabled commands out.
+        guard settings.isEnabled(commandID: id) else { return nil }
         if !store.isActive(id) {
             try store.activate(id)
             save()
@@ -347,6 +362,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         }
         let statusItem = item.statusItem ?? NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if item.statusItem == nil {
+            // Its own name, so it keeps its own position, and shown: an item only exists while its command is active.
+            statusItem.autosaveName = MenuBarStore.autosaveName(item.id)
+            statusItem.isVisible = true
             statusItem.menu = item.menu
             item.statusItem = statusItem
         }
