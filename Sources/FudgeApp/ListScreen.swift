@@ -41,7 +41,14 @@ struct ListScreen: View {
                                     item: item, selected: item.id == selected, compact: compact, assets: command.assets
                                 )
                                 .id(item.id)
-                                .onRowClick(select: { model.select(node: item.id) }, open: { model.activate() })
+                                .onRowClick(
+                                    select: {
+                                        model.select(node: item.id)
+                                        // A click can leave the first responder outside the search field.
+                                        model.restoreKeyboard()
+                                    },
+                                    open: { model.activate() }
+                                )
                                 // Scrolling near the end asks for the next page.
                                 .onAppear { model.loadMoreIfNeeded(near: item.id) }
                             }
