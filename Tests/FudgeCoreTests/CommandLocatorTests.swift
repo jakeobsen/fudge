@@ -224,3 +224,49 @@ private func request(_ params: String) throws -> LaunchRequest {
     guard case .object(let plain) = without, case .object(let plainProps) = plain["launchProps"] else { return }
     #expect(plainProps["launchContext"] == nil, "no context, no key")
 }
+
+@Test func launchPermissionsListAndForgetAnswers() throws {
+    var permissions = LaunchPermissions()
+    permissions.record(false, caller: "tools", target: "other")
+    permissions.record(true, caller: "alpha", target: "zeta")
+    permissions.record(true, caller: "alpha", target: "beta")
+    #expect(
+        permissions.entries == [
+            .init(caller: "alpha", target: "beta", allowed: true),
+            .init(caller: "alpha", target: "zeta", allowed: true),
+            .init(caller: "tools", target: "other", allowed: false),
+        ], "sorted by caller, then target")
+
+    permissions.forget(caller: "alpha", target: "beta")
+    permissions.forget(caller: "tools", target: "other")
+    permissions.forget(caller: "nobody", target: "x")
+    #expect(permissions.answers == ["alpha": ["zeta": true]], "a caller with no answers left is gone")
+    #expect(permissions.answer(caller: "tools", target: "other") == nil, "asked again next time")
+
+    let file = try Fixtures.temporaryDirectory().appendingPathComponent("launch-permissions.json")
+    var stored = LaunchPermissions(answers: ["a": ["b": true, "c": false], "d": ["e": true]])
+    try stored.save(to: file)
+    stored = LaunchPermissions.load(from: file)
+    stored.record(true, caller: "a", target: "c")
+    stored.forget(caller: "d", target: "e")
+    try stored.save(to: file)
+    #expect(LaunchPermissions.load(from: file).answers == ["a": ["b": true, "c": true]], "other answers are kept")
+}
+
+@Test func launchPermissionsNeverOverwriteAFileTheyCantRead() throws {
+    let file = try Fixtures.temporaryDirectory().appendingPathComponent("launch-permissions.json")
+    #expect(!LaunchPermissions.isUnreadable(file), "a missing file is fine")
+    try Data("  \n".utf8).write(to: file)
+    #expect(!LaunchPermissions.isUnreadable(file), "a blank one too")
+    try LaunchPermissions(answers: ["a": ["b": true]]).save(to: file)
+
+    for broken in ["not json", "[1, 2]", #"{"a": {"b": "yes"}}"#] {
+        try Data(broken.utf8).write(to: file)
+        #expect(LaunchPermissions.isUnreadable(file), "\(broken)")
+        #expect(LaunchPermissions.load(from: file) == LaunchPermissions())
+        #expect(throws: LaunchPermissions.Unreadable()) {
+            try LaunchPermissions(answers: ["x": ["y": true]]).save(to: file)
+        }
+        #expect(try Data(contentsOf: file) == Data(broken.utf8), "left byte for byte")
+    }
+}
