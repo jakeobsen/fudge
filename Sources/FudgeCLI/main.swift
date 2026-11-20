@@ -9,7 +9,7 @@ let usage = """
                       Compile the Raycast extension in <folder> and install it, in the
                       default extensions folder or, with --into, in that one.
       scan <folder> [--json]
-                      Say what the extension in <folder> uses that fudge doesn't have
+                      Say what the extension in <folder> uses that Fudge doesn't have
                       yet. Nothing is built or run.
       help            Show this help.
       version         Print the fudge version.

@@ -119,9 +119,9 @@ const kindWords: Record<Gap["kind"], string> = {
 
 /** `fudge scan <folder>` without `--json`: a short list for a person. */
 export function describe(scanned: Report): string {
-    if (scanned.supported) return `${scanned.extension}: fudge supports everything it uses.`;
+    if (scanned.supported) return `${scanned.extension}: Fudge supports everything it uses.`;
     const lines =
-        scanned.gaps.length === 0 ? [] : [`${scanned.extension} uses things fudge doesn't have yet:`];
+        scanned.gaps.length === 0 ? [] : [`${scanned.extension} uses things Fudge doesn't have yet:`];
     for (const gap of scanned.gaps) {
         const how = gap.kind === "via @raycast/utils" ? `${kindWords[gap.kind]}: ${gap.via!.join(", ")}` : kindWords[gap.kind];
         lines.push(`  ${gap.api} (${how}${gap.byDesign ? `; ${gap.byDesign}, left out on purpose` : ""})`);

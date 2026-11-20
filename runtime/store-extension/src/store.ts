@@ -35,12 +35,12 @@ export type ScanReport = { supported: boolean; gaps: { api: string }[]; unreadab
 
 /** The install confirmation's line about what works: from the scan, or saying the scan couldn't run. */
 export function compatibilityLine(report: ScanReport | undefined): string {
-    if (!report) return "fudge couldn't check what this extension uses.";
-    if (report.supported) return "fudge supports everything this extension uses.";
+    if (!report) return "Fudge couldn't check what this extension uses.";
+    if (report.supported) return "Fudge supports everything this extension uses.";
     const names = [...new Set(report.gaps.map((gap) => gap.api))];
-    if (names.length === 0) return "fudge couldn't read all of this extension's source, so some of it may not work.";
+    if (names.length === 0) return "Fudge couldn't read all of this extension's source, so some of it may not work.";
     const more = names.length > 5 ? `, and ${names.length - 5} more` : "";
-    return `This extension uses things fudge doesn't have yet: ${names.slice(0, 5).join(", ")}${more}. Some of its commands may not work.`;
+    return `This extension uses things Fudge doesn't have yet: ${names.slice(0, 5).join(", ")}${more}. Some of its commands may not work.`;
 }
 
 /** Runs `$FUDGE_CLI scan <source> --json`. Undefined when it fails or says something unexpected. */
