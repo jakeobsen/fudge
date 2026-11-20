@@ -306,6 +306,11 @@ public struct SearchBarDropdown: Sendable, Equatable {
     public struct Section: Sendable, Equatable {
         public var title: String?
         public var items: [Item]
+
+        public init(title: String?, items: [Item]) {
+            self.title = title
+            self.items = items
+        }
     }
 
     /// The node id, which `onChange` events go to.

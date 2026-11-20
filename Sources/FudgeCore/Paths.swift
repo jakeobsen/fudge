@@ -40,6 +40,11 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("dropdown-values.json")
     }
 
+    /// The values of Form fields with `storeValue`, one file per extension.
+    public var formValuesDirectory: URL {
+        supportDirectory.appendingPathComponent("form-values", isDirectory: true)
+    }
+
     /// Which extensions the user allowed to open other extensions' commands (`launchCommand`).
     public var launchPermissionsFile: URL {
         supportDirectory.appendingPathComponent("launch-permissions.json")
