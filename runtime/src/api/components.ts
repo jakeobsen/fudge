@@ -8,9 +8,10 @@
 // them back as props. Components with behaviour (Action.Push, …) are plain
 // function components that render a host `Action`.
 
-import { createElement, isValidElement, type FunctionComponent, type ReactNode } from "react";
+import { createElement, isValidElement, useState, type FunctionComponent, type ReactNode } from "react";
 import { SLOT } from "../renderer/serialize.ts";
 import { builtInActions } from "./actions.ts";
+import { FormValuesContext, useFormField, type FormRegistry } from "./form-state.ts";
 import { useNavigation } from "./navigation.ts";
 import { RAYCAST_ENUMS } from "./raycast-enums.generated.ts";
 
@@ -107,19 +108,48 @@ export const Grid = Object.assign(host("Grid"), {
 
 export const Detail = Object.assign(host("Detail"), { Metadata });
 
+// Forms: the Form provides the registry SubmitForm reads, and each field
+// registers its value there (see form-state.ts).
+
+/** A form field: its host element, always with an onChange the app can call as the user edits. */
+function field(type: string, empty: unknown): FunctionComponent<Props> {
+    const Host = host(type);
+    const Field: FunctionComponent<Props> = (props) => {
+        const record = useFormField(props.id, props.value, props.defaultValue, empty);
+        const onChange = props.onChange as ((value: unknown) => void) | undefined;
+        return createElement(Host, {
+            ...props,
+            onChange: (next: unknown) => {
+                record(next);
+                onChange?.(next);
+            },
+        });
+    };
+    Field.displayName = type;
+    return Field;
+}
+
+const FormHost = host("Form");
+
+function FormView(props: Props) {
+    const [registry] = useState<FormRegistry>(() => new Map());
+    return createElement(FormValuesContext.Provider, { value: registry }, createElement(FormHost, props));
+}
+FormView.displayName = "Form";
+
 const FormDropdownItem = host("Form.Dropdown.Item");
 const FormDropdownSection = host("Form.Dropdown.Section");
 const FormTagPickerItem = host("Form.TagPicker.Item");
 
-export const Form = Object.assign(host("Form"), {
-    TextField: host("Form.TextField"),
-    PasswordField: host("Form.PasswordField"),
-    TextArea: host("Form.TextArea"),
-    Checkbox: host("Form.Checkbox"),
-    DatePicker: Object.assign(host("Form.DatePicker"), { Type: DatePickerType }),
-    Dropdown: Object.assign(host("Form.Dropdown"), { Item: FormDropdownItem, Section: FormDropdownSection }),
-    TagPicker: Object.assign(host("Form.TagPicker"), { Item: FormTagPickerItem }),
-    FilePicker: host("Form.FilePicker"),
+export const Form = Object.assign(FormView, {
+    TextField: field("Form.TextField", ""),
+    PasswordField: field("Form.PasswordField", ""),
+    TextArea: field("Form.TextArea", ""),
+    Checkbox: field("Form.Checkbox", false),
+    DatePicker: Object.assign(field("Form.DatePicker", null), { Type: DatePickerType }),
+    Dropdown: Object.assign(field("Form.Dropdown", undefined), { Item: FormDropdownItem, Section: FormDropdownSection }),
+    TagPicker: Object.assign(field("Form.TagPicker", []), { Item: FormTagPickerItem }),
+    FilePicker: field("Form.FilePicker", []),
     Separator: host("Form.Separator"),
     Description: host("Form.Description"),
     LinkAccessory: host("Form.LinkAccessory"),

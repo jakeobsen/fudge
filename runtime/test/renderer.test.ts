@@ -129,7 +129,7 @@ test("Form fields render in order, with the action panel as a prop", async () =>
         form.children.map((child) => [child.type, child.props]),
         [
             ["Form.Description", { text: "Write a note" }],
-            ["Form.TextArea", { id: "note", title: "Note", defaultValue: "hi" }],
+            ["Form.TextArea", { id: "note", title: "Note", defaultValue: "hi", onChange: { $fn: ["onChange"] } }],
         ],
     );
     assert.equal((form.props.actions as unknown as { type: string }).type, "ActionPanel");
