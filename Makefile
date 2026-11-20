@@ -17,7 +17,7 @@ ESBUILD    = $(firstword $(wildcard runtime/node_modules/@esbuild/darwin-*/bin/e
 # The @raycast/api release whose type definitions live in runtime/vendor/raycast-api.
 RAYCAST_API_VERSION ?= 2.13.1
 
-.PHONY: help app run install-extension build runtime test test-swift test-runtime lint fmt raycast-types clean
+.PHONY: help app run install-extension build runtime test test-swift test-runtime lint fmt raycast-types compat-scan clean
 
 help:
 	@printf 'fudge — a keyboard launcher for macOS, built to run Raycast extensions\n\n'
@@ -31,6 +31,7 @@ help:
 	@printf '  lint           Check Swift formatting and type-check the extension host.\n'
 	@printf '  fmt            Format all Swift code.\n'
 	@printf '  raycast-types  Copy the type definitions of @raycast/api %s into runtime/vendor and regenerate what is derived from them.\n' '$(RAYCAST_API_VERSION)'
+	@printf '  compat-scan DIR=<folder>  Report which @raycast/api uses of the extensions in <folder> fudge lacks.\n'
 	@printf '  clean          Remove build output.\n'
 
 runtime/node_modules: runtime/package.json runtime/package-lock.json
@@ -93,6 +94,10 @@ raycast-types:
 	printf '%s\n' '$(RAYCAST_API_VERSION)' > runtime/vendor/raycast-api/VERSION
 	@cd runtime && npm run --silent generate
 	@printf '→ copied the type definitions of @raycast/api %s and regenerated the files derived from them\n' '$(RAYCAST_API_VERSION)'
+
+compat-scan: runtime/node_modules
+	@test -n '$(DIR)' || { printf 'usage: make compat-scan DIR=<folder of extensions>\n'; exit 2; }
+	@cd runtime && node scripts/compat-scan.ts '$(abspath $(DIR))'
 
 clean:
 	@rm -rf build .build runtime/dist

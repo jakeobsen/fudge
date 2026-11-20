@@ -45,6 +45,7 @@ fudge is a keyboard launcher for macOS, built to run extensions written for Rayc
   - `App/AppIcon.icon` (an Icon Composer icon) is compiled by `actool` into `Assets.car` and an `AppIcon.icns` fallback. That needs Xcode 26 or later.
   - the host and worker bundles go into `Contents/Resources/runtime/`
   - the helpers and the bundle are signed ad hoc
+- **`make compat-scan DIR=<folder>` measures store compatibility statically** (`runtime/scripts/compat-scan.ts`). Every folder in `DIR` with a `package.json` and a `src/` is an extension, as in a checkout of raycast/extensions. `scripts/compat/scan.ts` turns each source file into JavaScript with esbuild, which drops type-only uses. It then collects the API paths used through `@raycast/api` imports (`Clipboard.copy`, `Action.CopyToClipboard`) and checks each against `createApiModule()`. The Markdown report ranks the missing APIs by how many extensions use them; `--json <file>` also writes each extension's gaps. Nothing is built or run.
 - **`runtime/vendor/raycast-api/index.d.ts` is Raycast's own type definitions** (MIT, notice alongside). It's the contract fudge implements. `make raycast-types` copies it unmodified from the `@raycast/api` release named by `RAYCAST_API_VERSION`. Never edit it by hand.
 
 ## Gotchas
@@ -61,7 +62,7 @@ fudge is a keyboard launcher for macOS, built to run extensions written for Rayc
 
 ## Commands
 
-`make app` · `make run` · `make install-extension DIR=<folder>` · `make test` · `make lint` · `make fmt` · `make raycast-types`
+`make app` · `make run` · `make install-extension DIR=<folder>` · `make test` · `make lint` · `make fmt` · `make raycast-types` · `make compat-scan DIR=<folder>`
 
 ## Conventions
 
