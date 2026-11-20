@@ -241,16 +241,17 @@ struct SearchBarDropdownButton: View {
 }
 
 /// The dropdown's open panel: its own search field, then its sections, with the current value checked.
+/// The dropdown panel: a search field over sections of items. It serves the List's search bar dropdown (⌘P), a
+/// Form.Dropdown and a TagPicker, reading what it shows from the model's open panel.
 struct DropdownPanelView: View {
     @Bindable var model: LauncherModel
-    let dropdown: SearchBarDropdown
     let assets: URL?
     var focus: FocusState<LauncherView.Field?>.Binding
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                TextField(dropdown.placeholder ?? "Search…", text: $model.dropdownPanelQuery)
+                TextField(model.dropdownPanelPlaceholder, text: $model.dropdownPanelQuery)
                     .textFieldStyle(.plain)
                     .font(.system(size: 13))
                     .focused(focus, equals: .dropdown)
@@ -267,7 +268,9 @@ struct DropdownPanelView: View {
                         model.escape()
                         return .handled
                     }
-                if dropdown.isLoading { ProgressView().controlSize(.mini) }
+                    // A TagPicker takes its last tag off with ⌫ in the empty search.
+                    .onKeyPress(.delete) { model.dropdownPanelDeleteBackward() ? .handled : .ignored }
+                if model.dropdownPanelIsLoading { ProgressView().controlSize(.mini) }
             }
             .padding(.horizontal, 12)
             .frame(height: 36)
@@ -293,7 +296,8 @@ struct DropdownPanelView: View {
                             }
                         }
                         if sections.isEmpty {
-                            Text(dropdown.isLoading ? "Loading…" : "No results").foregroundStyle(.secondary).padding(8)
+                            Text(model.dropdownPanelIsLoading ? "Loading…" : "No results").foregroundStyle(.secondary)
+                                .padding(8)
                         }
                     }
                     .padding(6)
@@ -316,7 +320,7 @@ struct DropdownPanelView: View {
             ExtensionImage(source: item.icon, assets: assets, size: 16)
             Text(item.title).lineLimit(1)
             Spacer()
-            if item.value == model.dropdownValue {
+            if model.dropdownPanelChecks(item.value) {
                 Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
             }
         }

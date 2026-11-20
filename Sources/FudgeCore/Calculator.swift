@@ -4,7 +4,19 @@ import Foundation
 /// copies.
 public struct CalculatorResult: Sendable, Equatable {
     public enum Kind: Sendable, Equatable {
-        case arithmetic, units, timeZone
+        case arithmetic, units, timeZone, currency
+    }
+
+    /// What ↵ does on the card.
+    public enum Enter: Sendable, Equatable {
+        /// Copies the answer: every card that has one.
+        case copy
+        /// Opens Settings on the General page, where currency conversion is turned on.
+        case turnOnCurrencyConversion
+        /// Downloads the exchange rates again at once.
+        case retryExchangeRates
+        /// Nothing to do yet (the rates are downloading, or the ECB has no rate for the currency).
+        case nothing
     }
 
     public var kind: Kind
@@ -16,22 +28,32 @@ public struct CalculatorResult: Sendable, Equatable {
     /// What Copy Answer puts on the clipboard: the answer without grouping separators, and with up to 15
     /// significant digits rather than the card's.
     public var copyText: String
+    /// Small text under the arrow: how fresh a currency conversion's rates are.
+    public var footnote: String? = nil
+    public var enter: Enter = .copy
 
     /// What Copy Question and Answer puts on the clipboard.
     public var questionAndAnswer: String { "\(question) = \(answer)" }
 }
 
-/// Root search's calculator: a time zone conversion, a unit conversion or arithmetic, read and written in the
-/// user's locale.
+/// Root search's calculator: a time zone conversion, a currency conversion, a unit conversion or arithmetic, read
+/// and written in the user's locale.
 public enum Calculator {
     /// Longer queries aren't evaluated.
     public static let maximumLength = 200
 
-    public static func evaluate(_ query: String, locale: Locale, now: Date, timeZone: TimeZone) -> CalculatorResult? {
+    /// `currency` is what fudge knows about exchange rates; a currency query gets a card even without them, saying
+    /// why it can't answer.
+    public static func evaluate(
+        _ query: String, locale: Locale, now: Date, timeZone: TimeZone, currency: CurrencyState = .off
+    ) -> CalculatorResult? {
         guard query.count <= maximumLength, !query.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
         let commaIsDecimal = locale.decimalSeparator == ","
         if let conversion = TimeZoneConversion.evaluate(query, now: now, timeZone: timeZone) {
             return timeZoneResult(query, conversion, locale: locale)
+        }
+        if let conversion = CurrencyConversion.parse(query, locale: locale) {
+            return currencyResult(query, conversion, currency: currency, locale: locale, now: now)
         }
         if let conversion = UnitConversion.evaluate(query, commaIsDecimal: commaIsDecimal), conversion.value.isFinite {
             let number = format(conversion.value, locale: locale, for: .card)
@@ -50,6 +72,36 @@ public enum Calculator {
                 copyText: format(value, locale: locale, for: .copy))
         }
         return nil
+    }
+
+    private static func currencyResult(
+        _ query: String, _ conversion: CurrencyConversion.Query, currency: CurrencyState, locale: Locale, now: Date
+    ) -> CalculatorResult {
+        let from = CurrencyConversion.pluralName(conversion.from)
+        let to = CurrencyConversion.pluralName(conversion.to)
+        func card(_ answer: String, _ label: String, enter: CalculatorResult.Enter) -> CalculatorResult {
+            CalculatorResult(
+                kind: .currency, question: query, questionLabel: from, answer: answer, answerLabel: label,
+                copyText: "", enter: enter)
+        }
+        guard currency.enabled else {
+            return card("Currency conversion is off", "Press ↵ to turn it on", enter: .turnOnCurrencyConversion)
+        }
+        guard let rates = currency.rates else {
+            if let failure = currency.failure, !currency.downloading {
+                return card("Couldn't download exchange rates", failure, enter: .retryExchangeRates)
+            }
+            return card("Downloading exchange rates…", to, enter: .nothing)
+        }
+        guard let value = CurrencyConversion.convert(conversion, rates: rates), value.isFinite else {
+            let lacking = rates.rate(conversion.from) == nil ? conversion.from : conversion.to
+            return card("No rate for \(lacking) in the ECB data", to, enter: .nothing)
+        }
+        return CalculatorResult(
+            kind: .currency, question: query, questionLabel: from,
+            answer: CurrencyConversion.format(value, code: conversion.to, locale: locale), answerLabel: to,
+            copyText: CurrencyConversion.copyText(value, code: conversion.to, locale: locale),
+            footnote: rates.freshness(now: now, locale: locale))
     }
 
     private static func timeZoneResult(_ query: String, _ conversion: TimeZoneConversion.Result, locale: Locale)
