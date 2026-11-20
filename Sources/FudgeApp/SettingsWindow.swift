@@ -74,6 +74,26 @@ final class SettingsModel {
         currencyRatesChanged(on)
     }
 
+    // MARK: - Pop to Root Search
+
+    /// How long the panel stays hidden before it opens on root search again (`resetAfterSeconds`).
+    var resetAfter: PanelResetSetting { fudgeSettings.resetAfter }
+    /// Tells the launcher; set by the app delegate.
+    @ObservationIgnored var resetAfterChanged: (PanelResetSetting) -> Void = { _ in }
+
+    func setResetAfter(_ setting: PanelResetSetting) {
+        // Read the file again first, so hand edits made meanwhile aren't overwritten.
+        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        guard fudgeSettings.resetAfter != setting else { return }
+        fudgeSettings.resetAfter = setting
+        do {
+            try fudgeSettings.save(to: paths.settingsFile)
+        } catch {
+            FileHandle.standardError.write(Data("fudge: couldn't save settings: \(error)\n".utf8))
+        }
+        resetAfterChanged(setting)
+    }
+
     // MARK: - Command hotkeys
 
     func hotkey(for commandID: String) -> HotKeySpec? {

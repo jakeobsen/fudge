@@ -12,6 +12,8 @@ public struct FudgeSettings: Sendable, Equatable {
     public var extensions: [String: ExtensionSettings]
     /// Download exchange rates from the European Central Bank for the calculator. Off unless set.
     public var currencyRates: Bool
+    /// How long the panel stays hidden before it opens on root search again (`resetAfterSeconds`).
+    public var resetAfter: PanelResetSetting = .default
 
     public struct CommandSettings: Sendable, Equatable {
         /// In `HotKeySpec` text form.
@@ -65,6 +67,7 @@ public struct FudgeSettings: Sendable, Equatable {
         else { return FudgeSettings() }
         var settings = FudgeSettings(
             hotkey: object["hotkey"] as? String, currencyRates: object["currencyRates"] as? Bool ?? false)
+        settings.resetAfter = PanelResetSetting(settingsValue: object["resetAfterSeconds"])
         for case (let id, let entry as [String: Any]) in object["commands"] as? [String: Any] ?? [:] {
             settings.commands[id] = CommandSettings(
                 hotkey: entry["hotkey"] as? String, alias: entry["alias"] as? String, enabled: entry["enabled"] as? Bool
@@ -87,6 +90,7 @@ public struct FudgeSettings: Sendable, Equatable {
         }
         object["hotkey"] = hotkey
         object["currencyRates"] = currencyRates ? true : nil
+        object["resetAfterSeconds"] = resetAfter.settingsValue
 
         var commandObjects = object["commands"] as? [String: Any] ?? [:]
         let commandIDs = Set(commandObjects.keys).union(commands.keys)

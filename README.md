@@ -50,6 +50,8 @@ Release builds are signed ad hoc. Until fudge has a Developer ID, you grant its 
 
 Open fudge with ⌥Space, type to search applications and extension commands, and press ↵. Esc goes back, then hides the window.
 
+When you open fudge again within 90 seconds, it's as you left it. After longer, it starts over on an empty root search. **Pop to Root Search** on the **General** page of **Settings…** sets how long: Immediately, after 30 seconds, 1 minute or 90 seconds, or Never. Only the time the window is closed counts.
+
 To use another shortcut, put it in `~/Library/Application Support/fudge/settings.json`:
 
 ```json

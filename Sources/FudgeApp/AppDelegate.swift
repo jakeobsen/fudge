@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             Task { await self.exchangeRates.updateIfNeeded(now: Date(), explicit: true) }
         }
+        settingsModel.resetAfterChanged = { [weak self] setting in self?.model.panelReset.setting = setting }
         settingsModel.currencyRatesChanged = { [weak self] on in
             guard let self else { return }
             Task { await self.exchangeRates.setEnabled(on, now: Date()) }
@@ -122,7 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.image = NSImage(systemSymbolName: "command", accessibilityDescription: "fudge")
 
         let menu = NSMenu()
-        let open = menu.addItem(withTitle: "Open fudge", action: #selector(showPanel), keyEquivalent: "")
+        let open = menu.addItem(withTitle: "Open fudge", action: #selector(openFromMenu), keyEquivalent: "")
         open.target = self
         if let shortcut { open.title = "Open fudge (\(shortcut))" }
         let reload = menu.addItem(
@@ -157,18 +158,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menu
     }
 
+    /// The launcher's hotkey: hides the panel, or shows it, starting over on root search after a long hide.
     private func togglePanel() {
-        if panel.isVisible { hidePanel() } else { showPanel() }
+        if panel.isVisible {
+            hidePanel()
+        } else {
+            model.resetIfDue()
+            showPanel()
+        }
     }
 
-    @objc private func showPanel() {
+    /// The menu bar item's "Open fudge", which shows the panel as the launcher's hotkey does.
+    @objc private func openFromMenu() {
+        if !panel.isVisible { model.resetIfDue() }
+        showPanel()
+    }
+
+    /// Every path that shows the panel ends here, after it has built its screen.
+    private func showPanel() {
+        model.panelReset.panelShown()
         panel.present()
         model.presented()
     }
 
+    /// Every path that hides the panel ends here: Esc, the hotkey, the model's `hide`, and the panel resigning key.
     private func hidePanel() {
         guard panel.isVisible else { return }
         panel.orderOut(nil)
+        model.panelReset.panelHidden()
     }
 
     /// The key as it types with no modifier at all, so ⌘⇧, is "," with cmd and shift. `charactersIgnoringModifiers`
