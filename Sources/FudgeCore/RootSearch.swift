@@ -7,6 +7,10 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         case command(extension: String, command: String, mode: String, entry: URL)
         /// fudge's Settings window, on its default page.
         case settings
+        /// Reads the extensions and applications again, as the menu bar item's "Reload Extensions" does.
+        case reloadExtensions
+        /// Quits fudge, after asking.
+        case quit
     }
 
     public var id: String
@@ -55,6 +59,28 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         kind: .settings
     )
 
+    /// "Reload Extensions": the menu bar item's reload, so nothing needs the menu bar.
+    public static let reloadExtensions = RootItem(
+        id: "fudge:reload-extensions",
+        title: "Reload Extensions",
+        keywords: ["reload", "refresh", "extensions", "fudge"],
+        kind: .reloadExtensions
+    )
+
+    /// "Quit fudge": asks first, since fudge's hotkeys stop working until it's opened again.
+    public static let quit = RootItem(
+        id: "fudge:quit",
+        title: "Quit fudge",
+        keywords: ["quit", "exit", "fudge"],
+        kind: .quit
+    )
+
+    /// Whether opening the item counts in `LaunchHistory`. Quitting doesn't, so an empty search never puts
+    /// "Quit fudge" at the top.
+    public var recordsLaunch: Bool {
+        kind != .quit
+    }
+
     /// The id of a command's item, which its launches count under in `LaunchHistory`.
     public static func commandID(extension extensionName: String, command: String) -> String {
         "command:\(extensionName)/\(command)"
@@ -90,7 +116,7 @@ public struct RootItem: Sendable, Equatable, Identifiable {
 /// Ranks root items for a query: fuzzy match first, launch history second.
 public enum RootSearch {
     /// fudge's own items, searched alongside applications and commands.
-    public static let builtInItems: [RootItem] = [.settings]
+    public static let builtInItems: [RootItem] = [.settings, .reloadExtensions, .quit]
 
     public static func rank(_ items: [RootItem], query: String, history: LaunchHistory, now: Date = Date())
         -> [RootItem]

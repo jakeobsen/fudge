@@ -88,7 +88,8 @@ public enum ActionTarget: Sendable, Equatable {
 
 /// fudge's own actions on a root search item.
 public enum RootAction: Sendable, Equatable {
-    /// What ↵ does: run the command, open the application, or open the Settings window.
+    /// What ↵ does: run the command, open the application, open the Settings window, reload the extensions, or
+    /// quit fudge.
     case open
     /// Opens the Settings window on an extension's preferences.
     case configureExtension(String)
@@ -145,6 +146,10 @@ public enum RootActions {
                 [("Open Application", enter, .open), ("Show in Finder", showInFinderShortcut, .showInFinder(url))]
             case .settings:
                 [("Open Settings", enter, .open)]
+            case .reloadExtensions:
+                [("Reload Extensions", enter, .open)]
+            case .quit:
+                [("Quit fudge", enter, .open)]
             }
         return section(entries)
     }

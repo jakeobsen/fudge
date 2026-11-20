@@ -370,7 +370,7 @@ private struct RootResults: View {
         switch item.kind {
         case .application: "Application"
         case .command: "Command"
-        case .settings: "fudge"
+        case .settings, .reloadExtensions, .quit: "fudge"
         }
     }
 }
