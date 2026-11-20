@@ -66,6 +66,10 @@ fudge refuses a shortcut that's its own (⌥Space) or another command's, and one
 
 Extensions' preferences are under **Settings…** in the fudge menu bar menu, or ⌘, in the fudge window. You can also search root search for "fudge Settings". To go straight to a command's extension, select the command and press ⌘⇧, (or ⌘K, then **Configure Extension**). A command that needs a preference you haven't set opens that window instead of running.
 
+### Menu bar commands
+
+An extension's menu bar command puts its own item in the menu bar. Run it from root search to turn it on, and the item stays there, across restarts, until you select the command in root search and pick **Deactivate Menu Bar Item** from ⌘K. Running it again from root search refreshes it and opens its menu. The command refreshes itself in the background at fudge's start and as often as its extension asks, and again each time you open its menu. When a background refresh fails, the item keeps what it showed last and its menu ends with "⚠ Last refresh failed". fudge shows at most 50 of these items. The active ones are listed in `menu-bar.json` in fudge's support folder.
+
 ### Selected text and Finder items
 
 Extensions can read the text selected in the app you were in, and the items selected in Finder. The first time, macOS asks you to allow fudge under **Privacy & Security → Accessibility** or **Automation**.

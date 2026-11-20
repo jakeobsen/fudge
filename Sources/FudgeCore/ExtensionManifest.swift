@@ -24,9 +24,11 @@ public struct ExtensionManifest: Sendable, Equatable, Decodable {
         public var keywords: [String]
         public var arguments: [Argument]
         public var preferences: [Preference]
+        /// How often a menu-bar command refreshes in the background, e.g. "10s" (`MenuBarInterval`).
+        public var interval: String?
 
         enum CodingKeys: String, CodingKey {
-            case name, title, subtitle, description, mode, icon, keywords, arguments, preferences
+            case name, title, subtitle, description, mode, icon, keywords, arguments, preferences, interval
         }
 
         public init(from decoder: Decoder) throws {
@@ -40,6 +42,7 @@ public struct ExtensionManifest: Sendable, Equatable, Decodable {
             keywords = try container.decodeIfPresent([String].self, forKey: .keywords) ?? []
             arguments = try container.decodeIfPresent([Argument].self, forKey: .arguments) ?? []
             preferences = try container.decodeIfPresent([Preference].self, forKey: .preferences) ?? []
+            interval = try? container.decodeIfPresent(String.self, forKey: .interval)
         }
     }
 

@@ -142,11 +142,23 @@ final class LauncherModel {
     @ObservationIgnored private var icons: [String: NSImage] = [:]
     @ObservationIgnored private let dropdownStore: SearchBarDropdown.Store
     @ObservationIgnored private var searchDebounce: Task<Void, Never>?
+    /// The active menu-bar commands. Their sessions run in this model's extension host.
+    @ObservationIgnored let menuBar: MenuBarController
 
     init(paths: FudgePaths) {
         self.paths = paths
         history = LaunchHistory.load(from: paths.historyFile)
         dropdownStore = SearchBarDropdown.Store(file: paths.dropdownValuesFile)
+        menuBar = MenuBarController(paths: paths)
+        menuBar.host = MenuBarController.Host(
+            launch: { [weak self] installed, command, userInitiated in
+                self?.launchMenuBarCommand(installed, command: command, userInitiated: userInitiated)
+                    ?? .failure(MenuBarController.LaunchFailed(message: "fudge is quitting"))
+            },
+            send: { [weak self] message in self?.send(message) },
+            showHUD: { [weak self] title in self?.showHUD(title) },
+            log: { [weak self] session, level, message in self?.log(session, level, message) }
+        )
         reload()
     }
 
@@ -155,6 +167,7 @@ final class LauncherModel {
         let installed = InstalledExtension.all(in: paths.extensionsDirectory)
         extensions = Dictionary(installed.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
         loadCommandMetadata(installed)
+        menuBar.update(installed: installed)
         items =
             installed.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) } + RootSearch.builtInItems
             + ApplicationIndex.scan()
@@ -373,7 +386,12 @@ final class LauncherModel {
     var currentActions: [ActionSection] {
         if case .root = screen {
             if selectedItem == Self.calculatorID { return RootActions.calculatorSections() }
-            return RootActions.sections(for: selectedRootItem)
+            var isActiveInMenuBar = false
+            if case .command(let extensionName, let commandName, "menu-bar", _) = selectedRootItem?.kind {
+                isActiveInMenuBar = menuBar.isActive(
+                    FudgeSettings.commandID(extension: extensionName, command: commandName))
+            }
+            return RootActions.sections(for: selectedRootItem, isActiveInMenuBar: isActiveInMenuBar)
         }
         guard let command, let view = command.view else { return [] }
         guard let list = command.list else { return ActionPanelReader.sections(of: view.node("actions")) }
@@ -720,6 +738,8 @@ final class LauncherModel {
             activate()
         case .configureExtension(let name):
             showSettings(extension: name)
+        case .deactivateMenuBarItem(let id):
+            menuBar.deactivate(id)
         case .showInFinder(let url):
             hide()
             SystemCalls.showInFinder(url.path)
@@ -1003,6 +1023,21 @@ final class LauncherModel {
             recordLaunch(item.id)
             searchText = ""
             showSettings(extension: nil)
+        case .command(let extensionName, let commandName, "menu-bar", _):
+            // Activates it, or refreshes it and opens its menu; the panel closes either way.
+            recordLaunch(item.id)
+            do {
+                try menuBar.runFromRootSearch(FudgeSettings.commandID(extension: extensionName, command: commandName))
+            } catch {
+                showFailureToast("Can't activate \(item.title)", message: String(describing: error))
+                return
+            }
+            // As with a no-view command, a hotkey leaves the root query alone.
+            if launchOrigin.clearsRootSearchWhenFinished {
+                rootQuery = ""
+                refreshResults()
+            }
+            hide()
         case .command(let extensionName, let commandName, _, _):
             guard let installed = extensions[extensionName],
                 let command = installed.manifest.commands.first(where: { $0.name == commandName })
@@ -1125,6 +1160,50 @@ final class LauncherModel {
         return nil
     }
 
+    /// Starts a menu-bar command for `MenuBarController`, prepared as root search prepares launches. Its session's
+    /// messages go to the controller. A missing required preference opens Settings when the launch is
+    /// UserInitiated.
+    private func launchMenuBarCommand(
+        _ installed: InstalledExtension, command: ExtensionManifest.Command, userInitiated: Bool
+    ) -> Result<String, MenuBarController.LaunchFailed> {
+        let prepared = prepareLaunch(of: installed, command: command, userInitiated: false)
+        guard prepared.preferences.missing.isEmpty else {
+            if userInitiated { openSettings(installed.manifest.name) }
+            let names = prepared.preferences.missing.map { $0.title ?? $0.name }.joined(separator: ", ")
+            return .failure(.init(message: "set \(names) in the Settings window first"))
+        }
+        let host: ExtensionHost
+        do {
+            host = try ensureHost()
+        } catch {
+            return .failure(.init(message: String(describing: error)))
+        }
+        let session = "s\(nextSession)"
+        nextSession += 1
+        sessionExtensions[session] = installed.manifest.name
+        sessionCommands[session] = command.name
+        let launchProps = LaunchProps(launchType: userInitiated ? "userInitiated" : "background")
+        do {
+            try host.send(
+                .launch(
+                    session: session, entry: installed.entry(for: command.name).path, mode: command.mode,
+                    launchProps: launchProps, preferences: prepared.preferences.values,
+                    environment: prepared.environment))
+        } catch {
+            sessionExtensions[session] = nil
+            sessionCommands[session] = nil
+            return .failure(.init(message: String(describing: error)))
+        }
+        return .success(session)
+    }
+
+    /// A failure toast in the bottom bar that no command showed.
+    private func showFailureToast(_ title: String, message: String) {
+        let shown = ToastState(session: "", id: 0, title: title, message: message, style: "FAILURE")
+        toast = shown
+        expireToast(shown)
+    }
+
     // MARK: - launchCommand
 
     /// `launchCommand` from the command running in `session` (the `command.launch` rpc). Finds the command
@@ -1137,7 +1216,8 @@ final class LauncherModel {
         }
         let request = try LaunchRequest(params: params)
         let target = try CommandLocator.locate(request, caller: callerName, in: Array(extensions.values))
-        try CommandLocator.checkMode(target.command, type: request.type)
+        let targetID = FudgeSettings.commandID(extension: target.installed.manifest.name, command: target.command.name)
+        try CommandLocator.checkMode(target.command, type: request.type, isActiveInMenuBar: menuBar.isActive(targetID))
         if target.isOtherExtension { try await checkPermission(of: caller, toOpen: target) }
 
         let userInitiated = request.type == .userInitiated
@@ -1158,6 +1238,12 @@ final class LauncherModel {
             showNeedsSettings(
                 target.command.title, extension: target.installed.manifest.name,
                 missing: prepared.preferences.missing)
+            return
+        }
+        if target.command.mode == "menu-bar" {
+            // A refresh (SPEC-004 C): the menu bar starts it, or skips it while it's loaded.
+            try menuBar.launchCommand(targetID, userInitiated: userInitiated)
+            answer()
             return
         }
         if let failure = launch(
@@ -1270,6 +1356,7 @@ final class LauncherModel {
         host = nil
         background.removeAll()
         quietSessions.removeAll()
+        menuBar.hostStopped()
         if case .command(var command) = screen, command.failure == nil {
             command.failure = Failure(title: "\(command.title) stopped", message: "The extension host exited.")
             screen = .command(command)
@@ -1277,6 +1364,25 @@ final class LauncherModel {
     }
 
     private func handle(_ message: HostMessage) {
+        // A menu-bar command's tree, errors and exit belong to the menu bar; its rpcs and logs are answered here.
+        if let session = message.session, menuBar.owns(session) {
+            switch message {
+            case .render, .eventSettled:
+                menuBar.handle(message)
+                return
+            case .error(_, let text, let stack, _):
+                menuBar.handle(message)
+                log(session, "error", stack ?? text)
+                return
+            case .exit:
+                sessionExtensions[session] = nil
+                sessionCommands[session] = nil
+                menuBar.handle(message)
+                return
+            case .rpc, .log, .pong, .protocolError, .unknown:
+                break
+            }
+        }
         switch message {
         case .render(let session, let view, let depth):
             guard case .command(var command) = screen, command.session == session else { return }
@@ -1403,7 +1509,7 @@ final class LauncherModel {
         case .protocolError(let message):
             log("host", "error", message)
 
-        case .pong, .unknown:
+        case .pong, .eventSettled, .unknown:
             break
         }
     }

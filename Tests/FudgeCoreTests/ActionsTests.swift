@@ -78,8 +78,10 @@ private let panel = #"""
     #expect(ActionPanelReader.flat(sections).map(\.target) == [.node(1), .node(2), .node(3), .node(11)])
 }
 
-private func rootEntries(_ item: RootItem?) -> [String] {
-    ActionPanelReader.flat(RootActions.sections(for: item)).map { "\($0.title) \($0.shortcut?.description ?? "-")" }
+private func rootEntries(_ item: RootItem?, isActiveInMenuBar: Bool = false) -> [String] {
+    ActionPanelReader.flat(RootActions.sections(for: item, isActiveInMenuBar: isActiveInMenuBar)).map {
+        "\($0.title) \($0.shortcut?.description ?? "-")"
+    }
 }
 
 private let commandItem = RootItem(
@@ -97,6 +99,23 @@ private let applicationItem = RootItem.application(
     #expect(rootEntries(applicationItem) == ["Open Application ↵", "Show in Finder ⇧⌘F"])
     #expect(rootEntries(.settings) == ["Open Settings ↵"])
     #expect(RootActions.sections(for: nil).isEmpty)
+    #expect(
+        rootEntries(commandItem) == rootEntries(commandItem, isActiveInMenuBar: true),
+        "only a menu-bar command can be deactivated")
+}
+
+@Test func anActiveMenuBarCommandCanBeDeactivated() {
+    let menuBarItem = RootItem(
+        id: "command:inbox/status", title: "Status",
+        kind: .command(
+            extension: "inbox", command: "status", mode: "menu-bar", entry: URL(fileURLWithPath: "/tmp/status.cjs")))
+    #expect(rootEntries(menuBarItem) == ["Open Command ↵", "Configure Extension ⇧⌘,"])
+    #expect(
+        rootEntries(menuBarItem, isActiveInMenuBar: true) == [
+            "Open Command ↵", "Deactivate Menu Bar Item -", "Configure Extension ⇧⌘,",
+        ])
+    let deactivate = ActionPanelReader.flat(RootActions.sections(for: menuBarItem, isActiveInMenuBar: true))[1]
+    #expect(deactivate.target == .root(.deactivateMenuBarItem("inbox/status")))
 
     let command = ActionPanelReader.flat(RootActions.sections(for: commandItem))
     #expect(command.map(\.target) == [.root(.open), .root(.configureExtension("scratch"))])

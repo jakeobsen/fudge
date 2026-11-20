@@ -76,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             FileHandle.standardError.write(Data("fudge: couldn't register the shortcut \(spec)\n".utf8))
         }
         installStatusItem(shortcut: registered ? spec : nil)
+        model.menuBar.start()
         applyCommandHotkeys()
         settingsModel.launcherHotkey = spec
         settingsModel.suspendHotkeys = { [weak self] in self?.registry.suspend() }
