@@ -57,7 +57,20 @@ final class FixedAccessibility: AccessibilityAccess {
     func selectedText(pid: Int32) async -> String? { nil }
 }
 
-/// Reads the status when the view appears, then every second until it goes away.
+extension NSWindow {
+    /// Drops the window's views once it has closed, so a SwiftUI `.task` in them (the Accessibility polling) is
+    /// cancelled: a closed window that isn't released keeps its views, and their tasks, alive. Done on the next turn,
+    /// after the close, and only if the window hasn't been shown again meanwhile.
+    func dropContentWhenClosed() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.isVisible else { return }
+            self.contentView = nil
+        }
+    }
+}
+
+/// Reads the status when the view appears, then every second until it goes away. A closed window drops its views
+/// (`dropContentWhenClosed`), which ends this too.
 struct AccessibilityStatusPolling: ViewModifier {
     let status: AccessibilityStatus
 

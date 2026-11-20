@@ -139,7 +139,7 @@ struct OpenAtLoginControls: View {
     }
 }
 
-/// The calculator's currency conversion checkbox, saying what it downloads and from where.
+/// The calculator's currency conversion switch, saying what it downloads and from where.
 struct CurrencyRatesToggle: View {
     let model: SettingsModel
 
@@ -148,7 +148,7 @@ struct CurrencyRatesToggle: View {
             Text("Currency conversion")
             Text("fudge downloads exchange rates from the European Central Bank once a day.")
         }
-        .toggleStyle(.checkbox)
+        .toggleStyle(.switch)
     }
 }
 

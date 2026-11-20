@@ -435,6 +435,9 @@ final class SettingsWindowController {
         model.refreshLoginItem()
         // "fudge Settings" and Settings… open on the General page; Configure Extension on the extension's own.
         model.selected = name ?? SettingsModel.generalPage
+        if let window, window.contentView == nil {
+            window.contentView = NSHostingView(rootView: SettingsView(model: model))
+        }
         if window == nil {
             let window = SettingsNSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 880, height: 520),
@@ -447,12 +450,16 @@ final class SettingsWindowController {
             window.contentView = NSHostingView(rootView: SettingsView(model: model))
             window.center()
             self.window = window
-            // Closing the window mid-recording gives fudge its hotkeys back.
+            // Closing the window mid-recording gives fudge its hotkeys back. Its views go too, so nothing in them keeps
+            // running while it's closed (the Permissions page polls Accessibility); showing it builds them again.
             let model = model
             NotificationCenter.default.addObserver(
                 forName: NSWindow.willCloseNotification, object: window, queue: .main
-            ) { _ in
-                MainActor.assumeIsolated { model.cancelRecording() }
+            ) { [weak window] _ in
+                MainActor.assumeIsolated {
+                    model.cancelRecording()
+                    window?.dropContentWhenClosed()
+                }
             }
             // Coming back from System Settings → Login Items shows what was changed there.
             NotificationCenter.default.addObserver(

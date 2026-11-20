@@ -152,10 +152,14 @@ final class OnboardingWindowController {
         window.contentView = view
         self.window = window
         let settings = settings
-        // Closing it mid-recording gives fudge its hotkeys back. The answers so far are saved already.
+        // Closing it mid-recording gives fudge its hotkeys back, and its views go, so the Accessibility step stops
+        // polling. The answers so far are saved already.
         NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) {
-            _ in
-            MainActor.assumeIsolated { settings.cancelRecording() }
+            [weak window] _ in
+            MainActor.assumeIsolated {
+                settings.cancelRecording()
+                window?.dropContentWhenClosed()
+            }
         }
         // Coming back from System Settings shows what was changed there.
         NotificationCenter.default.addObserver(
@@ -222,12 +226,14 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 14) {
                 title("Launcher hotkey")
                 Text("Press it anywhere to open fudge. Click the keys to record another shortcut.")
-                LauncherHotkeyControls(model: settings)
                 Text(
                     "⌘Space is Spotlight's. To use it for fudge, turn off Spotlight's shortcut in System Settings → "
                         + "Keyboard → Keyboard Shortcuts first."
                 )
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                SettingsGroup {
+                    LabeledContent("Launcher hotkey") { LauncherHotkeyControls(model: settings) }
+                }
             }
         case .accessibility:
             VStack(alignment: .leading, spacing: 14) {
@@ -238,13 +244,13 @@ struct OnboardingView: View {
             VStack(alignment: .leading, spacing: 14) {
                 title("Open at Login")
                 Text("Start fudge when you log in, so its hotkeys always work.")
-                OpenAtLoginControls(model: settings)
+                SettingsGroup { OpenAtLoginControls(model: settings) }
             }
         case .currency:
             VStack(alignment: .leading, spacing: 14) {
                 title("Currency conversion")
                 Text("The calculator can convert currencies, like 100 usd to eur.")
-                CurrencyRatesToggle(model: settings)
+                SettingsGroup { CurrencyRatesToggle(model: settings) }
             }
         case .done:
             VStack(alignment: .leading, spacing: 14) {
@@ -282,5 +288,21 @@ struct OnboardingView: View {
             Text(label).foregroundStyle(.secondary)
             value()
         }
+    }
+}
+
+/// General's controls laid out as General lays them out, in a grouped section, so a switch sits on the right as it
+/// does in Settings.
+private struct SettingsGroup<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        Form { Section { content() } }
+            .formStyle(.grouped)
+            .scrollDisabled(true)
+            .scrollContentBackground(.hidden)
+            // The grouped style's own inset, so the section lines up with the text above it.
+            .padding(.horizontal, -20)
+            .padding(.top, -20)
     }
 }
