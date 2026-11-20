@@ -86,7 +86,7 @@ Root search ranks what you open often first. **Clear Search History…** on the 
 
 ### Extensions that open other extensions
 
-The first time an extension opens another extension's command, fudge asks whether to allow it, and remembers the answer. To change or forget an answer, open **Settings…** → **General** → **Extensions that open other extensions**: pick **Allowed** or **Not allowed**, or click × to be asked again next time.
+The first time an extension opens another extension's command, Fudge asks whether to allow it, and remembers the answer. To change or forget an answer, open **Settings…** → **Permissions** → **Extensions that open other extensions**: pick **Allowed** or **Not allowed**, or click × to be asked again next time.
 
 ### Backup: import and export
 
