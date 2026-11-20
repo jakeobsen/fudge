@@ -60,8 +60,13 @@ public final class Paste {
     private let restoreDelay: Duration
 
     /// The restore waiting to happen: the user's clipboard from before the first of the pastes in quick succession,
-    /// and the task that writes it back.
-    private var pending: (snapshot: PasteboardContents, task: Task<Void, Never>)?
+    /// the `changeCount` of fudge's write that it replaces, and the task that writes it back.
+    private var pending: (snapshot: PasteboardContents, written: Int, task: Task<Void, Never>)?
+    /// Whether a paste is running, and the pastes waiting for their turn, oldest first. Pastes run one at a time: one
+    /// taking its snapshot while another's content is on the pasteboard would keep fudge's write as the user's
+    /// clipboard.
+    private var busy = false
+    private var waiting: [CheckedContinuation<Void, Never>] = []
 
     public init(
         gate: AccessibilityGate,
@@ -79,15 +84,46 @@ public final class Paste {
 
     /// Pastes `content`. With `closeMainWindow`, `hideWindow` hides fudge's panel and returns once it's really gone,
     /// so key status is back with the target app. `frontmost` is read after that. Resolves once ⌘V is posted; the
-    /// restore follows on its own.
+    /// restore follows on its own. A paste that starts while another is running waits for it.
     public func paste(
         _ content: PasteboardContents,
         closeMainWindow: Bool,
         hideWindow: () async -> Void,
         frontmost: () -> FrontmostApplication?
     ) async throws {
-        // While a restore is pending, the pasteboard holds fudge's own last write: keep the snapshot from before it.
-        let snapshot = pending?.snapshot ?? SelectedText.restoration(of: pasteboard.contents())
+        await takeTurn()
+        defer { endTurn() }
+        try await pasteNow(content, closeMainWindow: closeMainWindow, hideWindow: hideWindow, frontmost: frontmost)
+    }
+
+    private func takeTurn() async {
+        guard busy else {
+            busy = true
+            return
+        }
+        await withCheckedContinuation { waiting.append($0) }
+    }
+
+    /// Hands the turn to the oldest waiting paste, or frees it.
+    private func endTurn() {
+        if waiting.isEmpty {
+            busy = false
+        } else {
+            waiting.removeFirst().resume()
+        }
+    }
+
+    private func pasteNow(
+        _ content: PasteboardContents,
+        closeMainWindow: Bool,
+        hideWindow: () async -> Void,
+        frontmost: () -> FrontmostApplication?
+    ) async throws {
+        // While a restore is pending and the pasteboard still holds fudge's own last write, keep the snapshot from
+        // before it. If the user or an app has copied since, that's the clipboard to put back.
+        let snapshot =
+            pending.flatMap { $0.written == pasteboard.changeCount ? $0.snapshot : nil }
+            ?? SelectedText.restoration(of: pasteboard.contents())
         pending?.task.cancel()
         pending = nil
         pasteboard.replace(with: content)
@@ -108,7 +144,7 @@ public final class Paste {
             self.restore(snapshot, ifStill: written)
             self.pending = nil
         }
-        pending = (snapshot, task)
+        pending = (snapshot, written, task)
     }
 
     /// Writes `snapshot` back, if the pasteboard still holds fudge's write: if the user or an app has changed it

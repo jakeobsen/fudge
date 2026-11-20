@@ -164,6 +164,32 @@ private struct Rig {
     #expect(rig.log.events.filter { $0 == "write user's clipboard" }.count == 1, "one restore")
 }
 
+@Test @MainActor func overlappingPastesRunOneAtATime() async throws {
+    let rig = Rig()
+    // Two `clipboard.paste` calls arrive together: the second starts while the first waits for the panel to hide.
+    let first = Task { try await rig.run("A") }
+    let second = Task { try await rig.run("B") }
+    try await first.value
+    try await second.value
+    #expect(
+        rig.log.events == [
+            "snapshot", "write A", "trust", "hide", "hidden", "post",
+            "write B", "trust", "hide", "hidden", "post",
+        ], "each ⌘V pastes its own content, and the second paste keeps the first one's snapshot")
+    await afterRestore()
+    #expect(rig.pasteboard.plainText() == "user's clipboard", "not fudge's first write")
+    #expect(rig.log.events.filter { $0 == "write user's clipboard" }.count == 1, "one restore")
+}
+
+@Test @MainActor func aCopyBetweenPastesIsTheClipboardPutBack() async throws {
+    let rig = Rig()
+    try await rig.run("first")
+    rig.pasteboard.copied("copied meanwhile")
+    try await rig.run("second")
+    await afterRestore()
+    #expect(rig.pasteboard.plainText() == "copied meanwhile", "the user's newer copy, not the older snapshot")
+}
+
 @Test @MainActor func refusesToPasteIntoFudgeAndPutsTheClipboardBackFirst() async throws {
     let rig = Rig()
     await #expect(throws: PasteError.noTarget) {

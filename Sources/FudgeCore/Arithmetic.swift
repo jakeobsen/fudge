@@ -2,11 +2,14 @@ import Foundation
 
 /// Evaluates arithmetic typed into root search: `+ - * / ^`, `×` and `÷`, parentheses, `%` (`15% of 200`,
 /// `200 + 10%`), `!`, functions (`sqrt`, `sin`, `log`, …; trig in radians, `log` base 10, `ln` natural) and the
-/// constants `pi` and `e`. A number written next to a parenthesis or a name multiplies (`2pi`, `3(4+5)`). Numbers
-/// are read by `number(_:commaIsDecimal:)`.
+/// constants `pi`, `e` and `tau`. A number written next to a parenthesis or a name multiplies (`2pi`, `3(4+5)`).
+/// A sign binds looser than `^`, which is right-associative: `-2^2` is -4 and `2^3^2` is 512. Numbers are read by
+/// `number(_:commaIsDecimal:)`.
 public enum Arithmetic {
-    /// The value of `text`, or nil when it isn't a calculation: not arithmetic, or a lone number or constant.
+    /// The value of `text`, or nil when it isn't a calculation: not arithmetic, a lone number, constants alone
+    /// (`e`, `pi pi`), or a date (`2026-11-20`).
     public static func evaluate(_ text: String, commaIsDecimal: Bool = true) -> Double? {
+        guard !isDate(text) else { return nil }
         // One token is a number or a name (`42`, `e`), not a calculation; nor is a signed number (`-5`).
         guard let tokens = tokenize(text, commaIsDecimal: commaIsDecimal), tokens.count > 1,
             tokens.contains(where: \.isOperation)
@@ -14,6 +17,8 @@ public enum Arithmetic {
         if tokens.count == 2, tokens[0] == .symbol("-") || tokens[0] == .symbol("+"), case .number = tokens[1] {
             return nil
         }
+        // Constants side by side (`e e`) multiply, but nobody types them to calculate, any more than a lone `e`.
+        if tokens.allSatisfy(\.isConstant) { return nil }
         var parser = Parser(tokens: tokens)
         guard let value = parser.expression(), parser.isAtEnd, value.number.isFinite else { return nil }
         return value.isPercent ? value.number / 100 : value.number
@@ -32,13 +37,29 @@ public enum Arithmetic {
             case .symbol(let symbol): symbol != "(" && symbol != ")"
             }
         }
+
+        var isConstant: Bool {
+            if case .name(let name) = self { Arithmetic.constants[name] != nil } else { false }
+        }
     }
+
+    /// Whether `text` is exactly an ISO date, `YYYY-MM-DD` with a month from 01 to 12 and a day from 01 to 31.
+    static func isDate(_ text: String) -> Bool {
+        let range = NSRange(text.startIndex..., in: text)
+        return isoDate.firstMatch(in: text, range: range) != nil
+    }
+
+    nonisolated(unsafe) private static let isoDate = try! NSRegularExpression(
+        pattern: #"^\s*[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])\s*$"#)
 
     /// A number as typed. Where the locale's decimal separator is `,`, both `,` and `.` are decimal points and
     /// there's no grouping. Otherwise `.` is the decimal point, and `,` groups when every group after the first
-    /// has three digits (`1,000`, `1,234,567.5`); any other single `,` is a decimal point (`13,5`).
+    /// has three digits (`1,000`, `1,234,567.5`); any other single `,` is a decimal point (`13,5`). An exponent
+    /// (`2.5E3`, `1e-7`) follows the digits, and the separators are read before it (`1,152921505E18` in en_DK).
     public static func number(_ literal: String, commaIsDecimal: Bool) -> Double? {
-        var text = literal
+        let exponentStart = literal.firstIndex { $0 == "e" || $0 == "E" } ?? literal.endIndex
+        let exponent = literal[exponentStart...]
+        var text = String(literal[..<exponentStart])
         if commaIsDecimal {
             text = text.replacingOccurrences(of: ",", with: ".")
         } else if text.contains(",") {
@@ -53,7 +74,7 @@ public enum Arithmetic {
             }
         }
         guard text.filter({ $0 == "." }).count <= 1, text.contains(where: \.isNumber) else { return nil }
-        return Double(text.hasPrefix(".") ? "0" + text : text)
+        return Double((text.hasPrefix(".") ? "0" + text : text) + exponent)
     }
 
     static func tokenize(_ text: String, commaIsDecimal: Bool = true) -> [Token]? {
@@ -68,6 +89,7 @@ public enum Arithmetic {
                 while end < text.endIndex, text[end].isNumber || text[end] == "." || text[end] == "," {
                     end = text.index(after: end)
                 }
+                end = exponentEnd(text, from: end)
                 guard let number = number(String(text[index..<end]), commaIsDecimal: commaIsDecimal) else {
                     return nil
                 }
@@ -93,6 +115,19 @@ public enum Arithmetic {
             }
         }
         return tokens
+    }
+
+    /// Where a number's exponent ends, if one starts at `index`: `e` or `E`, an optional `+` or `-`, and at least one
+    /// digit, with no spaces anywhere (`1e-7`, `2.5E3`, `2e+1`). Otherwise `index` itself, and the `e` is read as
+    /// the constant: `2e` is 2 × e, `2e + 1` is 2 × e + 1, and in `1e3e` the second `e` is.
+    private static func exponentEnd(_ text: String, from index: String.Index) -> String.Index {
+        guard index < text.endIndex, text[index] == "e" || text[index] == "E" else { return index }
+        var digits = text.index(after: index)
+        if digits < text.endIndex, text[digits] == "+" || text[digits] == "-" { digits = text.index(after: digits) }
+        guard digits < text.endIndex, text[digits].isNumber else { return index }
+        var end = digits
+        while end < text.endIndex, text[end].isNumber { end = text.index(after: end) }
+        return end
     }
 
     private static func nextIsDigit(_ text: String, _ index: String.Index) -> Bool {
@@ -145,14 +180,14 @@ public enum Arithmetic {
         }
 
         mutating func term() -> Value? {
-            guard var left = power() else { return nil }
+            guard var left = unary() else { return nil }
             while true {
                 if take("*") || take("/") {
                     let divide = tokens[position - 1] == .symbol("/")
-                    guard let right = power() else { return nil }
+                    guard let right = unary() else { return nil }
                     left = combine(left, right, divide: divide)
                 } else if startsImplicitProduct {
-                    guard let right = power() else { return nil }
+                    guard let right = unary() else { return nil }
                     left = combine(left, right, divide: false)
                 } else {
                     return left
@@ -176,17 +211,19 @@ public enum Arithmetic {
             }
         }
 
-        mutating func power() -> Value? {
-            guard let base = unary() else { return nil }
-            guard take("^") else { return base }
-            guard let exponent = power() else { return nil }
-            return Value(number: Foundation.pow(base.number, exponent.number))
-        }
-
+        /// `unary := ('-' | '+') unary | power`: a sign applies to the whole power, so `-2^2` is -4.
         mutating func unary() -> Value? {
             if take("-") { return unary().map { Value(number: -$0.number, isPercent: $0.isPercent) } }
             if take("+") { return unary() }
-            return postfix()
+            return power()
+        }
+
+        /// `power := postfix ('^' unary)?`, right-associative: `2^3^2` is 2^9, and `2^-1` is 0.5.
+        mutating func power() -> Value? {
+            guard let base = postfix() else { return nil }
+            guard take("^") else { return base }
+            guard let exponent = unary() else { return nil }
+            return Value(number: Foundation.pow(base.number, exponent.number))
         }
 
         mutating func postfix() -> Value? {

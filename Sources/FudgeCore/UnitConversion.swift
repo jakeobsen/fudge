@@ -19,7 +19,7 @@ public enum UnitConversion {
     nonisolated(unsafe) private static let separator = try! NSRegularExpression(
         pattern: #"(?<=\s)(?:to|in|as|into|=|->)(?=\s)"#)
     nonisolated(unsafe) private static let quantityPattern = try! NSRegularExpression(
-        pattern: #"^\s*(-?[\d.,]*\d)\s*(.+?)\s*$"#)
+        pattern: #"^\s*(-?[\d.,]*\d(?:[eE][+-]?\d+)?)\s*(.+?)\s*$"#)
 
     /// The conversion `text` asks for, or nil. Its number is read by `Arithmetic.number(_:commaIsDecimal:)`.
     public static func evaluate(_ text: String, commaIsDecimal: Bool = true) -> Result? {
