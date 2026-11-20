@@ -26,6 +26,18 @@ make install-extension DIR=path/to/extension   # compile and install an extensio
 
 `make help` lists every target.
 
+## Using it
+
+Open fudge with ⌥Space, type to search applications and extension commands, and press ↵. Esc goes back, then hides the window.
+
+To use another shortcut, put it in `~/Library/Application Support/fudge/settings.json`:
+
+```json
+{ "hotkey": "cmd+space" }
+```
+
+Shortcuts are modifiers (`cmd`, `option`, `ctrl`, `shift`) plus a key, joined with `+`.
+
 ## License
 
 Copyright (C) 2026 Morten Jakobsen.

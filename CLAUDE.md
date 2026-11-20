@@ -10,6 +10,10 @@ fudge is a keyboard launcher for macOS, built to run extensions written for Rayc
 
 - **One Swift package, three targets.**
   - `FudgeApp` is the app: an accessory app with a menu bar item and no Dock icon.
+    - `HotKey` registers the global shortcut through Carbon, which needs no Accessibility permission. It's `hotkey` in `settings.json` (`FudgeSettings`), default ⌥Space.
+    - `LauncherPanel` is a non-activating `NSPanel`: it takes keys while the app you were in stays frontmost.
+    - `LauncherModel` holds the panel's state. Root search ranks `ApplicationIndex` and installed commands with `RootSearch` (fuzzy match, then `LaunchHistory`). Commands run through `ExtensionHost`, and its messages update the screen.
+    - `LauncherView` is the SwiftUI side.
   - `FudgeCLI` is the `fudge` command-line tool.
   - `FudgeCore` is shared code, and the only target with tests.
 
@@ -40,6 +44,8 @@ fudge is a keyboard launcher for macOS, built to run extensions written for Rayc
 - **Names must differ by more than case.** macOS file systems are case-insensitive, so no two products or targets may differ only by case. The tool's product is `fudge`, which is why the app's product is `FudgeApp`.
 - **Runtime TypeScript must be erasable syntax only** (`erasableSyntaxOnly`), because tests run it through type stripping. That rules out enums, namespaces, parameter properties and JSX in `.ts` files. Relative imports carry the `.ts` extension.
 - **Compiled extension commands are CommonJS.** The worker loads them with `require`, which is the only way `Module._load` can hand them fudge's modules.
+- **Apps opened from Finder don't get the shell's `PATH`.** That's why `Runtime.locateNode` checks `$FUDGE_NODE`, `Contents/Helpers`, Homebrew and `/usr/local` before `PATH`.
+- **Check the panel's layout without showing it:** `build/Fudge.app/Contents/MacOS/Fudge --snapshot out.png [--query text] [--activate]`. It renders the panel off-screen and transparent, never key, then saves a PNG and quits. The window blur doesn't render in snapshots.
 - **Swift tests that build extensions need esbuild** from `runtime/node_modules`. `make test` installs it; without it, `swift test` skips those tests.
 - **npm may block install scripts.** esbuild works without its postinstall step, so don't approve it just to silence the warning.
 
