@@ -302,7 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The key as it types with no modifier at all, so ⌘⇧, is "," with cmd and shift. `charactersIgnoringModifiers`
     /// still applies ⇧ and would give "<" (US) or ";" (Danish). Read through the keyboard layout, punctuation
     /// follows the user's layout rather than the key's position.
-    private nonisolated static func shortcut(for event: NSEvent) -> KeyShortcut? {
+    nonisolated static func shortcut(for event: NSEvent) -> KeyShortcut? {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         var modifiers: Set<String> = []
         if flags.contains(.command) { modifiers.insert("cmd") }

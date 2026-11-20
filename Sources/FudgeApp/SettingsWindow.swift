@@ -419,9 +419,23 @@ final class SettingsModel {
 /// The Settings window, which can refuse the keyboard: snapshots render it without taking anyone's typing.
 final class SettingsNSWindow: NSWindow {
     var refusesKey = false
+    /// Whether a hotkey is being recorded, when ⌘Q and ⌘W belong to the recorder.
+    var isRecording: () -> Bool = { false }
 
     override var canBecomeKey: Bool { !refusesKey && super.canBecomeKey }
     override var canBecomeMain: Bool { !refusesKey && super.canBecomeMain }
+
+    /// ⌘Q closes the window as ⌘W and its close button do, and fudge keeps running (`WindowShortcut`). The key is
+    /// the one that types "q" in the current layout, as for the panel's shortcuts.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.type == .keyDown, let pressed = AppDelegate.shortcut(for: event),
+            WindowShortcut.closesWindow(pressed, recording: isRecording())
+        {
+            performClose(nil)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
 }
 
 @MainActor
@@ -480,6 +494,7 @@ final class SettingsWindowController {
             )
             window.title = "fudge Settings"
             window.isReleasedWhenClosed = false
+            window.isRecording = { [model] in model.recording != nil }
             window.contentView = NSHostingView(rootView: SettingsView(model: model))
             window.center()
             self.window = window
