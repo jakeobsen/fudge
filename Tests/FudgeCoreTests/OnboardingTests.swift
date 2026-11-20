@@ -91,5 +91,5 @@ import Testing
     #expect(
         AccessibilityPermission.paneURL.absoluteString
             == "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
-    #expect(!AccessibilityPermission.reason.contains("paste"), "Paste isn't in fudge yet")
+    #expect(AccessibilityPermission.reason.contains("paste"), "Paste needs it too")
 }

@@ -74,8 +74,8 @@ public struct Onboarding: Sendable, Equatable {
 public enum AccessibilityPermission {
     /// Why fudge asks for it.
     public static let reason =
-        "Some extensions read the text you've selected. macOS asks you to allow that under Privacy & Security → "
-        + "Accessibility."
+        "Some extensions read the text you've selected, or paste into the app you were using. macOS asks you to allow "
+        + "that under Privacy & Security → Accessibility."
 
     /// System Settings → Privacy & Security → Accessibility.
     public static let paneURL = URL(

@@ -72,7 +72,7 @@ Untick **Enabled** to turn a command off, or a whole extension. A command that's
 
 The first time fudge starts, it walks you through a few choices: the launcher hotkey, Accessibility, Open at Login and currency conversion. Each takes effect at once, and **Settings…** has them all. Until you click **Start Using fudge** at the end, fudge shows these steps again at its next start, from where you left off.
 
-**Settings… → Permissions** shows whether fudge may use Accessibility, which extensions need to read the text you've selected. **Open Accessibility Settings** lets macOS ask you first; if it doesn't ask, click it again to open **System Settings → Privacy & Security → Accessibility** and turn fudge on there. **Show Onboarding Again** goes through the first-run choices again.
+**Settings… → Permissions** shows whether fudge may use Accessibility, which extensions need to read the text you've selected or to paste. **Open Accessibility Settings** lets macOS ask you first; if it doesn't ask, click it again to open **System Settings → Privacy & Security → Accessibility** and turn fudge on there. **Show Onboarding Again** goes through the first-run choices again.
 
 ### Open at Login and search history
 
