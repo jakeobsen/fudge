@@ -50,10 +50,14 @@ app: build
 	@cp '$(SWIFT_BIN)/FudgeApp' '$(APP)/Contents/MacOS/Fudge'
 	@cp '$(SWIFT_BIN)/fudge' '$(ESBUILD)' '$(APP)/Contents/Helpers/'
 	@cp App/Info.plist '$(APP)/Contents/Info.plist'
-	@xcrun actool App/AppIcon.icon --compile '$(APP)/Contents/Resources' --app-icon AppIcon \
+	@# actool hands the work to a shared daemon, which resolves relative paths against its own working directory:
+	@# another worktree's, if one started it. Every path is absolute. actool reports on stdout, even its errors,
+	@# and may exit 0 when it compiled nothing, so its report goes to build/actool.log and is shown when it fails.
+	@xcrun actool '$(CURDIR)/App/AppIcon.icon' --compile '$(abspath $(APP))/Contents/Resources' --app-icon AppIcon \
 		--platform macosx --target-device mac --minimum-deployment-target 14.0 \
-		--output-partial-info-plist build/AppIcon.plist >/dev/null
-	@test -f '$(APP)/Contents/Resources/Assets.car' || { printf 'actool could not compile App/AppIcon.icon (needs Xcode 26 or later)\n'; exit 1; }
+		--output-format human-readable-text --output-partial-info-plist '$(CURDIR)/build/AppIcon.plist' \
+		>'$(CURDIR)/build/actool.log' && test -f '$(APP)/Contents/Resources/Assets.car' \
+		|| { cat build/actool.log; printf 'actool did not write %s (it needs Xcode 26 or later; see its output above, also in build/actool.log)\n' '$(APP)/Contents/Resources/Assets.car'; exit 1; }
 	@plutil -replace CFBundleShortVersionString -string '$(VERSION)' '$(APP)/Contents/Info.plist'
 	@cp runtime/dist/host.js runtime/dist/worker.js '$(APP)/Contents/Resources/runtime/'
 	@codesign --force --sign - '$(APP)'/Contents/Helpers/* 2>/dev/null
