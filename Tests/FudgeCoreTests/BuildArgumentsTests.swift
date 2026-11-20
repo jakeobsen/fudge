@@ -45,3 +45,70 @@ struct BuildIntoTests {
         #expect(!FileManager.default.fileExists(atPath: defaultFolder.path), "the default folder is untouched")
     }
 }
+
+/// The source folder must never be what a build replaces (#51's review): these are refused before anything is
+/// compiled, so they need no esbuild.
+struct BuildNeverReplacesItsSourceTests {
+    let builder = ExtensionBuilder(esbuild: URL(fileURLWithPath: "/missing-esbuild"))
+
+    private func sourceFiles(_ folder: URL) -> [String] {
+        (try? FileManager.default.subpathsOfDirectory(atPath: folder.path))?.sorted() ?? []
+    }
+
+    @Test func intoTheSourcesOwnParentIsRefused() throws {
+        let source = try Fixtures.greeterCopy()  // <tmp>/greeter, named "greeter"
+        let before = sourceFiles(source)
+        #expect(
+            throws: BuildError.sourceIsDestination(
+                source.deletingLastPathComponent().appendingPathComponent("greeter").path)
+        ) {
+            try builder.build(source: source, into: source.deletingLastPathComponent())
+        }
+        #expect(sourceFiles(source) == before, "the source is untouched")
+    }
+
+    @Test func aCaseDifferentSourceFolderIsTheSameFolder() throws {
+        let parent = try Fixtures.temporaryDirectory()
+        let source = parent.appendingPathComponent("Greeter")
+        try FileManager.default.copyItem(at: Fixtures.greeter, to: source)
+        #expect {
+            try builder.build(source: source, into: parent)
+        } throws: { error in
+            if case BuildError.sourceIsDestination = error { return true }
+            return false
+        }
+        #expect(FileManager.default.fileExists(atPath: source.appendingPathComponent("src").path))
+    }
+
+    @Test func intoTheSourceItselfIsRefused() throws {
+        let source = try Fixtures.greeterCopy()
+        #expect {
+            try builder.build(source: source, into: source)
+        } throws: { error in
+            if case BuildError.sourceIsDestination = error { return true }
+            return false
+        }
+    }
+
+    @Test func aFolderThatIsntAFudgeBuildIsNeverReplaced() throws {
+        let extensions = try Fixtures.temporaryDirectory()
+        let inTheWay = extensions.appendingPathComponent("greeter")
+        try FileManager.default.createDirectory(
+            at: inTheWay.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try Data("mine".utf8).write(to: inTheWay.appendingPathComponent("src/notes.txt"))
+        #expect(throws: BuildError.notAnInstall(inTheWay.path)) {
+            try builder.build(source: Fixtures.greeter, into: extensions)
+        }
+        #expect(FileManager.default.fileExists(atPath: inTheWay.appendingPathComponent("src/notes.txt").path))
+    }
+
+    @Test func anEarlierBuildMayBeReplaced() throws {
+        let extensions = try Fixtures.temporaryDirectory()
+        let installed = extensions.appendingPathComponent("greeter")
+        try FileManager.default.createDirectory(
+            at: installed.appendingPathComponent("dist"), withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: installed.appendingPathComponent("package.json"))
+        try Data().write(to: installed.appendingPathComponent(".DS_Store"))
+        try ExtensionBuilder.checkDestination(installed, source: Fixtures.greeter)
+    }
+}
