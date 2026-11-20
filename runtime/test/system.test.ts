@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { Cache, Clipboard, LocalStorage, environment, getApplications, open, showInFinder, trash } from "../src/api/index.ts";
+import { Cache, Clipboard, LocalStorage, environment, getApplications, open, pasteText, showInFinder, trash } from "../src/api/index.ts";
 import { placeholderEnvironment, setLaunchContext } from "../src/api/launch.ts";
 import { createApiModule } from "../src/api/module.ts";
 import { connect, settle, type RpcRequest } from "../src/bridge.ts";
@@ -144,7 +144,22 @@ test("Clipboard calls go to the app", async () => {
             ["clipboard.read", { offset: 0 }],
         ],
     );
-    assert.throws(() => Clipboard.paste("x"), /Clipboard\.paste isn't available in fudge yet/);
+});
+
+test("Clipboard.paste goes to the app with the content and closeMainWindow, and its errors reject", async () => {
+    await Clipboard.paste("x");
+    await Clipboard.paste({ file: "/tmp/a.txt" }, { closeMainWindow: false });
+    await pasteText("old API");
+    assert.deepEqual(
+        calls.map((call) => [call.method, call.params]),
+        [
+            ["clipboard.paste", { text: "x", closeMainWindow: true }],
+            ["clipboard.paste", { file: "/tmp/a.txt", closeMainWindow: false }],
+            ["clipboard.paste", { text: "old API", closeMainWindow: true }],
+        ],
+    );
+    connect((request) => setImmediate(() => settle(request.id, undefined, "There is no app to paste into")));
+    await assert.rejects(Clipboard.paste("x"), /There is no app to paste into/);
 });
 
 test("open, trash, showInFinder and getApplications go to the app", async () => {

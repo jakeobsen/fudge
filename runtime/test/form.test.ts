@@ -4,6 +4,7 @@ import { createElement as h, useState } from "react";
 import { Action, ActionPanel, Form } from "../src/api/index.ts";
 import type { UINode } from "../src/renderer/serialize.ts";
 import { connect, type RpcRequest } from "../src/bridge.ts";
+import { revive } from "../src/protocol.ts";
 import { find, mount, type Mounted } from "./support/mount.ts";
 
 function submitAction(onSubmit: (values: Record<string, unknown>) => void) {
@@ -168,6 +169,60 @@ test("submitting sends the values of fields with storeValue to the app, never a 
             sent.map((request) => [request.method, request.params]),
             [["form.storeValues", { values: { name: "otter", tags: ["red"] } }]],
         );
+    } finally {
+        connect(null);
+    }
+});
+
+test("isFullDay is on Form.DatePicker and Action.PickDate, also through the module extensions get", async () => {
+    const { createApiModule } = await import("../src/api/module.ts");
+    const api = createApiModule() as { Form: typeof Form; Action: typeof Action };
+    for (const isFullDay of [Form.DatePicker.isFullDay, Action.PickDate.isFullDay, api.Form.DatePicker.isFullDay, api.Action.PickDate.isFullDay]) {
+        assert.equal(isFullDay(new Date(2026, 10, 20)), true, "local midnight");
+        assert.equal(isFullDay(new Date(2026, 10, 20, 0, 0, 0, 1)), false);
+        assert.equal(isFullDay(new Date(2026, 10, 20, 9, 30)), false);
+        assert.equal(isFullDay(null), false);
+        assert.equal(isFullDay(new Date("nope")), false);
+    }
+});
+
+test("a DatePicker's revived Date reaches onChange and the submit; a FilePicker submits its paths", async () => {
+    const submitted: Record<string, unknown>[] = [];
+    const heard: unknown[] = [];
+    const mounted = await mount(
+        h(
+            Form,
+            { actions: submitAction((values) => submitted.push(values)) },
+            h(Form.DatePicker, { id: "due", onChange: (value: unknown) => heard.push(value) }),
+            h(Form.FilePicker, { id: "files" }),
+        ),
+    );
+    await submit(mounted);
+    assert.deepEqual(submitted.at(-1), { due: null, files: [] }, "empty: null and []");
+    // The app sends dates as $date markers; the worker revives event arguments before dispatching them.
+    const [due] = revive([{ $date: "2026-11-20T00:00:00.000Z" }]) as [Date];
+    await type(mounted, "Form.DatePicker", due);
+    await type(mounted, "Form.FilePicker", ["/tmp/a.txt", "/tmp/b"]);
+    await submit(mounted);
+    assert.ok(heard[0] instanceof Date);
+    const values = submitted.at(-1)!;
+    assert.ok(values.due instanceof Date && values.due.toISOString() === "2026-11-20T00:00:00.000Z");
+    assert.deepEqual(values.files, ["/tmp/a.txt", "/tmp/b"]);
+});
+
+test("a stored Date goes to the app as a $date marker", async () => {
+    const sent: RpcRequest[] = [];
+    connect((request) => sent.push(request));
+    try {
+        const mounted = await mount(
+            h(Form, { actions: submitAction(() => {}) }, h(Form.DatePicker, { id: "due", storeValue: true }), h(Form.FilePicker, { id: "files", storeValue: true })),
+        );
+        await type(mounted, "Form.DatePicker", new Date("2026-11-20T12:00:00.000Z"));
+        await type(mounted, "Form.FilePicker", ["/tmp/a.txt"]);
+        await submit(mounted);
+        assert.deepEqual(sent.map((request) => request.params), [
+            { values: { due: { $date: "2026-11-20T12:00:00.000Z" }, files: ["/tmp/a.txt"] } },
+        ]);
     } finally {
         connect(null);
     }

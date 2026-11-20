@@ -15,9 +15,21 @@ enum SystemCalls {
         "selection.finderItems",
     ]
 
+    /// Offers the Accessibility pane when macOS's prompt didn't help. The app delegate sets it up with the panel;
+    /// snapshot runs have none.
+    static var accessibilitySettingsOffer: AccessibilitySettingsOffer?
+    private static let accessibility = SystemAccessibility()
+    /// Shared by reading the selection and pasting, so macOS's Accessibility prompt shows at most once per run, and
+    /// fudge's own offer too.
+    private static let gate = AccessibilityGate(
+        access: accessibility, offerSettings: { accessibilitySettingsOffer?.offer() })
+    private static let keys = SystemCopyKey()
+    private static let pasteboard = SystemPasteboard()
     private static let selectedText = SelectedText(
-        accessibility: SystemAccessibility(), keys: SystemCopyKey(), pasteboard: SystemPasteboard(),
-        ownPid: ProcessInfo.processInfo.processIdentifier)
+        accessibility: accessibility, keys: keys, pasteboard: pasteboard,
+        ownPid: ProcessInfo.processInfo.processIdentifier, gate: gate)
+    private static let paster = Paste(
+        gate: gate, keys: keys, pasteboard: pasteboard, ownPid: ProcessInfo.processInfo.processIdentifier)
     private static let automation = SystemAutomationPermission()
     private static let finder = FinderEvents()
 
@@ -71,6 +83,17 @@ enum SystemCalls {
         default:
             throw Failure(description: "\(method) isn't available in fudge yet")
         }
+    }
+
+    /// `Clipboard.paste` (`clipboard.paste`): the content as `Clipboard.copy` takes it, pasted into the frontmost app.
+    /// `hideWindow` hides fudge's panel and returns once it's really gone; the model supplies it.
+    static func paste(_ json: JSONValue, hideWindow: () async -> Void) async throws {
+        let params = Params(json)
+        let content = PasteboardContents.forPaste(
+            text: params.string("text"), html: params.string("html"), file: params.string("file"))
+        try await paster.paste(
+            content, closeMainWindow: params.values["closeMainWindow"] != .bool(false), hideWindow: hideWindow,
+            frontmost: frontmost)
     }
 
     private static func frontmost() -> FrontmostApplication? {

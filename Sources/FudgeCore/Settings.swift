@@ -12,6 +12,8 @@ public struct FudgeSettings: Sendable, Equatable {
     public var extensions: [String: ExtensionSettings]
     /// Download exchange rates from the European Central Bank for the calculator. Off unless set.
     public var currencyRates: Bool
+    /// How the calculator reads and shows numbers: the Mac's format unless set. An unknown value reads as the Mac's.
+    public var numberFormat: NumberFormatSetting
     /// How long the panel stays hidden before it opens on root search again (`resetAfterSeconds`).
     public var resetAfter: PanelResetSetting = .default
     /// Which screen the panel opens on (`showOnScreen`).
@@ -46,12 +48,13 @@ public struct FudgeSettings: Sendable, Equatable {
 
     public init(
         hotkey: String? = nil, commands: [String: CommandSettings] = [:], extensions: [String: ExtensionSettings] = [:],
-        currencyRates: Bool = false
+        currencyRates: Bool = false, numberFormat: NumberFormatSetting = .system
     ) {
         self.hotkey = hotkey
         self.commands = commands
         self.extensions = extensions
         self.currencyRates = currencyRates
+        self.numberFormat = numberFormat
     }
 
     /// A command's key in `commands`: "<extension name>/<command name>".
@@ -107,7 +110,8 @@ public struct FudgeSettings: Sendable, Equatable {
     public static func load(from file: URL) -> FudgeSettings {
         guard let object = try? existingObject(at: file) else { return FudgeSettings() }
         var settings = FudgeSettings(
-            hotkey: object["hotkey"] as? String, currencyRates: object["currencyRates"] as? Bool ?? false)
+            hotkey: object["hotkey"] as? String, currencyRates: object["currencyRates"] as? Bool ?? false,
+            numberFormat: (object["numberFormat"] as? String).flatMap(NumberFormatSetting.init(rawValue:)) ?? .system)
         settings.resetAfter = PanelResetSetting(settingsValue: object["resetAfterSeconds"])
         settings.showOnScreen = ShowOnScreen(settingsValue: object["showOnScreen"])
         settings.escapeBehavior = EscapeBehavior(settingsValue: object["escapeBehavior"])
@@ -129,6 +133,7 @@ public struct FudgeSettings: Sendable, Equatable {
         var object = try Self.existingObject(at: file)
         object["hotkey"] = hotkey
         object["currencyRates"] = currencyRates ? true : nil
+        object["numberFormat"] = numberFormat == .system ? nil : numberFormat.rawValue
         object["resetAfterSeconds"] = resetAfter.settingsValue
         object["showOnScreen"] = showOnScreen.settingsValue
         object["escapeBehavior"] = escapeBehavior.settingsValue
