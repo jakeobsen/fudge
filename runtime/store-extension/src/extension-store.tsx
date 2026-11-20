@@ -195,6 +195,9 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
 
     const shown = loaded ? filterEntries(loaded.entries, filter, loaded.installed) : [];
     const { installed: installedRows, other } = sections(shown, loaded?.installed ?? {});
+    // Only the selected row carries its actions (the first row until something is selected): 3,500 action panels
+    // would make every render take seconds. Moving the selection renders the new row's.
+    const actionsFor = selected ?? (installedRows[0] ?? other[0])?.name;
     const item = (entry: StoreEntry) => {
         const state = loaded ? status(entry, loaded.installed, loaded.trees) : "available";
         const icon = loaded ? iconURL(entry, loaded.commit) : undefined;
@@ -220,8 +223,14 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                                   : { text: accessory.text },
                           )
                 }
-                detail={<List.Item.Detail markdown={detailMarkdown(entry, loaded?.commit ?? "", readmes[entry.name])} />}
+                detail={
+                    // Built only while the pane is open: 3,500 rows' markdown would slow every render.
+                    showingDetail ? (
+                        <List.Item.Detail markdown={detailMarkdown(entry, loaded?.commit ?? "", readmes[entry.name])} />
+                    ) : undefined
+                }
                 actions={
+                    entry.name !== actionsFor ? undefined : (
                     <ActionPanel>
                         <ActionPanel.Section>
                             {state === "available" && (
@@ -262,6 +271,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                             />
                         </ActionPanel.Section>
                     </ActionPanel>
+                    )
                 }
             />
         );
