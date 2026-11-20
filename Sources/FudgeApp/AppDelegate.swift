@@ -124,15 +124,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.applyHotkeys = { [weak self] in self?.applyCommandHotkeys() ?? [] }
     }
 
-    /// Registers the hotkeys of the installed commands from `settings.json`. Hotkeys of commands that aren't
-    /// installed stay in the file, unregistered, so reinstalling the extension brings them back. Returns the
-    /// command ids whose hotkey the system refused.
+    /// Applies `settings.json` to root search (aliases, disabled commands) and registers the hotkeys of the
+    /// installed, enabled commands. Hotkeys of commands that aren't installed stay in the file, unregistered, so
+    /// reinstalling the extension brings them back. Returns the command ids whose hotkey the system refused.
     @discardableResult
     private func applyCommandHotkeys() -> Set<String> {
-        let installed = Set(model.installedCommandIDs)
-        let wanted = FudgeSettings.load(from: paths.settingsFile).commandHotkeys.filter { installed.contains($0.key) }
-        registry.apply(wanted)
-        model.refreshCommandHotkeys()
+        model.applySettings()
+        registry.apply(model.settings.availableHotkeys(installed: Set(model.installedCommandIDs)))
         return registry.refused
     }
 

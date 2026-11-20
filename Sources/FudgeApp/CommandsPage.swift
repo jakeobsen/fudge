@@ -4,7 +4,7 @@ import FudgeCore
 import SwiftUI
 
 /// The Settings window's Commands page: every installed extension, expanded to its commands, with each command's
-/// hotkey. Clicking "Record Hotkey" records the next key press.
+/// alias, hotkey and enabled state. Clicking "Record Hotkey" records the next key press.
 struct CommandsPage: View {
     @Bindable var model: SettingsModel
     @State private var search = ""
@@ -12,13 +12,23 @@ struct CommandsPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let problem = model.settingsProblem {
+                Label(problem, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.red)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 12)
+            }
             TextField("Search Commands", text: $search)
                 .textFieldStyle(.roundedBorder)
                 .padding(12)
             HStack(spacing: 0) {
                 Text("Name").frame(maxWidth: .infinity, alignment: .leading)
-                Text("Type").frame(width: 90, alignment: .leading)
-                Text("Hotkey").frame(width: 170, alignment: .leading)
+                Text("Type").frame(width: 80, alignment: .leading)
+                Text("Alias").frame(width: 110, alignment: .leading)
+                Text("Hotkey").frame(width: 150, alignment: .leading)
+                Text("Enabled").frame(width: 60, alignment: .center)
             }
             .font(.system(size: 11, weight: .medium))
             .foregroundStyle(.secondary)
@@ -65,9 +75,17 @@ struct CommandsPage: View {
                 Text(installed.manifest.title).fontWeight(.medium)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text("Extension").foregroundStyle(.secondary).frame(width: 90, alignment: .leading)
-            Text("--").foregroundStyle(.tertiary).frame(width: 170, alignment: .leading)
+            Text("Extension").foregroundStyle(.secondary).frame(width: 80, alignment: .leading)
+            Text("--").foregroundStyle(.tertiary).frame(width: 110, alignment: .leading)
+            Text("--").foregroundStyle(.tertiary).frame(width: 150, alignment: .leading)
+            Toggle(
+                "",
+                isOn: Binding(get: { model.isEnabled(extension: name) }, set: { model.setEnabled($0, extension: name) })
+            )
+            .labelsHidden()
+            .frame(width: 60)
         }
+        .opacity(model.isEnabled(extension: name) ? 1 : 0.45)
         .rowStyle()
         .contentShape(Rectangle())
         .onTapGesture {
@@ -77,18 +95,28 @@ struct CommandsPage: View {
 
     private func commandRow(_ command: ExtensionManifest.Command, of installed: InstalledExtension) -> some View {
         let id = FudgeSettings.commandID(extension: installed.manifest.name, command: command.name)
+        let enabled = model.isEnabled(command: id) && model.isEnabled(extension: installed.manifest.name)
         return HStack(spacing: 0) {
             HStack(spacing: 6) {
                 icon(command.icon ?? installed.manifest.icon, in: installed)
-                Text(command.title)
+                // The extension's name gives way first when the column is narrow.
+                Text(command.title).layoutPriority(1)
                 Text(installed.manifest.title).foregroundStyle(.secondary)
             }
             .lineLimit(1)
             .padding(.leading, 18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text("Command").foregroundStyle(.secondary).frame(width: 90, alignment: .leading)
-            HotkeyCell(model: model, commandID: id).frame(width: 170, alignment: .leading)
+            Text("Command").foregroundStyle(.secondary).frame(width: 80, alignment: .leading)
+            AliasCell(model: model, commandID: id, dimmed: !enabled).frame(width: 110, alignment: .leading)
+            HotkeyCell(model: model, commandID: id).frame(width: 150, alignment: .leading)
+            Toggle(
+                "", isOn: Binding(get: { model.isEnabled(command: id) }, set: { model.setEnabled($0, command: id) })
+            )
+            .labelsHidden()
+            .frame(width: 60)
         }
+        // A disabled command, or one of a disabled extension, is dimmed.
+        .opacity(enabled ? 1 : 0.45)
         .rowStyle()
     }
 
@@ -103,6 +131,38 @@ struct CommandsPage: View {
 extension View {
     fileprivate func rowStyle() -> some View {
         font(.system(size: 13)).padding(.horizontal, 16).frame(minHeight: 30)
+    }
+}
+
+/// A command's alias, edited in place: ↵ saves, Esc cancels, and empty removes it. A refused alias stays in the
+/// field with the reason under it.
+private struct AliasCell: View {
+    let model: SettingsModel
+    let commandID: String
+    /// A disabled row's alias is dimmed here: the row's opacity doesn't reach the text field's AppKit drawing (seen
+    /// in snapshots).
+    let dimmed: Bool
+    @State private var text = ""
+    @FocusState private var editing: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            TextField("Add Alias", text: $text)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(dimmed ? .secondary : .primary)
+                .focused($editing)
+                .onSubmit { model.setAlias(text, for: commandID) }
+                .onKeyPress(.escape) {
+                    text = model.alias(for: commandID) ?? ""
+                    editing = false
+                    return .handled
+                }
+            if let message = model.aliasMessages[commandID] {
+                Text(message).font(.system(size: 10)).foregroundStyle(.red).lineLimit(2)
+            }
+        }
+        .onAppear { text = model.alias(for: commandID) ?? "" }
     }
 }
 
