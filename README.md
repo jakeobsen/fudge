@@ -7,7 +7,7 @@ fudge is an independent project. It is not affiliated with or endorsed by Raycas
 ## What's here
 
 - `Sources/FudgeApp`: the macOS app. It runs in the menu bar, without a Dock icon.
-- `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for fudge.
+- `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for fudge. A running fudge picks up an extension you install, rebuild or remove within a second, with nothing to reload.
 - `Sources/FudgeCore`: code shared by the app and the tool.
 - `runtime/`: the extension host. This is the Node.js program that runs extensions. The app talks to it over stdin/stdout.
 
@@ -50,19 +50,51 @@ Release builds are signed ad hoc. Until fudge has a Developer ID, you grant its 
 
 Open fudge with ⌥Space, type to search applications and extension commands, and press ↵. Esc goes back, then hides the window.
 
-To use another shortcut, put it in `~/Library/Application Support/fudge/settings.json`:
+What the fudge menu bar menu does is in root search too: "fudge Settings", **Reload Extensions** (reads the extensions and applications again) and **Quit fudge** (asks first, since fudge's hotkeys stop working until you open it again).
 
-```json
-{ "hotkey": "cmd+space" }
-```
+To use another shortcut, open **Settings…** on the **General** page, click the keys next to **Launcher hotkey**, and press the new shortcut. Esc cancels. A shortcut needs ⌘, ⌥ or ⌃, unless it's an F-key. The launcher always has a hotkey, so ⌫ (or **Reset to ⌥Space**) puts ⌥Space back. fudge refuses a shortcut that a command already has, and keeps the old one when another app has the new one. If another app already holds the launcher's hotkey when fudge starts, the General page says so, and the menu bar menu's **Open fudge** still works.
 
-Shortcuts are modifiers (`cmd`, `option`, `ctrl`, `shift`) plus a key, joined with `+`.
+### Command hotkeys
 
-Extensions' preferences are under **Settings…** in the fudge menu bar menu, or ⌘, in the fudge window. You can also search root search for "fudge Settings". To go straight to a command's extension, select the command and press ⌘⇧, (or ⌘K, then **Configure Extension**). A command that needs a preference you haven't set opens that window instead of running.
+Any command can have its own hotkey. Open **Settings…** on the **Commands** page, click **Record Hotkey** next to the command, and press the shortcut. Esc cancels, and ⌫ removes it. A hotkey needs ⌘, ⌥ or ⌃, unless it's an F-key. Pressing it anywhere opens the command as root search would: a view command shows the fudge window, a no-view command just runs, and a command with a required argument shows root search with that field ready. Pressing a view command's hotkey again while it's on screen hides the window.
+
+fudge refuses a shortcut that's the launcher's or another command's, and one another app has registered. That last check is best-effort: macOS doesn't report system shortcuts such as ⌘Space or ⌃↑, so one of those can be recorded but never fire.
+
+### Aliases and turning commands off
+
+On the same page, a command can have an **Alias**: a short word such as `sf`. Click the Alias cell, type it, and press ↵ (Esc puts back what was there, and an empty alias removes it). An alias is 1 to 32 characters with no spaces, and two commands can't share one (letter case doesn't count). Typing the alias in root search puts its command first, above a calculator result. For a command with arguments, typing the alias and a space moves to its first argument field, and the rest of what you type goes there.
+
+Untick **Enabled** to turn a command off, or a whole extension. A command that's off isn't in root search, its hotkey doesn't fire, and other extensions can't launch it; its alias and hotkey are kept for when you turn it back on.
+
+**Settings…** in the fudge menu bar menu, ⌘, in the fudge window, and "fudge Settings" in root search open the Settings window on its **General** page. Extensions' preferences are in the same window, under each extension. To go straight to a command's extension, select the command and press ⌘⇧, (or ⌘K, then **Configure Extension**). A command that needs a preference you haven't set opens that window instead of running.
+
+### Open at Login and search history
+
+fudge doesn't start at login until you turn on **Open at Login** at the top of **Settings… → General**. macOS then shows a "Login item added" notification, and lists fudge under **System Settings → General → Login Items**, where you can also turn it off; the switch shows what's set there. If macOS asks you to allow it first, the page says so and **Open Login Items** takes you there. The login item is tied to where the app is, so after moving fudge (to `/Applications`, say), turn Open at Login off and on again.
+
+Root search ranks what you open often first. **Clear Search History…** on the same page makes it forget, after asking.
+
+### Extensions that open other extensions
+
+The first time an extension opens another extension's command, fudge asks whether to allow it, and remembers the answer. To change or forget an answer, open **Settings…** → **General** → **Extensions that open other extensions**: pick **Allowed** or **Not allowed**, or click × to be asked again next time.
+
+### Calculator and currency
+
+Type a calculation in root search and the answer shows above the results: arithmetic (`5+5/10*39`), units (`13kg to lbs`), time zones (`3pm cet in pst`) and currencies (`100 usd to eur`, `€100 in usd`, `100 € in kr`). ↵ copies the answer.
+
+Numbers follow your Mac's number format, or the one you pick under **Settings… → General → Number format**: "1,234.5" or "1.234,5". In "1.234,5", `1.000 + 1` is 1.001, and `1.5` isn't a number, so it gets no answer rather than a wrong one.
+
+Currency conversion is off until you turn it on under **Settings… → General**, because it needs exchange rates from the network. Until then, a currency query shows a card saying so, and ↵ on it opens that page.
+
+### Network
+
+fudge makes no connections of its own (no updater, telemetry or crash reporting), with two exceptions: the images extensions show (see **Images from the web** below), and one you turn on yourself: with currency conversion on, it downloads the European Central Bank's daily reference rates (`https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml`). It downloads that one public file when you turn the setting on, then when the rates are a day old, at most once every 12 hours. Like any download, the server sees your IP address, and nothing else is sent: no cookies and no identifier beyond `fudge/<version>` as the user agent. The rates are kept in `exchange-rates.json` in the support folder. Turning the setting off stops the downloads. Extensions make their own connections, as they do in Raycast.
 
 ### Selected text and Finder items
 
 Extensions can read the text selected in the app you were in, and the items selected in Finder. The first time, macOS asks you to allow fudge under **Privacy & Security → Accessibility** or **Automation**.
+
+macOS only asks when fudge isn't in the Accessibility list yet. If fudge is there but switched off, or the entry was left by an older build of fudge, nothing appears, and extensions are just refused. So when Accessibility is refused a second time, fudge shows its own alert, once per run, and **Open Accessibility Settings** takes you to the list. Switch fudge on there. If it's already on, select it, remove it with −, and add it again with +.
 
 When an app doesn't share its selection through Accessibility (often browsers and Electron apps such as VS Code), fudge copies it with ⌘C and puts back what was on your clipboard right after. That has some side effects:
 
@@ -73,6 +105,21 @@ When an app doesn't share its selection through Accessibility (often browsers an
 - fudge waits half a second for the copy. An app that answers ⌘C later than that copies after fudge has put your clipboard back, so the selected text ends up on your clipboard.
 
 Secure text fields, such as passwords, never give their text.
+
+### Images from the web
+
+When an extension uses an `https://` image (an icon, or an image in markdown), fudge downloads it on the extension's behalf, without cookies or credentials, and keeps it in `~/Library/Application Support/fudge/image-cache/` (up to 200 MB). A downloaded image is reused for a day, then checked for changes the next time it's shown.
+
+Loading an image tells the image's host your IP address and when you looked, as in a browser. Markdown that shows other people's content, such as issues or emails, can carry tracking images, as it can in Raycast or in a mail app that loads images. fudge doesn't load `http://` images, or images from your Mac (`localhost`) or the local network (`.local` names and private addresses).
+
+### Pasting
+
+Extensions can paste into the app you were in (`Clipboard.paste`, the Paste action). fudge puts the content on your clipboard, presses ⌘V in that app, and puts back what was on your clipboard about a second later. It needs the same Accessibility permission. Without it, the content stays on your clipboard for you to paste yourself.
+
+- fudge marks what it puts on the clipboard as transient, so clipboard history apps that follow [nspasteboard.org](http://nspasteboard.org) skip it.
+- If you copy something within that second, fudge leaves your new copy alone.
+- If your clipboard held a password that a password manager marked as concealed, fudge leaves the clipboard empty instead of putting the password back, for the same reason as above.
+- Apps that read the clipboard late, such as virtual machines or remote desktops that sync it, may paste what fudge put back instead of the content.
 
 ## License
 

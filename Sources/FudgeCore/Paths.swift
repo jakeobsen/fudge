@@ -25,6 +25,11 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("settings.json")
     }
 
+    /// The calculator's exchange rates, downloaded from the European Central Bank while that's turned on.
+    public var exchangeRatesFile: URL {
+        supportDirectory.appendingPathComponent("exchange-rates.json")
+    }
+
     /// How often and how recently root items were opened.
     public var historyFile: URL {
         supportDirectory.appendingPathComponent("history.json")
@@ -35,9 +40,19 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("dropdown-values.json")
     }
 
+    /// The values of Form fields with `storeValue`, one file per extension.
+    public var formValuesDirectory: URL {
+        supportDirectory.appendingPathComponent("form-values", isDirectory: true)
+    }
+
     /// Which extensions the user allowed to open other extensions' commands (`launchCommand`).
     public var launchPermissionsFile: URL {
         supportDirectory.appendingPathComponent("launch-permissions.json")
+    }
+
+    /// What commands changed about themselves with `updateCommandMetadata` (`CommandMetadata`).
+    public var commandMetadataFile: URL {
+        supportDirectory.appendingPathComponent("command-metadata.json")
     }
 
     /// The preference values set for each extension.
@@ -58,6 +73,11 @@ public struct FudgePaths: Sendable, Equatable {
     /// Where an extension's `LocalStorage` lives.
     public func localStorageFile(forExtension name: String) -> URL {
         supportDirectory.appendingPathComponent("local-storage/\(name).json")
+    }
+
+    /// The https images extensions showed, kept by `RemoteImageCache`.
+    public var imageCacheDirectory: URL {
+        supportDirectory.appendingPathComponent("image-cache", isDirectory: true)
     }
 
     /// Installed extensions, one folder each.

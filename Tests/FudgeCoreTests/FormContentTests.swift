@@ -26,11 +26,11 @@ import Testing
         ])
     #expect(fields[0].text == "What Claude checks." && !fields[0].isEditable)
     #expect(fields[1].fieldId == "workflow" && fields[1].title == "Workflow" && fields[1].info != nil)
-    #expect(fields[1].initialValue == .string("saved"))
-    #expect(fields[2].initialValue == .string("x") && fields[2].error == "Required" && fields[2].autoFocus)
+    #expect(fields[1].initialValue() == .string("saved"))
+    #expect(fields[2].initialValue() == .string("x") && fields[2].error == "Required" && fields[2].autoFocus)
     #expect(fields[2].placeholder == "Name")
-    #expect(fields[3].text == "Done" && fields[3].initialValue == .bool(false))
-    #expect(fields[6].value == nil && fields[6].initialValue == .string(""), "a null value means uncontrolled")
+    #expect(fields[3].text == "Done" && fields[3].initialValue() == .bool(false))
+    #expect(fields[6].value == nil && fields[6].initialValue() == .string(""), "a null value means uncontrolled")
 }
 
 @Test func fieldValuesIgnoreStaleEchoes() {

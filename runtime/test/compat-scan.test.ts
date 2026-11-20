@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as implementation from "../src/api/index.ts";
 import { createApiModule } from "../src/api/module.ts";
-import { NOT_DRAWN, UNAVAILABLE } from "../src/api/stubs.ts";
+import { NOT_DRAWN, notAvailable, UNAVAILABLE } from "../src/api/stubs.ts";
 import { RAYCAST_UTILS_PATHS } from "../scripts/compat/raycast-utils.generated.ts";
 import { apiName, gaps, isExtensionSource, support, toJavaScript, uses } from "../scripts/compat/scan.ts";
 import { raycastDeclarations, vendoredTypes } from "../scripts/raycast-types.ts";
@@ -54,17 +54,21 @@ test("names the API a path is about", () => {
 });
 
 test("a stub is missing wherever the path reaches it, lowercase members included", () => {
-    assert.equal(support(api, "Clipboard.paste"), "missing", "a stub member of an implemented namespace");
-    assert.equal(support(api, "pasteText"), "missing", "an implemented export that is a stub");
+    // fudge implements every member of its namespaces now, so a small module stands in for one with stubs.
+    const partial = { Clipboard: { copy() {}, paste: notAvailable("Clipboard.paste") }, pasteText: notAvailable("pasteText") };
+    assert.equal(support(partial, "Clipboard.paste"), "missing", "a stub member of an implemented namespace");
+    assert.equal(support(partial, "Clipboard.copy"), "implemented");
+    assert.equal(support(partial, "pasteText"), "missing", "an implemented export that is a stub");
     assert.equal(support(api, "BrowserExtension.getTabs"), "missing", "a member of an export fudge leaves out");
     assert.equal(support(api, "environment.commandName"), "implemented", "a getter that needs a running command");
 });
 
 test("an action that renders but fails when used is render-but-fail", () => {
-    for (const path of ["Action.Paste", "Action.CreateQuicklink", "Action.ToggleQuickLook", "Action.PickDate", "PasteAction"]) {
+    for (const path of ["Action.CreateQuicklink", "Action.CreateSnippet", "Action.ToggleQuickLook", "Action.PickDate"]) {
         assert.equal(support(api, path, declared), "render-but-fail", path);
     }
     assert.equal(support(api, "Action.CopyToClipboard", declared), "implemented");
+    assert.equal(support(api, "Action.Paste", declared), "implemented", "Paste works now");
 });
 
 test("a component the app doesn't draw, and any member of one, is not-drawn", () => {
@@ -125,13 +129,17 @@ test("paths Raycast doesn't declare are not-raycast, not gaps", () => {
 });
 
 test("an extension using a @raycast/utils export inherits its paths", () => {
-    const table = { useThing: ["Clipboard.paste", "Clipboard.copy", "Color.Gray"], useOther: ["Clipboard.paste"] };
+    const table = {
+        useThing: ["WindowManagement.getActiveWindow", "Clipboard.copy", "Color.Gray"],
+        useOther: ["WindowManagement.getActiveWindow"],
+    };
     assert.deepEqual(gaps({ api: new Set(), utils: new Set(["useThing", "useOther"]) }, api, declared, table).gaps, [
-        { api: "Clipboard.paste", kind: "via @raycast/utils", via: ["useOther", "useThing"] },
+        { api: "WindowManagement.getActiveWindow", kind: "via @raycast/utils", via: ["useOther", "useThing"] },
     ]);
     assert.deepEqual(
-        gaps({ api: new Set(["Clipboard.paste"]), utils: new Set(["useThing"]) }, api, declared, table).gaps,
-        [{ api: "Clipboard.paste", kind: "missing" }],
+        gaps({ api: new Set(["WindowManagement.getActiveWindow"]), utils: new Set(["useThing"]) }, api, declared, table)
+            .gaps,
+        [{ api: "WindowManagement.getActiveWindow", kind: "missing" }],
         "a direct use counts as direct",
     );
     const oauth = gaps({ api: new Set(), utils: new Set(["OAuthService"]) }, api, declared, RAYCAST_UTILS_PATHS);

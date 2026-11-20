@@ -91,6 +91,8 @@ app: build
 
 # The user's fudge: Fudge processes launched as the app, by LaunchServices (their parent is launchd), with no
 # arguments. `--snapshot` runs, key probes and test harnesses that agents start from a shell are left alone.
+# A process whose shell has exited is re-parented to launchd too, so a detached Fudge started with no arguments
+# counts as the user's: give anything you leave running an argument.
 USER_FUDGE_PIDS = for pid in $$(pgrep -x Fudge); do \
 		[ "$$(ps -o ppid= -p $$pid | tr -d ' ')" = 1 ] && [ "$$(ps -o args= -p $$pid)" = "$$(ps -o comm= -p $$pid)" ] \
 			&& echo $$pid; \

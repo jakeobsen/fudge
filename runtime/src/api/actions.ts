@@ -6,12 +6,28 @@ import { createElement, useEffect, useState, type FunctionComponent } from "reac
 import { closeMainWindow, showHUD, showToast, Toast } from "./feedback.ts";
 import { RAYCAST_ENUMS } from "./raycast-enums.generated.ts";
 import { mark, NotAvailableError, UNAVAILABLE } from "./stubs.ts";
-import { Clipboard, getApplications, open, showInFinder, trash } from "./system.ts";
-import { useFormValues } from "./form-state.ts";
+import { Clipboard, getApplications, getFrontmostApplication, open, showInFinder, trash } from "./system.ts";
+import { callApp } from "../bridge.ts";
+import { useFormValues, useStoredFormValues } from "./form-state.ts";
 
 const Icon = RAYCAST_ENUMS.Icon;
 type Props = Record<string, unknown>;
 type HostAction = FunctionComponent<Props>;
+
+/**
+ * The frontmost application, asked once for all the `Action.Paste`s mounted in one render: their effects run in the
+ * same turn, and a list with a Paste on every row would otherwise send one call per row.
+ */
+let frontmostLookup: ReturnType<typeof getFrontmostApplication> | null = null;
+function frontmostOnce(): ReturnType<typeof getFrontmostApplication> {
+    if (!frontmostLookup) {
+        frontmostLookup = getFrontmostApplication();
+        setTimeout(() => {
+            frontmostLookup = null;
+        }, 0);
+    }
+    return frontmostLookup;
+}
 
 /** Builds the built-in actions on top of the host `Action` and `ActionPanel.Submenu`. */
 export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
@@ -88,11 +104,40 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
         );
     }
 
+    /** Pastes `content` into the app the user is in, then calls `onPaste`. A failure shows as a toast. */
+    function Paste({ content, onPaste, title, ...props }: Props) {
+        const [target, setTarget] = useState<string | null>(null);
+        useEffect(() => {
+            let current = true;
+            frontmostOnce().then(
+                (app) => current && setTarget(app.name),
+                () => {},
+            );
+            return () => {
+                current = false;
+            };
+        }, []);
+        const defaultTitle = target ? `Paste to ${target}` : "Paste in Active App";
+        return action({ title: title ?? defaultTitle, icon: Icon.Clipboard }, props, async () => {
+            try {
+                await Clipboard.paste(content as string);
+            } catch (error) {
+                await showToast({ style: Toast.Style.Failure, title: error instanceof Error ? error.message : String(error) });
+                return;
+            }
+            (onPaste as ((content: unknown) => void) | undefined)?.(content);
+        });
+    }
+
     function SubmitForm({ onSubmit, ...props }: Props) {
         const values = useFormValues();
-        return action({ title: "Submit Form", icon: Icon.Checkmark }, props, () =>
-            (onSubmit as ((values: Record<string, unknown>) => unknown) | undefined)?.(values()) as void,
-        );
+        const stored = useStoredFormValues();
+        return action({ title: "Submit Form", icon: Icon.Checkmark }, props, () => {
+            // Fields with `storeValue` start the form next time; the app keeps their values.
+            const keep = stored();
+            if (Object.keys(keep).length > 0) callApp("form.storeValues", { values: keep }).catch(() => {});
+            return (onSubmit as ((values: Record<string, unknown>) => unknown) | undefined)?.(values()) as void;
+        });
     }
 
     /** An action fudge can't perform yet: it shows, and says so when picked. */
@@ -115,7 +160,7 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
         ShowInFinder,
         Trash,
         SubmitForm,
-        Paste: unavailable("Action.Paste", "Paste"),
+        Paste,
         CreateQuicklink: unavailable("Action.CreateQuicklink", "Create Quicklink"),
         CreateSnippet: unavailable("Action.CreateSnippet", "Create Snippet"),
         ToggleQuickLook: unavailable("Action.ToggleQuickLook", "Quick Look"),

@@ -29,10 +29,27 @@ struct LauncherView: View {
             }
         }
         .overlay(alignment: .topTrailing) {
-            if model.dropdownPanel != nil, let command = model.command, let dropdown = command.list?.dropdown {
-                DropdownPanelView(model: model, dropdown: dropdown, assets: command.assets, focus: $focus)
+            if model.dropdownPanel?.source == .searchBar, let command = model.command, command.list?.dropdown != nil {
+                DropdownPanelView(model: model, assets: command.assets, focus: $focus)
                     .padding(.trailing, 14)
                     .padding(.top, 50)
+            }
+        }
+        // A Form field's panel opens under the field, or above it when there's no room below.
+        .overlayPreferenceValue(FormFieldBounds.self) { bounds in
+            if let node = model.formPanelField, let anchor = bounds[node], let command = model.command {
+                GeometryReader { proxy in
+                    let field = proxy[anchor]
+                    let x = max(8, min(field.minX, proxy.size.width - 288))
+                    let panel = DropdownPanelView(model: model, assets: command.assets, focus: $focus)
+                    if proxy.size.height - field.maxY >= 260 {
+                        panel.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                            .padding(.leading, x).padding(.top, field.maxY + 4)
+                    } else {
+                        panel.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                            .padding(.leading, x).padding(.bottom, proxy.size.height - field.minY + 4)
+                    }
+                }
             }
         }
         // The panel's hidden title bar would otherwise push everything down by its height.
@@ -181,13 +198,19 @@ struct LauncherView: View {
                     .font(.system(size: 20))
                     .focused($focus, equals: .search)
                     .onSubmit { model.activate() }
+                    // While an input method is composing, ↑↓ pick its candidates, as the key monitor leaves them.
                     .onKeyPress(.upArrow) {
+                        guard !composing else { return .ignored }
                         model.moveSelection(by: -1)
                         return .handled
                     }
                     .onKeyPress(.downArrow) {
+                        guard !composing else { return .ignored }
                         model.moveSelection(by: 1)
                         return .handled
+                    }
+                    .onKeyPress(keys: [.leftArrow, .rightArrow], phases: [.down, .repeat]) { press in
+                        gridArrow(press)
                     }
                     .onKeyPress(.escape) {
                         model.escape()
@@ -198,6 +221,40 @@ struct LauncherView: View {
             .layoutPriority(1)
     }
 
+    /// ← and → in a Grid move the selection when `GridNavigation.arrowMovesSelection` says so: with the field
+    /// empty or its cursor at the end, and no ⇧, ⌥, ⌘ or ⌃. Otherwise the field keeps them, and while an input
+    /// method is composing, it does.
+    private func gridArrow(_ press: KeyPress) -> KeyPress.Result {
+        let editor = fieldEditor
+        let range = editor?.selectedRange()
+        let length = editor?.string.utf16.count ?? model.searchText.utf16.count
+        let move: GridNavigation.Move = press.key == .leftArrow ? .left : .right
+        return model.moveGridSelection(
+            move, modifiers: Self.names(press.modifiers), composing: editor?.hasMarkedText() == true,
+            textLength: length, selection: range.map { ($0.location, $0.length) }) ? .handled : .ignored
+    }
+
+    /// The search field's editor, which holds the cursor and any marked text. The panel isn't always the key window,
+    /// so it's found by type.
+    private var fieldEditor: NSTextView? {
+        NSApp.windows.first { $0 is LauncherPanel }?.firstResponder as? NSTextView
+    }
+
+    /// Whether an input method is composing in the search field (marked text). Its keys are its own then.
+    private var composing: Bool {
+        fieldEditor?.hasMarkedText() == true
+    }
+
+    /// A key press's modifiers, named as `KeyShortcut` names them. `fn`, `numpad` and `capslock` are passed on too,
+    /// for the rules to ignore: arrow keys always carry the first two.
+    private static func names(_ modifiers: EventModifiers) -> Set<String> {
+        let all: [(EventModifiers, String)] = [
+            (.shift, "shift"), (.option, "opt"), (.command, "cmd"), (.control, "ctrl"), (.function, "fn"),
+            (.numericPad, "numpad"), (.capsLock, "capslock"),
+        ]
+        return Set(all.filter { modifiers.contains($0.0) }.map(\.1))
+    }
+
     @ViewBuilder private var content: some View {
         switch model.screen {
         case .root:
@@ -205,6 +262,8 @@ struct LauncherView: View {
         case .command(let command):
             if let failure = command.failure {
                 FailureView(failure: failure)
+            } else if let list = command.list, case .grid = list.layout {
+                GridScreen(model: model, command: command, list: list)
             } else if let list = command.list {
                 ListScreen(model: model, command: command, list: list)
             } else if let form = command.form {
@@ -277,49 +336,19 @@ private struct RootResults: View {
     let model: LauncherModel
 
     var body: some View {
-        if model.results.isEmpty, model.calculator == nil {
+        let rows = model.rootRows
+        if rows.isEmpty {
             Text("No results").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 2) {
-                        if let calculator = model.calculator {
-                            Text("Calculator")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                            CalculatorCard(
-                                result: calculator, selected: model.selectedItem == LauncherModel.calculatorID
-                            )
-                            .id(LauncherModel.calculatorID)
-                            .onRowClick(
-                                select: {
-                                    model.selectedItem = LauncherModel.calculatorID
-                                    // A click can leave the first responder outside the search field.
-                                    model.restoreKeyboard()
-                                },
-                                open: { model.activate() }
-                            )
-                            .padding(.bottom, 6)
-                        }
-                        ForEach(model.results) { item in
-                            Row(
-                                icon: Image(nsImage: model.icon(for: item)),
-                                title: item.title,
-                                subtitle: item.subtitle,
-                                accessory: kind(of: item),
-                                selected: item.id == model.selectedItem
-                            )
-                            .id(item.id)
-                            .onRowClick(
-                                select: {
-                                    model.selectedItem = item.id
-                                    // A click can leave the first responder outside the search field.
-                                    model.restoreKeyboard()
-                                },
-                                open: { model.activate() })
+                        // In `RootSearch.rows`' order, which ↑↓ follows too.
+                        ForEach(rows) { rootRow in
+                            switch rootRow {
+                            case .item(let item): row(item)
+                            case .calculator: calculatorCard
+                            }
                         }
                     }
                     .padding(8)
@@ -329,11 +358,53 @@ private struct RootResults: View {
         }
     }
 
+    @ViewBuilder private var calculatorCard: some View {
+        if let calculator = model.calculator {
+            Text("Calculator")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+            CalculatorCard(result: calculator, selected: model.selectedItem == LauncherModel.calculatorID)
+                .id(LauncherModel.calculatorID)
+                .onRowClick(
+                    select: {
+                        model.selectedItem = LauncherModel.calculatorID
+                        // A click can leave the first responder outside the search field.
+                        model.restoreKeyboard()
+                    },
+                    open: { model.activate() }
+                )
+                .padding(.bottom, 6)
+        }
+    }
+
+    private func row(_ item: RootItem) -> some View {
+        Row(
+            icon: Image(nsImage: model.icon(for: item)),
+            title: item.title,
+            subtitle: item.subtitle,
+            accessory: kind(of: item),
+            selected: item.id == model.selectedItem,
+            alias: item.alias,
+            hotkey: model.commandHotkeys[item.id]
+        )
+        .id(item.id)
+        .onRowClick(
+            select: {
+                model.selectedItem = item.id
+                // A click can leave the first responder outside the search field.
+                model.restoreKeyboard()
+            },
+            open: { model.activate() })
+    }
+
     private func kind(of item: RootItem) -> String {
         switch item.kind {
         case .application: "Application"
         case .command: "Command"
-        case .settings: "fudge"
+        case .settings, .reloadExtensions, .quit: "fudge"
         }
     }
 }
@@ -347,16 +418,27 @@ private struct CalculatorCard: View {
     var body: some View {
         HStack(spacing: 0) {
             side(result.question, label: result.questionLabel, size: 24)
-            // The dividing line, broken around the arrow.
+            // The dividing line, broken around the arrow, and stopping above the footnote.
             VStack(spacing: 10) {
                 Rectangle().fill(Color.primary.opacity(0.15)).frame(width: 1)
                 Image(systemName: "arrow.right").font(.system(size: 18, weight: .medium)).foregroundStyle(.secondary)
                 Rectangle().fill(Color.primary.opacity(0.15)).frame(width: 1)
             }
+            .padding(.bottom, result.footnote == nil ? 0 : 22)
             .frame(width: 32)
             side(result.answer, label: result.answerLabel, size: 28)
         }
         .frame(height: 118)
+        // How fresh a currency conversion's rates are, small and grey under the arrow.
+        .overlay(alignment: .bottom) {
+            if let footnote = result.footnote {
+                Text(footnote)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.bottom, 8)
+            }
+        }
         .background(Color.primary.opacity(selected ? 0.13 : 0.07), in: RoundedRectangle(cornerRadius: 12))
         .contentShape(Rectangle())
     }
@@ -398,6 +480,10 @@ private struct Row: View {
     let subtitle: String?
     let accessory: String?
     let selected: Bool
+    /// A command's alias, shown as an outlined tag after its title.
+    var alias: String?
+    /// A command's hotkey, shown as keycaps after its title.
+    var hotkey: HotKeySpec?
 
     var body: some View {
         HStack(spacing: 10) {
@@ -406,6 +492,15 @@ private struct Row: View {
             if let subtitle {
                 Text(subtitle).foregroundStyle(.secondary).lineLimit(1)
             }
+            if let alias {
+                Text(alias)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.secondary.opacity(0.6)))
+            }
+            if let hotkey { Keycaps(spec: hotkey).foregroundStyle(.secondary) }
             Spacer()
             if let accessory {
                 Text(accessory).foregroundStyle(.secondary).font(.system(size: 12))
