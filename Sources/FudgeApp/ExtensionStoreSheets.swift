@@ -5,7 +5,8 @@ extension ExtensionStore {
     static var consentRequest: LauncherModel.AlertRequest {
         LauncherModel.AlertRequest(
             title: Consent.title, message: Consent.message, primary: Consent.confirm, dismiss: Consent.cancel,
-            destructive: false)
+            destructive: false,
+            footnote: .init(text: Consent.note, linkText: Consent.issueLinkText, url: Consent.issuesURL))
     }
 
     /// The sheet shown before the store is turned off.

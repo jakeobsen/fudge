@@ -214,7 +214,14 @@ struct OnboardingView: View {
         .padding(32)
         .frame(width: 600, height: 460, alignment: .topLeading)
         .background(Color(nsColor: .windowBackgroundColor))
+        .sheet(item: Binding(get: { restore.sheet }, set: { restore.sheet = $0 })) { sheet in
+            BackupSheet(controller: restore, sheet: sheet)
+        }
     }
+
+    /// Welcome's Restore from a Backup…: General's import flow. A backup never holds onboarding's own answers, so
+    /// onboarding stays where it is after an import, with the imported settings in its steps.
+    private var restore: BackupController { settings.onboardingBackup }
 
     @ViewBuilder private var content: some View {
         switch model.step {
@@ -273,6 +280,7 @@ struct OnboardingView: View {
     @ViewBuilder private var buttons: some View {
         switch model.step {
         case .welcome:
+            Button("Restore from a Backup…") { restore.startImport() }
             Button("Get Started") { model.next() }.keyboardShortcut(.defaultAction)
         case .accessibility where !settings.accessibility.isTrusted:
             Button("Not Now") { model.next() }

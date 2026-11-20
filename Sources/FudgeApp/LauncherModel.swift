@@ -125,6 +125,14 @@ final class LauncherModel {
         var primary: String
         var dismiss: String
         var destructive: Bool
+        /// A last paragraph with a link in it, which a sheet draws below the message (the Extension Store's).
+        var footnote: Footnote? = nil
+
+        struct Footnote {
+            var text: String
+            var linkText: String
+            var url: URL
+        }
     }
 
     @ObservationIgnored private let paths: FudgePaths
