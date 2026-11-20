@@ -91,7 +91,8 @@ private struct MarkdownBlockView: View {
     }
 }
 
-/// An image in markdown: a local file or asset; other sources show their description for now.
+/// An image in markdown: an https URL, a local file or an asset. Raycast's `raycast-width`, `raycast-height` and
+/// `raycast-tint-color` query parameters size and tint it; until a remote one arrives, its description shows.
 private struct MarkdownImage: View {
     let alt: String
     let source: String
@@ -99,21 +100,37 @@ private struct MarkdownImage: View {
 
     var body: some View {
         if let image {
-            Image(nsImage: image).resizable().aspectRatio(contentMode: .fit)
-                .frame(maxWidth: min(image.size.width, 560), maxHeight: 320, alignment: .leading)
+            let hints = MarkdownImageHints(source: source)
+            let tint = hints.tintColor.flatMap { ExtensionColor.color(.string($0)) }
+            let drawn = Group {
+                if let tint {
+                    Image(nsImage: image).resizable().renderingMode(.template).foregroundStyle(tint)
+                } else {
+                    Image(nsImage: image).resizable()
+                }
+            }
+            if let size = hints.displaySize(natural: image.size) {
+                drawn.frame(width: size.width, height: size.height)
+            } else {
+                drawn.aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: min(image.size.width, 560), maxHeight: 320, alignment: .leading)
+            }
         } else {
             Label(alt.isEmpty ? source : alt, systemImage: "photo").font(.system(size: 13)).foregroundStyle(.secondary)
         }
     }
 
     private var image: NSImage? {
+        if RemoteImageURL.isURL(source) {
+            return RemoteImages.shared.entry(for: source).image
+        }
         // Raycast's size hints (`?raycast-width=…`) don't name a different file.
         var path = source.components(separatedBy: "?")[0]
         if path.hasPrefix("file://") { path = URL(string: path)?.path ?? path }
         let file: URL
         if path.hasPrefix("/") || path.hasPrefix("~") {
             file = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-        } else if let assets, !path.contains("://") {
+        } else if let assets {
             file = assets.appendingPathComponent(path.removingPercentEncoding ?? path)
         } else {
             return nil

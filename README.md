@@ -80,6 +80,12 @@ When an app doesn't share its selection through Accessibility (often browsers an
 
 Secure text fields, such as passwords, never give their text.
 
+### Images from the web
+
+fudge makes no network connections of its own: no updater, telemetry or crash reporting. The exception is the images extensions show: when an extension uses an `https://` image (an icon, or an image in markdown), fudge downloads it on the extension's behalf, without cookies or credentials, and keeps it in `~/Library/Application Support/fudge/image-cache/` (up to 200 MB). A downloaded image is reused for a day, then checked for changes the next time it's shown.
+
+Loading an image tells the image's host your IP address and when you looked, as in a browser. Markdown that shows other people's content, such as issues or emails, can carry tracking images, as it can in Raycast or in a mail app that loads images. fudge doesn't load `http://` images, or images from your Mac (`localhost`) or the local network (`.local` names and private addresses).
+
 ## License
 
 Copyright (C) 2026 Morten Jakobsen.
