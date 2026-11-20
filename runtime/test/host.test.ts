@@ -118,6 +118,18 @@ test("getPreferenceValues returns the preferences sent with the launch", async (
     await host.close();
 });
 
+test("a toast's action runs when the app sends toastAction", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "t", entry: fixture("toast-action.cjs"), mode: "view" });
+    const rpc = await host.next(of("t", "rpc"));
+    assert.equal(rpc.method, "toast.show");
+    host.send({ type: "rpcResult", session: "t", id: rpc.id, result: null });
+    const toast = (rpc.params as { id: number }).id;
+    host.send({ type: "toastAction", session: "t", toast, action: "primary" });
+    assert.equal((await host.next(of("t", "log"))).message, "undo: Saved");
+    await host.close();
+});
+
 test("the extension and the renderer share one React", async () => {
     const host = start();
     host.send({ type: "launch", session: "r", entry: fixture("same-react.cjs"), mode: "view" });

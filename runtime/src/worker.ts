@@ -10,6 +10,7 @@ import { parentPort, workerData } from "node:worker_threads";
 import React, { createElement, type FunctionComponent } from "react";
 import * as jsxRuntime from "react/jsx-runtime";
 import { placeholderEnvironment, setLaunchContext, type LaunchEnvironment } from "./api/launch.ts";
+import { Toast } from "./api/feedback.ts";
 import { createApiModule } from "./api/module.ts";
 import { NavigationRoot, type NavigationHandle } from "./api/navigation.ts";
 import { connect, settle } from "./bridge.ts";
@@ -92,6 +93,13 @@ port.on("message", (message: HostToWorker) => {
             return;
         case "rpcResult":
             settle(message.id, message.result, message.error);
+            return;
+        case "toastAction":
+            try {
+                Toast.runAction(message.toast, message.action);
+            } catch (error) {
+                report(error, false);
+            }
             return;
     }
 });

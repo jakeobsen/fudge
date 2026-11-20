@@ -127,9 +127,12 @@ public enum AppMessage: Sendable, Equatable, Encodable {
     case pop(session: String)
     case unload(session: String)
     case rpcResult(session: String, id: Int, result: JSONValue?, error: String?)
+    /// The user picked a toast's primary or secondary action.
+    case toastAction(session: String, toast: Int, action: String)
 
     enum Keys: String, CodingKey {
         case type, id, session, entry, mode, launchProps, preferences, environment, node, path, args, result, error
+        case toast, action
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -164,6 +167,11 @@ public enum AppMessage: Sendable, Equatable, Encodable {
             try container.encode(id, forKey: .id)
             try container.encodeIfPresent(result, forKey: .result)
             try container.encodeIfPresent(error, forKey: .error)
+        case .toastAction(let session, let toast, let action):
+            try container.encode("toastAction", forKey: .type)
+            try container.encode(session, forKey: .session)
+            try container.encode(toast, forKey: .toast)
+            try container.encode(action, forKey: .action)
         }
     }
 }
