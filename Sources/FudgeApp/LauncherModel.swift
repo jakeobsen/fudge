@@ -289,13 +289,21 @@ final class LauncherModel {
             guard newValue != searchText else { return }
             switch screen {
             case .command(var command):
+                let typed = Timing.now()
+                Timing.log("app.typed", "text=\(newValue)")
                 command.searchText = newValue
                 command.searchField.edit(.string(newValue))
                 refreshList(&command, selectFirst: true)
+                let refreshed = Timing.now()
                 command.selectFirstOnRender = command.view.map { !ListContent.filtersLocally($0) } ?? false
                 screen = .command(command)
+                Timing.log(
+                    "app.typed.local",
+                    "refreshList=\(String(format: "%.1f", refreshed - typed)) assign=\(Timing.ms(since: refreshed)) items=\(command.list?.items.count ?? -1)"
+                )
                 commandSearchChanged(command)
                 reportSelection()
+                if Timing.enabled { DispatchQueue.main.async { Timing.log("app.drawn") } }
             case .root, .failure:
                 if case .failure = screen { screen = .root }
                 // An alias and a space hand the rest of the query to that command's first argument (as in Raycast).
@@ -1659,6 +1667,7 @@ final class LauncherModel {
             status = "Running \(title)…"
             if !launchOrigin.clearsRootSearchWhenFinished { hotkeySessions.insert(session) }
         }
+        Timing.log("app.launch")
         do {
             try host.send(
                 .launch(
@@ -1915,6 +1924,12 @@ final class LauncherModel {
         switch message {
         case .render(let session, let view, let depth):
             guard case .command(var command) = screen, command.session == session else { return }
+            let renderStart = Timing.now()
+            defer {
+                Timing.log(
+                    "app.render", "total=\(Timing.ms(since: renderStart)) items=\(command.list?.items.count ?? -1)")
+                if Timing.enabled { DispatchQueue.main.async { Timing.log("app.drawn") } }
+            }
             if depth != command.depth {
                 // A view was pushed or popped. Each view has its own search text and selection.
                 if depth > command.depth {
@@ -1944,11 +1959,15 @@ final class LauncherModel {
                     command.selectFirstOnRender = true
                 }
             }
+            let refreshStart = Timing.now()
             refreshList(&command, selectFirst: command.selectFirstOnRender)
+            Timing.log("app.refreshList", "ms=\(Timing.ms(since: refreshStart))")
             // Results for a new search may come after a loading render or two.
             if command.list?.isLoading != true { command.selectFirstOnRender = false }
             refreshForm(&command)
+            let assignStart = Timing.now()
             screen = .command(command)
+            Timing.log("app.assign", "ms=\(Timing.ms(since: assignStart))")
             syncDropdownPanel()
             syncDatePanel()
             reportSelection()

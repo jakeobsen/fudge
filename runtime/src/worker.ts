@@ -16,6 +16,8 @@ import { NavigationRoot, type NavigationHandle } from "./api/navigation.ts";
 import { connect, settle } from "./bridge.ts";
 import { revive, type CommandMode, type HostToWorker, type LaunchProps, type WorkerMessage } from "./protocol.ts";
 import { createRoot, StaleCallbackError, type Root } from "./renderer/root.ts";
+import { timing } from "./timing.ts";
+timing("worker.start");
 
 export type WorkerData = {
     entry: string;
@@ -75,6 +77,7 @@ const navigation: NavigationHandle = { current: null };
 port.on("message", (message: HostToWorker) => {
     switch (message.type) {
         case "event": {
+            timing("worker.event", message.path.join("."));
             // Every event is answered with one `eventSettled`, so the app knows when no handler is running. It
             // comes after the render the handler caused: React renders a state update on a later turn (its
             // scheduler's setImmediate, queued before this one), and the root sends the snapshot a turn after that.
@@ -126,6 +129,7 @@ port.on("message", (message: HostToWorker) => {
 
 try {
     const exported = Module.createRequire(entry)(entry) as unknown;
+    timing("worker.bundle-loaded");
     const command =
         typeof exported === "function" ? exported : (exported as { default?: unknown } | null | undefined)?.default;
     if (typeof command !== "function") throw new Error(`${entry} has no default export to run`);

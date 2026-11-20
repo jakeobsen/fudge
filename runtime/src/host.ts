@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { parseAppMessage, type AppMessage, type HostMessage, type HostToWorker, type WorkerMessage } from "./protocol.ts";
 import type { WorkerData } from "./worker.ts";
+import { now, timing } from "./timing.ts";
 
 // stdout carries the protocol and nothing else.
 console.log = console.error;
@@ -26,7 +27,13 @@ type Session = { worker: Worker; done: boolean; unloadTimer?: NodeJS.Timeout };
 const sessions = new Map<string, Session>();
 
 function send(message: HostMessage): void {
-    process.stdout.write(`${JSON.stringify(message)}\n`);
+    const t0 = now();
+    const line = JSON.stringify(message);
+    const t1 = now();
+    process.stdout.write(`${line}\n`);
+    if (message.type === "render") {
+        timing("host.render", `stringify=${(t1 - t0).toFixed(1)} write=${(now() - t1).toFixed(1)} bytes=${line.length}`);
+    }
 }
 
 function launch(message: Extract<AppMessage, { type: "launch" }>): void {
@@ -50,6 +57,7 @@ function launch(message: Extract<AppMessage, { type: "launch" }>): void {
     eachLine(worker.stderr, (line) => send({ session: id, type: "log", level: "error", message: line }));
 
     worker.on("message", (reply: WorkerMessage) => {
+        if (reply.type === "render") timing("host.received");
         if (session.done) return;
         send({ ...reply, session: id });
         if (reply.type === "exit") finish(id, session);
