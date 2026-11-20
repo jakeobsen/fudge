@@ -26,7 +26,8 @@ enum ExtensionImages {
     static func resolve(_ json: JSONValue?, assets: URL?, dark: Bool) -> ResolvedImage? {
         switch json {
         case .string(let source):
-            return content(for: source, assets: assets, dark: dark).map { ResolvedImage(content: $0) }
+            return (content(for: source, assets: assets, dark: dark) ?? placeholder(for: source))
+                .map { ResolvedImage(content: $0) }
         case .object(let object):
             if case .string(let path) = object["fileIcon"] {
                 return ResolvedImage(content: .bitmap(fileIcon(path)))
@@ -44,7 +45,7 @@ enum ExtensionImages {
             if resolved == nil, case .string(let fallback) = object["fallback"] {
                 resolved = content(for: fallback, assets: assets, dark: dark)
             }
-            guard let resolved else { return nil }
+            guard let resolved = resolved ?? source.flatMap(placeholder) else { return nil }
             let mask: String? = if case .string(let mask) = object["mask"] { mask } else { nil }
             return ResolvedImage(content: resolved, tint: ExtensionColor(json: object["tintColor"]), mask: mask)
         default:
@@ -70,10 +71,17 @@ enum ExtensionImages {
         return image
     }
 
+    /// Shown where a remote image is still loading, or failed with no `fallback`.
+    private static func placeholder(for source: String) -> ResolvedImage.Content? {
+        RemoteImageURL.isURL(source) ? .symbol("photo") : nil
+    }
+
     private static func content(for source: String, assets: URL?, dark: Bool) -> ResolvedImage.Content? {
-        if source.hasPrefix("http://") || source.hasPrefix("https://") {
-            // Remote images aren't loaded yet; show that one belongs here.
-            return .symbol("photo")
+        if RemoteImageURL.isURL(source) {
+            // The placeholder shows while it loads; a failed one gives way to the fallback.
+            let entry = RemoteImages.shared.entry(for: source)
+            if let image = entry.image { return .bitmap(image) }
+            return entry.failed ? nil : .symbol("photo")
         }
         if source.hasPrefix("/") || source.hasPrefix("~") {
             return bitmap(at: URL(fileURLWithPath: (source as NSString).expandingTildeInPath)).map { .bitmap($0) }
