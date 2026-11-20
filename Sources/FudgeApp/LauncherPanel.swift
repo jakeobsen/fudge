@@ -61,8 +61,11 @@ final class LauncherPanel: NSPanel {
         allowsOffscreen ? frameRect : super.constrainFrameRect(frameRect, to: screen)
     }
 
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { true }
+    /// Set in snapshot mode: the panel never takes the keyboard, so a snapshot can't catch anyone's typing.
+    var refusesKey = false
+
+    override var canBecomeKey: Bool { !refusesKey }
+    override var canBecomeMain: Bool { !refusesKey }
 
     override func cancelOperation(_ sender: Any?) {
         onEscape()
