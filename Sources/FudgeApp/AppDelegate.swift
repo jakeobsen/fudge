@@ -26,10 +26,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel = LauncherPanel(content: LauncherView(model: model))
         settingsModel = SettingsModel(paths: paths)
         settingsModel.launcherHotkey = FudgeSettings.load(from: paths.settingsFile).launcherHotkey
+        // Snapshots and tests never register fudge as a login item; only the real app talks to the system.
+        settingsModel.loginItem =
+            Snapshot.isRequested(CommandLine.arguments)
+            ? FixedLoginItem(Snapshot(arguments: CommandLine.arguments)?.loginItem ?? .notRegistered)
+            : SMAppServiceLoginItem()
         settingsWindow = SettingsWindowController(model: settingsModel)
         model.hide = { [weak self] in self?.hidePanel() }
         model.show = { [weak self] in self?.showPanel() }
         model.openSettings = { [weak self] name in self?.settingsWindow.show(extension: name) }
+        settingsModel.clearSearchHistory = { [weak self] in self?.model.clearHistory() }
         model.showHUD = { [weak self] title in self?.hud.show(title) }
         model.isVisible = { [weak self] in self?.panel.isVisible ?? false }
         model.confirm = { [weak self] request in await self?.confirm(request) ?? false }
@@ -242,7 +248,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// `--search <text>` types into its search field, `--dropdown <value>` picks a value in its search bar dropdown,
 /// `--actions` presses ⌘K, and `--open-dropdown` presses ⌘P, or in a Form opens its first Dropdown (`--open-tags`: its
 /// first TagPicker).
-/// `--snapshot <file.png> --settings [<extension>]` renders the Settings window instead.
+/// `--snapshot <file.png> --settings [<extension>]` renders the Settings window instead, with a fake login item
+/// whose status `--login-item <status>` sets (`enabled`, `requiresApproval`, `notRegistered`, `notFound`).
 /// For checking the layout without looking at the screen.
 @MainActor
 struct Snapshot {
@@ -256,6 +263,8 @@ struct Snapshot {
     let openTags: Bool
     let settings: Bool
     let settingsExtension: String?
+    /// `--login-item <status>`: what the General page's Open at Login shows (`notRegistered` by default).
+    let loginItem: LoginItemStatus
 
     init?(arguments: [String]) {
         guard let index = arguments.firstIndex(of: "--snapshot"), index + 1 < arguments.count else { return nil }
@@ -271,6 +280,7 @@ struct Snapshot {
         actions = arguments.contains("--actions")
         openDropdown = arguments.contains("--open-dropdown")
         openTags = arguments.contains("--open-tags")
+        loginItem = value("--login-item").flatMap(LoginItemStatus.init(rawValue:)) ?? .notRegistered
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1
