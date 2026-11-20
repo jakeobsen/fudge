@@ -178,8 +178,7 @@ private struct RootResults: View {
                                 selected: item.id == model.selectedItem
                             )
                             .id(item.id)
-                            .onTapGesture(count: 2) { model.open(item) }
-                            .onTapGesture { model.selectedItem = item.id }
+                            .onRowClick(select: { model.selectedItem = item.id }, open: { model.activate() })
                         }
                     }
                     .padding(8)
@@ -192,6 +191,17 @@ private struct RootResults: View {
     private func kind(of item: RootItem) -> String {
         if case .application = item.kind { return "Application" }
         return "Command"
+    }
+}
+
+extension View {
+    /// A click selects the row at once; the second click of a double-click also opens it. A double-tap gesture
+    /// beside a single-tap one would hold every single click until the double-click interval has passed.
+    func onRowClick(select: @escaping () -> Void, open: @escaping () -> Void) -> some View {
+        onTapGesture {
+            select()
+            if NSApp.currentEvent?.clickCount == 2 { open() }
+        }
     }
 }
 
