@@ -230,6 +230,21 @@ final class SettingsModel {
         }
     }
 
+    // MARK: - Show fudge on, and Escape key behavior
+
+    var showOnScreen: ShowOnScreen { fudgeSettings.showOnScreen }
+    var escapeBehavior: EscapeBehavior { fudgeSettings.escapeBehavior }
+
+    func setShowOnScreen(_ setting: ShowOnScreen) {
+        guard setting != showOnScreen, change({ $0.showOnScreen = setting }) else { return }
+        _ = applyHotkeys()  // which applies settings.json to the launcher too
+    }
+
+    func setEscapeBehavior(_ behavior: EscapeBehavior) {
+        guard behavior != escapeBehavior, change({ $0.escapeBehavior = behavior }) else { return }
+        _ = applyHotkeys()
+    }
+
     // MARK: - Pop to Root Search
 
     /// How long the panel stays hidden before it opens on root search again (`resetAfterSeconds`).
