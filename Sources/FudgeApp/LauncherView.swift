@@ -38,23 +38,31 @@ struct LauncherView: View {
                     .foregroundStyle(.secondary)
                     .font(.system(size: 14, weight: .semibold))
             }
-            TextField(model.placeholder, text: $model.searchText)
-                .textFieldStyle(.plain)
-                .font(.system(size: 20))
-                .focused($focus, equals: .search)
-                .onSubmit { model.activate() }
-                .onKeyPress(.upArrow) {
-                    model.moveSelection(by: -1)
-                    return .handled
-                }
-                .onKeyPress(.downArrow) {
-                    model.moveSelection(by: 1)
-                    return .handled
-                }
-                .onKeyPress(.escape) {
-                    model.escape()
-                    return .handled
-                }
+            if let title = model.viewTitle {
+                // Detail and Form have no search field; their title takes its place.
+                Text(title)
+                    .font(.system(size: 15, weight: .medium))
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                TextField(model.placeholder, text: $model.searchText)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 20))
+                    .focused($focus, equals: .search)
+                    .onSubmit { model.activate() }
+                    .onKeyPress(.upArrow) {
+                        model.moveSelection(by: -1)
+                        return .handled
+                    }
+                    .onKeyPress(.downArrow) {
+                        model.moveSelection(by: 1)
+                        return .handled
+                    }
+                    .onKeyPress(.escape) {
+                        model.escape()
+                        return .handled
+                    }
+            }
             if let command = model.command, let dropdown = command.list?.dropdown {
                 SearchBarDropdownButton(
                     dropdown: dropdown,
@@ -79,8 +87,14 @@ struct LauncherView: View {
                 FailureView(failure: failure)
             } else if let list = command.list {
                 ListScreen(model: model, command: command, list: list)
+            } else if let form = command.form {
+                FormScreen(model: model, form: form)
+            } else if let view = command.view, view.type == "Detail" {
+                DetailScreen(model: model, view: view, assets: command.assets)
             } else if let view = command.view {
-                CommandContent(view: view, assets: command.assets)
+                Text("fudge can't show a \(view.type) yet.")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ProgressView().controlSize(.small)
             }
@@ -102,7 +116,7 @@ struct LauncherView: View {
             Spacer()
             if let label = primaryLabel {
                 Text(label).foregroundStyle(.primary)
-                KeyCap("↵")
+                KeyCap(model.command == nil ? "↵" : model.primaryKey.description)
             }
             if !model.currentActions.isEmpty {
                 Divider().frame(height: 16)
@@ -176,25 +190,6 @@ private struct RootResults: View {
     private func kind(of item: RootItem) -> String {
         if case .application = item.kind { return "Application" }
         return "Command"
-    }
-}
-
-/// A command's view other than a List. Details render simply here; their full look comes with later work.
-private struct CommandContent: View {
-    let view: UINode
-    let assets: URL?
-
-    var body: some View {
-        switch view.type {
-        case "Detail":
-            ScrollView {
-                MarkdownView(markdown: view.string("markdown") ?? "", assets: assets).padding(20)
-            }
-        default:
-            Text("fudge can't show a \(view.type) yet.")
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
     }
 }
 
