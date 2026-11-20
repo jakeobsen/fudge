@@ -43,15 +43,17 @@ struct GeneralPage: View {
                             .disabled(model.launcherHotkey.sameKeys(as: .default) && !model.launcherHotkeyInUse)
                     }
                 }
+                SettingsPopupRow(
+                    "Pop to Root Search",
+                    selection: Binding(get: { model.resetAfter }, set: { model.setResetAfter($0) }),
+                    options: PanelResetSetting.allCases.map { ($0, $0.title) },
+                    help: "How long after the window closes fudge goes back to root search."
+                )
             }
             Section("Calculator") {
                 Toggle(isOn: Binding(get: { model.currencyRates }, set: { model.setCurrencyRates($0) })) {
-                    Text("Currency conversion: download exchange rates from the European Central Bank once a day")
-                    Text(
-                        "Apart from the images extensions show, this is the only connection fudge makes on its own. It "
-                            + "downloads one public file; like any "
-                            + "download, the server sees your IP address, and nothing else is sent."
-                    )
+                    Text("Currency conversion")
+                    Text("fudge downloads exchange rates from the European Central Bank once a day.")
                 }
                 .toggleStyle(.checkbox)
                 Picker(
@@ -65,6 +67,13 @@ struct GeneralPage: View {
                     Text("Number format")
                     Text("How the calculator reads the numbers you type, and writes its answers.")
                 }
+            }
+            Section("Extension Store") {
+                Toggle(isOn: Binding(get: { model.extensionStore }, set: { model.setExtensionStore($0) })) {
+                    Text("Extension Store: browse and install extensions from github.com/raycast/extensions")
+                    Text("Off until you turn it on. Turning it on explains what it downloads and asks you first.")
+                }
+                .toggleStyle(.checkbox)
             }
             Section("Search") {
                 LabeledContent {
@@ -165,6 +174,37 @@ private struct LauncherHotkeyCell: View {
                 Text(message).font(.system(size: 10)).foregroundStyle(.red)
             } else if model.launcherHotkeyInUse {
                 Text("In use by another app").font(.system(size: 10)).foregroundStyle(.red)
+            }
+        }
+    }
+}
+
+/// A General-page row as Raycast lays it out: a label, a popup of choices, and an ⓘ whose tooltip explains it.
+struct SettingsPopupRow<Value: Hashable>: View {
+    let title: String
+    @Binding var selection: Value
+    let options: [(value: Value, title: String)]
+    let help: String
+
+    init(_ title: String, selection: Binding<Value>, options: [(Value, String)], help: String) {
+        self.title = title
+        _selection = selection
+        self.options = options.map { (value: $0.0, title: $0.1) }
+        self.help = help
+    }
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: 6) {
+                Picker(title, selection: $selection) {
+                    ForEach(options, id: \.value) { option in Text(option.title).tag(option.value) }
+                }
+                .labelsHidden()
+                .fixedSize()
+                Image(systemName: "info.circle")
+                    .foregroundStyle(.secondary)
+                    .help(help)
+                    .accessibilityLabel(help)
             }
         }
     }

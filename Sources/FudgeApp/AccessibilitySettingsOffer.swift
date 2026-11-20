@@ -35,7 +35,8 @@ final class AccessibilitySettingsOffer {
             }
             return
         }
-        NSApp.activate()
+        // A modal behind another app would block fudge until found; this follows a refused paste or selection.
+        NSApp.activateFromUserAction()
         Self.answer(alert.runModal())
     }
 

@@ -73,6 +73,15 @@ app: build
 		|| { cat build/actool.log; printf 'actool did not write %s (it needs Xcode 26 or later; see its output above, also in build/actool.log)\n' '$(APP)/Contents/Resources/Assets.car'; exit 1; }
 	@plutil -replace CFBundleShortVersionString -string '$(VERSION)' '$(APP)/Contents/Info.plist'
 	@cp runtime/dist/host.js runtime/dist/worker.js '$(APP)/Contents/Resources/runtime/'
+	@# The Extension Store is an extension bundled with the app, built like any other into a scratch folder and
+	@# moved to Contents/Resources/store-extension. Its source is runtime/store-extension; no source, no store.
+	@if [ -f runtime/store-extension/package.json ]; then \
+		scratch='$(abspath build)/store-extension-build' && rm -rf "$$scratch" && mkdir -p "$$scratch" && \
+		FUDGE_ESBUILD='$(abspath $(ESBUILD))' '$(SWIFT_BIN)/fudge' build runtime/store-extension --into "$$scratch" \
+			>/dev/null && \
+		mv "$$scratch"/* '$(APP)/Contents/Resources/store-extension' && rm -rf "$$scratch" \
+		|| { echo 'make app: building runtime/store-extension failed'; exit 1; }; \
+	fi
 	@# Each failure exits explicitly: make 3.81, the one macOS ships, ignores .SHELLFLAGS. No timestamp, so signing
 	@# never goes over the network. An identity's errors stay visible, and the last line names it as listed.
 	@identity='$(SIGN_IDENTITY)'; \
@@ -107,8 +116,14 @@ run: app
 		alive=; for pid in $$pids; do kill -0 $$pid 2>/dev/null && alive=$$pid; done; \
 		[ -z "$$alive" ] && break; sleep 0.1; \
 	done; \
-	[ -z "$$alive" ] || { printf 'the running Fudge did not quit\n'; exit 1; }
-	@open '$(APP)'
+	[ -z "$$alive" ] || { printf 'the running Fudge did not quit\n'; exit 1; }; \
+	again=$$($(USER_FUDGE_PIDS)); \
+	[ -z "$$again" ] || { printf 'another Fudge started meanwhile (pid %s); quit it, then run make run again\n' \
+		"$$again"; exit 1; }
+	@# -n starts a new instance. Without it, LaunchServices hands the open to any live Fudge with the same bundle
+	@# id, such as a --snapshot run from another checkout, and fails with -600, leaving no fudge running. The user's
+	@# own fudge was quit, and checked for again, just above, so -n can't start a second copy of it.
+	@open -n '$(APP)'
 
 install-extension: app
 	@test -n '$(DIR)' || { printf 'usage: make install-extension DIR=<folder>\n'; exit 2; }
