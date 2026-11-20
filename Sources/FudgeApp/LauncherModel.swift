@@ -415,10 +415,10 @@ final class LauncherModel {
         return ActionPanelReader.sections(of: list.emptyView?.actions ?? view.node("actions"))
     }
 
-    /// Reads the top view's List again, after it or the search text changed, and keeps the selection on the
+    /// Reads the top view's List or Grid again, after it or the search text changed, and keeps the selection on the
     /// same item where it can.
     private func refreshList(_ command: inout CommandScreen, selectFirst: Bool) {
-        guard let view = command.view, view.type == "List" else {
+        guard let view = command.view, ListContent.viewTypes.contains(view.type) else {
             command.list = nil
             command.dropdown = nil
             return
@@ -1075,16 +1075,39 @@ final class LauncherModel {
             guard !rows.isEmpty else { return }
             let index = rows.firstIndex { $0 == selectedItem } ?? 0
             selectedItem = rows[max(0, min(rows.count - 1, index + offset))]
-        case .command(var command):
-            guard let rows = command.list?.items, !rows.isEmpty else { return }
-            let index = rows.firstIndex { $0.id == command.selectedNode } ?? 0
-            command.selectedNode = rows[max(0, min(rows.count - 1, index + offset))].id
-            screen = .command(command)
-            reportSelection()
-            if let node = command.selectedNode { loadMoreIfNeeded(near: node) }
+        case .command(let command):
+            guard let list = command.list, !list.items.isEmpty else { return }
+            let index = list.items.firstIndex { $0.id == command.selectedNode } ?? 0
+            if let sections = list.gridSections {
+                selectListItem(at: GridNavigation.target(from: index, move: offset < 0 ? .up : .down, in: sections))
+            } else {
+                selectListItem(at: max(0, min(list.items.count - 1, index + offset)))
+            }
         case .failure:
             break
         }
+    }
+
+    /// ← or → in a Grid's search field: moves the selection when `GridNavigation.arrowMovesSelection` says so,
+    /// and returns false to leave the key to the field's cursor otherwise (and outside a Grid).
+    func moveGridSelection(_ move: GridNavigation.Move, textLength: Int, selection: (location: Int, length: Int)?)
+        -> Bool
+    {
+        guard let command, let list = command.list, let sections = list.gridSections, !list.items.isEmpty,
+            GridNavigation.arrowMovesSelection(move, textLength: textLength, selection: selection)
+        else { return false }
+        let index = list.items.firstIndex { $0.id == command.selectedNode } ?? 0
+        selectListItem(at: GridNavigation.target(from: index, move: move, in: sections))
+        return true
+    }
+
+    /// Selects the running command's item at `index`, as the arrow keys do.
+    private func selectListItem(at index: Int) {
+        guard var command, let items = command.list?.items, items.indices.contains(index) else { return }
+        command.selectedNode = items[index].id
+        screen = .command(command)
+        reportSelection()
+        if let node = command.selectedNode { loadMoreIfNeeded(near: node) }
     }
 
     /// ↵: open the selected item, or run the selected row's first action.
@@ -1510,7 +1533,7 @@ final class LauncherModel {
             command.view = view
             command.depth = depth
             // The extension can set the search text (`searchText`); echoes of what was typed don't undo typing.
-            if let view, view.type == "List", let controlled = view.string("searchText") {
+            if let view, ListContent.viewTypes.contains(view.type), let controlled = view.string("searchText") {
                 command.searchField.render(controlled: .string(controlled))
                 if case .string(let text) = command.searchField.value, text != command.searchText {
                     command.searchText = text

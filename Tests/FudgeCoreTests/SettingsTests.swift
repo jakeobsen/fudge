@@ -125,3 +125,29 @@ func everyRecordableKeyRoundTrips(text: String, keyCode: UInt32) throws {
     try Data(#"{ "hotkey": 5, "commands": { "a/b": { "alias": 7, "enabled": "no" } } }"#.utf8).write(to: file)
     #expect(FudgeSettings.load(from: file) == FudgeSettings(commands: ["a/b": .init()]))
 }
+
+@Test func theLauncherHotkeyRoundTripsAndItsDefaultIsntWritten() throws {
+    let folder = try Fixtures.temporaryDirectory()
+    let file = folder.appendingPathComponent("settings.json")
+    try Data(#"{ "theme": "dark", "hotkey": "option+space" }"#.utf8).write(to: file)
+    var settings = FudgeSettings.load(from: file)
+    #expect(settings.launcherHotkey == .default)
+
+    settings.launcherHotkey = HotKeySpec.parse("cmd+shift+k")!
+    try settings.save(to: file)
+    #expect(FudgeSettings.load(from: file).launcherHotkey == HotKeySpec.parse("cmd+shift+k")!)
+    var object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+    #expect(object["hotkey"] as? String == "shift+cmd+k")
+    #expect(object["theme"] as? String == "dark", "a key fudge doesn't know is kept")
+
+    settings.launcherHotkey = .default
+    try settings.save(to: file)
+    object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+    #expect(object["hotkey"] == nil, "⌥Space is the default, so it isn't written")
+    #expect(object["theme"] as? String == "dark")
+    #expect(FudgeSettings.load(from: file).launcherHotkey == .default)
+
+    // A value that doesn't parse reads as ⌥Space.
+    try Data(#"{ "hotkey": "hyper+space" }"#.utf8).write(to: file)
+    #expect(FudgeSettings.load(from: file).launcherHotkey == .default)
+}

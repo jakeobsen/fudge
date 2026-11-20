@@ -15,6 +15,8 @@ public final class HotKeyRegistry {
 
     private let registrar: HotKeyRegistering
     public private(set) var launcher: HotKeySpec?
+    /// Whether the system refused `launcher`, usually because another app has it. It's tried again on `resume`.
+    public private(set) var launcherRefused = false
     /// The command hotkeys wanted, by command id, registered or not.
     public private(set) var commands: [String: HotKeySpec] = [:]
     /// Command ids whose hotkey the system refused.
@@ -27,13 +29,29 @@ public final class HotKeyRegistry {
         self.registrar = registrar
     }
 
-    /// Sets the launcher's hotkey. False when the system refuses it.
+    /// Sets the launcher's hotkey; false when the system refuses it. A refused change keeps the old hotkey, which
+    /// is registered again and stays `launcher`. With no old one (at launch), the refused hotkey becomes `launcher`
+    /// anyway, marked `launcherRefused`.
     @discardableResult
-    public func setLauncher(_ spec: HotKeySpec?) -> Bool {
-        if launcher != nil, !isSuspended { registrar.unregister(id: Self.launcherID) }
-        launcher = spec
-        guard let spec, !isSuspended else { return true }
-        return registrar.register(spec, id: Self.launcherID)
+    public func setLauncher(_ spec: HotKeySpec) -> Bool {
+        guard !isSuspended else {
+            launcher = spec
+            return true
+        }
+        let old = launcher
+        if old != nil, !launcherRefused { registrar.unregister(id: Self.launcherID) }
+        if registrar.register(spec, id: Self.launcherID) {
+            launcher = spec
+            launcherRefused = false
+            return true
+        }
+        if let old {
+            launcherRefused = !registrar.register(old, id: Self.launcherID)
+        } else {
+            launcher = spec
+            launcherRefused = true
+        }
+        return false
     }
 
     /// Makes the registered command hotkeys `wanted`, touching only those that changed.
@@ -59,7 +77,7 @@ public final class HotKeyRegistry {
     public func suspend() {
         guard !isSuspended else { return }
         isSuspended = true
-        if launcher != nil { registrar.unregister(id: Self.launcherID) }
+        if launcher != nil, !launcherRefused { registrar.unregister(id: Self.launcherID) }
         for command in commands.keys where !refused.contains(command) {
             if let id = ids[command] { registrar.unregister(id: id) }
         }
@@ -69,7 +87,7 @@ public final class HotKeyRegistry {
     public func resume() {
         guard isSuspended else { return }
         isSuspended = false
-        if let launcher { _ = registrar.register(launcher, id: Self.launcherID) }
+        if let launcher { launcherRefused = !registrar.register(launcher, id: Self.launcherID) }
         refused = []
         for (command, spec) in commands { register(spec, for: command) }
     }
@@ -104,6 +122,54 @@ public enum HotKeyConflict: Sendable, Equatable {
         }
         return nil
     }
+
+    /// Checks `spec` as the launcher's hotkey against the commands'.
+    public static func check(launcher spec: HotKeySpec, commands: [String: HotKeySpec]) -> HotKeyConflict? {
+        guard spec.isAllowed else { return .needsModifier }
+        if let other = commands.filter({ $0.value.sameKeys(as: spec) }).keys.min() { return .command(other) }
+        return nil
+    }
+}
+
+/// What a key press means while a hotkey is being recorded, on the Commands page and the General page alike: Esc
+/// alone cancels, ⌫ or ⌦ alone clears, and anything else is the new hotkey, checked afterwards (`HotKeyConflict`).
+public enum HotKeyRecording: Sendable, Equatable {
+    case cancel
+    case clear
+    case record(HotKeySpec)
+
+    public init(keyCode: UInt32, command: Bool, option: Bool, control: Bool, shift: Bool) {
+        let modified = command || option || control || shift
+        let deletes = [HotKeySpec.keyCodes["delete"], HotKeySpec.keyCodes["forwarddelete"]]
+        if !modified, keyCode == HotKeySpec.keyCodes["escape"] {
+            self = .cancel
+        } else if !modified, deletes.contains(keyCode) {
+            self = .clear
+        } else {
+            self = .record(
+                HotKeySpec(keyCode: keyCode, command: command, option: option, control: control, shift: shift))
+        }
+    }
+
+    /// What it does to the launcher's hotkey, which can't be empty: clearing sets the default ⌥Space instead. A
+    /// command's hotkey wins over a new launcher hotkey, so that one is refused.
+    public func launcherEdit(commands: [String: HotKeySpec]) -> LauncherHotkeyEdit {
+        let spec: HotKeySpec
+        switch self {
+        case .cancel: return .keep
+        case .clear: spec = .default
+        case .record(let recorded): spec = recorded
+        }
+        if let conflict = HotKeyConflict.check(launcher: spec, commands: commands) { return .refused(conflict) }
+        return .set(spec)
+    }
+}
+
+/// A recording's outcome for the launcher's hotkey.
+public enum LauncherHotkeyEdit: Sendable, Equatable {
+    case keep
+    case set(HotKeySpec)
+    case refused(HotKeyConflict)
 }
 
 /// What pressing a command's hotkey does.
