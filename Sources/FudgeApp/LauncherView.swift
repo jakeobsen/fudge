@@ -348,16 +348,27 @@ private struct CalculatorCard: View {
     var body: some View {
         HStack(spacing: 0) {
             side(result.question, label: result.questionLabel, size: 24)
-            // The dividing line, broken around the arrow.
+            // The dividing line, broken around the arrow, and stopping above the footnote.
             VStack(spacing: 10) {
                 Rectangle().fill(Color.primary.opacity(0.15)).frame(width: 1)
                 Image(systemName: "arrow.right").font(.system(size: 18, weight: .medium)).foregroundStyle(.secondary)
                 Rectangle().fill(Color.primary.opacity(0.15)).frame(width: 1)
             }
+            .padding(.bottom, result.footnote == nil ? 0 : 22)
             .frame(width: 32)
             side(result.answer, label: result.answerLabel, size: 28)
         }
         .frame(height: 118)
+        // How fresh a currency conversion's rates are, small and grey under the arrow.
+        .overlay(alignment: .bottom) {
+            if let footnote = result.footnote {
+                Text(footnote)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.bottom, 8)
+            }
+        }
         .background(Color.primary.opacity(selected ? 0.13 : 0.07), in: RoundedRectangle(cornerRadius: 12))
         .contentShape(Rectangle())
     }
