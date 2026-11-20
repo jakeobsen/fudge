@@ -14,6 +14,18 @@ SWIFT_BIN  = $(shell swift build -c $(CONFIG) --show-bin-path)
 # esbuild's native binary, installed with the extension host's dependencies.
 ESBUILD    = $(firstword $(wildcard runtime/node_modules/@esbuild/darwin-*/bin/esbuild))
 
+# The identity `make app` signs with: a name or SHA-1 hash that `security find-identity -v -p codesigning` lists, or -
+# for ad hoc. macOS ties Accessibility and Automation grants to the signature, and an ad hoc one changes with every
+# build. The default is "fudge local signing", else the first "Apple Development:" identity, else ad hoc (CI and
+# releases have neither). It's picked by hash, so two certificates with the same name can't make codesign refuse
+# the name as ambiguous. See the README.
+# (Every parenthesis in the awk program is balanced: make counts them to find the end of $(shell).)
+SIGN_IDENTITY ?= $(shell security find-identity -v -p codesigning 2>/dev/null | awk -F'"' \
+	'{ split($$1, f, " ") } length(f[2]) == 40 && f[2] ~ /^[0-9A-F]+$$/ { \
+		if ($$2 == "fudge local signing" && local == "") local = f[2]; \
+		else if (index($$2, "Apple Development: ") == 1 && dev == "") dev = f[2] } \
+	END { print (local != "" ? local : (dev != "" ? dev : "-")) }')
+
 # The @raycast/api release whose type definitions live in runtime/vendor/raycast-api.
 RAYCAST_API_VERSION ?= 2.13.1
 
@@ -23,7 +35,8 @@ help:
 	@printf 'fudge — a keyboard launcher for macOS, built to run Raycast extensions\n\n'
 	@printf 'Usage: make <target>\n\n'
 	@printf '  help           Show this help (default).\n'
-	@printf '  app            Build %s (CONFIG=debug|release, now: %s).\n' '$(APP)' '$(CONFIG)'
+	@printf '  app            Build %s (CONFIG=debug|release, now: %s). Signs with SIGN_IDENTITY: by default\n' '$(APP)' '$(CONFIG)'
+	@printf '                 "fudge local signing", else an Apple Development identity, else ad hoc (-). See README.md.\n'
 	@printf '  run            Build the app and open it, quitting a running copy first.\n'
 	@printf '  install-extension DIR=<folder>  Build the app, then compile and install the extension in <folder>.\n'
 	@printf '  build          Build the Swift targets and the extension host.\n'
@@ -60,15 +73,39 @@ app: build
 		|| { cat build/actool.log; printf 'actool did not write %s (it needs Xcode 26 or later; see its output above, also in build/actool.log)\n' '$(APP)/Contents/Resources/Assets.car'; exit 1; }
 	@plutil -replace CFBundleShortVersionString -string '$(VERSION)' '$(APP)/Contents/Info.plist'
 	@cp runtime/dist/host.js runtime/dist/worker.js '$(APP)/Contents/Resources/runtime/'
-	@codesign --force --sign - '$(APP)'/Contents/Helpers/* 2>/dev/null
-	@codesign --force --sign - '$(APP)' 2>/dev/null
-	@printf '→ built %s (%s, %s)\n' '$(APP)' '$(VERSION)' '$(CONFIG)'
+	@# Each failure exits explicitly: make 3.81, the one macOS ships, ignores .SHELLFLAGS. No timestamp, so signing
+	@# never goes over the network. An identity's errors stay visible, and the last line names it as listed.
+	@identity='$(SIGN_IDENTITY)'; \
+	if [ "$$identity" = - ]; then \
+		codesign --force --sign - '$(APP)'/Contents/Helpers/* 2>/dev/null && codesign --force --sign - '$(APP)' 2>/dev/null && \
+		signed='ad hoc'; \
+	else \
+		name=$$(security find-identity -v -p codesigning 2>/dev/null | \
+			awk -F'"' -v id="$$identity" '{ split($$1, f, " ") } f[2] == id || $$2 == id { print $$2; exit }'); \
+		{ codesign --force --timestamp=none --sign "$$identity" '$(APP)'/Contents/Helpers/* && \
+			codesign --force --timestamp=none --sign "$$identity" '$(APP)'; } || \
+			{ printf 'codesign could not sign with "%s" (see its error above)\n' "$${name:-$$identity}"; exit 1; }; \
+		signed="with $${name:-$$identity}"; \
+	fi && \
+	printf '→ built %s (%s, %s, signed %s)\n' '$(APP)' '$(VERSION)' '$(CONFIG)' "$$signed"
+
+# The user's fudge: Fudge processes launched as the app, by LaunchServices (their parent is launchd), with no
+# arguments. `--snapshot` runs, key probes and test harnesses that agents start from a shell are left alone.
+USER_FUDGE_PIDS = for pid in $$(pgrep -x Fudge); do \
+		[ "$$(ps -o ppid= -p $$pid | tr -d ' ')" = 1 ] && [ "$$(ps -o args= -p $$pid)" = "$$(ps -o comm= -p $$pid)" ] \
+			&& echo $$pid; \
+	done; true
 
 run: app
-	@pkill -x Fudge 2>/dev/null || true
-	@# open hands off to a Fudge that's still quitting and fails (-600), so wait for it to exit.
-	@for _ in $$(seq 50); do pgrep -x Fudge >/dev/null || break; sleep 0.1; done
-	@! pgrep -x Fudge >/dev/null || { printf 'the running Fudge did not quit\n'; exit 1; }
+	@# Quit the user's fudge and wait for exactly those processes: open hands off to a Fudge that's still quitting
+	@# and fails (-600).
+	@pids=$$($(USER_FUDGE_PIDS)); \
+	[ -z "$$pids" ] || kill $$pids 2>/dev/null; \
+	for _ in $$(seq 50); do \
+		alive=; for pid in $$pids; do kill -0 $$pid 2>/dev/null && alive=$$pid; done; \
+		[ -z "$$alive" ] && break; sleep 0.1; \
+	done; \
+	[ -z "$$alive" ] || { printf 'the running Fudge did not quit\n'; exit 1; }
 	@open '$(APP)'
 
 install-extension: app
