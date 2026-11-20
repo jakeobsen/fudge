@@ -46,6 +46,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        SystemCalls.accessibilitySettingsOffer = AccessibilitySettingsOffer(
+            panel: panel, restoreKeyboard: { [weak self] in self?.model.restoreKeyboard() })
+
         // ⌘K, ⌘↵ and the extensions' shortcuts, before the search field sees them.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let pressed = Self.shortcut(for: event) else { return event }
