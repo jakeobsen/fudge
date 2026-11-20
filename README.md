@@ -50,21 +50,29 @@ Release builds are signed ad hoc. Until fudge has a Developer ID, you grant its 
 
 Open fudge with ⌥Space, type to search applications and extension commands, and press ↵. Esc goes back, then hides the window.
 
-To use another shortcut, put it in `~/Library/Application Support/fudge/settings.json`:
+What the fudge menu bar menu does is in root search too: "fudge Settings", **Reload Extensions** (reads the extensions and applications again) and **Quit fudge** (asks first, since fudge's hotkeys stop working until you open it again).
 
-```json
-{ "hotkey": "cmd+space" }
-```
-
-Shortcuts are modifiers (`cmd`, `option`, `ctrl`, `shift`) plus a key, joined with `+`. An F-key may stand alone (`f5`).
+To use another shortcut, open **Settings…** on the **General** page, click the keys next to **Launcher hotkey**, and press the new shortcut. Esc cancels. A shortcut needs ⌘, ⌥ or ⌃, unless it's an F-key. The launcher always has a hotkey, so ⌫ (or **Reset to ⌥Space**) puts ⌥Space back. fudge refuses a shortcut that a command already has, and keeps the old one when another app has the new one. If another app already holds the launcher's hotkey when fudge starts, the General page says so, and the menu bar menu's **Open fudge** still works.
 
 ### Command hotkeys
 
 Any command can have its own hotkey. Open **Settings…** on the **Commands** page, click **Record Hotkey** next to the command, and press the shortcut. Esc cancels, and ⌫ removes it. A hotkey needs ⌘, ⌥ or ⌃, unless it's an F-key. Pressing it anywhere opens the command as root search would: a view command shows the fudge window, a no-view command just runs, and a command with a required argument shows root search with that field ready. Pressing a view command's hotkey again while it's on screen hides the window.
 
-fudge refuses a shortcut that's its own (⌥Space) or another command's, and one another app has registered. That last check is best-effort: macOS doesn't report system shortcuts such as ⌘Space or ⌃↑, so one of those can be recorded but never fire. Hotkeys are kept in `settings.json` under `commands`, e.g. `{ "commands": { "scratch/scratch-folders": { "hotkey": "option+s" } } }`. fudge keeps anything else you put in that file.
+fudge refuses a shortcut that's the launcher's or another command's, and one another app has registered. That last check is best-effort: macOS doesn't report system shortcuts such as ⌘Space or ⌃↑, so one of those can be recorded but never fire.
+
+### Aliases and turning commands off
+
+On the same page, a command can have an **Alias**: a short word such as `sf`. Click the Alias cell, type it, and press ↵ (Esc puts back what was there, and an empty alias removes it). An alias is 1 to 32 characters with no spaces, and two commands can't share one (letter case doesn't count). Typing the alias in root search puts its command first, above a calculator result. For a command with arguments, typing the alias and a space moves to its first argument field, and the rest of what you type goes there.
+
+Untick **Enabled** to turn a command off, or a whole extension. A command that's off isn't in root search, its hotkey doesn't fire, and other extensions can't launch it; its alias and hotkey are kept for when you turn it back on.
 
 **Settings…** in the fudge menu bar menu, ⌘, in the fudge window, and "fudge Settings" in root search open the Settings window on its **General** page. Extensions' preferences are in the same window, under each extension. To go straight to a command's extension, select the command and press ⌘⇧, (or ⌘K, then **Configure Extension**). A command that needs a preference you haven't set opens that window instead of running.
+
+### Open at Login and search history
+
+fudge doesn't start at login until you turn on **Open at Login** at the top of **Settings… → General**. macOS then shows a "Login item added" notification, and lists fudge under **System Settings → General → Login Items**, where you can also turn it off; the switch shows what's set there. If macOS asks you to allow it first, the page says so and **Open Login Items** takes you there. The login item is tied to where the app is, so after moving fudge (to `/Applications`, say), turn Open at Login off and on again.
+
+Root search ranks what you open often first. **Clear Search History…** on the same page makes it forget, after asking.
 
 ### Calculator and currency
 

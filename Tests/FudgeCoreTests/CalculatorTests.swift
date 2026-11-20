@@ -74,6 +74,59 @@ func arithmeticValues(_ query: String, _ value: Double) throws {
     #expect(try #require(calculate("1/10^6", enUS)).answer == "0.000001")
 }
 
+@Test func theCardNeverRoundsTheIntegerPartAndTheCopyKeepsFifteenDigits() throws {
+    let us = try #require(calculate("123456789012.5*1", enUS))
+    #expect(us.answer == "123,456,789,013", "12 digits: the integer part, rounded in the fraction")
+    #expect(us.copyText == "123456789012.5")
+    #expect(us.answerLabel.hasSuffix("Seven Hundred Eighty-Nine Thousand Thirteen"), "spelled as shown")
+    #expect(us.questionAndAnswer == "123456789012.5*1 = 123,456,789,013")
+    let dk = try #require(calculate("123456789012,5*1", enDK))
+    #expect(dk.answer == "123.456.789.013")
+    #expect(dk.copyText == "123456789012,5", "the copy uses the locale's decimal separator")
+}
+
+@Test func theCardShowsBetweenTenAndFifteenSignificantDigits() {
+    #expect(Calculator.cardDigits(for: 0.5) == 10)
+    #expect(Calculator.cardDigits(for: 1_234_567_890.5) == 10)
+    #expect(Calculator.cardDigits(for: -12_345_678_901.5) == 11)
+    #expect(Calculator.cardDigits(for: 123_456_789_012_345.5) == 15)
+    #expect(Calculator.cardDigits(for: 999_999_999_999_999) == 15)
+    #expect(Calculator.cardDigits(for: 1e15) == 10, "scientific notation")
+    #expect(Calculator.cardDigits(for: 1e20) == 10)
+    #expect(Calculator.cardDigits(for: 3e-8) == 10)
+    #expect(Calculator.cardDigits(for: .infinity) == 10)
+}
+
+@Test func copiesKeepFifteenSignificantDigits() throws {
+    let us = try #require(calculate("1/3", enUS))
+    #expect(us.answer == "0.3333333333")
+    #expect(us.copyText == "0.333333333333333")
+    let dk = try #require(calculate("1/3", enDK))
+    #expect(dk.answer == "0,3333333333")
+    #expect(dk.copyText == "0,333333333333333")
+}
+
+@Test(arguments: [("0.1+0.2", "0.3", "0,3"), ("1.1*3", "3.3", "3,3")])
+func floatingPointNoiseDoesNotShow(_ query: String, _ us: String, _ dk: String) throws {
+    let american = try #require(calculate(query, enUS))
+    #expect(american.answer == us)
+    #expect(american.copyText == us)
+    let danish = try #require(calculate(query.replacingOccurrences(of: ".", with: ","), enDK))
+    #expect(danish.answer == dk)
+    #expect(danish.copyText == dk)
+}
+
+@Test func scientificAnswersAtBothPrecisions() throws {
+    let huge = try #require(calculate("2^60", enUS))
+    #expect(huge.answer == "1.152921505E18", "the card keeps 10 digits in scientific notation")
+    #expect(huge.copyText == "1.15292150460685E18")
+    #expect(try #require(calculate("2^60", enDK)).answer == "1,152921505E18")
+    let tiny = try #require(calculate("1/(3*10^7)", enUS))
+    #expect(tiny.answer == "3.333333333E-8")
+    #expect(tiny.copyText == "3.33333333333333E-8")
+    #expect(try #require(calculate("1/(3*10^7)", enDK)).copyText == "3,33333333333333E-8")
+}
+
 @Test func readingCommasDependsOnTheLocale() throws {
     #expect(try #require(calculate("1,000+1", enUS)).answer == "1,001", "grouping where `.` is the decimal")
     #expect(try #require(calculate("1,234,567.5+0.5", enUS)).copyText == "1234568")
@@ -81,10 +134,39 @@ func arithmeticValues(_ query: String, _ value: Double) throws {
     #expect(try #require(calculate("1,5+1.5", daDK)).answer == "3", "both are decimal points in da_DK")
 }
 
-@Test(arguments: ["42", "3,5", "e", "pi", "-5", "1/0", "kg to km", "safari", "", "   "])
+@Test(arguments: [
+    "42", "3,5", "e", "pi", "-5", "1/0", "kg to km", "safari", "", "   ", "2026-11-20", "1999-01-31", "e e",
+    "pi pi", "π π", "tau e pi",
+])
 func noCard(_ query: String) {
     #expect(calculate(query, enUS) == nil)
     #expect(calculate(query, daDK) == nil)
+}
+
+@Test(arguments: [
+    ("-2^2", -4.0), ("(-2)^2", 4), ("2^-1", 0.5), ("-2^-2", -0.25), ("2^3^2", 512), ("-10^20", -1e20), ("-3!", -6),
+    ("-10% of 50", -5), ("2pi^2", 2 * Double.pi * Double.pi), ("2 -3", -1), ("2*-3", -6), ("-(2)^2", -4),
+    ("100 - 10%", 90), ("50% of 2^2", 2),
+])
+func aSignBindsLooserThanAPower(_ query: String, _ value: Double) throws {
+    let result = try #require(Arithmetic.evaluate(query))
+    #expect(Swift.abs(result - value) <= Swift.abs(value) * 1e-12)
+}
+
+@Test func datesAreNotCalculationsButDateLikeArithmeticIs() throws {
+    #expect(Arithmetic.evaluate("2026-11-20") == nil)
+    #expect(Arithmetic.evaluate(" 2026-11-20 ") == nil)
+    #expect(Arithmetic.evaluate("2026-11-20 + 1") == 1996)
+    #expect(Arithmetic.evaluate("2026-13-20") == 1993, "month 13 isn't a date")
+    #expect(Arithmetic.evaluate("2026-11-32") == 1983, "day 32 isn't a date")
+    #expect(try #require(calculate("2026-11-20 + 1", enUS)).answer == "1,996")
+}
+
+@Test func constantsAloneAreNotCalculationsButWithAnOperationTheyAre() throws {
+    #expect(Arithmetic.evaluate("e e") == nil)
+    #expect(Arithmetic.evaluate("pi pi") == nil)
+    #expect(try #require(Arithmetic.evaluate("2 pi")) == 2 * Double.pi)
+    #expect(try #require(Arithmetic.evaluate("e^2")) == M_E * M_E)
 }
 
 @Test func longQueriesAreNotEvaluated() {
@@ -113,6 +195,14 @@ func noCard(_ query: String) {
     #expect(dk.answerLabel == "Pounds")
     #expect(try #require(calculate("13kg to lbs", daDK)).answer == "28,66009408 lb")
     #expect(try #require(calculate("13kg to lbs", enUS)).answer == "28.66009408 lb")
+}
+
+@Test func unitAnswersUseBothPrecisions() throws {
+    let dk = try #require(calculate("13kg to lbs", enDK))
+    #expect(dk.answer == "28,66009408 lb")
+    #expect(dk.copyText == "28,6600940840341 lb")
+    let us = try #require(calculate("13kg to lbs", enUS))
+    #expect(us.copyText == "28.6600940840341 lb")
 }
 
 @Test func unitExamples() throws {
@@ -181,6 +271,21 @@ func copenhagenToNewYork(_ month: Int, _ date: Int, _ time: String, _ zone: Stri
     #expect(london.answer.hasSuffix("11.00"))
     #expect(try #require(calculate("time in london", enDK)).answerLabel == "London, GMT")
     #expect(try #require(calculate("time in london", enDK, now: day(7, 15))).answerLabel == "London, BST")
+}
+
+@Test func familiarAbbreviationsForZonesFoundationOnlyHasOffsetsFor() throws {
+    #expect(try #require(calculate("time in copenhagen", enDK)).answerLabel == "Copenhagen, CET")
+    #expect(try #require(calculate("time in copenhagen", enDK, now: day(7, 15))).answerLabel == "Copenhagen, CEST")
+    #expect(try #require(calculate("time in phoenix", enDK, now: day(7, 15))).answerLabel == "Phoenix, MST")
+    #expect(try #require(calculate("time in auckland", enDK)).answerLabel == "Auckland, NZDT")
+    #expect(try #require(calculate("time in shanghai", enDK)).answerLabel == "Shanghai, GMT+8", "never CST")
+    for identifier in ["Europe/Kyiv", "Europe/Kiev"] {
+        let zone = try #require(TimeZone(identifier: identifier))
+        #expect(TimeZoneConversion.abbreviation(of: zone, at: day(1, 15)) == "EET", "\(identifier)")
+        #expect(TimeZoneConversion.abbreviation(of: zone, at: day(7, 15)) == "EEST", "\(identifier)")
+    }
+    #expect(TimeZoneConversion.place("cest")?.zone.identifier == "Europe/Berlin", "typed input is unchanged")
+    #expect(TimeZoneConversion.place("kst") == nil, "display only")
 }
 
 @Test func nowInAPlace() throws {
