@@ -1136,12 +1136,14 @@ final class LauncherModel {
     }
 
     /// ← or → in a Grid's search field: moves the selection when `GridNavigation.arrowMovesSelection` says so,
-    /// and returns false to leave the key to the field's cursor otherwise (and outside a Grid).
-    func moveGridSelection(_ move: GridNavigation.Move, textLength: Int, selection: (location: Int, length: Int)?)
-        -> Bool
-    {
+    /// and returns false to leave the key to the field's cursor or the input method otherwise (and outside a Grid).
+    func moveGridSelection(
+        _ move: GridNavigation.Move, modifiers: Set<String>, composing: Bool, textLength: Int,
+        selection: (location: Int, length: Int)?
+    ) -> Bool {
         guard let command, let list = command.list, let sections = list.gridSections, !list.items.isEmpty,
-            GridNavigation.arrowMovesSelection(move, textLength: textLength, selection: selection)
+            GridNavigation.arrowMovesSelection(
+                move, modifiers: modifiers, composing: composing, textLength: textLength, selection: selection)
         else { return false }
         let index = list.items.firstIndex { $0.id == command.selectedNode } ?? 0
         selectListItem(at: GridNavigation.target(from: index, move: move, in: sections))
