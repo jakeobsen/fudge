@@ -10,7 +10,8 @@ const dependencySections = ["dependencies", "devDependencies", "optionalDependen
 /**
  * Why `spec` isn't a registry version, or undefined when it is: a range (`^1.2.0`, `>=1 <2`, `*`, `1.x`, `""`), a
  * dist-tag (`latest`, `next`) or an `npm:` alias of one (`npm:other@^1`). Git, GitHub, URLs, `file:`, `link:`,
- * `workspace:` and `user/repo` shorthands all name another source.
+ * `workspace:`, `user/repo` shorthands and tarball names (`evil.tgz`, which npm reads as a file) all name another
+ * source.
  */
 export function specProblem(name: string, spec: unknown): string | undefined {
     if (typeof spec !== "string") return `${name}'s version isn't a string`;
@@ -18,9 +19,12 @@ export function specProblem(name: string, spec: unknown): string | undefined {
     if (alias) return alias[2] === undefined ? undefined : specProblem(name, alias[2]);
     if (spec.includes(":") || spec.includes("/") || spec.includes("\\") || spec.startsWith("."))
         return `${name} comes from "${spec}", not the npm registry`;
+    if (isTarball(spec)) return `${name} comes from the file "${spec}", not the npm registry`;
     if (!/^[\w.*^~<>=|+\- ]*$/.test(spec)) return `${name}'s version "${spec}" isn't a registry version`;
     return undefined;
 }
+
+const isTarball = (spec: string) => /\.(?:tgz|tar|tar\.gz)$/i.test(spec.trim());
 
 /** The first problem in a `package.json`'s dependency sections and `overrides`. */
 export function packageJSONProblem(manifest: unknown): string | undefined {
@@ -60,7 +64,11 @@ function entryProblem(name: string, entry: unknown): string | undefined {
     if (link === true) return `${name} is linked from a local folder`;
     if (typeof resolved === "string" && !resolved.startsWith(registry))
         return `${name} is downloaded from ${resolved}, not the npm registry`;
-    if (typeof version === "string" && version.includes(":") && !version.startsWith("npm:"))
+    if (
+        typeof version === "string" &&
+        !version.startsWith("npm:") &&
+        (version.includes(":") || version.includes("/") || isTarball(version))
+    )
         return `${name} comes from "${version}", not the npm registry`;
     return undefined;
 }
@@ -106,14 +114,25 @@ async function files(folder: string, prefix = ""): Promise<string[]> {
     return nested.flat();
 }
 
+/** Paths in `files` that differ only by case: on APFS they name one file, which a check could read either way. */
+export function caseClash(files: string[]): string[] | undefined {
+    const byName = new Map<string, string[]>();
+    for (const file of files) byName.set(file.toLowerCase(), [...(byName.get(file.toLowerCase()) ?? []), file]);
+    return [...byName.values()].find((names) => names.length > 1);
+}
+
 /**
  * Why the extension in `folder` may get packages from somewhere other than the npm registry, or undefined when it
  * can't: an `.npmrc` anywhere in it, a lockfile entry off the registry, or a dependency spec that isn't a registry
- * version.
+ * version. Names are compared ignoring case, as APFS and the build (which copies these files by name) do, and two
+ * names that differ only by case are refused.
  */
 export async function sourceProblem(folder: string): Promise<string | undefined> {
     const all = await files(folder);
-    const npmrc = all.find((file) => path.basename(file) === ".npmrc");
+    const clash = caseClash(all);
+    if (clash) return `It has files whose names differ only by case (${clash.join(", ")})`;
+    const named = (name: string) => all.find((file) => file.toLowerCase() === name);
+    const npmrc = all.find((file) => path.basename(file).toLowerCase() === ".npmrc");
     if (npmrc) return `It has an .npmrc (${npmrc}), which can point npm at another registry`;
     const read = async (file: string): Promise<unknown> => {
         const text = await readFile(path.join(folder, file), "utf8");
@@ -123,12 +142,13 @@ export async function sourceProblem(folder: string): Promise<string | undefined>
             return null;
         }
     };
-    const manifestProblem = packageJSONProblem(await read("package.json"));
+    const manifestProblem = packageJSONProblem(await read(named("package.json") ?? "package.json"));
     if (manifestProblem) return manifestProblem;
     for (const lockfile of ["package-lock.json", "npm-shrinkwrap.json"]) {
-        if (!all.includes(lockfile)) continue;
-        const problem = lockfileProblem(await read(lockfile));
-        if (problem) return `${lockfile}: ${problem}`;
+        const file = named(lockfile);
+        if (!file) continue;
+        const problem = lockfileProblem(await read(file));
+        if (problem) return `${file}: ${problem}`;
     }
     return undefined;
 }

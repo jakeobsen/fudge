@@ -30,7 +30,7 @@ import {
     type StoreEntry,
 } from "./catalog.ts";
 import { gitAvailable, stopRunningGit, StoreRepository } from "./git.ts";
-import { filterImages } from "./readme.ts";
+import { detailMarkdown } from "./readme.ts";
 import { install, oneAtATime, readInstalled, uninstall, type StoreContext } from "./store.ts";
 
 type Loaded = { entries: StoreEntry[]; installed: Installed; trees: Map<string, string>; commit: string };
@@ -74,26 +74,33 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
         setLoaded({ entries, installed, trees, commit });
     }, [repo]);
 
-    /** Clones the first time, refreshes after that; the list stays usable meanwhile. */
-    const refresh = useCallback(async () => {
-        const first = !(await repo.exists());
-        const toast = await showToast({
-            style: Toast.Style.Animated,
-            title: first ? "Downloading the store's list…" : "Updating the store's list…",
-        });
-        try {
-            if (first) await repo.clone();
-            else await repo.refresh();
-            await load();
-            setReadmes({});
-            await toast.hide();
-        } catch (error) {
-            toast.style = Toast.Style.Failure;
-            toast.title = first ? "Couldn't download the store's list" : "Couldn't update the store's list";
-            toast.message = message(error);
-            if (first) setLoadError(message(error));
-        }
-    }, [repo, load]);
+    /**
+     * Clones the first time, refreshes after that; the list stays usable meanwhile. Like every git operation of the
+     * store's, it waits its turn (`oneAtATime`), so it never runs during an install or a README fetch.
+     */
+    const refresh = useCallback(
+        () =>
+            oneAtATime(async () => {
+                const first = !(await repo.exists());
+                const toast = await showToast({
+                    style: Toast.Style.Animated,
+                    title: first ? "Downloading the store's list…" : "Updating the store's list…",
+                });
+                try {
+                    if (first) await repo.clone();
+                    else await repo.refresh();
+                    await load();
+                    setReadmes({});
+                    await toast.hide();
+                } catch (error) {
+                    toast.style = Toast.Style.Failure;
+                    toast.title = first ? "Couldn't download the store's list" : "Couldn't update the store's list";
+                    toast.message = message(error);
+                    if (first) setLoadError(message(error));
+                }
+            }),
+        [repo, load],
+    );
 
     useEffect(() => {
         void (async () => {
@@ -123,17 +130,16 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     useEffect(() => {
         if (!showingDetail || !selected || !loaded || readmes[selected] !== undefined) return;
         const name = selected;
-        void (async () => {
+        void oneAtATime(async () => {
             let readme = "";
             try {
                 await repo.add(`/extensions/${name}/README.md`);
-                const text = await readFile(path.join(repo.path, "extensions", name, "README.md"), "utf8");
-                readme = filterImages(text, name, loaded.commit);
+                readme = await readFile(path.join(repo.path, "extensions", name, "README.md"), "utf8");
             } catch {
                 // No README, or it couldn't be fetched: the detail shows the manifest alone.
             }
             setReadmes((current) => ({ ...current, [name]: readme }));
-        })();
+        });
     }, [showingDetail, selected, loaded, readmes, repo]);
 
     const context: StoreContext = {
@@ -304,26 +310,4 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
             <List.Section title="Extensions">{other.map(item)}</List.Section>
         </List>
     );
-}
-
-/** The detail pane: the manifest's facts, then the README once it's fetched. */
-function detailMarkdown(entry: StoreEntry, commit: string, readme: string | undefined): string {
-    const commands = entry.commands
-        .map((command) => `- **${command.title}**${command.description ? `: ${command.description}` : ""}`)
-        .join("\n");
-    const facts = [
-        entry.author && `**Author:** ${entry.author}`,
-        entry.categories.length > 0 && `**Categories:** ${entry.categories.join(", ")}`,
-        entry.license && `**License:** ${entry.license}`,
-        commit && `[Source on GitHub](${folderURL(entry.name, commit)})`,
-    ].filter(Boolean);
-    return [
-        `# ${entry.title}`,
-        entry.description,
-        `## Commands\n\n${commands}`,
-        facts.join("  \n"),
-        readme === undefined ? "_Loading the README…_" : readme && `---\n\n${readme}`,
-    ]
-        .filter(Boolean)
-        .join("\n\n");
 }

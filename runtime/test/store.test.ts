@@ -26,11 +26,24 @@ import {
     type GitResult,
     type Run,
 } from "../store-extension/src/git.ts";
-import { filterImages, isGitHubImage } from "../store-extension/src/readme.ts";
-import { lockfileProblem, packageJSONProblem, sourceProblem, specProblem } from "../store-extension/src/sources.ts";
+import {
+    detailMarkdown,
+    filterImages,
+    imageSource,
+    isGitHubImage,
+    rendererPass,
+} from "../store-extension/src/readme.ts";
+import {
+    caseClash,
+    lockfileProblem,
+    packageJSONProblem,
+    sourceProblem,
+    specProblem,
+} from "../store-extension/src/sources.ts";
 import {
     buildArguments,
     install,
+    oneAtATime,
     readInstalled,
     StoreError,
     uninstall,
@@ -290,6 +303,34 @@ test("an extension folder: an .npmrc anywhere, package.json and the lockfiles", 
     assert.match((await sourceProblem(folder))!, /a comes from "user\/repo"/);
 });
 
+test("file names are compared ignoring case, as APFS and the build do", async () => {
+    const folder = await temporary();
+    await writeJSON(path.join(folder, "package.json"), { dependencies: { a: "^1" } });
+    await writeFile(path.join(folder, ".NPMRC"), "registry=https://evil.example/");
+    assert.match((await sourceProblem(folder))!, /\.npmrc \(\.NPMRC\)/);
+    await rm(path.join(folder, ".NPMRC"));
+
+    await writeJSON(path.join(folder, "Package-Lock.json"), {
+        lockfileVersion: 3,
+        packages: { "node_modules/a": { resolved: "https://evil.example/a.tgz" } },
+    });
+    assert.match((await sourceProblem(folder))!, /^Package-Lock\.json: node_modules\/a is downloaded from/);
+
+    assert.deepEqual(caseClash(["src/a.ts", "SRC/a.ts", "b.ts"]), ["src/a.ts", "SRC/a.ts"]);
+    assert.deepEqual(caseClash([".npmrc", ".NPMRC"]), [".npmrc", ".NPMRC"]);
+    assert.equal(caseClash(["a.ts", "b.ts", "src/a.ts"]), undefined);
+});
+
+test("tarball specs and lockfile versions that are paths or user/repo are refused", () => {
+    for (const spec of ["evil.tgz", "evil.tar.gz", "pkg.TAR", "./x.tgz"]) assert.ok(specProblem("x", spec), spec);
+    for (const version of ["user/repo", "/abs/x.tgz", "evil.tgz", "../x"]) {
+        assert.ok(lockfileProblem({ lockfileVersion: 1, dependencies: { x: { version } } }), version);
+        assert.ok(lockfileProblem({ lockfileVersion: 3, packages: { "node_modules/x": { version } } }), version);
+    }
+    const scopedAlias = { version: "npm:@scope/real@1.0.0", resolved: registryURL("real") };
+    assert.equal(lockfileProblem({ lockfileVersion: 1, dependencies: { x: scopedAlias } }), undefined);
+});
+
 // MARK: - README images
 
 test("only images on GitHub's hosts are shown", () => {
@@ -345,6 +386,60 @@ test("other images become their alt text; paths in the folder become GitHub's ra
             "[bad]: https://evil.example/bad.png",
         ].join("\n"),
     );
+});
+
+test("a source the renderer would read differently is never shown", () => {
+    for (const source of ["a b", "x)", "<x", "x>", "media/a.png\n![y](https://evil.example/p.png", ""]) {
+        assert.equal(imageSource(source, "alpha", "c0ffee"), undefined, JSON.stringify(source));
+    }
+    const vector = "![a](<x)\n![y](https://evil.example/two.png>)";
+    const filtered = filterImages(vector, "alpha", "c0ffee");
+    assert.ok(!filtered.includes("evil.example/two.png)"), filtered);
+    assert.ok(!/!\[[^\]]*\]\(https:\/\/evil/.test(filtered), filtered);
+});
+
+test("the last pass uses the renderer's rule: an image line off GitHub becomes its alt text", () => {
+    assert.equal(rendererPass("![t](https://evil.example/p.png)"), "t");
+    assert.equal(rendererPass('  ![t](<https://evil.example/p.png> "title")  '), "t");
+    const kept = "![t](https://raw.githubusercontent.com/a/b/c/x.png)";
+    assert.equal(rendererPass(`intro\n${kept}\nend`), `intro\n${kept}\nend`);
+});
+
+test("everything in the detail goes through the filter, the manifest's text included", () => {
+    const evil = "![p](https://evil.example/p.png)";
+    const entry = parseManifest(
+        "alpha",
+        manifest("alpha", {
+            description: `Nice ${evil}`,
+            author: evil,
+            commands: [{ name: "run", title: "Run", description: evil }],
+        }),
+    )!;
+    const detail = detailMarkdown(entry, "c0ffee", `# Readme\n\n${evil}\n\n![shot](media/shot.png)`);
+    assert.ok(!detail.includes("evil.example"), detail);
+    assert.match(detail, /^# Alpha/);
+    assert.ok(detail.includes("raw.githubusercontent.com/raycast/extensions/c0ffee/extensions/alpha/media/shot.png"));
+    assert.match(detailMarkdown(entry, "c0ffee", undefined), /Loading the README/);
+});
+
+test("every git operation of the store's waits its turn", async () => {
+    const order: string[] = [];
+    const slow = oneAtATime(async () => {
+        order.push("refresh starts");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        order.push("refresh ends");
+    });
+    const next = oneAtATime(async () => {
+        order.push("install starts");
+    });
+    const failing = oneAtATime(async () => {
+        throw new Error("boom");
+    });
+    const after = oneAtATime(async () => {
+        order.push("readme starts");
+    });
+    await Promise.all([slow, next, failing.catch(() => undefined), after]);
+    assert.deepEqual(order, ["refresh starts", "refresh ends", "install starts", "readme starts"]);
 });
 
 // MARK: - Git
