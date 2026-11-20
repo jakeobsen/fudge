@@ -7,6 +7,8 @@ import FudgeCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let paths = FudgePaths.standard()
     private var statusItem: NSStatusItem?
+    /// The menu bar item's autosave name, which its saved visibility and position are kept under.
+    static let statusItemName = "fudge"
     private var model: LauncherModel!
     private var panel: LauncherPanel!
     private let hotKeys = CarbonHotKeys()
@@ -22,6 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var appToRestore: NSRunningApplication?
     private var exchangeRates: ExchangeRateUpdater!
     private let exchangeRateSchedule = ExchangeRateSchedule()
+    /// Not in snapshot runs, which install nothing that outlives them.
+    private var extensionsWatcher: ExtensionsWatcher?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = Self.mainMenu()
@@ -38,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.hide = { [weak self] in self?.hidePanel() }
         model.show = { [weak self] in self?.showPanel() }
         model.openSettings = { [weak self] name in self?.settingsWindow.show(extension: name) }
+        model.reloadAll = { [weak self] in self?.reloadExtensions() }
         settingsModel.clearSearchHistory = { [weak self] in self?.model.clearHistory() }
         model.showHUD = { [weak self] title in self?.hud.show(title) }
         model.isVisible = { [weak self] in self?.panel.isVisible ?? false }
@@ -60,6 +65,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             Task { await self.exchangeRates.setEnabled(on, now: Date()) }
         }
+        // The model reads the setting again, and the open query's card is evaluated again in the new format.
+        settingsModel.numberFormatChanged = { [weak self] in self?.model.applySettings() }
         panel.onEscape = { [weak self] in self?.model.escape() }
         panel.onResign = { [weak self] in
             // An alert sheet takes the keyboard; that's not the user leaving.
@@ -78,6 +85,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+
+        SystemCalls.accessibilitySettingsOffer = AccessibilitySettingsOffer(
+            panel: panel, restoreKeyboard: { [weak self] in self?.model.restoreKeyboard() })
 
         // Snapshots never download; the app checks the rates now and every hour.
         exchangeRateSchedule.start(exchangeRates)
@@ -126,6 +136,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.launcherHotkeyChanged()
         }
         settingsModel.applyHotkeys = { [weak self] in self?.applyCommandHotkeys() ?? [] }
+
+        // `fudge build` while fudge runs: the new, rebuilt or removed extension shows without a reload.
+        let watcher = ExtensionsWatcher(directory: paths.extensionsDirectory) { [weak self] in
+            self?.extensionsChanged()
+        }
+        do {
+            try watcher.start()
+        } catch {
+            FileHandle.standardError.write(Data("fudge: couldn't watch \(watcher.directory.path): \(error)\n".utf8))
+        }
+        extensionsWatcher = watcher
     }
 
     /// Applies `settings.json` to root search (aliases, disabled commands) and registers the hotkeys of the
@@ -134,8 +155,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @discardableResult
     private func applyCommandHotkeys() -> Set<String> {
         model.applySettings()
+        return registerCommandHotkeys()
+    }
+
+    /// Registers the hotkeys of the installed, enabled commands, from the settings the model last read.
+    @discardableResult
+    private func registerCommandHotkeys() -> Set<String> {
         registry.apply(model.settings.availableHotkeys(installed: Set(model.installedCommandIDs)))
         return registry.refused
+    }
+
+    /// The extensions folder changed: an extension was installed, rebuilt or removed. Root search, the command
+    /// hotkeys and an open Settings window catch up; the applications aren't scanned again.
+    private func extensionsChanged() {
+        model.reloadExtensions()
+        registerCommandHotkeys()
+        settingsWindow.reloadIfShown()
     }
 
     /// Shows the launcher's hotkey as it's registered: on the General page, and in the menu bar item's "Open fudge"
@@ -149,7 +184,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "command", accessibilityDescription: "fudge")
+        // macOS saves whether a status item is shown in the app's preferences, under its autosave name. Unnamed, it
+        // would be "Item-0", a key every build with this bundle id shares; a stale "hidden" there hid fudge's icon.
+        item.autosaveName = Self.statusItemName
+        // ⌘-dragging can't remove it, so it's never hidden by accident.
+        item.behavior = []
+        item.isVisible = true
+        item.button?.image = MenuBarIcon.image
 
         let menu = NSMenu()
         let open = menu.addItem(withTitle: "Open fudge", action: #selector(showPanel), keyEquivalent: "")

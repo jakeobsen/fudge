@@ -57,6 +57,7 @@ final class SettingsModel {
         }
         fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
         settingsProblem = FudgeSettings.isWritable(paths.settingsFile) ? nil : unreadableMessage
+        loadLaunchPermissions()
         if selected != Self.generalPage, selected != Self.commandsPage,
             !extensions.contains(where: { $0.manifest.name == selected })
         {
@@ -84,6 +85,17 @@ final class SettingsModel {
         currencyRatesChanged(on)
     }
 
+    /// How the calculator reads and shows numbers (`numberFormat` in `settings.json`).
+    var numberFormat: NumberFormatSetting { fudgeSettings.numberFormat }
+    /// Re-evaluates root search's calculator card; set by the app delegate.
+    @ObservationIgnored var numberFormatChanged: () -> Void = {}
+
+    /// Saved through `change {}`, so a broken `settings.json` is refused and the banner says why.
+    func setNumberFormat(_ format: NumberFormatSetting) {
+        guard format != numberFormat, change({ $0.numberFormat = format }) else { return }
+        numberFormatChanged()
+    }
+
     // MARK: - Open at Login and search history
 
     /// fudge as a login item; the app delegate sets the real one, and snapshots a fake.
@@ -106,6 +118,44 @@ final class SettingsModel {
 
     func openLoginItemsSettings() {
         loginItem.openSystemSettings()
+    }
+
+    // MARK: - Extensions that open other extensions
+
+    /// The answers to "Allow <A> to open <B>'s commands?" (`launch-permissions.json`).
+    private(set) var launchPermissions: [LaunchPermissions.Entry] = []
+    /// The file holds something fudge can't read, so the answers can't be changed here.
+    private(set) var launchPermissionsUnreadable = false
+
+    /// An installed extension's title, or nil when it isn't installed.
+    func extensionTitle(_ name: String) -> String? {
+        allExtensions.first { $0.manifest.name == name }?.manifest.title
+    }
+
+    func setLaunchPermission(_ allowed: Bool, caller: String, target: String) {
+        changeLaunchPermissions { $0.record(allowed, caller: caller, target: target) }
+    }
+
+    /// Forgets an answer, so the user is asked again next time.
+    func forgetLaunchPermission(caller: String, target: String) {
+        changeLaunchPermissions { $0.forget(caller: caller, target: target) }
+    }
+
+    private func loadLaunchPermissions() {
+        launchPermissions = LaunchPermissions.load(from: paths.launchPermissionsFile).entries
+        launchPermissionsUnreadable = LaunchPermissions.isUnreadable(paths.launchPermissionsFile)
+    }
+
+    /// Reads the file again first, so an answer given meanwhile isn't lost, then edits and saves it.
+    private func changeLaunchPermissions(_ edit: (inout LaunchPermissions) -> Void) {
+        var permissions = LaunchPermissions.load(from: paths.launchPermissionsFile)
+        edit(&permissions)
+        do {
+            try permissions.save(to: paths.launchPermissionsFile)
+        } catch {
+            FileHandle.standardError.write(Data("fudge: couldn't save launch permissions: \(error)\n".utf8))
+        }
+        loadLaunchPermissions()
     }
 
     // MARK: - The launcher's hotkey
@@ -349,6 +399,13 @@ final class SettingsWindowController {
         window?.makeKeyAndOrderFront(nil)
     }
 
+    /// Reads the installed extensions and settings again while the window is on screen; closed, it reads them
+    /// when it next opens.
+    func reloadIfShown() {
+        guard window?.isVisible == true else { return }
+        model.reload()
+    }
+
     /// Lays the window out off-screen and transparent, never key; only snapshots use this.
     func renderOffscreen(extension name: String?) {
         prepare(extension: name)
@@ -400,7 +457,9 @@ struct SettingsView: View {
     @Bindable var model: SettingsModel
 
     var body: some View {
-        NavigationSplitView {
+        // The sidebar always shows and has no toggle, as in System Settings: it's the way to the other pages, and
+        // SwiftUI's toggle jumps across the title bar each time it collapses or expands the sidebar.
+        NavigationSplitView(columnVisibility: .constant(.all)) {
             List(selection: $model.selected) {
                 Label("General", systemImage: "gearshape").tag(SettingsModel.generalPage)
                 Label("Commands", systemImage: "command").tag(SettingsModel.commandsPage)
@@ -410,6 +469,8 @@ struct SettingsView: View {
                     }
                 }
             }
+            .toolbar(removing: .sidebarToggle)
+            // Keep this last: above `.toolbar(removing:)`, it's ignored and the sidebar comes out about 140 pt wide.
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
             if model.selected == SettingsModel.generalPage {
@@ -422,7 +483,9 @@ struct SettingsView: View {
                 Text("No extension has preferences.").foregroundStyle(.secondary)
             }
         }
-        .frame(minWidth: 620, minHeight: 400)
+        // The width it opens at: any narrower and the Commands table squeezes its Name column, truncating names and
+        // running a command's subtitle into the Type column.
+        .frame(minWidth: 880, minHeight: 400)
     }
 }
 

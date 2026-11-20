@@ -2,7 +2,7 @@ import FudgeCore
 import SwiftUI
 
 /// The Settings window's General page: Open at Login, the launcher's hotkey, whether the calculator downloads
-/// exchange rates, and clearing root search's history.
+/// exchange rates, clearing root search's history, and which extensions may open other extensions' commands.
 struct GeneralPage: View {
     @Bindable var model: SettingsModel
     @State private var confirmingClear = false
@@ -47,11 +47,23 @@ struct GeneralPage: View {
                 Toggle(isOn: Binding(get: { model.currencyRates }, set: { model.setCurrencyRates($0) })) {
                     Text("Currency conversion: download exchange rates from the European Central Bank once a day")
                     Text(
-                        "This is the only connection fudge makes on its own. It downloads one public file; like any "
+                        "Apart from the images extensions show, this is the only connection fudge makes on its own. It "
+                            + "downloads one public file; like any "
                             + "download, the server sees your IP address, and nothing else is sent."
                     )
                 }
                 .toggleStyle(.checkbox)
+                Picker(
+                    selection: Binding(get: { model.numberFormat }, set: { model.setNumberFormat($0) })
+                ) {
+                    Text("Same as macOS (\(Calculator.format(1234.5, locale: .current, for: .card)))")
+                        .tag(NumberFormatSetting.system)
+                    Text("1,234.5").tag(NumberFormatSetting.dotDecimal)
+                    Text("1.234,5").tag(NumberFormatSetting.commaDecimal)
+                } label: {
+                    Text("Number format")
+                    Text("How the calculator reads the numbers you type, and writes its answers.")
+                }
             }
             Section("Search") {
                 LabeledContent {
@@ -59,6 +71,9 @@ struct GeneralPage: View {
                 } label: {
                     Text("Root search ranks what you open often first.")
                 }
+            }
+            if !model.launchPermissions.isEmpty || model.launchPermissionsUnreadable {
+                LaunchPermissionsSection(model: model)
             }
         }
         .formStyle(.grouped)
@@ -68,6 +83,60 @@ struct GeneralPage: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Root search forgets which results you opened, and ranks them by name again.")
+        }
+    }
+}
+
+/// The answers to "Allow <A> to open <B>'s commands?": each can be changed, or forgotten so it's asked again.
+private struct LaunchPermissionsSection: View {
+    let model: SettingsModel
+
+    var body: some View {
+        Section {
+            if model.launchPermissionsUnreadable {
+                Text(LaunchPermissions.Unreadable().description).font(.callout).foregroundStyle(.red)
+            }
+            ForEach(model.launchPermissions) { entry in
+                HStack(spacing: 6) {
+                    name(entry.caller)
+                    Image(systemName: "arrow.right").foregroundStyle(.secondary).imageScale(.small)
+                    name(entry.target)
+                    Spacer()
+                    Picker(
+                        "",
+                        selection: Binding(
+                            get: { entry.allowed },
+                            set: { model.setLaunchPermission($0, caller: entry.caller, target: entry.target) })
+                    ) {
+                        Text("Allowed").tag(true)
+                        Text("Not allowed").tag(false)
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    Button {
+                        model.forgetLaunchPermission(caller: entry.caller, target: entry.target)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Forget: ask again the next time")
+                }
+                .disabled(model.launchPermissionsUnreadable)
+            }
+        } header: {
+            Text("Extensions that open other extensions")
+        } footer: {
+            Text("fudge asks the first time an extension opens another extension's commands.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    /// The extension's title, or its name in grey when it isn't installed.
+    @ViewBuilder private func name(_ extensionName: String) -> some View {
+        if let title = model.extensionTitle(extensionName) {
+            Text(title)
+        } else {
+            Text(extensionName).foregroundStyle(.secondary).help("Not installed")
         }
     }
 }

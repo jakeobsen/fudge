@@ -110,6 +110,8 @@ final class LauncherModel {
     @ObservationIgnored var openPanel: (FilePickerOptions) async -> [String]? = { _ in nil }
     /// Downloads the exchange rates again at once (↵ on the "Couldn't download exchange rates" card).
     @ObservationIgnored var retryExchangeRates: () -> Void = {}
+    /// The menu bar item's "Reload Extensions", for root search's item of that name; set by the app delegate.
+    @ObservationIgnored var reloadAll: () -> Void = {}
     /// Shows a HUD message; set by the app delegate.
     @ObservationIgnored var showHUD: (String) -> Void = { _ in }
     /// Whether the launcher panel is on screen; set by the app delegate.
@@ -169,23 +171,35 @@ final class LauncherModel {
         refreshResults()
     }
 
-    /// Finds applications and installed extensions again.
+    /// Finds applications and installed extensions again: the menu's Reload Extensions, and launch.
     func reload() {
-        installedExtensions = InstalledExtension.all(in: paths.extensionsDirectory)
-        extensions = Dictionary(
-            installedExtensions.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
-        loadCommandMetadata(installedExtensions)
+        readInstalledExtensions()
         applications = ApplicationIndex.scan()
         applySettings()
     }
 
+    /// Reads the installed extensions again and keeps the applications already scanned: the extensions folder
+    /// changed (`ExtensionsWatcher`). The root query stays, and so does the selection while its item is still
+    /// there, with the action panel open on it. A running command keeps the code it loaded.
+    func reloadExtensions() {
+        readInstalledExtensions()
+        applySettings(keepingSelection: true)
+    }
+
+    private func readInstalledExtensions() {
+        installedExtensions = InstalledExtension.all(in: paths.extensionsDirectory)
+        extensions = Dictionary(
+            installedExtensions.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
+        loadCommandMetadata(installedExtensions)
+    }
+
     /// Rebuilds root search from `settings.json`: commands that are disabled leave it, and the rest get their
     /// aliases and hotkeys. Settings calls it after each change.
-    func applySettings() {
+    func applySettings(keepingSelection: Bool = false) {
         settings = FudgeSettings.load(from: paths.settingsFile)
         let commands = installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
         items = RootSearch.applying(settings, to: commands) + RootSearch.builtInItems + applications
-        refreshResults()
+        refreshResults(keepingSelection: keepingSelection)
         refreshCommandHotkeys()
     }
 
@@ -271,10 +285,18 @@ final class LauncherModel {
         return "Search for apps and commands…"
     }
 
-    private func refreshResults() {
+    /// Ranks root search again. The first row is selected, unless `keepingSelection` and the selected row is still
+    /// there: then the selection doesn't change, so the action panel open on it stays open.
+    private func refreshResults(keepingSelection: Bool = false) {
         calculator = evaluateCalculator()
         results = RootSearch.rank(items, query: rootQuery, history: history)
-        selectedItem = rootRows.first?.id
+        let rows = rootRows
+        if keepingSelection, let selectedItem, rows.contains(where: { $0.id == selectedItem }) {
+            // A rebuild may have changed the command's arguments.
+            syncArguments()
+            return
+        }
+        selectedItem = rows.first?.id
     }
 
     /// Root search's rows in the order they're drawn and moved through (`RootSearch.rows`): a command whose alias
@@ -299,8 +321,12 @@ final class LauncherModel {
         }
     }
 
+    /// "Same as macOS" is resolved here, for each query, so a change in System Settings applies at once.
     private func evaluateCalculator() -> CalculatorResult? {
-        Calculator.evaluate(rootQuery, locale: .current, now: Date(), timeZone: .current, currency: currency)
+        let locale = Locale.current
+        return Calculator.evaluate(
+            rootQuery, locale: locale, format: settings.numberFormat.resolve(locale), now: Date(), timeZone: .current,
+            currency: currency)
     }
 
     /// ↵ on the Calculator card: copy its answer, or what the card offers instead (turning currency on, retrying).
@@ -1239,12 +1265,14 @@ final class LauncherModel {
     }
 
     /// ← or → in a Grid's search field: moves the selection when `GridNavigation.arrowMovesSelection` says so,
-    /// and returns false to leave the key to the field's cursor otherwise (and outside a Grid).
-    func moveGridSelection(_ move: GridNavigation.Move, textLength: Int, selection: (location: Int, length: Int)?)
-        -> Bool
-    {
+    /// and returns false to leave the key to the field's cursor or the input method otherwise (and outside a Grid).
+    func moveGridSelection(
+        _ move: GridNavigation.Move, modifiers: Set<String>, composing: Bool, textLength: Int,
+        selection: (location: Int, length: Int)?
+    ) -> Bool {
         guard let command, let list = command.list, let sections = list.gridSections, !list.items.isEmpty,
-            GridNavigation.arrowMovesSelection(move, textLength: textLength, selection: selection)
+            GridNavigation.arrowMovesSelection(
+                move, modifiers: modifiers, composing: composing, textLength: textLength, selection: selection)
         else { return false }
         let index = list.items.firstIndex { $0.id == command.selectedNode } ?? 0
         selectListItem(at: GridNavigation.target(from: index, move: move, in: sections))
@@ -1390,6 +1418,15 @@ final class LauncherModel {
             recordLaunch(item.id)
             searchText = ""
             showSettings(extension: nil)
+        case .reloadExtensions:
+            recordLaunch(item)
+            searchText = ""
+            reloadAll()
+        case .quit:
+            recordLaunch(item)
+            Task {
+                if await confirm(Self.quitRequest) { NSApp.terminate(nil) }
+            }
         case .command(let extensionName, let commandName, _, _):
             guard let installed = extensions[extensionName],
                 let command = installed.manifest.commands.first(where: { $0.name == commandName })
@@ -1423,6 +1460,20 @@ final class LauncherModel {
         history.record(id)
         try? history.save(to: paths.historyFile)
     }
+
+    /// Records a root item's launch, unless it's one that never counts (`RootItem.recordsLaunch`: Quit).
+    private func recordLaunch(_ item: RootItem) {
+        if item.recordsLaunch { recordLaunch(item.id) }
+    }
+
+    /// "Quit fudge" asks first: its hotkeys stop working until fudge is opened again.
+    private static let quitRequest = AlertRequest(
+        title: "Quit fudge?",
+        message: "Its hotkeys stop working until you open it again.",
+        primary: "Quit",
+        dismiss: "Cancel",
+        destructive: false
+    )
 
     /// What a command needs before it launches: its preferences (with the required ones that aren't set in
     /// `missing`) and its environment. Root search and `launchCommand` both prepare launches here, and a
@@ -1765,6 +1816,15 @@ final class LauncherModel {
                     let confirmed = await confirm(Self.alertRequest(params))
                     send(.rpcResult(session: session, id: id, result: .bool(confirmed), error: nil))
                 }
+            case "clipboard.paste":
+                Task {
+                    do {
+                        try await SystemCalls.paste(params, hideWindow: { await self.hideForPaste() })
+                        send(.rpcResult(session: session, id: id, result: .null, error: nil))
+                    } catch {
+                        send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
+                    }
+                }
             case "command.updateMetadata":
                 do {
                     try updateCommandMetadata(params, from: session)
@@ -1850,6 +1910,14 @@ final class LauncherModel {
         }
     }
 
+    /// `Clipboard.paste` hides the panel first, as `closeMainWindow()` does, and waits until it's really gone: key
+    /// status goes back to the app the user was in asynchronously, so ⌘V waits a run-loop turn plus about 50 ms.
+    private func hideForPaste() async {
+        closeWindow(clearRootSearch: false, popToRootType: nil)
+        await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }
+        try? await Task.sleep(for: .milliseconds(50))
+    }
+
     /// Success and failure toasts go away after a few seconds; an animated one stays until it changes.
     private func expireToast(_ shown: ToastState) {
         toastExpiry?.cancel()
@@ -1923,6 +1991,10 @@ final class LauncherModel {
             image = NSWorkspace.shared.icon(forFile: url.path)
         case .settings:
             image = NSApp.applicationIconImage
+        case .reloadExtensions:
+            image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)!
+        case .quit:
+            image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)!
         case .command:
             image =
                 item.iconFile.flatMap(NSImage.init(contentsOf:))
