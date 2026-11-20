@@ -43,10 +43,24 @@ struct GeneralPage: View {
                     }
                 }
                 SettingsPopupRow(
+                    "Show fudge on",
+                    selection: Binding(get: { model.showOnScreen }, set: { model.setShowOnScreen($0) }),
+                    options: ShowOnScreen.allCases.map { ($0, $0.title) },
+                    help: "Which screen fudge opens on when you press its hotkey."
+                )
+                SettingsPopupRow(
                     "Pop to Root Search",
                     selection: Binding(get: { model.resetAfter }, set: { model.setResetAfter($0) }),
                     options: PanelResetSetting.allCases.map { ($0, $0.title) },
                     help: "How long after the window closes fudge goes back to root search."
+                )
+                SettingsPopupRow(
+                    "Escape Key Behavior",
+                    selection: Binding(get: { model.escapeBehavior }, set: { model.setEscapeBehavior($0) }),
+                    options: EscapeBehavior.allCases.map { ($0, $0.title) },
+                    help: "What Esc does in fudge. By default it clears the search, then goes back, then closes the "
+                        + "window. \"Close window and pop to root\" closes the window at once and starts from root "
+                        + "search next time."
                 )
             }
             Section("Calculator") {

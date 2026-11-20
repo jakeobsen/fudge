@@ -14,6 +14,10 @@ public struct FudgeSettings: Sendable, Equatable {
     public var currencyRates: Bool
     /// How long the panel stays hidden before it opens on root search again (`resetAfterSeconds`).
     public var resetAfter: PanelResetSetting = .default
+    /// Which screen the panel opens on (`showOnScreen`).
+    public var showOnScreen: ShowOnScreen = .default
+    /// What Esc does in the panel (`escapeBehavior`).
+    public var escapeBehavior: EscapeBehavior = .default
 
     public struct CommandSettings: Sendable, Equatable {
         /// In `HotKeySpec` text form.
@@ -105,6 +109,8 @@ public struct FudgeSettings: Sendable, Equatable {
         var settings = FudgeSettings(
             hotkey: object["hotkey"] as? String, currencyRates: object["currencyRates"] as? Bool ?? false)
         settings.resetAfter = PanelResetSetting(settingsValue: object["resetAfterSeconds"])
+        settings.showOnScreen = ShowOnScreen(settingsValue: object["showOnScreen"])
+        settings.escapeBehavior = EscapeBehavior(settingsValue: object["escapeBehavior"])
         for case (let id, let entry as [String: Any]) in object["commands"] as? [String: Any] ?? [:] {
             settings.commands[id] = CommandSettings(
                 hotkey: entry["hotkey"] as? String, alias: entry["alias"] as? String, enabled: entry["enabled"] as? Bool
@@ -124,6 +130,8 @@ public struct FudgeSettings: Sendable, Equatable {
         object["hotkey"] = hotkey
         object["currencyRates"] = currencyRates ? true : nil
         object["resetAfterSeconds"] = resetAfter.settingsValue
+        object["showOnScreen"] = showOnScreen.settingsValue
+        object["escapeBehavior"] = escapeBehavior.settingsValue
 
         var commandObjects = object["commands"] as? [String: Any] ?? [:]
         let commandIDs = Set(commandObjects.keys).union(commands.keys)

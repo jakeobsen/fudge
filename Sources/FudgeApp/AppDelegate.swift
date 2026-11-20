@@ -212,8 +212,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Every path that shows the panel ends here, after it has built its screen.
     private func showPanel() {
         model.panelReset.panelShown()
-        panel.present()
+        panel.present(on: chosenScreen())
         model.presented()
+    }
+
+    /// The screen "Show fudge on" picks (`PanelScreen`).
+    private func chosenScreen() -> NSScreen? {
+        let screens = NSScreen.screens
+        let setting = model.settings.showOnScreen
+        let window = setting == .activeWindow ? activeWindowFrame(primaryHeight: screens.first?.frame.height ?? 0) : nil
+        let index = PanelScreen.choose(
+            setting: setting, screens: screens.map(\.frame), mouse: NSEvent.mouseLocation, activeWindowFrame: window)
+        return index.map { screens[$0] }
+    }
+
+    /// The frontmost app's topmost window on screen, in Cocoa coordinates. Window bounds need no permission; nil
+    /// when there's no such window.
+    private func activeWindowFrame(primaryHeight: CGFloat) -> CGRect? {
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+            let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+                as? [[String: Any]]
+        else { return nil }
+        for window in windows
+        where (window[kCGWindowOwnerPID as String] as? pid_t) == pid && (window[kCGWindowLayer as String] as? Int) == 0
+        {
+            guard let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+                let rect = CGRect(dictionaryRepresentation: bounds)
+            else { continue }
+            return PanelScreen.cocoaFrame(windowListBounds: rect, primaryHeight: primaryHeight)
+        }
+        return nil
     }
 
     /// Every path that hides the panel ends here: Esc, the hotkey, the model's `hide`, and the panel resigning key.
