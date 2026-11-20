@@ -78,6 +78,8 @@ Root search ranks what you open often first. **Clear Search History…** on the 
 
 Type a calculation in root search and the answer shows above the results: arithmetic (`5+5/10*39`), units (`13kg to lbs`), time zones (`3pm cet in pst`) and currencies (`100 usd to eur`, `€100 in usd`, `100 € in kr`). ↵ copies the answer.
 
+Numbers follow your Mac's number format, or the one you pick under **Settings… → General → Number format**: "1,234.5" or "1.234,5". In "1.234,5", `1.000 + 1` is 1.001, and `1.5` isn't a number, so it gets no answer rather than a wrong one.
+
 Currency conversion is off until you turn it on under **Settings… → General**, because it needs exchange rates from the network. Until then, a currency query shows a card saying so, and ↵ on it opens that page.
 
 ### Network

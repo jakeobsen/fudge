@@ -299,8 +299,12 @@ final class LauncherModel {
         }
     }
 
+    /// "Same as macOS" is resolved here, for each query, so a change in System Settings applies at once.
     private func evaluateCalculator() -> CalculatorResult? {
-        Calculator.evaluate(rootQuery, locale: .current, now: Date(), timeZone: .current, currency: currency)
+        let locale = Locale.current
+        return Calculator.evaluate(
+            rootQuery, locale: locale, format: settings.numberFormat.resolve(locale), now: Date(), timeZone: .current,
+            currency: currency)
     }
 
     /// ↵ on the Calculator card: copy its answer, or what the card offers instead (turning currency on, retrying).

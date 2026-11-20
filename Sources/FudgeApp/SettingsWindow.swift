@@ -84,6 +84,17 @@ final class SettingsModel {
         currencyRatesChanged(on)
     }
 
+    /// How the calculator reads and shows numbers (`numberFormat` in `settings.json`).
+    var numberFormat: NumberFormatSetting { fudgeSettings.numberFormat }
+    /// Re-evaluates root search's calculator card; set by the app delegate.
+    @ObservationIgnored var numberFormatChanged: () -> Void = {}
+
+    /// Saved through `change {}`, so a broken `settings.json` is refused and the banner says why.
+    func setNumberFormat(_ format: NumberFormatSetting) {
+        guard format != numberFormat, change({ $0.numberFormat = format }) else { return }
+        numberFormatChanged()
+    }
+
     // MARK: - Open at Login and search history
 
     /// fudge as a login item; the app delegate sets the real one, and snapshots a fake.
