@@ -11,7 +11,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: LauncherPanel!
     private let hotKeys = CarbonHotKeys()
     private lazy var registry = HotKeyRegistry(registrar: hotKeys)
+    private var settingsModel: SettingsModel!
     private var settingsWindow: SettingsWindowController!
+    /// The menu bar item's "Open fudge (⌥Space)".
+    private var openItem: NSMenuItem?
     private let hud = HUDWindow()
     private var keyMonitor: Any?
     private var exchangeRates: ExchangeRateUpdater!
@@ -21,11 +24,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = Self.mainMenu()
         model = LauncherModel(paths: paths)
         panel = LauncherPanel(content: LauncherView(model: model))
-        let settingsModel = SettingsModel(paths: paths)
+        settingsModel = SettingsModel(paths: paths)
+        settingsModel.launcherHotkey = FudgeSettings.load(from: paths.settingsFile).launcherHotkey
+        // Snapshots and tests never register fudge as a login item; only the real app talks to the system.
+        settingsModel.loginItem =
+            Snapshot.isRequested(CommandLine.arguments)
+            ? FixedLoginItem(Snapshot(arguments: CommandLine.arguments)?.loginItem ?? .notRegistered)
+            : SMAppServiceLoginItem()
         settingsWindow = SettingsWindowController(model: settingsModel)
         model.hide = { [weak self] in self?.hidePanel() }
         model.show = { [weak self] in self?.showPanel() }
         model.openSettings = { [weak self] name in self?.settingsWindow.show(extension: name) }
+        settingsModel.clearSearchHistory = { [weak self] in self?.model.clearHistory() }
         model.showHUD = { [weak self] title in self?.hud.show(title) }
         model.isVisible = { [weak self] in self?.panel.isVisible ?? false }
         model.confirm = { [weak self] request in await self?.confirm(request) ?? false }
@@ -91,40 +101,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.model.openFromHotkey(command)
             }
         }
-        let settings = FudgeSettings.load(from: paths.settingsFile)
-        let spec = settings.hotkey.flatMap(HotKeySpec.parse) ?? .default
-        let registered = registry.setLauncher(spec)
-        if !registered {
+        let spec = FudgeSettings.load(from: paths.settingsFile).launcherHotkey
+        if !registry.setLauncher(spec) {
             FileHandle.standardError.write(Data("fudge: couldn't register the shortcut \(spec)\n".utf8))
         }
-        installStatusItem(shortcut: registered ? spec : nil)
+        installStatusItem()
+        launcherHotkeyChanged()
         applyCommandHotkeys()
-        settingsModel.launcherHotkey = spec
+        settingsModel.registerLauncherHotkey = { [weak self] spec in
+            guard let self else { return false }
+            let registered = self.registry.setLauncher(spec)
+            self.launcherHotkeyChanged()
+            return registered
+        }
         settingsModel.suspendHotkeys = { [weak self] in self?.registry.suspend() }
-        settingsModel.resumeHotkeys = { [weak self] in self?.registry.resume() }
+        settingsModel.resumeHotkeys = { [weak self] in
+            guard let self else { return }
+            self.registry.resume()
+            // Resuming tries a refused launcher hotkey again: the app that had it may have let go.
+            self.launcherHotkeyChanged()
+        }
         settingsModel.applyHotkeys = { [weak self] in self?.applyCommandHotkeys() ?? [] }
     }
 
-    /// Registers the hotkeys of the installed commands from `settings.json`. Hotkeys of commands that aren't
-    /// installed stay in the file, unregistered, so reinstalling the extension brings them back. Returns the
-    /// command ids whose hotkey the system refused.
+    /// Applies `settings.json` to root search (aliases, disabled commands) and registers the hotkeys of the
+    /// installed, enabled commands. Hotkeys of commands that aren't installed stay in the file, unregistered, so
+    /// reinstalling the extension brings them back. Returns the command ids whose hotkey the system refused.
     @discardableResult
     private func applyCommandHotkeys() -> Set<String> {
-        let installed = Set(model.installedCommandIDs)
-        let wanted = FudgeSettings.load(from: paths.settingsFile).commandHotkeys.filter { installed.contains($0.key) }
-        registry.apply(wanted)
-        model.refreshCommandHotkeys()
+        model.applySettings()
+        registry.apply(model.settings.availableHotkeys(installed: Set(model.installedCommandIDs)))
         return registry.refused
     }
 
-    private func installStatusItem(shortcut: HotKeySpec?) {
+    /// Shows the launcher's hotkey as it's registered: on the General page, and in the menu bar item's "Open fudge"
+    /// title, which leaves it out while another app has it.
+    private func launcherHotkeyChanged() {
+        let spec = registry.launcher ?? .default
+        settingsModel.launcherHotkey = spec
+        settingsModel.launcherHotkeyInUse = registry.launcherRefused
+        openItem?.title = registry.launcherRefused ? "Open fudge" : "Open fudge (\(spec))"
+    }
+
+    private func installStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "command", accessibilityDescription: "fudge")
 
         let menu = NSMenu()
         let open = menu.addItem(withTitle: "Open fudge", action: #selector(showPanel), keyEquivalent: "")
         open.target = self
-        if let shortcut { open.title = "Open fudge (\(shortcut))" }
+        openItem = open
         let reload = menu.addItem(
             withTitle: "Reload Extensions", action: #selector(reloadExtensions), keyEquivalent: "")
         reload.target = self
@@ -222,7 +248,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// `--search <text>` types into its search field, `--dropdown <value>` picks a value in its search bar dropdown,
 /// `--actions` presses ⌘K, and `--open-dropdown` presses ⌘P, or in a Form opens its first Dropdown (`--open-tags`: its
 /// first TagPicker).
-/// `--snapshot <file.png> --settings [<extension>]` renders the Settings window instead.
+/// `--snapshot <file.png> --settings [<extension>]` renders the Settings window instead, with a fake login item
+/// whose status `--login-item <status>` sets (`enabled`, `requiresApproval`, `notRegistered`, `notFound`).
 /// For checking the layout without looking at the screen.
 @MainActor
 struct Snapshot {
@@ -236,6 +263,8 @@ struct Snapshot {
     let openTags: Bool
     let settings: Bool
     let settingsExtension: String?
+    /// `--login-item <status>`: what the General page's Open at Login shows (`notRegistered` by default).
+    let loginItem: LoginItemStatus
 
     init?(arguments: [String]) {
         guard let index = arguments.firstIndex(of: "--snapshot"), index + 1 < arguments.count else { return nil }
@@ -251,6 +280,7 @@ struct Snapshot {
         actions = arguments.contains("--actions")
         openDropdown = arguments.contains("--open-dropdown")
         openTags = arguments.contains("--open-tags")
+        loginItem = value("--login-item").flatMap(LoginItemStatus.init(rawValue:)) ?? .notRegistered
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1
