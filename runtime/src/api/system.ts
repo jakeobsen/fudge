@@ -3,7 +3,6 @@
 
 import { fileURLToPath } from "node:url";
 import { callApp } from "../bridge.ts";
-import { notAvailable } from "./stubs.ts";
 
 type PathLike = string | Buffer | URL;
 type Application = { name: string; path: string; bundleId?: string; localizedName?: string };
@@ -37,8 +36,13 @@ export const Clipboard = {
         const content = await callApp<{ text?: string } | null>("clipboard.read", { offset: options.offset ?? 0 });
         return content?.text;
     },
-    // Pasting into the frontmost app means posting ⌘V, which needs Accessibility permission.
-    paste: notAvailable("Clipboard.paste") as (content: Content) => Promise<void>,
+    /**
+     * Pastes into the app the user is in: the app writes the content, posts ⌘V there (which needs Accessibility
+     * permission) and puts the clipboard back a second later. Closes fudge's window first unless told not to.
+     */
+    async paste(content: Content, options: { closeMainWindow?: boolean } = {}): Promise<void> {
+        await callApp("clipboard.paste", { ...normalize(content), closeMainWindow: options.closeMainWindow ?? true });
+    },
 };
 
 /** @deprecated Use Clipboard.copy. */
@@ -46,7 +50,7 @@ export const copyTextToClipboard = (text: string) => Clipboard.copy(text);
 /** @deprecated Use Clipboard.clear. */
 export const clearClipboard = () => Clipboard.clear();
 /** @deprecated Use Clipboard.paste. */
-export const pasteText = notAvailable("pasteText");
+export const pasteText = (text: string) => Clipboard.paste(text);
 
 /** Opens a file, folder or URL, optionally with a given application (name, path, bundle id or Application). */
 export async function open(target: string, application?: Application | string): Promise<void> {

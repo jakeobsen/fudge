@@ -74,6 +74,10 @@ fudge doesn't start at login until you turn on **Open at Login** at the top of *
 
 Root search ranks what you open often first. **Clear Search History…** on the same page makes it forget, after asking.
 
+### Extensions that open other extensions
+
+The first time an extension opens another extension's command, fudge asks whether to allow it, and remembers the answer. To change or forget an answer, open **Settings…** → **General** → **Extensions that open other extensions**: pick **Allowed** or **Not allowed**, or click × to be asked again next time.
+
 ### Calculator and currency
 
 Type a calculation in root search and the answer shows above the results: arithmetic (`5+5/10*39`), units (`13kg to lbs`), time zones (`3pm cet in pst`) and currencies (`100 usd to eur`, `€100 in usd`, `100 € in kr`). ↵ copies the answer.
@@ -99,6 +103,15 @@ When an app doesn't share its selection through Accessibility (often browsers an
 - fudge waits half a second for the copy. An app that answers ⌘C later than that copies after fudge has put your clipboard back, so the selected text ends up on your clipboard.
 
 Secure text fields, such as passwords, never give their text.
+
+### Pasting
+
+Extensions can paste into the app you were in (`Clipboard.paste`, the Paste action). fudge puts the content on your clipboard, presses ⌘V in that app, and puts back what was on your clipboard about a second later. It needs the same Accessibility permission. Without it, the content stays on your clipboard for you to paste yourself.
+
+- fudge marks what it puts on the clipboard as transient, so clipboard history apps that follow [nspasteboard.org](http://nspasteboard.org) skip it.
+- If you copy something within that second, fudge leaves your new copy alone.
+- If your clipboard held a password that a password manager marked as concealed, fudge leaves the clipboard empty instead of putting the password back, for the same reason as above.
+- Apps that read the clipboard late, such as virtual machines or remote desktops that sync it, may paste what fudge put back instead of the content.
 
 ## License
 
