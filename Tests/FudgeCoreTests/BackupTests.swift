@@ -1,0 +1,405 @@
+import Foundation
+import Testing
+
+@testable import FudgeCore
+
+/// A throwaway support folder, removed when the test ends.
+private final class Folder {
+    let url: URL
+    var paths: FudgePaths { FudgePaths(supportDirectory: url) }
+
+    init() throws {
+        url = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "fudge-backup-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    }
+
+    deinit { try? FileManager.default.removeItem(at: url) }
+
+    func write(_ path: String, _ text: String) throws {
+        let file = url.appendingPathComponent(path)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(text.utf8).write(to: file)
+    }
+
+    func read(_ path: String) -> String? {
+        (try? Data(contentsOf: url.appendingPathComponent(path))).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    func json(_ path: String) -> [String: Any]? {
+        (try? Data(contentsOf: url.appendingPathComponent(path)))
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+    }
+
+    func exists(_ path: String) -> Bool {
+        FileManager.default.fileExists(atPath: url.appendingPathComponent(path).path)
+    }
+
+    /// Every file under the folder with its contents, for "nothing changed" checks.
+    func snapshot() -> [String: Data] {
+        var files: [String: Data] = [:]
+        for path in (try? FileManager.default.subpathsOfDirectory(atPath: url.path)) ?? [] {
+            let file = url.appendingPathComponent(path)
+            guard (try? file.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+            files[path] = try? Data(contentsOf: file)
+        }
+        return files
+    }
+}
+
+private func installed(_ name: String, title: String, version: String? = nil) throws -> InstalledExtension {
+    let versionField = version.map { #","version":"\#($0)""# } ?? ""
+    let json = #"{"name":"\#(name)","title":"\#(title)"\#(versionField)}"#
+    return InstalledExtension(
+        manifest: try JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8)),
+        directory: URL(fileURLWithPath: "/nonexistent/\(name)"))
+}
+
+private let now = Date(timeIntervalSince1970: 1_795_000_000)
+private let password = "correct horse"
+
+/// A support folder with every part, the Extension Store's consent, and the things a backup leaves out.
+private func seeded() throws -> Folder {
+    let folder = try Folder()
+    try folder.write(
+        "settings.json",
+        #"{"hotkey":"option+space","extensionStore":true,"extensionStoreConsentAt":"2026-11-20T10:00:00Z","commands":{"alpha/run":{"alias":"ar"}}}"#
+    )
+    try folder.write("launch-permissions.json", #"{"alpha":{"beta":true}}"#)
+    try folder.write("history.json", #"{"alpha/run":3}"#)
+    try folder.write("dropdown-values.json", #"{"alpha/run/kind":"b"}"#)
+    try folder.write("command-metadata.json", #"{"alpha/run":{"subtitle":"Busy"}}"#)
+    try folder.write("preferences/alpha.json", #"{"token":"secret"}"#)
+    try folder.write("local-storage/alpha.json", #"{"count":"1"}"#)
+    try folder.write("form-values/alpha.json", #"{"run":{"name":"x"}}"#)
+    try folder.write("extension-data/alpha/notes/a.txt", "alpha's note")
+    try folder.write("extension-data/fudge-extension-store/installed.json", #"{"alpha":{"tree":"t"}}"#)
+    try folder.write("extension-data/fudge-extension-store/repo/extensions/alpha/package.json", "{}")
+    // Left out of every backup:
+    try folder.write("cache/alpha/cache.json", "{}")
+    try folder.write("exchange-rates.json", "{}")
+    try folder.write("onboarding.json", "{}")
+    try folder.write("extensions/alpha/package.json", "{}")
+    try folder.write("backups/before-import-old.fudgebackup", "old")
+    return folder
+}
+
+// MARK: - The password
+
+@Test func theArchiveGetsAFixedLengthStringMadeFromThePassword() throws {
+    #expect(
+        BackupArchive.archivePassword("correct horse")
+            == "9befe618e1e188107af4b8d691bf81d7a767a69d0b201f4bc52f23cbd76caf38")
+    #expect(BackupArchive.archivePassword("12345678").count == 64, "within AppleEncryptedArchive's 20–256 bytes")
+    let folder = try Folder()
+    let file = folder.url.appendingPathComponent("b.fudgebackup")
+    try BackupArchive.write([BackupEntry(path: "manifest.json", data: Data("{}".utf8))], to: file, password: "12345678")
+    #expect(BackupArchive.isEncrypted(file))
+    #expect(try BackupArchive.read(from: file, password: "12345678").map(\.path) == ["manifest.json"])
+}
+
+// MARK: - Round trip
+
+@Test func aBackupRoundTripsIntoAnEmptySupportFolder() throws {
+    let source = try seeded()
+    let export = Backup.collect(
+        from: source.paths, installed: [try installed("alpha", title: "Alpha", version: "1.2.0")],
+        fudgeVersion: "1.0", now: now)
+    #expect(export.leftOut.isEmpty && export.skipped == 0)
+    #expect(
+        export.summary.text == "Settings, 1 extension's preferences, 2 extensions' data, 1 installed extension listed",
+        "alpha's data and the store's installed.json")
+    let exported = try #require(export.entries.first { $0.path == "settings.json" })
+    let exportedSettings = try #require(try JSONSerialization.jsonObject(with: exported.data) as? [String: Any])
+    #expect(exportedSettings["extensionStoreConsentAt"] == nil, "the consent never goes into a backup")
+    #expect(exportedSettings["extensionStore"] as? Bool == true, "the switch does, for the import's summary")
+    let file = source.url.appendingPathComponent("out/fudge-backup.fudgebackup")
+    try BackupArchive.write(export.entries, to: file, password: password)
+    let attributes = try FileManager.default.attributesOfItem(atPath: file.path)
+    #expect((attributes[.posixPermissions] as? Int) == 0o600)
+
+    let contents = try Backup.open(file, password: password)
+    #expect(contents.manifest.format == 1 && contents.manifest.fudgeVersion == "1.0")
+    #expect(
+        contents.manifest.extensions == [Backup.Listed(name: "alpha", title: "Alpha", version: "1.2.0", source: .store)]
+    )
+    #expect(contents.hadExtensionStore)
+
+    let target = try Folder()
+    let result = try Backup.apply(contents, to: target.paths, installed: [], fudgeVersion: "1.0", now: now)
+    #expect(result.notInstalled.map(\.name) == ["alpha"] && result.hadExtensionStore)
+    let settings = try #require(target.json("settings.json"))
+    #expect(settings["hotkey"] as? String == "option+space")
+    #expect(settings["extensionStore"] == nil && settings["extensionStoreConsentAt"] == nil, "consent never travels")
+    for path in [
+        "launch-permissions.json", "history.json", "preferences/alpha.json", "local-storage/alpha.json",
+        "form-values/alpha.json", "extension-data/alpha/notes/a.txt",
+        "extension-data/fudge-extension-store/installed.json",
+    ] {
+        #expect(target.read(path) == source.read(path), "\(path)")
+    }
+    // The keyed files are merged, so they're written again: the same entries.
+    #expect(target.json("dropdown-values.json") as? [String: String] == ["alpha/run/kind": "b"])
+    #expect(
+        (target.json("command-metadata.json")?["alpha/run"] as? [String: String]) == ["subtitle": "Busy"])
+    #expect(target.json("settings.json")?["commands"] != nil)
+    for path in [
+        "cache/alpha/cache.json", "exchange-rates.json", "onboarding.json", "extensions/alpha/package.json",
+        "extension-data/fudge-extension-store/repo/extensions/alpha/package.json",
+    ] {
+        #expect(!target.exists(path), "\(path) is left out")
+    }
+}
+
+@Test func aWrongPasswordOrADamagedFileFailsCleanly() throws {
+    let source = try seeded()
+    let export = Backup.collect(from: source.paths, installed: [], fudgeVersion: "1.0", now: now)
+    let file = source.url.appendingPathComponent("b.fudgebackup")
+    try BackupArchive.write(export.entries, to: file, password: password)
+    #expect(throws: BackupError.wrongPassword) { try Backup.open(file, password: "not the password") }
+
+    let garbage = source.url.appendingPathComponent("garbage.fudgebackup")
+    try Data("not an archive at all".utf8).write(to: garbage)
+    #expect(throws: BackupError.unreadable) { try Backup.open(garbage, password: password) }
+    #expect(!BackupArchive.isEncrypted(garbage))
+
+    let whole = try Data(contentsOf: file)
+    let truncated = source.url.appendingPathComponent("truncated.fudgebackup")
+    try whole.prefix(whole.count / 2).write(to: truncated)
+    #expect(throws: BackupError.self) { try Backup.open(truncated, password: password) }
+}
+
+@Test func aNewerFormatIsRefused() throws {
+    let manifest = #"{"format":2,"fudgeVersion":"9.0","created":"2030-01-01T00:00:00Z","extensions":[]}"#
+    #expect(throws: BackupError.newerFormat(2)) {
+        try Backup.contents(of: [BackupEntry(path: "manifest.json", data: Data(manifest.utf8))])
+    }
+    let unknownShape = #"{"format":3,"something":"else"}"#
+    #expect(throws: BackupError.newerFormat(3)) {
+        try Backup.contents(of: [BackupEntry(path: "manifest.json", data: Data(unknownShape.utf8))])
+    }
+}
+
+@Test func theCapLeavesOutTheBiggestExtensionsData() throws {
+    let folder = try Folder()
+    try folder.write("extension-data/big/blob", String(repeating: "x", count: 800))
+    try folder.write("local-storage/small.json", String(repeating: "y", count: 150))
+    try folder.write("extension-data/small/blob", String(repeating: "z", count: 150))
+    let export = Backup.collect(from: folder.paths, installed: [], fudgeVersion: "1.0", now: now, dataCap: 1000)
+    #expect(export.leftOut == ["big"])
+    #expect(!export.entries.contains { $0.path.hasPrefix("extension-data/big/") })
+    #expect(export.entries.contains { $0.path == "extension-data/small/blob" })
+    #expect(export.summary.data == ["small"])
+}
+
+@Test func exportNeverFollowsLinks() throws {
+    let folder = try seeded()
+    let outside = try Folder()
+    try outside.write("elsewhere/secret.txt", "not fudge's")
+    let manager = FileManager.default
+    try manager.createSymbolicLink(
+        at: folder.url.appendingPathComponent("extension-data/linked"),
+        withDestinationURL: outside.url.appendingPathComponent("elsewhere"))
+    try manager.createSymbolicLink(
+        at: folder.url.appendingPathComponent("extension-data/alpha/inner.txt"),
+        withDestinationURL: outside.url.appendingPathComponent("elsewhere/secret.txt"))
+    let export = Backup.collect(from: folder.paths, installed: [], fudgeVersion: "1.0", now: now)
+    #expect(export.skipped == 2)
+    #expect(!export.entries.contains { $0.path.contains("linked") || $0.path.contains("inner.txt") })
+    #expect(export.entries.contains { $0.path == "extension-data/alpha/notes/a.txt" })
+}
+
+// MARK: - Applying an import
+
+@Test func anImportReplacesItsPartsAndLeavesTheRestAlone() throws {
+    let source = try seeded()
+    let file = source.url.appendingPathComponent("b.fudgebackup")
+    try BackupArchive.write(
+        Backup.collect(from: source.paths, installed: [], fudgeVersion: "1.0", now: now).entries, to: file,
+        password: password)
+
+    let target = try Folder()
+    try target.write("settings.json", #"{"hotkey":"cmd+space","extensionStore":true,"extensionStoreConsentAt":"here"}"#)
+    try target.write("dropdown-values.json", #"{"alpha/run/kind":"a","beta/list":"keep"}"#)
+    try target.write("preferences/alpha.json", #"{"token":"old"}"#)
+    try target.write("preferences/beta.json", #"{"token":"beta's"}"#)
+    try target.write("extension-data/alpha/stale.txt", "gone after the import")
+    try target.write("extension-data/beta/b.txt", "beta's data")
+
+    let result = try Backup.apply(
+        try Backup.open(file, password: password), to: target.paths,
+        installed: [try installed("alpha", title: "Alpha")],
+        fudgeVersion: "1.0", now: now)
+    #expect(result.notInstalled.isEmpty)
+
+    let settings = try #require(target.json("settings.json"))
+    #expect(settings["hotkey"] as? String == "option+space")
+    #expect(settings["extensionStore"] as? Bool == true && settings["extensionStoreConsentAt"] as? String == "here")
+    #expect(target.json("dropdown-values.json") as? [String: String] == ["alpha/run/kind": "b", "beta/list": "keep"])
+    #expect(target.read("preferences/alpha.json") == #"{"token":"secret"}"#)
+    #expect(target.read("preferences/beta.json") == #"{"token":"beta's"}"#)
+    #expect(target.read("extension-data/alpha/notes/a.txt") == "alpha's note")
+    #expect(!target.exists("extension-data/alpha/stale.txt"), "an extension's data folder is replaced whole")
+    #expect(target.read("extension-data/beta/b.txt") == "beta's data")
+    #expect(!target.snapshot().keys.contains { $0.contains(".import-") }, "no staging left behind")
+
+    // The before-import backup holds what was there, unencrypted.
+    #expect(result.beforeImport.deletingLastPathComponent().lastPathComponent == "backups")
+    let before = try Backup.open(result.beforeImport, password: nil)
+    #expect(before.root["settings.json"].flatMap { String(data: $0, encoding: .utf8) }?.contains("cmd+space") == true)
+    #expect(before.data["alpha"]?["stale.txt"] == Data("gone after the import".utf8))
+}
+
+@Test func onlyTheLastThreeBeforeImportBackupsAreKeptPrivately() throws {
+    let source = try seeded()
+    let contents = try Backup.contents(
+        of: Backup.collect(from: source.paths, installed: [], fudgeVersion: "1.0", now: now).entries)
+    let target = try Folder()
+    var made: [URL] = []
+    for minute in 0..<5 {
+        made.append(
+            try Backup.apply(
+                contents, to: target.paths, installed: [], fudgeVersion: "1.0",
+                now: now.addingTimeInterval(Double(minute) * 60)
+            ).beforeImport)
+    }
+    let kept = try FileManager.default.contentsOfDirectory(atPath: target.paths.backupsDirectory.path).sorted()
+    #expect(kept == made.suffix(3).map(\.lastPathComponent))
+    let manager = FileManager.default
+    #expect(
+        (try manager.attributesOfItem(atPath: target.paths.backupsDirectory.path)[.posixPermissions] as? Int) == 0o700)
+    for name in kept {
+        let path = target.paths.backupsDirectory.appendingPathComponent(name).path
+        #expect((try manager.attributesOfItem(atPath: path)[.posixPermissions] as? Int) == 0o600)
+    }
+}
+
+@Test func aWriteThatFailsPartwayPutsEverythingBack() throws {
+    let source = try seeded()
+    let contents = try Backup.contents(
+        of: Backup.collect(from: source.paths, installed: [], fudgeVersion: "1.0", now: now).entries)
+    let target = try Folder()
+    try target.write("settings.json", #"{"hotkey":"cmd+space"}"#)
+    try target.write("history.json", #"{"old":1}"#)
+    try target.write("extension-data/alpha/old.txt", "old data")
+    let before = target.snapshot()
+
+    // Writes 1–8 are files, 9 stages alpha's data folder, and 10 stages the store's, after alpha's swap.
+    for failing in [3, 9, 10] {
+        let writes = Counter()
+        let writer = Backup.FileWriter { data, url in
+            if writes.next() == failing { throw CocoaError(.fileWriteNoPermission) }
+            try Backup.FileWriter.atomic.write(data, url)
+        }
+        #expect(throws: BackupError.self) {
+            try Backup.apply(contents, to: target.paths, installed: [], fudgeVersion: "1.0", now: now, writer: writer)
+        }
+        let after = target.snapshot().filter { !$0.key.hasPrefix("backups/") }
+        #expect(after == before, "write \(failing) failing leaves the folder as it was")
+    }
+}
+
+private final class Counter: @unchecked Sendable {
+    private var count = 0
+    private let lock = NSLock()
+
+    func next() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        count += 1
+        return count
+    }
+}
+
+// MARK: - Crafted backups: refused, with nothing written
+
+private func crafted(_ entries: [BackupArchive.RawEntry], limits: (Int, Int)? = nil) throws -> Result<
+    Backup.Contents, Error
+> {
+    let folder = try Folder()
+    let manifest = BackupArchive.RawEntry(
+        path: "manifest.json",
+        data: Data(#"{"format":1,"fudgeVersion":"1.0","created":"2026-11-20T00:00:00Z","extensions":[]}"#.utf8))
+    let file = folder.url.appendingPathComponent("crafted.fudgebackup")
+    try BackupArchive.writeRaw([manifest] + entries, to: file, password: password)
+    let support = try Folder()
+    let before = support.snapshot()
+    let result = Result {
+        if let limits {
+            try Backup.contents(
+                of: BackupArchive.read(from: file, password: password, entryLimit: limits.0, totalLimit: limits.1))
+        } else {
+            try Backup.open(file, password: password)
+        }
+    }
+    #expect(support.snapshot() == before && !support.exists("backups"), "nothing written")
+    return result
+}
+
+private func refusal(_ result: Result<Backup.Contents, Error>) -> BackupError.Refusal? {
+    if case .failure(BackupError.refused(let refusal)) = result { return refusal }
+    return nil
+}
+
+private func file(_ path: String, _ text: String = "x") -> BackupArchive.RawEntry {
+    BackupArchive.RawEntry(path: path, data: Data(text.utf8))
+}
+
+@Test func craftedPathsAreRefused() throws {
+    // Apple Archive's own decoder refuses `..`, absolute paths and empty segments before fudge sees the entry.
+    for path in ["../x", "/etc/x", "extension-data/alpha/../../x", "extension-data/alpha//x"] {
+        let result = try crafted([file(path)])
+        guard case .failure(let error) = result else {
+            Issue.record("\(path) was read")
+            continue
+        }
+        #expect(error as? BackupError == .unreadable, "\(path)")
+        // fudge's own check refuses them too, should a decoder ever let one through.
+        #expect(throws: BackupError.refused(.path(path))) {
+            try Backup.contents(of: [BackupEntry(path: path, data: Data("x".utf8))])
+        }
+    }
+    #expect(refusal(try crafted([file("other/x.json")])) == .path("other/x.json"))
+    #expect(refusal(try crafted([file("preferences/a/b.json")])) == .path("preferences/a/b.json"))
+    #expect(refusal(try crafted([file("extension-data/alpha")])) == .path("extension-data/alpha"))
+    #expect(
+        refusal(try crafted([file("extension-data/fudge-extension-store/repo/x")]))
+            == .path("extension-data/fudge-extension-store/repo/x"), "the store's clone is never imported")
+    #expect(refusal(try crafted([file("settings.json"), file("settings.json")])) == .duplicate("settings.json"))
+}
+
+@Test func craftedExtensionNamesAreRefused() throws {
+    #expect(refusal(try crafted([file("preferences/.hidden.json")])) == .extensionName(".hidden"))
+    #expect(refusal(try crafted([file("extension-data/Bad Name/x")])) == .extensionName("Bad Name"))
+    for name in ["a/b", "..", ".hidden"] {
+        let manifest =
+            #"{"format":1,"fudgeVersion":"1.0","created":"2026-11-20T00:00:00Z","extensions":[{"name":"\#(name)","title":"T","source":"local"}]}"#
+        #expect(throws: BackupError.refused(.extensionName(name))) {
+            try Backup.contents(of: [BackupEntry(path: "manifest.json", data: Data(manifest.utf8))])
+        }
+    }
+}
+
+@Test func craftedLinksAndOtherEntriesAreRefused() throws {
+    let symlink = BackupArchive.RawEntry(type: .link, path: "settings.json", link: "/etc/passwd")
+    #expect(refusal(try crafted([symlink])) == .link)
+    let hardLink = BackupArchive.RawEntry(path: "history.json", data: Data("{}".utf8), hardLinkCluster: 7)
+    #expect(refusal(try crafted([hardLink])) == .link)
+    #expect(refusal(try crafted([BackupArchive.RawEntry(type: .directory, path: "preferences")])) == .notAFile)
+    #expect(refusal(try crafted([BackupArchive.RawEntry(type: .fifo, path: "history.json")])) == .notAFile)
+}
+
+@Test func craftedSizesAreRefusedWhileReading() throws {
+    #expect(
+        refusal(try crafted([file("history.json", String(repeating: "x", count: 200))], limits: (150, 10_000)))
+            == .tooBig)
+    let three = (1...3).map { file("preferences/e\($0).json", String(repeating: "x", count: 90)) }
+    #expect(refusal(try crafted(three, limits: (150, 250))) == .tooBig, "too much in total")
+    #expect(throws: Never.self) { try crafted([file("history.json", "{}")], limits: (150, 10_000)).get() }
+}
+
+@Test func aBackupWithoutAManifestIsRefused() throws {
+    #expect(throws: BackupError.refused(.noManifest)) {
+        try Backup.contents(of: [BackupEntry(path: "settings.json", data: Data("{}".utf8))])
+    }
+}

@@ -12,6 +12,8 @@ public struct ExtensionManifest: Sendable, Equatable, Decodable {
     public var preferences: [Preference]
     /// True when `dependencies` or `devDependencies` lists anything.
     public var hasDependencies: Bool
+    /// `package.json`'s `version`, when it has one (Raycast's store extensions usually don't).
+    public var version: String?
 
     public struct Command: Sendable, Equatable, Decodable {
         public var name: String
@@ -71,7 +73,8 @@ public struct ExtensionManifest: Sendable, Equatable, Decodable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case name, title, description, icon, owner, author, commands, preferences, dependencies, devDependencies
+        case name, title, description, icon, owner, author, commands, preferences, dependencies, devDependencies,
+            version
     }
 
     public init(from decoder: Decoder) throws {
@@ -88,6 +91,7 @@ public struct ExtensionManifest: Sendable, Equatable, Decodable {
         let dependencies = try container.decodeIfPresent([String: String].self, forKey: .dependencies) ?? [:]
         let devDependencies = try container.decodeIfPresent([String: String].self, forKey: .devDependencies) ?? [:]
         hasDependencies = !dependencies.isEmpty || !devDependencies.isEmpty
+        version = try? container.decodeIfPresent(String.self, forKey: .version)
     }
 
     public static func load(from packageJSON: URL) throws -> ExtensionManifest {
