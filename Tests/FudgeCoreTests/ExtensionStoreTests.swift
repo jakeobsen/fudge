@@ -99,11 +99,11 @@ private func storeFixture() throws -> (paths: FudgePaths, resources: URL) {
     #expect(ExtensionStore.Consent.title == "Turn on the Extension Store?")
     #expect(
         ExtensionStore.Consent.message
-            == "This adds the Extension Store to fudge. It downloads extensions from Raycast's open-source extensions "
+            == "This adds the Extension Store to Fudge. It downloads extensions from Raycast's open-source extensions "
             + "repository on GitHub.")
     #expect(
         ExtensionStore.Consent.note
-            == "fudge aims to run Raycast extensions, but not all of them work yet. If you find one that doesn't, "
+            == "Fudge aims to run Raycast extensions, but not all of them work yet. If you find one that doesn't, "
             + "please file an issue.")
     #expect(ExtensionStore.Consent.note.contains(ExtensionStore.Consent.issueLinkText), "the link is in the text")
     #expect(ExtensionStore.Consent.issuesURL.absoluteString == "https://github.com/jakeobsen/fudge/issues")

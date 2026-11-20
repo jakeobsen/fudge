@@ -39,11 +39,11 @@ public enum ExtensionStore {
     public enum Consent {
         public static let title = "Turn on the Extension Store?"
         public static let message =
-            "This adds the Extension Store to fudge. It downloads extensions from Raycast's open-source extensions "
+            "This adds the Extension Store to Fudge. It downloads extensions from Raycast's open-source extensions "
             + "repository on GitHub."
         /// The second paragraph, with `issueLinkText` linking to `issuesURL`.
         public static let note =
-            "fudge aims to run Raycast extensions, but not all of them work yet. If you find one that doesn't, "
+            "Fudge aims to run Raycast extensions, but not all of them work yet. If you find one that doesn't, "
             + "please file an issue."
         public static let issueLinkText = "file an issue"
         public static let issuesURL = URL(string: "https://github.com/jakeobsen/fudge/issues")!
