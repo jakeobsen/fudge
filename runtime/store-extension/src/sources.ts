@@ -1,5 +1,5 @@
-// The package-source check: an extension may get npm packages only from registry.npmjs.org, which is what the
-// Extension Store's consent text promises. Anything that could point npm elsewhere is refused before installing.
+// The package-source check: the store installs an extension only if every npm package it uses comes from
+// registry.npmjs.org. Anything that could point npm elsewhere is refused before installing.
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 

@@ -97,7 +97,7 @@ export async function install(entry: StoreEntry, context: StoreContext): Promise
     const commit = await context.repo.commit();
     const confirmed = await context.confirm(
         `${installed[name] ? "Update" : "Install"} ${entry.title}?`,
-        `From github.com/raycast/extensions at ${commit.slice(0, 7)}. It runs on your Mac with your permissions.`,
+        `From github.com/raycast/extensions at ${commit.slice(0, 7)}. It runs its own code on your Mac, like any app you install.`,
         installed[name] ? "Update" : "Install",
     );
     if (!confirmed) return false;

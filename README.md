@@ -131,7 +131,6 @@ With the Extension Store turned on in **Settings… → General**, the **Extensi
 - ↵ installs one, after saying which version of the repository it comes from. ⌘U updates one marked **Update available**, and ⌃X uninstalls it, to the Trash.
 - ⌘D shows an extension's details and README. ⌘R updates the list, which otherwise happens when you open the store and the list is a day old.
 - The store needs Git. If it's missing, install Apple's Command Line Tools: run `xcode-select --install` in Terminal.
-- It refuses an extension that would get npm packages from anywhere but registry.npmjs.org, and shows README images only from GitHub.
 - It never touches extensions you installed with `fudge build` yourself.
 
 ## License

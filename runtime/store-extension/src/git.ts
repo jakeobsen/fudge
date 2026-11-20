@@ -30,9 +30,8 @@ export function stopRunningGit(): void {
 }
 
 /**
- * The environment every program the store runs gets. Git never asks for a password (`GIT_TERMINAL_PROMPT=0`), and
- * ignores the user's own git configuration: a global `url.<base>.insteadOf` could send the clone to SSH, or anywhere,
- * instead of the https address the consent text names.
+ * The environment every program the store runs gets: git never asks for a password (`GIT_TERMINAL_PROMPT=0`), and
+ * ignores the user's own git configuration, so it clones the repository's address exactly as given.
  */
 export function storeEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
     return { ...base, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };

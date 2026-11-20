@@ -510,7 +510,7 @@ test("install fetches the source, checks it, asks, builds into FUDGE_EXTENSIONS_
     assert.deepEqual(asked, [
         {
             title: "Install Alpha?",
-            message: "From github.com/raycast/extensions at c0ffee1. It runs on your Mac with your permissions.",
+            message: "From github.com/raycast/extensions at c0ffee1. It runs its own code on your Mac, like any app you install.",
             primary: "Install",
         },
     ]);

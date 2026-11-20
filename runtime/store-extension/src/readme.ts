@@ -1,4 +1,4 @@
-// An extension's README, made safe to show: images load only from GitHub's hosts, as the consent text says.
+// An extension's README, with images from GitHub's hosts only.
 import { rawURL } from "./catalog.ts";
 
 const githubHosts = new Set([
