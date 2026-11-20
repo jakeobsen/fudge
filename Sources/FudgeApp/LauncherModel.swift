@@ -175,8 +175,34 @@ final class LauncherModel {
     }
 
     private func refreshResults() {
+        calculator = Calculator.evaluate(rootQuery, locale: .current, now: Date(), timeZone: .current)
         results = RootSearch.rank(items, query: rootQuery, history: history)
-        selectedItem = results.first?.id
+        selectedItem = calculator != nil ? Self.calculatorID : results.first?.id
+    }
+
+    // MARK: - The calculator
+
+    /// The Calculator card's answer to the root query, when it's a calculation. The card is the first row.
+    private(set) var calculator: CalculatorResult?
+
+    /// The `selectedItem` of the Calculator card.
+    static let calculatorID = "calculator"
+
+    /// Root search's rows in order: the Calculator card, then the results.
+    private var rootRowIDs: [String] {
+        (calculator == nil ? [] : [Self.calculatorID]) + results.map(\.id)
+    }
+
+    /// Copies the calculator's answer (or the question and answer), then closes the panel with a HUD, as Raycast
+    /// does. The clipboard is written the way extensions' `Clipboard.copy` writes it.
+    func copyCalculatorAnswer(withQuestion: Bool = false) {
+        guard let calculator else { return }
+        let text = withQuestion ? calculator.questionAndAnswer : calculator.copyText
+        Task {
+            _ = try? await SystemCalls.handle("clipboard.copy", .object(["text": .string(text)]))
+        }
+        hide()
+        showHUD("Copied to Clipboard")
     }
 
     /// The item selected in root search.
@@ -649,9 +675,10 @@ final class LauncherModel {
     func moveSelection(by offset: Int) {
         switch screen {
         case .root:
-            guard !results.isEmpty else { return }
-            let index = results.firstIndex { $0.id == selectedItem } ?? 0
-            selectedItem = results[max(0, min(results.count - 1, index + offset))].id
+            let rows = rootRowIDs
+            guard !rows.isEmpty else { return }
+            let index = rows.firstIndex { $0 == selectedItem } ?? 0
+            selectedItem = rows[max(0, min(rows.count - 1, index + offset))]
         case .command(var command):
             guard let rows = command.list?.items, !rows.isEmpty else { return }
             let index = rows.firstIndex { $0.id == command.selectedNode } ?? 0
@@ -668,6 +695,10 @@ final class LauncherModel {
     func activate() {
         switch screen {
         case .root:
+            if selectedItem == Self.calculatorID {
+                copyCalculatorAnswer()
+                return
+            }
             guard let item = selectedRootItem else { return }
             // A required argument left empty takes the keyboard instead.
             if case .command = item.kind, !arguments.checkRequired() { return }
