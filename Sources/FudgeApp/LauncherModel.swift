@@ -37,6 +37,10 @@ final class LauncherModel {
         var followedItemId: String?
         /// The search changed and the command filters itself: select the first item of what it sends back.
         var selectFirstOnRender = false
+        /// The Form the top view shows.
+        var form: FormContent?
+        /// The values of the Form's fields as the user edits them, by node id.
+        var fieldValues: [Int: FieldValue] = [:]
     }
 
     struct DropdownState: Equatable {
@@ -245,6 +249,45 @@ final class LauncherModel {
         send(.event(session: command.session, node: node, path: path, args: []))
     }
 
+    // MARK: - Forms
+
+    /// Reads the top view's Form again, keeping what the user typed (see `FieldValue`).
+    private func refreshForm(_ command: inout CommandScreen) {
+        guard let view = command.view, view.type == "Form" else {
+            command.form = nil
+            command.fieldValues = [:]
+            return
+        }
+        let form = FormContent(view)
+        var values: [Int: FieldValue] = [:]
+        for field in form.fields where field.isEditable {
+            var value = command.fieldValues[field.id] ?? FieldValue(field.initialValue)
+            value.render(controlled: field.value)
+            values[field.id] = value
+        }
+        command.form = form
+        command.fieldValues = values
+    }
+
+    /// A Form field's value as shown.
+    func fieldValue(_ node: Int) -> JSONValue? {
+        command?.fieldValues[node]?.value
+    }
+
+    /// The user changed a Form field: show it, and tell the command (`onChange`).
+    func edit(field node: Int, to value: JSONValue) {
+        guard var command, command.fieldValues[node] != nil, command.fieldValues[node]?.value != value else { return }
+        command.fieldValues[node]?.edit(value)
+        screen = .command(command)
+        send(.event(session: command.session, node: node, path: ["onChange"], args: [value]))
+    }
+
+    /// The title shown in place of the search field in views that have none (Detail, Form).
+    var viewTitle: String? {
+        guard let command, let view = command.view, command.list == nil, command.failure == nil else { return nil }
+        return view.string("navigationTitle") ?? command.title
+    }
+
     // MARK: - The search bar dropdown
 
     /// What the search bar dropdown shows: the extension's value when it controls it, else the user's pick.
@@ -365,16 +408,37 @@ final class LauncherModel {
         send(.event(session: command.session, node: entry.id, path: ["onAction"], args: []))
     }
 
-    /// Keys that the launcher handles itself: ⌘K, ⌘↵ and the actions' shortcuts.
+    /// ↵ runs the primary action, except in a Form, where ↵ belongs to the fields and ⌘↵ submits.
+    var primaryKey: KeyShortcut {
+        command?.form != nil
+            ? KeyShortcut(key: "return", modifiers: ["cmd"]) : KeyShortcut(key: "return", modifiers: [])
+    }
+
+    /// ⌘↵ runs the secondary action; ⌘⇧↵ in a Form.
+    var secondaryKey: KeyShortcut {
+        KeyShortcut(key: "return", modifiers: command?.form != nil ? ["cmd", "shift"] : ["cmd"])
+    }
+
+    /// Keys that the launcher handles itself: ⌘K, the primary and secondary actions' keys, and the actions'
+    /// shortcuts; in views without a search field (Detail, Form) also ↵ and Esc.
     /// Returns false for everything else, which then goes to the focused field.
     func handleKey(_ pressed: KeyShortcut) -> Bool {
         if pressed == KeyShortcut(key: "k", modifiers: ["cmd"]) {
             toggleActionPanel()
             return true
         }
-        guard actionPanel == nil, case .command = screen else { return false }
-        if pressed == KeyShortcut(key: "return", modifiers: ["cmd"]) {
+        guard actionPanel == nil, let command, command.failure == nil else { return false }
+        let hasSearchField = command.view == nil || command.list != nil
+        if !hasSearchField, pressed == KeyShortcut(key: "escape", modifiers: []) {
+            escape()
+            return true
+        }
+        if pressed == secondaryKey {
             if let secondaryAction { run(secondaryAction) }
+            return true
+        }
+        if !hasSearchField, pressed == primaryKey {
+            if let primaryAction { run(primaryAction) }
             return true
         }
         guard !pressed.modifiers.isEmpty else { return false }
@@ -383,7 +447,7 @@ final class LauncherModel {
             return true
         }
         // ⌘P opens the search bar dropdown, unless an action took the shortcut.
-        if pressed == KeyShortcut(key: "p", modifiers: ["cmd"]), command?.list?.dropdown != nil {
+        if pressed == KeyShortcut(key: "p", modifiers: ["cmd"]), command.list?.dropdown != nil {
             dropdownOpenRequests += 1
             return true
         }
@@ -631,6 +695,7 @@ final class LauncherModel {
             refreshList(&command, selectFirst: command.selectFirstOnRender)
             // Results for a new search may come after a loading render or two.
             if command.list?.isLoading != true { command.selectFirstOnRender = false }
+            refreshForm(&command)
             screen = .command(command)
             reportSelection()
 
