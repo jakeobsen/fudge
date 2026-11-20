@@ -1138,12 +1138,14 @@ final class LauncherModel {
     }
 
     /// ← or → in a Grid's search field: moves the selection when `GridNavigation.arrowMovesSelection` says so,
-    /// and returns false to leave the key to the field's cursor otherwise (and outside a Grid).
-    func moveGridSelection(_ move: GridNavigation.Move, textLength: Int, selection: (location: Int, length: Int)?)
-        -> Bool
-    {
+    /// and returns false to leave the key to the field's cursor or the input method otherwise (and outside a Grid).
+    func moveGridSelection(
+        _ move: GridNavigation.Move, modifiers: Set<String>, composing: Bool, textLength: Int,
+        selection: (location: Int, length: Int)?
+    ) -> Bool {
         guard let command, let list = command.list, let sections = list.gridSections, !list.items.isEmpty,
-            GridNavigation.arrowMovesSelection(move, textLength: textLength, selection: selection)
+            GridNavigation.arrowMovesSelection(
+                move, modifiers: modifiers, composing: composing, textLength: textLength, selection: selection)
         else { return false }
         let index = list.items.firstIndex { $0.id == command.selectedNode } ?? 0
         selectListItem(at: GridNavigation.target(from: index, move: move, in: sections))
@@ -1680,6 +1682,15 @@ final class LauncherModel {
                     let confirmed = await confirm(Self.alertRequest(params))
                     send(.rpcResult(session: session, id: id, result: .bool(confirmed), error: nil))
                 }
+            case "clipboard.paste":
+                Task {
+                    do {
+                        try await SystemCalls.paste(params, hideWindow: { await self.hideForPaste() })
+                        send(.rpcResult(session: session, id: id, result: .null, error: nil))
+                    } catch {
+                        send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
+                    }
+                }
             case "command.updateMetadata":
                 do {
                     try updateCommandMetadata(params, from: session)
@@ -1763,6 +1774,14 @@ final class LauncherModel {
         default:
             break
         }
+    }
+
+    /// `Clipboard.paste` hides the panel first, as `closeMainWindow()` does, and waits until it's really gone: key
+    /// status goes back to the app the user was in asynchronously, so ⌘V waits a run-loop turn plus about 50 ms.
+    private func hideForPaste() async {
+        closeWindow(clearRootSearch: false, popToRootType: nil)
+        await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }
+        try? await Task.sleep(for: .milliseconds(50))
     }
 
     /// Success and failure toasts go away after a few seconds; an animated one stays until it changes.

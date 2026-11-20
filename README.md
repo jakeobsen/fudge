@@ -108,6 +108,15 @@ When an extension uses an `https://` image (an icon, or an image in markdown), f
 
 Loading an image tells the image's host your IP address and when you looked, as in a browser. Markdown that shows other people's content, such as issues or emails, can carry tracking images, as it can in Raycast or in a mail app that loads images. fudge doesn't load `http://` images, or images from your Mac (`localhost`) or the local network (`.local` names and private addresses).
 
+### Pasting
+
+Extensions can paste into the app you were in (`Clipboard.paste`, the Paste action). fudge puts the content on your clipboard, presses ⌘V in that app, and puts back what was on your clipboard about a second later. It needs the same Accessibility permission. Without it, the content stays on your clipboard for you to paste yourself.
+
+- fudge marks what it puts on the clipboard as transient, so clipboard history apps that follow [nspasteboard.org](http://nspasteboard.org) skip it.
+- If you copy something within that second, fudge leaves your new copy alone.
+- If your clipboard held a password that a password manager marked as concealed, fudge leaves the clipboard empty instead of putting the password back, for the same reason as above.
+- Apps that read the clipboard late, such as virtual machines or remote desktops that sync it, may paste what fudge put back instead of the content.
+
 ## License
 
 Copyright (C) 2026 Morten Jakobsen.

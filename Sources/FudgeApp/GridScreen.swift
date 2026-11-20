@@ -116,7 +116,8 @@ private struct GridCell: View {
     }
 }
 
-/// A cell's content, drawn into the space the inset leaves: an image as `fit` says, or a color filling it.
+/// A cell's content, drawn into the space the inset leaves: a picture as `fit` says, an icon whole, or a color
+/// filling it (`GridItemContent.drawing`).
 private struct GridCellContent: View {
     let content: GridItemContent?
     let fit: GridSectionLayout.Fit
@@ -131,10 +132,10 @@ private struct GridCellContent: View {
                 RoundedRectangle(cornerRadius: 6)
                     .fill(Color(nsColor: ExtensionColor(json: json)?.exactNSColor ?? .clear))
             case .image(let json):
-                if let resolved = ExtensionImages.resolve(json, assets: assets, dark: colorScheme == .dark) {
-                    drawn(resolved, in: size)
+                if let content, let resolved = ExtensionImages.resolve(json, assets: assets, dark: colorScheme == .dark)
+                {
+                    drawn(resolved, fills: content.fills(fit), in: size)
                         .frame(width: size.width, height: size.height)
-                        .clipShape(CellMask(mask: resolved.mask))
                 }
             case nil:
                 EmptyView()
@@ -142,25 +143,39 @@ private struct GridCellContent: View {
         }
     }
 
-    /// Pictures follow `fit`. Icons and emoji are drawn smaller, in the middle, as Raycast does.
-    @ViewBuilder private func drawn(_ resolved: ResolvedImage, in size: CGSize) -> some View {
+    /// A picture that fills is cropped to the space, and the mask shapes that space. Anything else is drawn whole in
+    /// the middle, and the mask shapes the image itself: a bitmap icon (a file's or an app's) fitted to the space,
+    /// and Raycast's icons and emoji smaller, as Raycast draws them.
+    @ViewBuilder private func drawn(_ resolved: ResolvedImage, fills: Bool, in size: CGSize) -> some View {
         let tint = resolved.tint?.color
         let side = min(size.width, size.height)
+        let mask = CellMask(mask: resolved.mask)
         switch resolved.content {
         case .bitmap(let image):
-            let mode: ContentMode = fit == .fill ? .fill : .fit
-            if let tint {
-                Image(nsImage: image).resizable().renderingMode(.template).aspectRatio(contentMode: mode)
-                    .foregroundStyle(tint)
+            if fills {
+                bitmap(image, tint: tint, mode: .fill)
+                    .frame(width: size.width, height: size.height)
+                    .clipped()
+                    .clipShape(mask)
             } else {
-                Image(nsImage: image).resizable().aspectRatio(contentMode: mode)
+                bitmap(image, tint: tint, mode: .fit).clipShape(mask)
             }
         case .symbol(let name):
             Image(systemName: name).resizable().aspectRatio(contentMode: .fit)
                 .foregroundStyle(tint ?? Color.primary)
                 .frame(width: side * 0.5, height: side * 0.5)
+                .clipShape(mask)
         case .text(let text):
-            Text(text).font(.system(size: side * 0.6))
+            Text(text).font(.system(size: side * 0.6)).clipShape(mask)
+        }
+    }
+
+    @ViewBuilder private func bitmap(_ image: NSImage, tint: Color?, mode: ContentMode) -> some View {
+        if let tint {
+            Image(nsImage: image).resizable().renderingMode(.template).aspectRatio(contentMode: mode)
+                .foregroundStyle(tint)
+        } else {
+            Image(nsImage: image).resizable().aspectRatio(contentMode: mode)
         }
     }
 }
