@@ -2,16 +2,32 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { raycastExports, render } from "../scripts/raycast-exports.ts";
+import { raycastEnums, raycastExports, renderEnums, renderExports } from "../scripts/raycast-types.ts";
 import * as implementation from "../src/api/index.ts";
 import { createApiModule, NotAvailableError } from "../src/api/module.ts";
 import { RAYCAST_EXPORTS } from "../src/api/raycast-exports.generated.ts";
 
-test("the generated export list matches the vendored type definitions", () => {
-    const types = readFileSync(fileURLToPath(new URL("../vendor/raycast-api/index.d.ts", import.meta.url)), "utf8");
-    const generated = readFileSync(fileURLToPath(new URL("../src/api/raycast-exports.generated.ts", import.meta.url)), "utf8");
-    assert.equal(generated, render(raycastExports(types)), "run `npm run generate`");
+const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
+const types = read("../vendor/raycast-api/index.d.ts");
+
+test("the generated files match the vendored type definitions", () => {
+    assert.equal(read("../src/api/raycast-exports.generated.ts"), renderExports(raycastExports(types)), "run `npm run generate`");
+    assert.equal(read("../src/api/raycast-enums.generated.ts"), renderEnums(raycastEnums(types)), "run `npm run generate`");
     assert.ok(RAYCAST_EXPORTS.includes("List") && RAYCAST_EXPORTS.includes("showToast"));
+});
+
+test("enums carry Raycast's own values", () => {
+    assert.equal(Object.keys(implementation.Icon).length, 478);
+    assert.equal(implementation.Icon.Trash, "trash-16");
+    assert.equal(implementation.Color.SecondaryText, "raycast-secondary-text");
+    assert.equal(implementation.LaunchType.UserInitiated, "userInitiated");
+    assert.equal(implementation.Action.Style.Destructive, "destructive");
+    assert.ok(Object.isFrozen(implementation.Icon));
+});
+
+test("enum parsing handles comments and members without a value", () => {
+    const parsed = raycastEnums(`declare enum Mixed {\n  /** doc */ A = "a", // note\n  B,\n  C = 5,\n  D\n}`);
+    assert.deepEqual(parsed, { Mixed: { A: "a", B: 0, C: 5, D: 6 } });
 });
 
 test("everything fudge implements is part of @raycast/api", () => {

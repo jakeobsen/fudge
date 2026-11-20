@@ -11,6 +11,7 @@
 import { createElement, isValidElement, type FunctionComponent, type ReactNode } from "react";
 import { SLOT } from "../renderer/serialize.ts";
 import { useNavigation } from "./navigation.ts";
+import { RAYCAST_ENUMS } from "./raycast-enums.generated.ts";
 
 type Props = Record<string, unknown> & { children?: ReactNode };
 
@@ -29,13 +30,13 @@ export function host(type: string): FunctionComponent<Props> {
     return component;
 }
 
-// Constants. Their values match @raycast/api's own, since extensions may compare them.
+// Constants, with @raycast/api's own values (generated from its type definitions).
 
-const ActionStyle = Object.freeze({ Regular: "regular", Destructive: "destructive" });
-const DatePickerType = Object.freeze({ Date: "date", DateTime: "date_time" });
-const GridInset = Object.freeze({ Zero: "zero", Small: "sm", Medium: "md", Large: "lg" });
-const GridItemSize = Object.freeze({ Small: "small", Medium: "medium", Large: "large" });
-const GridFit = Object.freeze({ Contain: "contain", Fill: "fill" });
+const ActionStyle = Object.freeze({ ...RAYCAST_ENUMS.ActionStyle });
+const DatePickerType = Object.freeze({ ...RAYCAST_ENUMS.DatePickerType });
+const GridInset = Object.freeze({ ...RAYCAST_ENUMS.GridInset });
+const GridItemSize = Object.freeze({ ...RAYCAST_ENUMS.GridItemSize });
+const GridFit = Object.freeze({ ...RAYCAST_ENUMS.GridFit });
 
 // Metadata is shared by Detail and List.Item.Detail.
 
