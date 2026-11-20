@@ -189,6 +189,9 @@ struct LauncherView: View {
                         model.moveSelection(by: 1)
                         return .handled
                     }
+                    .onKeyPress(keys: [.leftArrow, .rightArrow], phases: [.down, .repeat]) { press in
+                        gridArrow(press)
+                    }
                     .onKeyPress(.escape) {
                         model.escape()
                         return .handled
@@ -198,6 +201,20 @@ struct LauncherView: View {
             .layoutPriority(1)
     }
 
+    /// ← and → in a Grid move the selection when the field is empty or its cursor is at the end
+    /// (`GridNavigation.arrowMovesSelection`). Otherwise, and with ⇧, ⌥, ⌘ or ⌃ (text selection and word moves),
+    /// the field keeps them.
+    private func gridArrow(_ press: KeyPress) -> KeyPress.Result {
+        guard press.modifiers.intersection([.shift, .option, .command, .control]).isEmpty else { return .ignored }
+        // The field editor holds the cursor. The panel isn't always the key window, so it's found by type.
+        let editor = NSApp.windows.first { $0 is LauncherPanel }?.firstResponder as? NSTextView
+        let range = editor?.selectedRange()
+        let length = editor?.string.utf16.count ?? model.searchText.utf16.count
+        let move: GridNavigation.Move = press.key == .leftArrow ? .left : .right
+        return model.moveGridSelection(move, textLength: length, selection: range.map { ($0.location, $0.length) })
+            ? .handled : .ignored
+    }
+
     @ViewBuilder private var content: some View {
         switch model.screen {
         case .root:
@@ -205,6 +222,8 @@ struct LauncherView: View {
         case .command(let command):
             if let failure = command.failure {
                 FailureView(failure: failure)
+            } else if let list = command.list, case .grid = list.layout {
+                GridScreen(model: model, command: command, list: list)
             } else if let list = command.list {
                 ListScreen(model: model, command: command, list: list)
             } else if let form = command.form {

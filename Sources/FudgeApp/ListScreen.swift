@@ -67,7 +67,7 @@ struct ListScreen: View {
     }
 }
 
-private struct SectionHeader: View {
+struct SectionHeader: View {
     let title: String
     let subtitle: String?
     let first: Bool
@@ -138,7 +138,7 @@ private struct AccessoryView: View {
     }
 }
 
-private struct EmptyStateView: View {
+struct EmptyStateView: View {
     let empty: ListContent.EmptyView
     let assets: URL?
 
