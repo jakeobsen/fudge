@@ -5,7 +5,9 @@ let usage = """
     Usage: fudge <command>
 
     Commands:
-      build <folder>  Compile the Raycast extension in <folder> and install it.
+      build <folder> [--into <extensions folder>]
+                      Compile the Raycast extension in <folder> and install it, in the
+                      default extensions folder or, with --into, in that one.
       help            Show this help.
       version         Print the fudge version.
     """
@@ -15,14 +17,14 @@ func fail(_ message: String, status: Int32 = 1) -> Never {
     exit(status)
 }
 
-func build(_ folder: String) {
-    let source = URL(fileURLWithPath: folder).standardizedFileURL
+func build(_ arguments: BuildArguments) {
     guard let esbuild = ExtensionBuilder.locateEsbuild() else {
         fail("can't find esbuild: set FUDGE_ESBUILD to its path, or use the fudge inside Fudge.app")
     }
     let builder = ExtensionBuilder(esbuild: esbuild, log: { print("  \($0)") })
     do {
-        let installed = try builder.build(source: source, into: FudgePaths.standard().extensionsDirectory)
+        let installed = try builder.build(
+            source: arguments.source, into: arguments.destination ?? FudgePaths.standard().extensionsDirectory)
         let count = installed.manifest.commands.count
         print("→ installed \(installed.manifest.title) (\(count) command\(count == 1 ? "" : "s"))")
     } catch {
@@ -38,8 +40,11 @@ case nil, "help", "-h", "--help":
 case "version", "--version":
     print(FudgeVersion.current)
 case "build":
-    guard arguments.count == 2 else { fail("usage: fudge build <folder>", status: 2) }
-    build(arguments[1])
+    do {
+        build(try BuildArguments.parse(Array(arguments.dropFirst())))
+    } catch {
+        fail(String(describing: error), status: 2)
+    }
 default:
     fail("unknown command '\(arguments[0])'\n\n\(usage)", status: 2)
 }

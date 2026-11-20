@@ -191,7 +191,9 @@ final class LauncherModel {
     }
 
     private func readInstalledExtensions() {
-        installedExtensions = InstalledExtension.all(in: paths.extensionsDirectory)
+        // The bundled Extension Store is listed with them while it's on.
+        installedExtensions = InstalledExtension.all(
+            paths: paths, settings: FudgeSettings.load(from: paths.settingsFile), resources: Bundle.main.resourceURL)
         extensions = Dictionary(
             installedExtensions.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
         loadCommandMetadata(installedExtensions)
@@ -1736,7 +1738,11 @@ final class LauncherModel {
             throw HostUnavailable(
                 description: "The extension host is missing from Fudge.app. Rebuild it with `make app`.")
         }
-        let host = try ExtensionHost(node: node, script: script)
+        let cli = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/fudge")
+        let host = try ExtensionHost(
+            node: node, script: script,
+            environment: ExtensionStore.hostEnvironment(
+                cli: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil, paths: paths))
         self.host = host
         Task { [weak self] in
             for await message in host.messages { self?.handle(message) }
