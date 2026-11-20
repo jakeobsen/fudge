@@ -255,12 +255,57 @@ public struct LaunchPermissions: Sendable, Equatable, Codable {
         answers[caller, default: [:]][target] = allowed
     }
 
+    /// Removes an answer, so the user is asked again next time.
+    public mutating func forget(caller: String, target: String) {
+        answers[caller]?[target] = nil
+        if answers[caller]?.isEmpty == true { answers[caller] = nil }
+    }
+
+    /// One stored answer: whether `caller` may open `target`'s commands.
+    public struct Entry: Sendable, Hashable, Identifiable {
+        public var caller: String
+        public var target: String
+        public var allowed: Bool
+
+        /// The caller and target, not the answer, so changing an answer updates its row instead of replacing it.
+        public var id: [String] { [caller, target] }
+    }
+
+    /// Every stored answer, sorted by caller, then target.
+    public var entries: [Entry] {
+        answers.keys.sorted().flatMap { caller in
+            (answers[caller] ?? [:]).sorted { $0.key < $1.key }.map {
+                Entry(caller: caller, target: $0.key, allowed: $0.value)
+            }
+        }
+    }
+
+    /// The file holds something `load` can't read, so `save` won't overwrite it.
+    public struct Unreadable: Error, Equatable, CustomStringConvertible {
+        public init() {}
+        public var description: String {
+            "fudge can't read launch-permissions.json, so it leaves the file as it is and can't change these answers. "
+                + "Fix or remove it, then try again."
+        }
+    }
+
+    /// Whether `file` exists with something other than whitespace or answers in it. `load` reads such a file as
+    /// empty, so saving over it would lose what's there.
+    public static func isUnreadable(_ file: URL) -> Bool {
+        guard let data = try? Data(contentsOf: file) else { return false }
+        if String(decoding: data, as: UTF8.self).allSatisfy(\.isWhitespace) { return false }
+        return (try? JSONDecoder().decode(LaunchPermissions.self, from: data)) == nil
+    }
+
     public static func load(from file: URL) -> LaunchPermissions {
         guard let data = try? Data(contentsOf: file) else { return LaunchPermissions() }
         return (try? JSONDecoder().decode(LaunchPermissions.self, from: data)) ?? LaunchPermissions()
     }
 
+    /// Writes the file atomically. Throws `Unreadable`, leaving the file alone, when it holds something that
+    /// isn't answers.
     public func save(to file: URL) throws {
+        guard !Self.isUnreadable(file) else { throw Unreadable() }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
