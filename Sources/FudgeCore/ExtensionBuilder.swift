@@ -46,6 +46,10 @@ public enum BuildError: Error, Equatable, CustomStringConvertible {
     case invalidCommandName(String)
     case noCommands
     case missingEntry(command: String, searched: [String])
+    /// The source folder is where the build would go, or one holds the other.
+    case sourceIsDestination(String)
+    /// Something that isn't an extension fudge built is in the way.
+    case notAnInstall(String)
 
     public var description: String {
         switch self {
@@ -57,6 +61,11 @@ public enum BuildError: Error, Equatable, CustomStringConvertible {
             "the extension declares no commands"
         case .missingEntry(let command, let searched):
             "no source file for the command \"\(command)\" (looked for \(searched.joined(separator: ", ")))"
+        case .sourceIsDestination(let path):
+            "the extension would be installed at \(path), which is its own source folder or overlaps it; "
+                + "install it into another folder"
+        case .notAnInstall(let path):
+            "\(path) isn't an extension fudge built, so it won't be replaced"
         }
     }
 }
@@ -91,6 +100,7 @@ public struct ExtensionBuilder: Sendable {
             }
             return try Self.entry(for: command.name, in: source)
         }
+        try Self.checkDestination(extensionsDirectory.appendingPathComponent(manifest.name), source: source)
 
         let scratch = files.temporaryDirectory.appendingPathComponent("fudge-build-\(UUID().uuidString)")
         try files.createDirectory(at: scratch, withIntermediateDirectories: true)
@@ -178,6 +188,25 @@ public struct ExtensionBuilder: Sendable {
     }
 
     /// Moves `staging` to `destination`, replacing what's there.
+    /// What an install folder holds: `build` writes exactly these, and nothing else may be replaced.
+    static let installedItems: Set<String> = ["package.json", "dist", "assets"]
+
+    /// Refuses a destination that is the source folder, holds it or sits inside it, compared after resolving
+    /// symlinks and ignoring case (the file system does), since replacing it would delete the source. Refuses
+    /// anything there that isn't a fudge build too.
+    static func checkDestination(_ destination: URL, source: URL) throws {
+        func key(_ url: URL) -> String { url.standardizedFileURL.resolvingSymlinksInPath().path.lowercased() }
+        let target = key(destination.deletingLastPathComponent()) + "/" + destination.lastPathComponent.lowercased()
+        let origin = key(source)
+        if origin == target || origin.hasPrefix(target + "/") || target.hasPrefix(origin + "/") {
+            throw BuildError.sourceIsDestination(destination.path)
+        }
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: destination.path)) ?? []
+        if names.contains(where: { !$0.hasPrefix(".") && !installedItems.contains($0) }) {
+            throw BuildError.notAnInstall(destination.path)
+        }
+    }
+
     static func replace(_ destination: URL, with staging: URL) throws {
         let files = FileManager.default
         guard files.fileExists(atPath: destination.path) else {

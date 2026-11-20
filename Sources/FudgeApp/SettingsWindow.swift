@@ -48,11 +48,13 @@ final class SettingsModel {
     }
 
     func reload() {
-        extensions = InstalledExtension.all(in: paths.extensionsDirectory).filter { installed in
+        let installed = InstalledExtension.all(
+            paths: paths, settings: FudgeSettings.load(from: paths.settingsFile), resources: Bundle.main.resourceURL)
+        extensions = installed.filter { installed in
             !installed.manifest.preferences.isEmpty || installed.manifest.commands.contains { !$0.preferences.isEmpty }
         }
         stored = Dictionary(uniqueKeysWithValues: extensions.map { ($0.manifest.name, store.load($0.manifest.name)) })
-        allExtensions = InstalledExtension.all(in: paths.extensionsDirectory).sorted {
+        allExtensions = installed.sorted {
             $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending
         }
         fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
@@ -194,6 +196,39 @@ final class SettingsModel {
         }
         // What's registered must match the file, or the next launch would bring the old one back unannounced.
         if !change({ $0.launcherHotkey = spec }) { _ = registerLauncherHotkey(old) }
+    }
+
+    // MARK: - Extension Store
+
+    /// Whether the Extension Store is on: switched on through its consent sheet.
+    var extensionStore: Bool { fudgeSettings.isExtensionStoreOn }
+    /// Asks the user with a sheet on the Settings window; set by the window controller.
+    @ObservationIgnored var confirm: (LauncherModel.AlertRequest) async -> Bool = { _ in false }
+    /// Tells the launcher to list or drop the store's commands; set by the app delegate.
+    @ObservationIgnored var extensionStoreChanged: () -> Void = {}
+
+    /// The switch: on only after the consent sheet's Turn On, which records the date; off after its own sheet,
+    /// which deletes the store's downloaded repository but keeps its record of what it installed.
+    func setExtensionStore(_ on: Bool) {
+        guard on != extensionStore else { return }
+        Task {
+            let sheet = on ? ExtensionStore.consentRequest : ExtensionStore.turnOffRequest
+            guard await confirm(sheet) else { return }
+            let saved = change { settings in
+                settings.extensionStore = on
+                settings.extensionStoreConsentAt = on ? ISO8601DateFormatter().string(from: Date()) : nil
+            }
+            guard saved else { return }
+            if !on {
+                do {
+                    try ExtensionStore.deleteRepository(paths)
+                } catch {
+                    FileHandle.standardError.write(Data("fudge: couldn't delete the store's list: \(error)\n".utf8))
+                }
+            }
+            reload()
+            extensionStoreChanged()
+        }
     }
 
     // MARK: - Command hotkeys
@@ -442,6 +477,17 @@ final class SettingsWindowController {
             window.contentView = NSHostingView(rootView: SettingsView(model: model))
             window.center()
             self.window = window
+            model.confirm = { [weak window] request in
+                guard let window else { return false }
+                let alert = NSAlert()
+                alert.messageText = request.title
+                alert.informativeText = request.message ?? ""
+                alert.addButton(withTitle: request.primary).hasDestructiveAction = request.destructive
+                alert.addButton(withTitle: request.dismiss)
+                return await withCheckedContinuation { continuation in
+                    alert.beginSheetModal(for: window) { continuation.resume(returning: $0 == .alertFirstButtonReturn) }
+                }
+            }
             // Closing the window mid-recording gives fudge its hotkeys back.
             let model = model
             NotificationCenter.default.addObserver(
