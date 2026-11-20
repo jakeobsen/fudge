@@ -56,7 +56,7 @@ test("names the API a path is about", () => {
 test("a stub is missing wherever the path reaches it, lowercase members included", () => {
     assert.equal(support(api, "Clipboard.paste"), "missing", "a stub member of an implemented namespace");
     assert.equal(support(api, "pasteText"), "missing", "an implemented export that is a stub");
-    assert.equal(support(api, "getSelectedText"), "missing", "an export fudge doesn't implement");
+    assert.equal(support(api, "BrowserExtension.getTabs"), "missing", "a member of an export fudge leaves out");
     assert.equal(support(api, "environment.commandName"), "implemented", "a getter that needs a running command");
 });
 
