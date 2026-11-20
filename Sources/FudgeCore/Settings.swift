@@ -77,6 +77,12 @@ public struct FudgeSettings: Sendable, Equatable {
             && commands[Self.commandID(extension: extensionName, command: command)]?.enabled != false
     }
 
+    /// `isEnabled` for a command id ("<extension name>/<command name>"), split at its first "/".
+    public func isEnabled(commandID id: String) -> Bool {
+        guard let slash = id.firstIndex(of: "/") else { return true }
+        return isEnabled(extension: String(id[..<slash]), command: String(id[id.index(after: slash)...]))
+    }
+
     /// Whether an extension is enabled on the Commands page. Every extension is until it's disabled, except the
     /// bundled Extension Store, which is off until it's enabled. An install from before that, with the store
     /// switched on, counts as enabled until either is changed.

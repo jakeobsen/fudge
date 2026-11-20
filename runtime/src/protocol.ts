@@ -10,7 +10,7 @@ import type { LaunchEnvironment } from "./api/launch.ts";
 import type { RpcRequest } from "./bridge.ts";
 import type { UINode } from "./renderer/serialize.ts";
 
-export type CommandMode = "view" | "no-view";
+export type CommandMode = "view" | "no-view" | "menu-bar";
 
 export type LaunchProps = {
     arguments?: Record<string, string>;
@@ -46,6 +46,8 @@ export type WorkerMessage =
     | RpcRequest
     | { type: "error"; message: string; stack?: string; fatal: boolean }
     | { type: "log"; level: "info" | "error"; message: string }
+    /** Answers every `event`, once its handler has returned, or settled when it returned a promise. */
+    | { type: "eventSettled" }
     | { type: "exit"; reason: "finished" | "unloaded" | "crashed" };
 
 /** Host → worker. */
@@ -88,8 +90,8 @@ export function parseAppMessage(line: string): Parsed {
             const problem = needsSession();
             if (problem) return problem;
             if (typeof value.entry !== "string" || value.entry === "") return protocolError("`launch` needs an `entry`");
-            if (value.mode !== "view" && value.mode !== "no-view") {
-                return protocolError("`launch` needs a `mode` of `view` or `no-view`");
+            if (value.mode !== "view" && value.mode !== "no-view" && value.mode !== "menu-bar") {
+                return protocolError("`launch` needs a `mode` of `view`, `no-view` or `menu-bar`");
             }
             const launchProps = isObject(value.launchProps) ? (value.launchProps as LaunchProps) : undefined;
             const preferences = isObject(value.preferences) ? value.preferences : undefined;
