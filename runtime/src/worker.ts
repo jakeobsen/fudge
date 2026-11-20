@@ -45,6 +45,8 @@ function report(error: unknown, fatal: boolean): void {
     post({ type: "error", message: failure.message, stack: failure.stack, fatal });
 }
 
+// Dependencies' deprecation warnings (e.g. Node's punycode module) are noise to the user.
+process.noDeprecation = true;
 process.on("uncaughtException", (error) => report(error, false));
 process.on("unhandledRejection", (reason) => report(reason, false));
 connect((request) => post(request));
