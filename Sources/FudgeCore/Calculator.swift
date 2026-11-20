@@ -41,9 +41,11 @@ public enum Calculator {
                 copyText: "\(plain) \(conversion.to.symbol)")
         }
         if let value = Arithmetic.evaluate(query, commaIsDecimal: commaIsDecimal) {
+            // Spelled out only while the answer is written out: past 1e15 the words would name another number.
+            let label = Swift.abs(value) < 1e15 ? spelledOut(value) : "Result"
             return CalculatorResult(
                 kind: .arithmetic, question: query, questionLabel: "Expression",
-                answer: format(value, locale: locale, grouping: true), answerLabel: spelledOut(value),
+                answer: format(value, locale: locale, grouping: true), answerLabel: label,
                 copyText: format(value, locale: locale, grouping: false))
         }
         return nil
@@ -63,14 +65,18 @@ public enum Calculator {
         full.timeStyle = .short
         full.timeZone = conversion.target.zone
         let answer = full.string(from: conversion.date)
+        // A place typed as an abbreviation shows the one in force on that date: `pst` in July is PDT.
+        func name(_ place: TimeZoneConversion.Place) -> String {
+            place.isAbbreviation ? TimeZoneConversion.abbreviation(of: place.zone, at: conversion.date) : place.name
+        }
+        let source = name(conversion.source)
         let questionLabel =
-            conversion.isNow
-            ? "now, \(conversion.source.name)" : "\(time.string(from: conversion.date)), \(conversion.source.name)"
-        // An abbreviation as typed already names the zone ("PST"); a city gets the zone's abbreviation on that date.
+            conversion.isNow ? "now, \(source)" : "\(time.string(from: conversion.date)), \(source)"
         let target = conversion.target
-        let abbreviation = target.zone.abbreviation(for: conversion.date)
         let answerLabel =
-            target.isAbbreviation || abbreviation == nil ? target.name : "\(target.name), \(abbreviation!)"
+            target.isAbbreviation
+            ? name(target)
+            : "\(target.name), \(TimeZoneConversion.abbreviation(of: target.zone, at: conversion.date))"
         return CalculatorResult(
             kind: .timeZone, question: query, questionLabel: questionLabel, answer: answer, answerLabel: answerLabel,
             copyText: answer)

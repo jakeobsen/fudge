@@ -109,6 +109,24 @@ public enum TimeZoneConversion {
         (identifier.split(separator: "/").last.map(String.init) ?? identifier).replacingOccurrences(of: "_", with: " ")
     }
 
+    /// The abbreviation a zone goes by at `date`: its standard or summer one from `named` (CET or CEST, PST or PDT),
+    /// else Foundation's, which for many zones is an offset (`GMT+1`).
+    public static func abbreviation(of zone: TimeZone, at date: Date) -> String {
+        if let (standard, summer) = named[zone.identifier] {
+            return zone.isDaylightSavingTime(for: date) ? summer : standard
+        }
+        return zone.abbreviation(for: date) ?? zone.identifier
+    }
+
+    /// The standard and summer abbreviations of the zones `abbreviations` maps to.
+    static let named: [String: (String, String)] = [
+        "UTC": ("UTC", "UTC"), "GMT": ("GMT", "GMT"), "Europe/Berlin": ("CET", "CEST"),
+        "Europe/Athens": ("EET", "EEST"), "Europe/Lisbon": ("WET", "WEST"), "Europe/London": ("GMT", "BST"),
+        "America/New_York": ("EST", "EDT"), "America/Chicago": ("CST", "CDT"), "America/Denver": ("MST", "MDT"),
+        "America/Los_Angeles": ("PST", "PDT"), "Asia/Tokyo": ("JST", "JST"), "Asia/Kolkata": ("IST", "IST"),
+        "Australia/Sydney": ("AEST", "AEDT"),
+    ]
+
     /// Each abbreviation maps to one zone. IST is India's, and CST is the US's Central time.
     static let abbreviations: [String: String] = [
         "utc": "UTC", "gmt": "GMT", "cet": "Europe/Berlin", "cest": "Europe/Berlin", "eet": "Europe/Athens",

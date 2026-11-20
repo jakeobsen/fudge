@@ -58,6 +58,14 @@ func arithmeticValues(_ query: String, _ value: Double) throws {
     #expect(da.questionAndAnswer == "1234,5*1000 = 1.234.500")
 }
 
+@Test func hugeAnswersAreNotSpelledOut() throws {
+    // Spelling out tops out near 2^54: past 1e15 the words would name a different number.
+    #expect(try #require(calculate("10^14", enUS)).answerLabel == "One Hundred Trillion")
+    #expect(try #require(calculate("10^17", enUS)).answerLabel == "Result")
+    #expect(try #require(calculate("10^20", enUS)).answerLabel == "Result")
+    #expect(try #require(calculate("-10^20", enUS)).answerLabel == "Result")
+}
+
 @Test func tenSignificantDigitsAndScientificOutsideTheRange() throws {
     #expect(try #require(calculate("1/3", enUS)).answer == "0.3333333333")
     #expect(try #require(calculate("10^15", enUS)).answer.contains("E"), "1e15 is scientific")
@@ -164,11 +172,22 @@ func copenhagenToNewYork(_ month: Int, _ date: Int, _ time: String, _ zone: Stri
     #expect(try #require(calculate("3 pm cet in pst", enDK)).answer.hasSuffix("06.00"))
 }
 
+@Test func abbreviationsFollowSummerTime() throws {
+    let summer = try #require(calculate("3pm cet in pst", enDK, now: day(7, 15)))
+    #expect(summer.answer == "15 July 2026 at 06.00")
+    #expect(summer.questionLabel == "15.00, CEST", "CET in summer is CEST")
+    #expect(summer.answerLabel == "PDT", "PST in summer is PDT")
+    let london = try #require(calculate("12:00 london to utc", enDK, now: day(7, 15)))
+    #expect(london.answer.hasSuffix("11.00"))
+    #expect(try #require(calculate("time in london", enDK)).answerLabel == "London, GMT")
+    #expect(try #require(calculate("time in london", enDK, now: day(7, 15))).answerLabel == "London, BST")
+}
+
 @Test func nowInAPlace() throws {
     let tokyo = try #require(calculate("time in tokyo", enDK))
     #expect(tokyo.questionLabel == "now, Copenhagen")
     #expect(tokyo.answer == "15 January 2026 at 19.00")
-    #expect(tokyo.answerLabel == "Tokyo, GMT+9")
+    #expect(tokyo.answerLabel == "Tokyo, JST")
     #expect(try #require(calculate("now in london", enDK)).answer == "15 January 2026 at 10.00")
     #expect(try #require(calculate("Time in San Francisco", enDK)).answerLabel.hasPrefix("San Francisco"))
 }
