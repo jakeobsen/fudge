@@ -1,0 +1,33 @@
+# fudge
+
+A keyboard launcher for macOS, built to run extensions written for Raycast's [`@raycast/api`](https://developers.raycast.com).
+
+fudge is an independent project. It is not affiliated with or endorsed by Raycast.
+
+## What's here
+
+- `Sources/FudgeApp`: the macOS app. It runs in the menu bar, without a Dock icon.
+- `Sources/FudgeCLI`: the `fudge` command-line tool.
+- `Sources/FudgeCore`: code shared by the app and the tool.
+- `runtime/`: the extension host. This is the Node.js program that runs extensions. The app talks to it over stdin/stdout.
+
+## Building
+
+You need macOS 14 or later, Xcode 16 or later (Swift 6) and Node.js 22.18 or later.
+
+```bash
+make app     # build build/Fudge.app
+make run     # build it and open it
+make test    # run the Swift and extension host tests
+make lint    # check formatting and types
+```
+
+`make help` lists every target.
+
+## License
+
+Copyright (C) 2026 Morten Jakobsen.
+
+Licensed under the GNU Affero General Public License, version 3 or (at your option) any later version (`AGPL-3.0-or-later`). See [LICENSE](LICENSE).
+
+`runtime/vendor/raycast-api/index.d.ts` contains the type definitions from the `@raycast/api` package. They are Copyright (c) 2021 Raycast and MIT-licensed; see [the notice next to them](runtime/vendor/raycast-api/LICENSE).
