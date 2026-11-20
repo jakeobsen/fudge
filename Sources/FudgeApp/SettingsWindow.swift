@@ -74,6 +74,30 @@ final class SettingsModel {
         currencyRatesChanged(on)
     }
 
+    // MARK: - Open at Login and search history
+
+    /// fudge as a login item; the app delegate sets the real one, and snapshots a fake.
+    @ObservationIgnored var loginItem: any LoginItem = FixedLoginItem(.notRegistered)
+    /// The Open at Login switch, from the system's real status (`refreshLoginItem()`), never a stored value.
+    private(set) var loginItemState = LoginItemState(.notRegistered)
+    /// Why turning Open at Login on or off failed, until the next try.
+    private(set) var loginItemError: String?
+    /// Clears root search's launch history; set by the app delegate.
+    @ObservationIgnored var clearSearchHistory: () -> Void = {}
+
+    /// Reads the login item's status again: a change made in System Settings shows too.
+    func refreshLoginItem() {
+        loginItemState = LoginItemState(loginItem.status)
+    }
+
+    func setOpenAtLogin(_ on: Bool) {
+        (loginItemState, loginItemError) = LoginItemState.change(loginItem, to: on)
+    }
+
+    func openLoginItemsSettings() {
+        loginItem.openSystemSettings()
+    }
+
     // MARK: - Command hotkeys
 
     func hotkey(for commandID: String) -> HotKeySpec? {
@@ -222,6 +246,7 @@ final class SettingsWindowController {
 
     private func prepare(extension name: String?) {
         model.reload()
+        model.refreshLoginItem()
         // "fudge Settings" and Settings… open on the General page; Configure Extension on the extension's own.
         model.selected = name ?? SettingsModel.generalPage
         if window == nil {
@@ -242,6 +267,12 @@ final class SettingsWindowController {
                 forName: NSWindow.willCloseNotification, object: window, queue: .main
             ) { _ in
                 MainActor.assumeIsolated { model.cancelRecording() }
+            }
+            // Coming back from System Settings → Login Items shows what was changed there.
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+            ) { _ in
+                MainActor.assumeIsolated { model.refreshLoginItem() }
             }
         }
     }
