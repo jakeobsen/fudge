@@ -7,6 +7,7 @@
 // counts like `Action.CopyToClipboard`.
 
 import { transform } from "esbuild";
+import { isNotAvailable, NOT_DRAWN, NotAvailableError, UNAVAILABLE } from "../../src/api/stubs.ts";
 
 /** What one source file uses: API paths such as `Clipboard.copy`, and the names it imports from @raycast/utils. */
 export interface Uses {
@@ -77,16 +78,35 @@ export function uses(code: string): Uses {
     return { api, utils };
 }
 
-export type Support = "implemented" | "missing" | "unknown";
+/** Why an extension can't use an API in fudge. */
+export type GapKind = "missing" | "render-but-fail" | "not-drawn" | "via @raycast/utils";
 
-/** Reading any member of a not-available stub throws; reading one of an implemented value doesn't. */
-function isStub(value: unknown): boolean {
-    if ((typeof value !== "object" && typeof value !== "function") || value === null) return false;
+/**
+ * What fudge does with an API path: provides it, lacks it (and how), or the path isn't Raycast API at all
+ * (`Color.Gray`, a test mock's `showToast.mockResolvedValue`).
+ */
+export type Support = "implemented" | "not-raycast" | Exclude<GapKind, "via @raycast/utils">;
+
+function isObjectLike(value: unknown): value is object {
+    return (typeof value === "object" || typeof value === "function") && value !== null;
+}
+
+/** The gap a value itself stands for: a stub, or a component carrying one of the markers (src/api/stubs.ts). */
+function gapOf(value: unknown): Support | undefined {
+    if (isNotAvailable(value)) return "missing";
+    if (!isObjectLike(value)) return undefined;
+    if (Reflect.get(value, NOT_DRAWN) !== undefined) return "not-drawn";
+    if (Reflect.get(value, UNAVAILABLE) !== undefined) return "render-but-fail";
+    return undefined;
+}
+
+/** Reads a member: its value, or `missing` when reading it throws `NotAvailableError`. */
+function read(value: object, key: string): { value: unknown } | "missing" {
     try {
-        Reflect.get(value, "__fudgeProbe");
-        return false;
-    } catch {
-        return true;
+        return { value: Reflect.get(value, key) };
+    } catch (error) {
+        // A getter that needs a running command (`environment.commandName`) throws something else: it's there.
+        return error instanceof NotAvailableError ? "missing" : { value: undefined };
     }
 }
 
@@ -94,33 +114,80 @@ function isStub(value: unknown): boolean {
  * Whether fudge provides `path` in `api` (the module extensions receive). Capitalised segments are components,
  * namespaces and constants (`Action.CopyToClipboard`, `Toast.Style`) and are followed; the first lowercase
  * segment is a function or property (`Clipboard.copy`, `environment.supportPath`), checked for being there, and
- * nothing after it is (`environment.commandName.length` is about the string). "unknown" is a name that isn't
- * one of Raycast's exports at all.
+ * nothing after it is (`environment.commandName.length` is about the string). A value on the way that's a stub,
+ * or a component marked as failing when used or as not drawn by the app, makes the path a gap of that kind.
+ * `declared` says whether Raycast's types declare the path; without it, only the export is checked.
  */
-export function support(api: Record<string, unknown>, path: string): Support {
+export function support(api: Record<string, unknown>, path: string, declared?: (path: string) => boolean): Support {
     const [first, ...rest] = path.split(".");
-    if (!(first in api)) return "unknown";
-    let value: unknown;
-    try {
-        value = api[first];
-    } catch {
-        return "missing";
-    }
-    if (isStub(value)) return "missing";
+    if (!(first! in api) || (declared && !declared(apiName(path)))) return "not-raycast";
+    const top = read(api, first!);
+    if (top === "missing") return "missing";
+    let value = top.value;
+    let gap = gapOf(value);
+    if (gap) return gap;
     for (const segment of rest) {
-        if ((typeof value !== "object" && typeof value !== "function") || value === null) return "implemented";
-        if (/^[A-Z]/.test(segment)) {
-            try {
-                value = Reflect.get(value, segment);
-            } catch {
-                return "missing";
-            }
-            if (value === undefined || isStub(value)) return "missing";
-        } else {
-            return segment in value ? "implemented" : "missing";
-        }
+        if (!isObjectLike(value)) return "implemented";
+        const capitalised = /^[A-Z]/.test(segment);
+        if (!capitalised && !(segment in value)) return "missing";
+        const member = read(value, segment);
+        if (member === "missing") return "missing";
+        value = member.value;
+        if (capitalised && value === undefined) return "missing";
+        gap = gapOf(value);
+        if (gap) return gap;
+        if (!capitalised) return "implemented";
     }
     return "implemented";
+}
+
+/** One API an extension can't use in fudge. `via` names the @raycast/utils exports it comes through. */
+export interface Gap {
+    api: string;
+    kind: GapKind;
+    via?: string[];
+}
+
+/**
+ * The gaps in what an extension uses, and the paths it uses that aren't Raycast API. Each @raycast/utils export
+ * it uses adds the paths that export needs (`utilsPaths`); a gap only reached that way is `via @raycast/utils`.
+ */
+export function gaps(
+    found: Uses,
+    api: Record<string, unknown>,
+    declared: (path: string) => boolean,
+    utilsPaths: Readonly<Record<string, readonly string[]>>,
+): { gaps: Gap[]; notRaycast: string[] } {
+    const byApi = new Map<string, Gap>();
+    const notRaycast = new Set<string>();
+    for (const path of found.api) {
+        const result = support(api, path, declared);
+        if (result === "not-raycast") notRaycast.add(apiName(path));
+        else if (result !== "implemented" && !byApi.has(apiName(path))) byApi.set(apiName(path), { api: apiName(path), kind: result });
+    }
+    for (const name of [...found.utils].sort()) {
+        for (const path of utilsPaths[name] ?? []) {
+            const result = support(api, path, declared);
+            if (result === "implemented" || result === "not-raycast") continue;
+            const gap = byApi.get(apiName(path)) ?? { api: apiName(path), kind: "via @raycast/utils", via: [] };
+            if (gap.kind === "via @raycast/utils" && !gap.via!.includes(name)) gap.via!.push(name);
+            byApi.set(gap.api, gap);
+        }
+    }
+    const sorted = [...byApi.values()].sort((a, b) => a.api.localeCompare(b.api));
+    return { gaps: sorted, notRaycast: [...notRaycast].sort() };
+}
+
+/**
+ * Whether a file under an extension's `src/` is extension code: a script, not a declaration file, and not a test
+ * or mock (`*.test.*`, `*.spec.*`, or inside `__mocks__/`, `__tests__/`, `test/` or `tests/`).
+ */
+export function isExtensionSource(relativePath: string): boolean {
+    if (!/\.(tsx?|jsx?)$/.test(relativePath) || relativePath.endsWith(".d.ts")) return false;
+    const segments = relativePath.split(/[\\/]/);
+    if (segments.includes("node_modules")) return false;
+    if (segments.slice(0, -1).some((folder) => ["__mocks__", "__tests__", "test", "tests"].includes(folder))) return false;
+    return !/\.(test|spec)\.[^.]+$/.test(segments.at(-1)!);
 }
 
 /** The part of a path that names the missing API: up to its first lowercase segment (`Clipboard.copy`). */

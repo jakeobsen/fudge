@@ -15,6 +15,7 @@ import { isFullDay } from "./dates.ts";
 import { FormValuesContext, useFormField, type FormRegistry } from "./form-state.ts";
 import { useNavigation } from "./navigation.ts";
 import { RAYCAST_ENUMS } from "./raycast-enums.generated.ts";
+import { mark, NOT_DRAWN } from "./stubs.ts";
 
 type Props = Record<string, unknown> & { children?: ReactNode };
 
@@ -162,3 +163,24 @@ export const Form = Object.assign(FormView, {
     /** @deprecated Use Form.TagPicker.Item. */
     TagPickerItem: FormTagPickerItem,
 });
+
+// Components the extension host renders but the app can't draw yet. The compat scan counts every use of one, or
+// of a member of one, as missing ("not-drawn"). Whoever teaches the app to draw one removes it from this list in
+// the same PR. Where the app would draw them:
+// - Form.LinkAccessory: `FormContent` (Sources/FudgeCore/FormContent.swift) skips it, and nothing reads a Form's
+//   `searchBarAccessory`.
+const notDrawn: Record<string, object> = {
+    "Form.LinkAccessory": Form.LinkAccessory,
+};
+for (const [name, component] of Object.entries(notDrawn)) markNotDrawn(component, name);
+
+/** Marks a component and its sub-components, which old names also reach directly (`FormDropdownItem`). */
+function markNotDrawn(component: object, name: string): void {
+    if (Object.isFrozen(component)) return;
+    mark(component, NOT_DRAWN, name);
+    for (const [key, member] of Object.entries(component)) {
+        if (/^[A-Z]/.test(key) && (typeof member === "function" || typeof member === "object") && member !== null) {
+            markNotDrawn(member, `${name}.${key}`);
+        }
+    }
+}
