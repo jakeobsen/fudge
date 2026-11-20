@@ -91,6 +91,11 @@ public struct FudgePaths: Sendable, Equatable {
     }
 
     /// Installed extensions, one folder each.
+    /// The before-import backups (`Backup.apply`): plain archives of the state an import replaced.
+    public var backupsDirectory: URL {
+        supportDirectory.appendingPathComponent("backups", isDirectory: true)
+    }
+
     public var extensionsDirectory: URL {
         supportDirectory.appendingPathComponent("extensions", isDirectory: true)
     }

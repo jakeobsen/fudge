@@ -2,7 +2,8 @@ import FudgeCore
 import SwiftUI
 
 /// The Settings window's General page: Open at Login, the launcher's hotkey, whether the calculator downloads
-/// exchange rates, clearing root search's history, and which extensions may open other extensions' commands.
+/// exchange rates, clearing root search's history, which extensions may open other extensions' commands, and
+/// Import / Export.
 struct GeneralPage: View {
     @Bindable var model: SettingsModel
     @State private var confirmingClear = false
@@ -73,6 +74,7 @@ struct GeneralPage: View {
             if !model.launchPermissions.isEmpty || model.launchPermissionsUnreadable {
                 LaunchPermissionsSection(model: model)
             }
+            BackupSection(model: model)
         }
         .formStyle(.grouped)
         .onAppear { model.refreshLoginItem() }
