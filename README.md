@@ -98,7 +98,12 @@ Currency conversion uses the European Central Bank's daily exchange rates. Turn 
 
 ### Extension Store
 
-Turn on **Extension Store** under **Settings… → General** to browse the extensions in Raycast's open-source extensions repository and install the ones you choose. Turning it off removes the store's downloaded list; the extensions you installed stay installed.
+The Extension Store browses the extensions in Raycast's open-source repository and installs the ones you choose. It takes two steps:
+
+1. Enable **Extension Store** under **Settings… → Commands**, and it shows up in Fudge.
+2. Turn it on with the switch at the top of **Settings… → Extension Store**.
+
+Turning it off removes the store's downloaded list; the extensions you installed stay installed.
 
 ### Selected text and Finder items
 
