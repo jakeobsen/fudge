@@ -52,6 +52,8 @@ Open fudge with ⌥Space, type to search applications and extension commands, an
 
 When you open fudge again within 90 seconds, it's as you left it. After longer, it starts over on an empty root search. **Pop to Root Search** on the **General** page of **Settings…** sets how long: Immediately, after 30 seconds, 1 minute or 90 seconds, or Never. Only the time the window is closed counts.
 
+What the fudge menu bar menu does is in root search too: "fudge Settings", **Reload Extensions** (reads the extensions and applications again) and **Quit fudge** (asks first, since fudge's hotkeys stop working until you open it again).
+
 To use another shortcut, open **Settings…** on the **General** page, click the keys next to **Launcher hotkey**, and press the new shortcut. Esc cancels. A shortcut needs ⌘, ⌥ or ⌃, unless it's an F-key. The launcher always has a hotkey, so ⌫ (or **Reset to ⌥Space**) puts ⌥Space back. fudge refuses a shortcut that a command already has, and keeps the old one when another app has the new one. If another app already holds the launcher's hotkey when fudge starts, the General page says so, and the menu bar menu's **Open fudge** still works.
 
 ### Command hotkeys
@@ -73,6 +75,10 @@ Untick **Enabled** to turn a command off, or a whole extension. A command that's
 fudge doesn't start at login until you turn on **Open at Login** at the top of **Settings… → General**. macOS then shows a "Login item added" notification, and lists fudge under **System Settings → General → Login Items**, where you can also turn it off; the switch shows what's set there. If macOS asks you to allow it first, the page says so and **Open Login Items** takes you there. The login item is tied to where the app is, so after moving fudge (to `/Applications`, say), turn Open at Login off and on again.
 
 Root search ranks what you open often first. **Clear Search History…** on the same page makes it forget, after asking.
+
+### Extensions that open other extensions
+
+The first time an extension opens another extension's command, fudge asks whether to allow it, and remembers the answer. To change or forget an answer, open **Settings…** → **General** → **Extensions that open other extensions**: pick **Allowed** or **Not allowed**, or click × to be asked again next time.
 
 ### Calculator and currency
 

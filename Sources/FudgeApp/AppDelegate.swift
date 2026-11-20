@@ -7,6 +7,8 @@ import FudgeCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let paths = FudgePaths.standard()
     private var statusItem: NSStatusItem?
+    /// The menu bar item's autosave name, which its saved visibility and position are kept under.
+    static let statusItemName = "fudge"
     private var model: LauncherModel!
     private var panel: LauncherPanel!
     private let hotKeys = CarbonHotKeys()
@@ -35,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.hide = { [weak self] in self?.hidePanel() }
         model.show = { [weak self] in self?.showPanel() }
         model.openSettings = { [weak self] name in self?.settingsWindow.show(extension: name) }
+        model.reloadAll = { [weak self] in self?.reloadExtensions() }
         settingsModel.clearSearchHistory = { [weak self] in self?.model.clearHistory() }
         model.showHUD = { [weak self] title in self?.hud.show(title) }
         model.isVisible = { [weak self] in self?.panel.isVisible ?? false }
@@ -146,7 +149,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func installStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(systemSymbolName: "command", accessibilityDescription: "fudge")
+        // macOS saves whether a status item is shown in the app's preferences, under its autosave name. Unnamed, it
+        // would be "Item-0", a key every build with this bundle id shares; a stale "hidden" there hid fudge's icon.
+        item.autosaveName = Self.statusItemName
+        // ⌘-dragging can't remove it, so it's never hidden by accident.
+        item.behavior = []
+        item.isVisible = true
+        item.button?.image = MenuBarIcon.image
 
         let menu = NSMenu()
         let open = menu.addItem(withTitle: "Open fudge", action: #selector(openFromMenu), keyEquivalent: "")
