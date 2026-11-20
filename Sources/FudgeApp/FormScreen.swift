@@ -29,6 +29,8 @@ struct FormScreen: View {
             if let field {
                 lastFocused = field
                 model.formFieldFocused(field)
+                // Another field took the keyboard: a DatePicker's calendar closes.
+                if let open = model.datePanel?.node, open != field { model.closeDatePanel() }
             }
         }
         // Each showing of the panel puts the keyboard back in the field the model names (the last one, or the
@@ -173,6 +175,18 @@ struct FormScreen: View {
                     model.openTagPicker(field.id)
                 }
                 .anchorPreference(key: FormFieldBounds.self, value: .bounds) { [field.id: $0] }
+        case .datePicker:
+            FormDateField(model: model, field: field, focused: $focused)
+        case .filePicker:
+            FilePickerField(model: model, field: field, isFocused: focused == field.id)
+                .focusable(true, interactions: .edit)
+                .focusEffectDisabled()
+                .focused($focused, equals: field.id)
+                .onKeyPress(keys: [.space, .return]) { _ in
+                    Task { await model.chooseFiles(for: field.id) }
+                    return .handled
+                }
+                .onTapGesture { focused = field.id }
         case .unsupported(let type):
             Text("fudge can't show a \(type) yet.").foregroundStyle(.tertiary)
         case .description, .separator:
@@ -286,6 +300,193 @@ private struct TagPickerField: View {
             }
         }
         .padding(.vertical, 3)
+        .modifier(FieldBox(isFocused: isFocused))
+    }
+}
+
+/// A Form.DatePicker: the date, with a `DateTime`'s time beside it to edit in place, and a button that clears it.
+/// Space, ↵ or a click opens its calendar under it (`DatePanelView`), which picks nothing until a day is chosen;
+/// ⌫ clears it.
+private struct FormDateField: View {
+    let model: LauncherModel
+    let field: FormContent.Field
+    var focused: FocusState<Int?>.Binding
+    @FocusState private var timeFocused: Bool
+
+    var body: some View {
+        let options = field.dates ?? DatePickerOptions()
+        let date = FormDates.date(model.fieldValue(field.id))
+        let isOpen = model.datePanel?.node == field.id
+        HStack(spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "calendar").foregroundStyle(.secondary)
+                if let date {
+                    Text(date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).year()))
+                        .lineLimit(1)
+                } else {
+                    Text(field.placeholder ?? "No date").foregroundStyle(.tertiary).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .modifier(FieldBox(isFocused: focused.wrappedValue == field.id || isOpen))
+            .focusable(true, interactions: .edit)
+            .focusEffectDisabled()
+            .focused(focused, equals: field.id)
+            .onKeyPress(keys: [.space, .return]) { _ in
+                model.openDatePanel(field.id)
+                return .handled
+            }
+            .onKeyPress(keys: [.delete, .deleteForward]) { _ in
+                model.pickDate(nil, for: field.id)
+                return .handled
+            }
+            .onTapGesture {
+                focused.wrappedValue = field.id
+                if isOpen { model.closeDatePanel() } else { model.openDatePanel(field.id) }
+            }
+            .anchorPreference(key: FormFieldBounds.self, value: .bounds) { [field.id: $0] }
+            if let date, options.type == .dateTime {
+                DatePicker(
+                    "",
+                    selection: Binding(get: { date }, set: { model.pickDate($0, for: field.id) }),
+                    in: options.range,
+                    displayedComponents: [.hourAndMinute]
+                )
+                .labelsHidden()
+                .datePickerStyle(.stepperField)
+                .fixedSize()
+                .focused($timeFocused)
+                // The time box takes the keys from here, so the calendar closes.
+                .onChange(of: timeFocused) { _, now in
+                    if now, isOpen { model.closeDatePanel() }
+                }
+            }
+            if date != nil {
+                Button {
+                    model.pickDate(nil, for: field.id)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Clear (⌫)")
+            }
+        }
+    }
+}
+
+/// A Form.DatePicker's calendar, under its field: the month, its weeks and the highlighted day. A click on a day
+/// picks it. The keys (←→↑↓, ⇞⇟, ↵, Esc) go through `LauncherModel.handleKey`, since the field keeps the keyboard.
+struct DatePanelView: View {
+    let model: LauncherModel
+    /// Its height with the margin under or over the field: the header, the weekdays and six weeks, padded.
+    static let height: CGFloat = 236
+
+    var body: some View {
+        if let panel = model.datePanel {
+            let calendar = Calendar.current
+            VStack(spacing: 6) {
+                HStack(spacing: 10) {
+                    Text(panel.calendar.day.formatted(.dateTime.month(.wide).year()))
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    Button {
+                        model.moveDatePanel(months: -1)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                    }
+                    .help("Previous month (⇞)")
+                    Button {
+                        model.moveDatePanel(months: 1)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                    }
+                    .help("Next month (⇟)")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+                Grid(horizontalSpacing: 2, verticalSpacing: 2) {
+                    GridRow {
+                        ForEach(Array(DateCalendar.weekdaySymbols().enumerated()), id: \.offset) { _, symbol in
+                            Text(symbol).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                                .frame(width: 30, height: 18)
+                        }
+                    }
+                    ForEach(Array(panel.calendar.weeks().enumerated()), id: \.offset) { _, week in
+                        GridRow {
+                            ForEach(week) { day in
+                                // By the day, not the instant: where DST starts at midnight, a day starts at 1:00.
+                                cell(
+                                    day, highlighted: calendar.isDate(day.date, inSameDayAs: panel.calendar.day),
+                                    today: calendar.isDateInToday(day.date))
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(10)
+            .fixedSize()
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.12)))
+            .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+        }
+    }
+
+    private func cell(_ day: DateCalendar.Day, highlighted: Bool, today: Bool) -> some View {
+        Text("\(day.number)")
+            .font(.system(size: 12, weight: today ? .bold : .regular))
+            .foregroundStyle(
+                highlighted
+                    ? AnyShapeStyle(.white)
+                    : !day.isPickable
+                        ? AnyShapeStyle(.quaternary)
+                        : day.inMonth ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary)
+            )
+            .frame(width: 30, height: 26)
+            .background(highlighted ? Color.accentColor : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .overlay {
+                if today && !highlighted {
+                    RoundedRectangle(cornerRadius: 6).strokeBorder(Color.accentColor.opacity(0.6))
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { model.pickDatePanelDay(day.date) }
+    }
+}
+
+/// A Form.FilePicker: the chosen files and folders (icon and name, the path as a tooltip), each with a ×, and a
+/// Select… button that opens the open panel as a sheet on the launcher.
+private struct FilePickerField: View {
+    let model: LauncherModel
+    let field: FormContent.Field
+    let isFocused: Bool
+
+    var body: some View {
+        let paths = TagPicking.values(model.fieldValue(field.id))
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(paths, id: \.self) { path in
+                HStack(spacing: 6) {
+                    Image(nsImage: NSWorkspace.shared.icon(forFile: path)).resizable().frame(width: 16, height: 16)
+                    Text(URL(fileURLWithPath: path).lastPathComponent).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    Button {
+                        model.removeFile(path, from: field.id)
+                    } label: {
+                        Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Remove")
+                }
+                .help(path)
+            }
+            Button("Select…") { Task { await model.chooseFiles(for: field.id) } }
+                .controlSize(.small)
+        }
+        .padding(.vertical, 4)
         .modifier(FieldBox(isFocused: isFocused))
     }
 }

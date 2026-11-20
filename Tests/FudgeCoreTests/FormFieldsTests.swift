@@ -173,6 +173,214 @@ private let tagPickerJSON = #"""
     #expect(!plain.hasOnFocus && !plain.hasOnBlur)
 }
 
+private let copenhagen: Calendar = {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(identifier: "Europe/Copenhagen")!
+    return calendar
+}()
+
+private func date(_ iso: String) -> Date {
+    try! Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(iso)
+}
+
+@Test func readsADatePickerAndItsDates() throws {
+    let fields = try form(
+        #"""
+        {"id":2,"type":"Form.DatePicker","props":{"id":"due","type":"date",
+          "min":{"$date":"2026-11-01T00:00:00.000Z"},"max":{"$date":"2026-12-31T00:00:00.000Z"}},"children":[]},
+        {"id":3,"type":"Form.DatePicker","props":{"id":"at","defaultValue":{"$date":"2026-11-20T12:30:00.000Z"}},"children":[]}
+        """#
+    ).fields
+    #expect(fields[0].kind == .datePicker && fields[0].isEditable)
+    #expect(
+        fields[0].dates
+            == DatePickerOptions(
+                type: .date, min: date("2026-11-01T00:00:00.000Z"), max: date("2026-12-31T00:00:00.000Z")))
+    #expect(fields[1].dates?.type == .dateTime, "DateTime is the default")
+    #expect(fields[0].initialValue() == .null && fields[0].registeredValue == .null, "no date until one is picked")
+    #expect(fields[1].initialValue() == .object(["$date": .string("2026-11-20T12:30:00.000Z")]))
+    #expect(FormDates.date(fields[1].initialValue()) == date("2026-11-20T12:30:00.000Z"))
+    #expect(FormDates.date(.string("2026-11-20")) == nil && FormDates.date(.null) == nil)
+    #expect(FormDates.json(nil) == .null, "clearing is null")
+    #expect(FormDates.json(date("2026-11-20T12:30:00.000Z")) == .object(["$date": .string("2026-11-20T12:30:00.000Z")]))
+}
+
+@Test func aDatePickerWithMinAfterMaxIgnoresBothInsteadOfCrashing() throws {
+    let fields = try form(
+        #"""
+        {"id":2,"type":"Form.DatePicker","props":{"id":"due",
+          "min":{"$date":"2026-12-31T00:00:00.000Z"},"max":{"$date":"2026-11-01T00:00:00.000Z"}},"children":[]}
+        """#
+    ).fields
+    #expect(fields[0].dates == DatePickerOptions(type: .dateTime, min: nil, max: nil))
+    #expect(fields[0].dates?.range == Date.distantPast...Date.distantFuture)
+    let limited = DatePickerOptions(min: date("2026-11-01T00:00:00.000Z"), max: date("2026-12-31T00:00:00.000Z"))
+    #expect(limited.range == date("2026-11-01T00:00:00.000Z")...date("2026-12-31T00:00:00.000Z"))
+    let inverted = DatePickerOptions(min: date("2026-12-31T00:00:00.000Z"), max: date("2026-11-01T00:00:00.000Z"))
+    #expect(inverted.range == Date.distantPast...Date.distantFuture, "never an inverted range, which traps")
+}
+
+@Test func aDatePickerGivesMidnightOrWholeMinutesWithinItsLimits() {
+    let picked = date("2026-11-20T14:37:42.500Z")  // 15:37:42 in Copenhagen
+    let day = DatePickerOptions(type: .date)
+    #expect(FormDates.value(for: picked, options: day, calendar: copenhagen) == date("2026-11-19T23:00:00.000Z"))
+    #expect(
+        FormDates.value(for: picked, options: DatePickerOptions(), calendar: copenhagen)
+            == date("2026-11-20T14:37:00.000Z"))
+
+    // With Date, the limits count by the day: a min later on the same day doesn't move the pick.
+    let sameDay = DatePickerOptions(type: .date, min: date("2026-11-20T10:00:00.000Z"))
+    #expect(FormDates.value(for: picked, options: sameDay, calendar: copenhagen) == date("2026-11-19T23:00:00.000Z"))
+    let later = DatePickerOptions(type: .date, min: date("2026-11-25T10:00:00.000Z"))
+    #expect(FormDates.value(for: picked, options: later, calendar: copenhagen) == date("2026-11-24T23:00:00.000Z"))
+    let earlier = DatePickerOptions(type: .date, max: date("2026-11-10T10:00:00.000Z"))
+    #expect(FormDates.value(for: picked, options: earlier, calendar: copenhagen) == date("2026-11-09T23:00:00.000Z"))
+    // With DateTime, exactly.
+    let bounded = DatePickerOptions(min: date("2026-11-20T15:00:00.000Z"), max: date("2026-11-20T16:00:00.000Z"))
+    #expect(FormDates.value(for: picked, options: bounded, calendar: copenhagen) == date("2026-11-20T15:00:00.000Z"))
+    #expect(
+        FormDates.value(for: date("2026-11-20T17:00:00.000Z"), options: bounded, calendar: copenhagen)
+            == date("2026-11-20T16:00:00.000Z"))
+}
+
+@Test func aDateTimeLimitWithSecondsClampsToAWholeMinute() {
+    let options = DatePickerOptions(min: date("2026-11-20T15:00:30.000Z"), max: date("2026-11-20T16:00:30.000Z"))
+    #expect(
+        FormDates.value(for: date("2026-11-20T14:00:00.000Z"), options: options, calendar: copenhagen)
+            == date("2026-11-20T15:01:00.000Z"), "the first whole minute after min")
+    #expect(
+        FormDates.value(for: date("2026-11-20T17:00:00.000Z"), options: options, calendar: copenhagen)
+            == date("2026-11-20T16:00:00.000Z"), "the last whole minute before max")
+}
+
+private let mondayFirst: Calendar = {
+    var calendar = copenhagen
+    calendar.firstWeekday = 2
+    return calendar
+}()
+
+@Test func theCalendarOpensOnTheFieldsDayOrTodayWithinItsLimits() {
+    let now = date("2026-11-20T09:15:00.000Z")
+    let set = DateCalendar(
+        value: date("2026-12-24T17:00:00.000Z"), options: DatePickerOptions(), now: now, calendar: copenhagen)
+    #expect(set.day == date("2026-12-23T23:00:00.000Z"), "the field's day, at local midnight")
+    let empty = DateCalendar(value: nil, options: DatePickerOptions(), now: now, calendar: copenhagen)
+    #expect(empty.day == date("2026-11-19T23:00:00.000Z"), "today")
+    let later = DatePickerOptions(min: date("2026-12-01T10:00:00.000Z"))
+    #expect(
+        DateCalendar(value: nil, options: later, now: now, calendar: copenhagen).day
+            == date("2026-11-30T23:00:00.000Z"), "today isn't allowed: min's day")
+}
+
+@Test func theCalendarsKeysMoveTheDayWithinItsLimits() {
+    let options = DatePickerOptions(
+        type: .date, min: date("2026-11-10T12:00:00.000Z"), max: date("2027-01-31T12:00:00.000Z"))
+    var calendar = DateCalendar(value: date("2026-11-19T23:00:00.000Z"), options: options, calendar: copenhagen)
+    calendar.move(days: 1, calendar: copenhagen)
+    #expect(calendar.day == date("2026-11-20T23:00:00.000Z"))
+    calendar.move(days: -7, calendar: copenhagen)
+    #expect(calendar.day == date("2026-11-13T23:00:00.000Z"))
+    calendar.move(days: -7, calendar: copenhagen)
+    #expect(calendar.day == date("2026-11-09T23:00:00.000Z"), "stops at min's day")
+    calendar.move(months: 2, calendar: copenhagen)
+    #expect(calendar.day == date("2027-01-09T23:00:00.000Z"))
+    calendar.move(months: 1, calendar: copenhagen)
+    #expect(calendar.day == date("2027-01-30T23:00:00.000Z"), "stops at max's day")
+
+    var endOfMonth = DateCalendar(
+        value: date("2027-01-30T23:00:00.000Z"), options: DatePickerOptions(), calendar: copenhagen)
+    endOfMonth.move(months: 1, calendar: copenhagen)
+    #expect(endOfMonth.day == date("2027-02-27T23:00:00.000Z"), "31 January → 28 February")
+
+    let beforeMin = calendar.highlight(date("2026-11-05T12:00:00.000Z"), calendar: copenhagen)
+    #expect(!beforeMin && calendar.day == date("2027-01-30T23:00:00.000Z"), "a click before min changes nothing")
+    let christmasEve = calendar.highlight(date("2026-12-24T12:00:00.000Z"), calendar: copenhagen)
+    #expect(christmasEve && calendar.day == date("2026-12-23T23:00:00.000Z"))
+}
+
+@Test func theCalendarShowsSixWeeksFromTheFirstWeekday() {
+    let options = DatePickerOptions(type: .date, min: date("2026-11-10T00:00:00.000Z"))
+    let weeks = DateCalendar(value: date("2026-11-19T23:00:00.000Z"), options: options, calendar: mondayFirst)
+        .weeks(calendar: mondayFirst)
+    #expect(weeks.count == 6 && weeks.allSatisfy { $0.count == 7 })
+    // 1 November 2026 is a Sunday, so the first week starts on Monday 26 October.
+    #expect(weeks[0][0].number == 26 && !weeks[0][0].inMonth)
+    #expect(weeks[0][6].number == 1 && weeks[0][6].inMonth)
+    #expect(weeks[5][6].number == 6 && !weeks[5][6].inMonth, "6 December ends the sixth week")
+    #expect(weeks.joined().filter(\.inMonth).count == 30)
+    #expect(!weeks[1][6].isPickable && weeks[1][6].number == 8, "before min's day")
+    #expect(weeks[2][1].isPickable && weeks[2][1].number == 10, "min's own day")
+    #expect(DateCalendar.weekdaySymbols(calendar: mondayFirst).count == 7)
+    #expect(
+        DateCalendar.weekdaySymbols(calendar: mondayFirst).first
+            == mondayFirst.veryShortStandaloneWeekdaySymbols[1], "Monday first")
+}
+
+@Test func pickingTheHighlightedDayKeepsTheFieldsTimeOrTakesNows() {
+    let now = date("2026-11-20T09:15:42.000Z")
+    let calendar = DateCalendar(
+        value: date("2026-12-24T17:30:00.000Z"), options: DatePickerOptions(), calendar: copenhagen)
+    #expect(
+        calendar.value(current: date("2026-12-01T17:30:00.000Z"), now: now, calendar: copenhagen)
+            == date("2026-12-24T17:30:00.000Z"), "the field's time on the picked day")
+    #expect(
+        calendar.value(current: nil, now: now, calendar: copenhagen) == date("2026-12-24T09:15:00.000Z"),
+        "an empty field takes now's time, in whole minutes")
+    let day = DateCalendar(value: nil, options: DatePickerOptions(type: .date), now: now, calendar: copenhagen)
+    #expect(day.value(current: nil, now: now, calendar: copenhagen) == date("2026-11-19T23:00:00.000Z"), "midnight")
+    let limited = DateCalendar(
+        value: nil, options: DatePickerOptions(min: date("2026-11-20T12:00:30.000Z")), now: now, calendar: copenhagen)
+    #expect(
+        limited.value(current: nil, now: now, calendar: copenhagen) == date("2026-11-20T12:01:00.000Z"),
+        "min's day at an earlier time: min's first whole minute")
+}
+
+@Test func isFullDayMeansLocalMidnight() {
+    #expect(FormDates.isFullDay(date("2026-11-19T23:00:00.000Z"), calendar: copenhagen))
+    #expect(!FormDates.isFullDay(date("2026-11-20T00:00:00.000Z"), calendar: copenhagen), "UTC midnight isn't local")
+    #expect(!FormDates.isFullDay(date("2026-11-19T23:00:00.001Z"), calendar: copenhagen))
+    #expect(!FormDates.isFullDay(nil, calendar: copenhagen))
+}
+
+@Test func readsAFilePickersOptionsAndKeepsItsPaths() throws {
+    let fields = try form(
+        #"""
+        {"id":2,"type":"Form.FilePicker","props":{"id":"files"},"children":[]},
+        {"id":3,"type":"Form.FilePicker","props":{"id":"folder","canChooseFiles":false,"canChooseDirectories":true,
+          "allowMultipleSelection":false,"showHiddenFiles":true},"children":[]}
+        """#
+    ).fields
+    #expect(fields[0].kind == .filePicker && fields[0].isEditable)
+    #expect(fields[0].files == FilePickerOptions(), "Raycast's defaults")
+    let defaults = try #require(fields[0].files)
+    #expect(defaults.canChooseFiles && !defaults.canChooseDirectories && defaults.allowsMultipleSelection)
+    #expect(!defaults.showsHiddenFiles)
+    let folder = try #require(fields[1].files)
+    #expect(!folder.canChooseFiles && folder.canChooseDirectories && !folder.allowsMultipleSelection)
+    #expect(folder.showsHiddenFiles)
+    #expect(fields[0].initialValue() == .array([]) && fields[0].registeredValue == .array([]))
+
+    // Multiple: added after what's there, each once, in the order chosen. Single: in place of it.
+    let current = ["/a", "/b"]
+    #expect(FilePicking.choosing(["/c", "/a", "/d"], to: current, options: defaults) == ["/a", "/b", "/c", "/d"])
+    #expect(FilePicking.choosing(["/c"], to: current, options: folder) == ["/c"])
+    #expect(FilePicking.removing("/a", from: current) == ["/b"])
+}
+
+@Test func storedDatesAndPathsStartTheirFields() throws {
+    let fields = try form(
+        #"""
+        {"id":2,"type":"Form.DatePicker","props":{"id":"due","storeValue":true},"children":[]},
+        {"id":3,"type":"Form.FilePicker","props":{"id":"files","storeValue":true},"children":[]}
+        """#
+    ).fields
+    let stored: JSONValue = .object(["$date": .string("2026-11-20T12:00:00.000Z")])
+    #expect(fields[0].initialValue(stored: stored) == stored)
+    #expect(fields[0].initialValue(stored: .string("tomorrow")) == .null, "not a date")
+    #expect(fields[1].initialValue(stored: .array([.string("/a")])) == .array([.string("/a")]))
+    #expect(fields[1].initialValue(stored: .array([.number(1)])) == .array([]))
+}
+
 private func storedDropdown(items: String) throws -> FormContent.Field {
     try #require(
         try form(
@@ -249,4 +457,12 @@ private func colorItem(_ id: Int, _ value: String) -> String {
     #expect(
         text.start(current: .string("typed"), stored: nil)
             == FieldStart(value: .string("typed"), reports: false, pending: nil))
+}
+
+@Test func theCalendarOpensOnTheSideWithRoom() {
+    // Form Check's Due field (#2637): about 255 pt below, 191 above, for a 236 pt calendar.
+    #expect(PanelPlacement.opensBelow(spaceBelow: 255, spaceAbove: 191, height: 236))
+    #expect(PanelPlacement.opensBelow(spaceBelow: 200, spaceAbove: 150, height: 236), "neither fits: the bigger side")
+    #expect(!PanelPlacement.opensBelow(spaceBelow: 120, spaceAbove: 300, height: 236))
+    #expect(PanelPlacement.opensBelow(spaceBelow: 236, spaceAbove: 900, height: 236), "below is preferred when it fits")
 }

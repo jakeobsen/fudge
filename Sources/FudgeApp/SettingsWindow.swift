@@ -48,11 +48,13 @@ final class SettingsModel {
     }
 
     func reload() {
-        extensions = InstalledExtension.all(in: paths.extensionsDirectory).filter { installed in
+        let installed = InstalledExtension.all(
+            paths: paths, settings: FudgeSettings.load(from: paths.settingsFile), resources: Bundle.main.resourceURL)
+        extensions = installed.filter { installed in
             !installed.manifest.preferences.isEmpty || installed.manifest.commands.contains { !$0.preferences.isEmpty }
         }
         stored = Dictionary(uniqueKeysWithValues: extensions.map { ($0.manifest.name, store.load($0.manifest.name)) })
-        allExtensions = InstalledExtension.all(in: paths.extensionsDirectory).sorted {
+        allExtensions = installed.sorted {
             $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending
         }
         fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
@@ -73,15 +75,9 @@ final class SettingsModel {
     @ObservationIgnored var currencyRatesChanged: (Bool) -> Void = { _ in }
 
     func setCurrencyRates(_ on: Bool) {
-        // Read the file again first, so hand edits made meanwhile aren't overwritten.
-        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
-        guard fudgeSettings.currencyRates != on else { return }
-        fudgeSettings.currencyRates = on
-        do {
-            try fudgeSettings.save(to: paths.settingsFile)
-        } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't save settings: \(error)\n".utf8))
-        }
+        // A settings.json that can't be written is refused, with the banner, and nothing is turned on.
+        guard FudgeSettings.load(from: paths.settingsFile).currencyRates != on, change({ $0.currencyRates = on })
+        else { return }
         currencyRatesChanged(on)
     }
 
@@ -194,6 +190,51 @@ final class SettingsModel {
         }
         // What's registered must match the file, or the next launch would bring the old one back unannounced.
         if !change({ $0.launcherHotkey = spec }) { _ = registerLauncherHotkey(old) }
+    }
+
+    // MARK: - Extension Store
+
+    /// Whether the Extension Store is on: switched on through its consent sheet.
+    var extensionStore: Bool { fudgeSettings.isExtensionStoreOn }
+    /// Asks the user with a sheet on the Settings window; set by the window controller.
+    @ObservationIgnored var confirm: (LauncherModel.AlertRequest) async -> Bool = { _ in false }
+    /// Tells the launcher to list or drop the store's commands; set by the app delegate.
+    @ObservationIgnored var extensionStoreChanged: () -> Void = {}
+
+    /// The switch: on only after the consent sheet's Turn On, which records the date; off after its own sheet,
+    /// which deletes the store's downloaded repository but keeps its record of what it installed.
+    func setExtensionStore(_ on: Bool) {
+        guard on != extensionStore else { return }
+        Task {
+            let sheet = on ? ExtensionStore.consentRequest : ExtensionStore.turnOffRequest
+            guard await confirm(sheet) else { return }
+            let saved = change { settings in
+                settings.extensionStore = on
+                settings.extensionStoreConsentAt = on ? ISO8601DateFormatter().string(from: Date()) : nil
+            }
+            guard saved else { return }
+            if !on {
+                do {
+                    try ExtensionStore.deleteRepository(paths)
+                } catch {
+                    FileHandle.standardError.write(Data("fudge: couldn't delete the store's list: \(error)\n".utf8))
+                }
+            }
+            reload()
+            extensionStoreChanged()
+        }
+    }
+
+    // MARK: - Pop to Root Search
+
+    /// How long the panel stays hidden before it opens on root search again (`resetAfterSeconds`).
+    var resetAfter: PanelResetSetting { fudgeSettings.resetAfter }
+    /// Tells the launcher; set by the app delegate.
+    @ObservationIgnored var resetAfterChanged: (PanelResetSetting) -> Void = { _ in }
+
+    func setResetAfter(_ setting: PanelResetSetting) {
+        guard change({ $0.resetAfter = setting }) else { return }
+        resetAfterChanged(setting)
     }
 
     // MARK: - Command hotkeys
@@ -392,11 +433,19 @@ final class SettingsWindowController {
         self.model = model
     }
 
-    /// Opens the window, optionally on one extension's preferences.
+    /// Opens the window, optionally on one extension's preferences, in front and key: from closed, from behind
+    /// other apps' windows, minimized, or on another Space (it comes to the current one). Every way into Settings
+    /// comes here. **Only for entries the user starts** (⌘,, Settings…, Configure Extension, a command's
+    /// `openExtensionPreferences`, an unset required preference): it takes focus from the app in front, so no
+    /// background path may reach it; `CommandLocator.checkMode` keeps background launches from opening Settings.
     func show(extension name: String? = nil) {
         prepare(extension: name)
-        NSApp.activate()
-        window?.makeKeyAndOrderFront(nil)
+        guard let window else { return }
+        window.collectionBehavior.insert(.moveToActiveSpace)
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        NSApp.activateFromUserAction()
+        window.orderFrontRegardless()
+        window.makeKeyAndOrderFront(nil)
     }
 
     /// Reads the installed extensions and settings again while the window is on screen; closed, it reads them
@@ -434,6 +483,17 @@ final class SettingsWindowController {
             window.contentView = NSHostingView(rootView: SettingsView(model: model))
             window.center()
             self.window = window
+            model.confirm = { [weak window] request in
+                guard let window else { return false }
+                let alert = NSAlert()
+                alert.messageText = request.title
+                alert.informativeText = request.message ?? ""
+                alert.addButton(withTitle: request.primary).hasDestructiveAction = request.destructive
+                alert.addButton(withTitle: request.dismiss)
+                return await withCheckedContinuation { continuation in
+                    alert.beginSheetModal(for: window) { continuation.resume(returning: $0 == .alertFirstButtonReturn) }
+                }
+            }
             // Closing the window mid-recording gives fudge its hotkeys back.
             let model = model
             NotificationCenter.default.addObserver(
@@ -457,9 +517,10 @@ struct SettingsView: View {
     @Bindable var model: SettingsModel
 
     var body: some View {
-        // The sidebar always shows and has no toggle, as in System Settings: it's the way to the other pages, and
-        // SwiftUI's toggle jumps across the title bar each time it collapses or expands the sidebar.
-        NavigationSplitView(columnVisibility: .constant(.all)) {
+        // A fixed 200 pt sidebar beside the page, not a NavigationSplitView: the split view's divider could be dragged
+        // until the sidebar collapsed, and with no toggle (it jumped across the title bar) nothing brought it back.
+        // There's no split view, so no divider and no collapsed state to restore.
+        HStack(spacing: 0) {
             List(selection: $model.selected) {
                 Label("General", systemImage: "gearshape").tag(SettingsModel.generalPage)
                 Label("Commands", systemImage: "command").tag(SettingsModel.commandsPage)
@@ -469,24 +530,41 @@ struct SettingsView: View {
                     }
                 }
             }
-            .toolbar(removing: .sidebarToggle)
-            // Keep this last: above `.toolbar(removing:)`, it's ignored and the sidebar comes out about 140 pt wide.
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
-        } detail: {
-            if model.selected == SettingsModel.generalPage {
-                GeneralPage(model: model)
-            } else if model.selected == SettingsModel.commandsPage {
-                CommandsPage(model: model)
-            } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {
-                ExtensionPreferencesForm(model: model, installed: installed)
-            } else {
-                Text("No extension has preferences.").foregroundStyle(.secondary)
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .background(SidebarMaterial())
+            .frame(width: 200)
+            Divider()
+            Group {
+                if model.selected == SettingsModel.generalPage {
+                    GeneralPage(model: model)
+                } else if model.selected == SettingsModel.commandsPage {
+                    CommandsPage(model: model)
+                } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {
+                    ExtensionPreferencesForm(model: model, installed: installed)
+                } else {
+                    Text("No extension has preferences.").foregroundStyle(.secondary)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         // The width it opens at: any narrower and the Commands table squeezes its Name column, truncating names and
         // running a command's subtitle into the Type column.
         .frame(minWidth: 880, minHeight: 400)
     }
+}
+
+/// The sidebar's translucent material, as a split view's sidebar has it.
+private struct SidebarMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .sidebar
+        view.blendingMode = .behindWindow
+        view.state = .followsWindowActiveState
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }
 
 private struct ExtensionPreferencesForm: View {

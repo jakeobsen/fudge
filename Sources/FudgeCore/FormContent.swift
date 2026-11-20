@@ -3,7 +3,8 @@ import Foundation
 /// A Form view as fudge draws it: its fields in order.
 public struct FormContent: Sendable, Equatable {
     public enum Kind: Sendable, Equatable {
-        case textField, passwordField, textArea, checkbox, dropdown, tagPicker, description, separator
+        case textField, passwordField, textArea, checkbox, dropdown, tagPicker, datePicker, filePicker, description
+        case separator
         /// A field fudge can't draw yet, by its type ("Form.DatePicker", …).
         case unsupported(String)
     }
@@ -32,11 +33,15 @@ public struct FormContent: Sendable, Equatable {
         public var options: SearchBarDropdown?
         /// A TagPicker's items, in order.
         public var tags: [SearchBarDropdown.Item] = []
+        /// A DatePicker's type and limits.
+        public var dates: DatePickerOptions?
+        /// What a FilePicker lets the user choose.
+        public var files: FilePickerOptions?
 
         /// Whether the user can change it.
         public var isEditable: Bool {
             switch kind {
-            case .textField, .passwordField, .textArea, .checkbox, .dropdown, .tagPicker: true
+            case .textField, .passwordField, .textArea, .checkbox, .dropdown, .tagPicker, .datePicker, .filePicker: true
             default: false
             }
         }
@@ -62,8 +67,8 @@ public struct FormContent: Sendable, Equatable {
         public var emptyValue: JSONValue {
             switch kind {
             case .checkbox: .bool(false)
-            case .tagPicker: .array([])
-            case .dropdown: .null
+            case .tagPicker, .filePicker: .array([])
+            case .dropdown, .datePicker: .null
             default: .string("")
             }
         }
@@ -79,6 +84,10 @@ public struct FormContent: Sendable, Equatable {
             case (.tagPicker, .array(let values)):
                 let known = Set(tags.map(\.value))
                 return values.allSatisfy { if case .string(let value) = $0 { known.contains(value) } else { false } }
+            case (.datePicker, .null): return true
+            case (.datePicker, let value): return FormDates.date(value) != nil
+            case (.filePicker, .array(let values)):
+                return values.allSatisfy { if case .string = $0 { true } else { false } }
             default:
                 return false
             }
@@ -158,6 +167,8 @@ public struct FormContent: Sendable, Equatable {
         case "Form.Checkbox": kind = .checkbox
         case "Form.Dropdown": kind = .dropdown
         case "Form.TagPicker": kind = .tagPicker
+        case "Form.DatePicker": kind = .datePicker
+        case "Form.FilePicker": kind = .filePicker
         case "Form.Description": kind = .description
         case "Form.Separator": kind = .separator
         case let type where type.hasPrefix("Form.") && !type.hasPrefix("Form.LinkAccessory"): kind = .unsupported(type)
@@ -179,7 +190,9 @@ public struct FormContent: Sendable, Equatable {
             hasOnFocus: node.hasCallback("onFocus"),
             hasOnBlur: node.hasCallback("onBlur"),
             options: kind == .dropdown ? SearchBarDropdown(node) : nil,
-            tags: kind == .tagPicker ? node.children.compactMap(Self.tag) : []
+            tags: kind == .tagPicker ? node.children.compactMap(Self.tag) : [],
+            dates: kind == .datePicker ? DatePickerOptions(node) : nil,
+            files: kind == .filePicker ? FilePickerOptions(node) : nil
         )
     }
 
@@ -198,6 +211,122 @@ public struct FormContent: Sendable, Equatable {
             if let id = field.fieldId, let value = submitted[id] { kept[id] = value }
         }
         return kept
+    }
+}
+
+/// A Form.DatePicker's settings.
+public struct DatePickerOptions: Sendable, Equatable {
+    /// Raycast's `Form.DatePicker.Type`.
+    public enum Kind: String, Sendable, Equatable {
+        case date
+        case dateTime = "date_time"
+    }
+
+    public var type: Kind
+    public var min: Date?
+    public var max: Date?
+
+    public init(type: Kind = .dateTime, min: Date? = nil, max: Date? = nil) {
+        self.type = type
+        self.min = min
+        self.max = max
+    }
+
+    /// An extension's `min` after its `max` allows no date at all; fudge then ignores both, rather than refuse every
+    /// pick.
+    init(_ node: UINode) {
+        var min = FormDates.date(node.props["min"])
+        var max = FormDates.date(node.props["max"])
+        if let low = min, let high = max, low > high {
+            min = nil
+            max = nil
+        }
+        self.init(type: node.string("type").flatMap(Kind.init(rawValue:)) ?? .dateTime, min: min, max: max)
+    }
+
+    /// The dates the picker offers: from `min` to `max`, open where either is missing. Never an inverted range,
+    /// which would trap.
+    public var range: ClosedRange<Date> {
+        let low = min ?? .distantPast
+        let high = max ?? .distantFuture
+        return low <= high ? low...high : Date.distantPast...Date.distantFuture
+    }
+}
+
+/// Dates in Form values: they cross the bridge as `{ "$date": iso }`.
+public enum FormDates {
+    public static func date(_ json: JSONValue?) -> Date? {
+        guard case .object(let object) = json, object.count == 1, case .string(let iso) = object["$date"] else {
+            return nil
+        }
+        return (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(iso))
+            ?? (try? Date.ISO8601FormatStyle().parse(iso))
+    }
+
+    public static func json(_ date: Date?) -> JSONValue {
+        guard let date else { return .null }
+        return .object(["$date": .string(Date.ISO8601FormatStyle(includingFractionalSeconds: true).format(date))])
+    }
+
+    /// The value for a date the user picked: with `Date`, local midnight of that day; with `DateTime`, whole minutes.
+    /// Kept within `min` and `max`, which with `Date` count by the day only.
+    public static func value(for picked: Date, options: DatePickerOptions, calendar: Calendar = .current) -> Date {
+        switch options.type {
+        case .date:
+            var day = calendar.startOfDay(for: picked)
+            if let min = options.min.map(calendar.startOfDay(for:)), day < min { day = min }
+            if let max = options.max.map(calendar.startOfDay(for:)), day > max { day = max }
+            return day
+        case .dateTime:
+            func wholeMinute(_ date: Date) -> Date { calendar.dateInterval(of: .minute, for: date)?.start ?? date }
+            var minute = wholeMinute(picked)
+            // Limits with seconds clamp to the first and last whole minutes within them.
+            if let min = options.min, minute < min {
+                let start = wholeMinute(min)
+                minute = start < min ? start.addingTimeInterval(60) : start
+            }
+            if let max = options.max, minute > max { minute = wholeMinute(max) }
+            return minute
+        }
+    }
+
+    /// `Form.DatePicker.isFullDay`: a date at local midnight exactly, as a `Date` picker gives.
+    public static func isFullDay(_ date: Date?, calendar: Calendar = .current) -> Bool {
+        guard let date else { return false }
+        return calendar.startOfDay(for: date) == date
+    }
+}
+
+/// What a Form.FilePicker lets the user choose, with Raycast's defaults.
+public struct FilePickerOptions: Sendable, Equatable {
+    public var canChooseFiles = true
+    public var canChooseDirectories = false
+    public var allowsMultipleSelection = true
+    public var showsHiddenFiles = false
+
+    public init() {}
+
+    init(_ node: UINode) {
+        canChooseFiles = node.bool("canChooseFiles") ?? true
+        canChooseDirectories = node.bool("canChooseDirectories") ?? false
+        allowsMultipleSelection = node.bool("allowMultipleSelection") ?? true
+        showsHiddenFiles = node.bool("showHiddenFiles") ?? false
+    }
+}
+
+/// What a Form.FilePicker holds: absolute paths, in the order chosen.
+public enum FilePicking {
+    /// The paths after choosing `chosen` in the open panel: added after the ones there (each once), or, without
+    /// multiple selection, in their place.
+    public static func choosing(_ chosen: [String], to current: [String], options: FilePickerOptions) -> [String] {
+        guard options.allowsMultipleSelection else { return Array(chosen.prefix(1)) }
+        var paths = current
+        for path in chosen where !paths.contains(path) { paths.append(path) }
+        return paths
+    }
+
+    public static func removing(_ path: String, from current: [String]) -> [String] {
+        current.filter { $0 != path }
     }
 }
 

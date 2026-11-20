@@ -106,6 +106,8 @@ final class LauncherModel {
     /// Opens the Settings window on an extension's preferences, or on its default page for nil; set by the app
     /// delegate.
     @ObservationIgnored var openSettings: (String?) -> Void = { _ in }
+    /// Shows a FilePicker's open panel and returns the chosen paths, or nil when cancelled; set by the app delegate.
+    @ObservationIgnored var openPanel: (FilePickerOptions) async -> [String]? = { _ in nil }
     /// Downloads the exchange rates again at once (↵ on the "Couldn't download exchange rates" card).
     @ObservationIgnored var retryExchangeRates: () -> Void = {}
     /// The menu bar item's "Reload Extensions", for root search's item of that name; set by the app delegate.
@@ -151,8 +153,12 @@ final class LauncherModel {
     @ObservationIgnored private let dropdownStore: SearchBarDropdown.Store
     @ObservationIgnored private var searchDebounce: Task<Void, Never>?
 
+    /// When the panel was hidden, and whether it starts over on root search when it's shown again (FUD-48).
+    @ObservationIgnored let panelReset: PanelReset
+
     init(paths: FudgePaths) {
         self.paths = paths
+        panelReset = PanelReset(setting: FudgeSettings.load(from: paths.settingsFile).resetAfter)
         history = LaunchHistory.load(from: paths.historyFile)
         dropdownStore = SearchBarDropdown.Store(file: paths.dropdownValuesFile)
         reload()
@@ -185,7 +191,9 @@ final class LauncherModel {
     }
 
     private func readInstalledExtensions() {
-        installedExtensions = InstalledExtension.all(in: paths.extensionsDirectory)
+        // The bundled Extension Store is listed with them while it's on.
+        installedExtensions = InstalledExtension.all(
+            paths: paths, settings: FudgeSettings.load(from: paths.settingsFile), resources: Bundle.main.resourceURL)
         extensions = Dictionary(
             installedExtensions.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
         loadCommandMetadata(installedExtensions)
@@ -195,6 +203,7 @@ final class LauncherModel {
     /// aliases and hotkeys. Settings calls it after each change.
     func applySettings(keepingSelection: Bool = false) {
         settings = FudgeSettings.load(from: paths.settingsFile)
+        panelReset.setting = settings.resetAfter
         let commands = installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
         items = RootSearch.applying(settings, to: commands) + RootSearch.builtInItems + applications
         refreshResults(keepingSelection: keepingSelection)
@@ -606,6 +615,29 @@ final class LauncherModel {
         command?.form?.fields.first { $0.id == node }
     }
 
+    /// The user picked a date in a DatePicker, or cleared it (nil): local midnight for a `Date` picker, whole
+    /// minutes for `DateTime`, within `min` and `max` (`FormDates.value`).
+    func pickDate(_ picked: Date?, for node: Int) {
+        guard let options = formField(node)?.dates else { return }
+        edit(field: node, to: FormDates.json(picked.map { FormDates.value(for: $0, options: options) }))
+    }
+
+    /// A FilePicker's Select…: the open panel, then the chosen paths added (or, without multiple selection, in place
+    /// of the old one).
+    func chooseFiles(for node: Int) async {
+        guard let options = formField(node)?.files, let chosen = await openPanel(options), !chosen.isEmpty else {
+            return
+        }
+        let paths = FilePicking.choosing(chosen, to: TagPicking.values(fieldValue(node)), options: options)
+        edit(field: node, to: .array(paths.map(JSONValue.string)))
+    }
+
+    /// Takes a path off a FilePicker (its ×).
+    func removeFile(_ path: String, from node: Int) {
+        let paths = FilePicking.removing(path, from: TagPicking.values(fieldValue(node)))
+        edit(field: node, to: .array(paths.map(JSONValue.string)))
+    }
+
     /// A Form field's value as shown.
     func fieldValue(_ node: Int) -> JSONValue? {
         command?.fieldValues[node]?.value
@@ -766,24 +798,30 @@ final class LauncherModel {
     func openFormDropdown(_ node: Int) {
         guard formField(node)?.kind == .dropdown else { return }
         actionPanel = nil
+        datePanel = nil
         let current: String? = if case .string(let value) = fieldValue(node) { value } else { nil }
         dropdownPanel = DropdownPanelState(source: .formDropdown(node), selected: current)
         syncDropdownPanel()
     }
 
-    /// Opens the panel of the Form's first field of `kind` (a Dropdown or TagPicker), for snapshots. False when
-    /// there's none.
+    /// Opens the panel of the Form's first field of `kind` (a Dropdown, TagPicker or DatePicker), for snapshots.
+    /// False when there's none.
     func openFirstFormPicker(_ kind: FormContent.Kind) -> Bool {
         guard let field = command?.form?.fields.first(where: { $0.kind == kind }) else { return false }
         formFieldFocused(field.id)
-        if kind == .tagPicker { openTagPicker(field.id) } else { openFormDropdown(field.id) }
-        return dropdownPanel != nil
+        switch kind {
+        case .tagPicker: openTagPicker(field.id)
+        case .datePicker: openDatePanel(field.id)
+        default: openFormDropdown(field.id)
+        }
+        return dropdownPanel != nil || datePanel != nil
     }
 
     /// Opens a TagPicker's list of items to pick, starting the search with what was typed, if anything.
     func openTagPicker(_ node: Int, typing text: String = "") {
         guard formField(node)?.kind == .tagPicker else { return }
         actionPanel = nil
+        datePanel = nil
         dropdownPanel = DropdownPanelState(source: .tagPicker(node), query: text)
         syncDropdownPanel()
     }
@@ -878,6 +916,76 @@ final class LauncherModel {
         }
     }
 
+    // MARK: - A DatePicker's calendar
+
+    struct DatePanelState: Equatable {
+        /// The DatePicker's node id: the calendar opens under it.
+        let node: Int
+        var calendar: DateCalendar
+    }
+
+    /// The open DatePicker calendar. The field keeps the keyboard, and `handleKey` gives the calendar its keys.
+    private(set) var datePanel: DatePanelState?
+
+    /// Opens a DatePicker's calendar (Space, ↵ or a click) on its day, or today. Opening picks nothing.
+    func openDatePanel(_ node: Int) {
+        guard let options = formField(node)?.dates else { return }
+        actionPanel = nil
+        closeDropdownPanel()
+        datePanel = DatePanelState(
+            node: node, calendar: DateCalendar(value: FormDates.date(fieldValue(node)), options: options))
+    }
+
+    func closeDatePanel() {
+        datePanel = nil
+    }
+
+    func moveDatePanel(days: Int) {
+        datePanel?.calendar.move(days: days)
+    }
+
+    func moveDatePanel(months: Int) {
+        datePanel?.calendar.move(months: months)
+    }
+
+    /// Picks the highlighted day, or a clicked one, as the field's value, and closes the calendar. A clicked day
+    /// outside `min` and `max` does nothing.
+    func pickDatePanelDay(_ day: Date? = nil) {
+        guard var panel = datePanel else { return }
+        if let day, !panel.calendar.highlight(day) { return }
+        datePanel = nil
+        pickDate(panel.calendar.value(current: FormDates.date(fieldValue(panel.node))), for: panel.node)
+    }
+
+    /// The calendar's keys while it's open: ←→ a day, ↑↓ a week, ⇞⇟ a month, ↵ or Space picks, Esc closes it. Any
+    /// other key closes it and then does what it always does (Tab moves on, ⌘↵ submits, ⌫ clears the field).
+    private func handleDatePanelKey(_ pressed: KeyShortcut) -> Bool {
+        guard pressed.modifiers.isEmpty else {
+            closeDatePanel()
+            return false
+        }
+        switch pressed.key {
+        case "arrowLeft": moveDatePanel(days: -1)
+        case "arrowRight": moveDatePanel(days: 1)
+        case "arrowUp": moveDatePanel(days: -7)
+        case "arrowDown": moveDatePanel(days: 7)
+        case "pageUp": moveDatePanel(months: -1)
+        case "pageDown": moveDatePanel(months: 1)
+        case "return", "enter", "space": pickDatePanelDay()
+        case "escape": closeDatePanel()
+        default:
+            closeDatePanel()
+            return false
+        }
+        return true
+    }
+
+    /// Closes the calendar when its field is gone, or is no longer a DatePicker.
+    private func syncDatePanel() {
+        guard let panel = datePanel, formField(panel.node)?.dates == nil else { return }
+        datePanel = nil
+    }
+
     /// Tells the dropdown its search text changed (`onSearchTextChange`); with `throttle`, once typing pauses.
     private func dropdownSearchChanged(_ text: String, dropdown: SearchBarDropdown, session: String) {
         dropdownSearchDebounce?.cancel()
@@ -955,6 +1063,7 @@ final class LauncherModel {
             actionPanel = nil
         } else if !currentActions.isEmpty {
             closeDropdownPanel()
+            datePanel = nil
             actionPanel = ActionPanelState(selected: ActionPanelReader.flat(currentActions).first?.id)
         }
     }
@@ -1064,6 +1173,7 @@ final class LauncherModel {
     /// Settings window, after the running command's own shortcuts.
     /// Returns false for everything else, which then goes to the focused field.
     func handleKey(_ pressed: KeyShortcut) -> Bool {
+        if datePanel != nil, handleDatePanelKey(pressed) { return true }
         if pressed == KeyShortcut(key: "k", modifiers: ["cmd"]) {
             toggleActionPanel()
             return true
@@ -1207,9 +1317,13 @@ final class LauncherModel {
         }
     }
 
-    /// Esc: close the dropdown's panel or the action panel (a submenu at a time), pop a pushed view, clear the
+    /// Esc: close a DatePicker's calendar, the dropdown's panel or the action panel (a submenu at a time), pop a pushed view, clear the
     /// search, leave the command, then hide.
     func escape() {
+        if datePanel != nil {
+            closeDatePanel()
+            return
+        }
         if dropdownPanel != nil {
             closeDropdownPanel()
             return
@@ -1259,28 +1373,64 @@ final class LauncherModel {
         guard let item = items.first(where: { $0.id == "command:\(commandID)" }),
             case .command(let extensionName, let commandName, let mode, _) = item.kind
         else { return }
-        let onScreen =
-            isVisible() && command?.extensionName == extensionName && command?.commandName == commandName
-        let action = HotKeyLaunch.action(
-            mode: mode, hasRequiredArgument: item.arguments.contains { $0.required == true }, isOnScreen: onScreen)
-        switch action {
-        case .hidePanel:
-            hide()
-        case .askForArguments:
-            if case .command = screen { leaveCommand() }
-            screen = .root
-            rootQuery = ""
-            refreshResults()
-            selectedItem = item.id
-            arguments.focus = 0
-            show()
-        case .open:
-            if mode == "view", case .command = screen { leaveCommand() }
-            launchOrigin = .hotkey
-            open(item)
-            launchOrigin = .rootSearch
-            if mode == "view" { show() }
+        // The reset comes first, so the hotkey's target is built on top of it. A no-view command's hotkey resets
+        // too while the panel is hidden: the panel's next show would reset it anyway, so this changes nothing.
+        resettingFirst {
+            let onScreen =
+                isVisible() && command?.extensionName == extensionName && command?.commandName == commandName
+            let action = HotKeyLaunch.action(
+                mode: mode, hasRequiredArgument: item.arguments.contains { $0.required == true }, isOnScreen: onScreen)
+            switch action {
+            case .hidePanel:
+                hide()
+            case .askForArguments:
+                if case .command = screen { leaveCommand() }
+                screen = .root
+                rootQuery = ""
+                refreshResults()
+                selectedItem = item.id
+                arguments.focus = 0
+                show()
+            case .open:
+                if mode == "view", case .command = screen { leaveCommand() }
+                launchOrigin = .hotkey
+                open(item)
+                launchOrigin = .rootSearch
+                if mode == "view" { show() }
+            }
         }
+    }
+
+    // MARK: - Reset after inactivity
+
+    /// Starts over on an empty root search when the panel was hidden long enough (`PanelReset`). The launcher
+    /// hotkey and the menu bar item call this before they show the panel.
+    func resetIfDue() {
+        resettingFirst {}
+    }
+
+    /// Runs `build`, a path that shows the panel, after resetting the panel if that's due. Every such path goes
+    /// through here first; `presented()` never resets, since it runs after the path has built its screen.
+    /// `keeping` is a command on screen that the path unloads itself (a `launchCommand` caller, answered first).
+    private func resettingFirst<T>(keeping session: String? = nil, _ build: () -> T) -> T {
+        panelReset.enter(reset: { resetToRoot(keeping: session) }, build: build)
+    }
+
+    /// Root search as on a first show: the command on screen unloaded as Esc to root does, an empty query and
+    /// fresh argument fields, no action or dropdown panel, and the first row selected. A no-view command still
+    /// running in the background isn't touched.
+    private func resetToRoot(keeping session: String?) {
+        actionPanel = nil
+        dropdownPanel = nil
+        if case .command(let command) = screen {
+            if command.session != session { send(.unload(session: command.session)) }
+            status = nil
+            toast = nil
+        }
+        screen = .root
+        rootQuery = ""
+        refreshResults()
+        resetArguments(for: selectedRootItem)
     }
 
     /// The hotkeys of installed commands, by root item id, for their rows.
@@ -1492,10 +1642,15 @@ final class LauncherModel {
                 missing: prepared.preferences.missing)
             return
         }
-        if let failure = launch(
-            target.command.title, of: target.installed, command: target.command, launchProps: target.launchProps,
-            prepared: prepared, quiet: !userInitiated)
-        {
+        let start = {
+            self.launch(
+                target.command.title, of: target.installed, command: target.command, launchProps: target.launchProps,
+                prepared: prepared, quiet: !userInitiated)
+        }
+        // A user-initiated view launch shows the panel, so a due reset comes first. The command on screen is left
+        // to `unloadReplaced`, after the call is answered.
+        let showsPanel = userInitiated && target.command.mode == "view"
+        if let failure = showsPanel ? resettingFirst(keeping: onScreen, start) : start() {
             // A view launch has put its failure on screen in place of the command that was there.
             let error = LaunchCommandError.invalid("couldn't start \"\(target.command.name)\": \(failure)")
             send(.rpcResult(session: session, id: id, result: nil, error: error.description))
@@ -1539,19 +1694,21 @@ final class LauncherModel {
     /// A required argument has no value: root search shows the command, its fields filled with what was given and the
     /// keyboard in the first empty required one, as ↵ on it would. The panel opens if it's hidden.
     private func showArguments(of target: LaunchTarget) {
-        screen = .root
-        rootQuery = ""
-        refreshResults()
-        selectedItem = target.rootItemID
-        // Fresh fields, even if the command was already selected with something typed into them.
-        resetArguments(for: selectedRootItem)
-        for (index, argument) in arguments.arguments.enumerated() {
-            if let value = target.launchProps.arguments[argument.name], !value.isEmpty {
-                arguments.set(value, at: index)
+        resettingFirst {
+            screen = .root
+            rootQuery = ""
+            refreshResults()
+            selectedItem = target.rootItemID
+            // Fresh fields, even if the command was already selected with something typed into them.
+            resetArguments(for: selectedRootItem)
+            for (index, argument) in arguments.arguments.enumerated() {
+                if let value = target.launchProps.arguments[argument.name], !value.isEmpty {
+                    arguments.set(value, at: index)
+                }
             }
+            _ = arguments.checkRequired()
+            if !isVisible() { show() }
         }
-        _ = arguments.checkRequired()
-        if !isVisible() { show() }
     }
 
     /// Unloads the command a `launchCommand` view launch replaced on screen.
@@ -1560,6 +1717,7 @@ final class LauncherModel {
         if toast?.session == session { toast = nil }
         actionPanel = nil
         dropdownPanel = nil
+        datePanel = nil
     }
 
     // MARK: - The extension host
@@ -1580,7 +1738,11 @@ final class LauncherModel {
             throw HostUnavailable(
                 description: "The extension host is missing from Fudge.app. Rebuild it with `make app`.")
         }
-        let host = try ExtensionHost(node: node, script: script)
+        let cli = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/fudge")
+        let host = try ExtensionHost(
+            node: node, script: script,
+            environment: ExtensionStore.hostEnvironment(
+                cli: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil, paths: paths))
         self.host = host
         Task { [weak self] in
             for await message in host.messages { self?.handle(message) }
@@ -1629,6 +1791,7 @@ final class LauncherModel {
                 command.requestedMoreAt = nil
                 actionPanel = nil
                 dropdownPanel = nil
+                datePanel = nil
             }
             command.view = view
             command.depth = depth
@@ -1646,6 +1809,7 @@ final class LauncherModel {
             refreshForm(&command)
             screen = .command(command)
             syncDropdownPanel()
+            syncDatePanel()
             reportSelection()
 
         case .error(let session, let message, let stack, let fatal):
@@ -1832,12 +1996,15 @@ final class LauncherModel {
             refreshResults()
         }
         hide()
+        // "Suspended" keeps the command for when the panel opens again, however long it stays hidden.
+        if popToRootType == "suspended" { panelReset.suspend() }
     }
 
     /// Unloads the visible command, if any, and shows root search.
     private func leaveCommand() {
         actionPanel = nil
         dropdownPanel = nil
+        datePanel = nil
         if case .command(let command) = screen { send(.unload(session: command.session)) }
         screen = .root
         status = nil
