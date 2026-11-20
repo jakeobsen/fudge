@@ -82,6 +82,55 @@ private func item(_ title: String, subtitle: String? = nil, keywords: [String] =
     #expect(RootItem.settings.kind == .settings)
 }
 
+@Test func rootSearchHasReloadExtensionsAndQuitBesideSettings() {
+    #expect(RootSearch.builtInItems == [.settings, .reloadExtensions, .quit])
+    #expect(Set(RootSearch.builtInItems.map(\.id)).count == 3)
+    #expect(RootItem.reloadExtensions.title == "Reload Extensions")
+    #expect(RootItem.reloadExtensions.kind == .reloadExtensions)
+    #expect(RootItem.quit.title == "Quit fudge")
+    #expect(RootItem.quit.kind == .quit)
+}
+
+@Test func reloadExtensionsAndQuitAreFoundByTitleAndKeywords() {
+    let items = [item("Terminal"), item("Safari"), item("Mail"), item("Notes")] + RootSearch.builtInItems
+    func first(_ query: String) -> RootItem? {
+        RootSearch.rank(items, query: query, history: LaunchHistory(), now: now).first
+    }
+    for query in ["reload", "Reload Ext", "refresh", "extensions"] {
+        #expect(first(query) == .reloadExtensions, "found by \(query)")
+    }
+    for query in ["quit", "Quit fudge", "exit"] {
+        #expect(first(query) == .quit, "found by \(query)")
+    }
+    let fudge = RootSearch.rank(items, query: "fudge", history: LaunchHistory(), now: now)
+    #expect(fudge.first == .settings)
+    #expect(
+        Set(fudge.prefix(3).map(\.id)) == Set(RootSearch.builtInItems.map(\.id)),
+        "typing fudge finds all of fudge's own items")
+    for query in ["terminal", "safari", "xyz"] {
+        let ranked = RootSearch.rank(items, query: query, history: LaunchHistory(), now: now)
+        #expect(!ranked.contains(.reloadExtensions) && !ranked.contains(.quit), "not shown for \(query)")
+    }
+}
+
+@Test func quittingNeverCountsInLaunchHistory() {
+    #expect(!RootItem.quit.recordsLaunch)
+    #expect(RootItem.settings.recordsLaunch)
+    #expect(RootItem.reloadExtensions.recordsLaunch)
+    #expect(item("Terminal").recordsLaunch)
+
+    // Opened often, as the launcher records it: Quit still never rises to the top of an empty search.
+    let items = [item("Terminal")] + RootSearch.builtInItems
+    var history = LaunchHistory()
+    for _ in 0..<20 {
+        for opened in [RootItem.quit, .reloadExtensions] where opened.recordsLaunch {
+            history.record(opened.id, at: now)
+        }
+    }
+    #expect(history.score(RootItem.quit.id, now: now) == 0)
+    #expect(RootSearch.rank(items, query: "", history: history, now: now).first == .reloadExtensions)
+}
+
 @Test func theSettingsItemRanksByHistoryLikeAnyOther() {
     let items = [item("Fudge Factory")] + RootSearch.builtInItems
     #expect(RootSearch.rank(items, query: "fudge", history: LaunchHistory(), now: now).first?.title == "Fudge Factory")
