@@ -15,14 +15,14 @@ import Testing
               {"id":4,"type":"Form.TextField","props":{"id":"name","value":"x","placeholder":"Name","error":"Required","autoFocus":true},"children":[]},
               {"id":5,"type":"Form.Checkbox","props":{"id":"done","label":"Done"},"children":[]},
               {"id":6,"type":"Form.Separator","props":{},"children":[]},
-              {"id":7,"type":"Form.DatePicker","props":{"id":"when"},"children":[]},
+              {"id":7,"type":"Form.Future","props":{"id":"when"},"children":[]},
               {"id":8,"type":"Form.PasswordField","props":{"id":"secret","value":null},"children":[]}
             ]}
             """#.utf8))
     let fields = FormContent(view).fields
     #expect(
         fields.map(\.kind) == [
-            .description, .textArea, .textField, .checkbox, .separator, .unsupported("Form.DatePicker"), .passwordField,
+            .description, .textArea, .textField, .checkbox, .separator, .unsupported("Form.Future"), .passwordField,
         ])
     #expect(fields[0].text == "What Claude checks." && !fields[0].isEditable)
     #expect(fields[1].fieldId == "workflow" && fields[1].title == "Workflow" && fields[1].info != nil)
