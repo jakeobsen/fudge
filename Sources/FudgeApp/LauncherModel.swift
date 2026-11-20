@@ -1320,15 +1320,18 @@ final class LauncherModel {
     /// Esc: close a DatePicker's calendar, the dropdown's panel or the action panel (a submenu at a time), pop a pushed view, clear the
     /// search, leave the command, then hide.
     func escape() {
+        // The DatePicker's calendar is a popover too: it closes first, whatever Esc is set to do.
         if datePanel != nil {
             closeDatePanel()
             return
         }
-        if dropdownPanel != nil {
+        let state = EscapeAction.State(
+            dropdownOpen: dropdownPanel != nil, actionPanelOpen: actionPanel != nil, screen: escapeScreen)
+        switch EscapeAction.next(behavior: settings.escapeBehavior, state: state) {
+        case .closeDropdown:
             closeDropdownPanel()
-            return
-        }
-        if var panel = actionPanel {
+        case .closeActionPanel:
+            guard var panel = actionPanel else { return }
             if panel.path.isEmpty {
                 actionPanel = nil
             } else {
@@ -1338,21 +1341,34 @@ final class LauncherModel {
                 let first = ActionPanelReader.flat(actionPanelSections).first?.id
                 actionPanel?.selected = first
             }
-            return
+        case .popView:
+            if case .command(let command) = screen { send(.pop(session: command.session)) }
+        case .clearSearch:
+            searchText = ""
+        case .leaveCommand:
+            leaveCommand()
+        case .dismissFailure:
+            screen = .root
+        case .hide:
+            hide()
+        case .hideAndReset:
+            // "Close window and pop to root": as Pop to Root Search's reset, but at once.
+            resetToRoot(keeping: nil)
+            hide()
         }
+    }
+
+    /// The screen as Esc sees it (`EscapeAction.State.Screen`).
+    private var escapeScreen: EscapeAction.State.Screen {
         switch screen {
         case .root:
-            if rootQuery.isEmpty { hide() } else { searchText = "" }
+            return .root(queryEmpty: rootQuery.isEmpty)
         case .failure:
-            screen = .root
+            return .failure
         case .command(let command):
-            if command.failure == nil, command.depth > 1 {
-                send(.pop(session: command.session))
-            } else if command.failure == nil, !command.searchText.isEmpty {
-                searchText = ""
-            } else {
-                leaveCommand()
-            }
+            // A command that failed has nothing to go back through.
+            guard command.failure == nil else { return .command(depth: 1, searchEmpty: true, isForm: false) }
+            return .command(depth: command.depth, searchEmpty: command.searchText.isEmpty, isForm: command.form != nil)
         }
     }
 
