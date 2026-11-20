@@ -90,8 +90,11 @@ func arithmeticValues(_ query: String, _ value: Double) throws {
     #expect(Calculator.cardDigits(for: 1_234_567_890.5) == 10)
     #expect(Calculator.cardDigits(for: -12_345_678_901.5) == 11)
     #expect(Calculator.cardDigits(for: 123_456_789_012_345.5) == 15)
-    #expect(Calculator.cardDigits(for: 1e20) == 15)
-    #expect(Calculator.cardDigits(for: .infinity) == 15)
+    #expect(Calculator.cardDigits(for: 999_999_999_999_999) == 15)
+    #expect(Calculator.cardDigits(for: 1e15) == 10, "scientific notation")
+    #expect(Calculator.cardDigits(for: 1e20) == 10)
+    #expect(Calculator.cardDigits(for: 3e-8) == 10)
+    #expect(Calculator.cardDigits(for: .infinity) == 10)
 }
 
 @Test func copiesKeepFifteenSignificantDigits() throws {
@@ -115,8 +118,9 @@ func floatingPointNoiseDoesNotShow(_ query: String, _ us: String, _ dk: String) 
 
 @Test func scientificAnswersAtBothPrecisions() throws {
     let huge = try #require(calculate("2^60", enUS))
-    #expect(huge.answer == "1.15292150460685E18")
+    #expect(huge.answer == "1.152921505E18", "the card keeps 10 digits in scientific notation")
     #expect(huge.copyText == "1.15292150460685E18")
+    #expect(try #require(calculate("2^60", enDK)).answer == "1,152921505E18")
     let tiny = try #require(calculate("1/(3*10^7)", enUS))
     #expect(tiny.answer == "3.333333333E-8")
     #expect(tiny.copyText == "3.33333333333333E-8")
@@ -142,7 +146,7 @@ func noCard(_ query: String) {
 @Test(arguments: [
     ("-2^2", -4.0), ("(-2)^2", 4), ("2^-1", 0.5), ("-2^-2", -0.25), ("2^3^2", 512), ("-10^20", -1e20), ("-3!", -6),
     ("-10% of 50", -5), ("2pi^2", 2 * Double.pi * Double.pi), ("2 -3", -1), ("2*-3", -6), ("-(2)^2", -4),
-    ("100 - 10%", 90),
+    ("100 - 10%", 90), ("50% of 2^2", 2),
 ])
 func aSignBindsLooserThanAPower(_ query: String, _ value: Double) throws {
     let result = try #require(Arithmetic.evaluate(query))

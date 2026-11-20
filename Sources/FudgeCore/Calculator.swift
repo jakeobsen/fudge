@@ -147,12 +147,13 @@ public enum Calculator {
     /// noise (`0.1+0.2`) rounds away.
     public static let copyDigits = 15
 
-    /// The card's significant digits for `value`: at least 10, and more for a longer integer part, up to 15, so
-    /// rounding happens in the fraction and never in the integer part below 1e15.
+    /// The card's significant digits for `value`: while it's written out (below 1e15), at least 10 and more for a
+    /// longer integer part, up to 15, so rounding happens in the fraction and never in the integer part. In
+    /// scientific notation, 10.
     public static func cardDigits(for value: Double) -> Int {
         let magnitude = Swift.abs(value)
         // Also NaN and infinity, which fail the comparison.
-        guard magnitude < 1e15 else { return copyDigits }
+        guard magnitude < 1e15 else { return 10 }
         let integerDigits = magnitude < 1 ? 0 : String(UInt64(magnitude)).count
         return min(copyDigits, max(10, integerDigits))
     }
