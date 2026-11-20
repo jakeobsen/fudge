@@ -12,6 +12,8 @@ public struct FudgeSettings: Sendable, Equatable {
     public var extensions: [String: ExtensionSettings]
     /// Download exchange rates from the European Central Bank for the calculator. Off unless set.
     public var currencyRates: Bool
+    /// How the calculator reads and shows numbers: the Mac's format unless set. An unknown value reads as the Mac's.
+    public var numberFormat: NumberFormatSetting
     /// The Extension Store's switch (`extensionStore`); it counts only with the consent date beside it.
     public var extensionStore = false
     /// When the user confirmed the Extension Store's consent sheet (`extensionStoreConsentAt`, ISO 8601).
@@ -49,12 +51,13 @@ public struct FudgeSettings: Sendable, Equatable {
 
     public init(
         hotkey: String? = nil, commands: [String: CommandSettings] = [:], extensions: [String: ExtensionSettings] = [:],
-        currencyRates: Bool = false
+        currencyRates: Bool = false, numberFormat: NumberFormatSetting = .system
     ) {
         self.hotkey = hotkey
         self.commands = commands
         self.extensions = extensions
         self.currencyRates = currencyRates
+        self.numberFormat = numberFormat
     }
 
     /// A command's key in `commands`: "<extension name>/<command name>".
@@ -110,7 +113,8 @@ public struct FudgeSettings: Sendable, Equatable {
     public static func load(from file: URL) -> FudgeSettings {
         guard let object = try? existingObject(at: file) else { return FudgeSettings() }
         var settings = FudgeSettings(
-            hotkey: object["hotkey"] as? String, currencyRates: object["currencyRates"] as? Bool ?? false)
+            hotkey: object["hotkey"] as? String, currencyRates: object["currencyRates"] as? Bool ?? false,
+            numberFormat: (object["numberFormat"] as? String).flatMap(NumberFormatSetting.init(rawValue:)) ?? .system)
         settings.extensionStore = object["extensionStore"] as? Bool ?? false
         settings.extensionStoreConsentAt = object["extensionStoreConsentAt"] as? String
         for case (let id, let entry as [String: Any]) in object["commands"] as? [String: Any] ?? [:] {
@@ -131,6 +135,7 @@ public struct FudgeSettings: Sendable, Equatable {
         var object = try Self.existingObject(at: file)
         object["hotkey"] = hotkey
         object["currencyRates"] = currencyRates ? true : nil
+        object["numberFormat"] = numberFormat == .system ? nil : numberFormat.rawValue
         object["extensionStore"] = extensionStore ? true : nil
         object["extensionStoreConsentAt"] = extensionStoreConsentAt
 

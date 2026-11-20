@@ -116,8 +116,14 @@ run: app
 		alive=; for pid in $$pids; do kill -0 $$pid 2>/dev/null && alive=$$pid; done; \
 		[ -z "$$alive" ] && break; sleep 0.1; \
 	done; \
-	[ -z "$$alive" ] || { printf 'the running Fudge did not quit\n'; exit 1; }
-	@open '$(APP)'
+	[ -z "$$alive" ] || { printf 'the running Fudge did not quit\n'; exit 1; }; \
+	again=$$($(USER_FUDGE_PIDS)); \
+	[ -z "$$again" ] || { printf 'another Fudge started meanwhile (pid %s); quit it, then run make run again\n' \
+		"$$again"; exit 1; }
+	@# -n starts a new instance. Without it, LaunchServices hands the open to any live Fudge with the same bundle
+	@# id, such as a --snapshot run from another checkout, and fails with -600, leaving no fudge running. The user's
+	@# own fudge was quit, and checked for again, just above, so -n can't start a second copy of it.
+	@open -n '$(APP)'
 
 install-extension: app
 	@test -n '$(DIR)' || { printf 'usage: make install-extension DIR=<folder>\n'; exit 2; }

@@ -15,9 +15,14 @@ enum SystemCalls {
         "selection.finderItems",
     ]
 
+    /// Offers the Accessibility pane when macOS's prompt didn't help. The app delegate sets it up with the panel;
+    /// snapshot runs have none.
+    static var accessibilitySettingsOffer: AccessibilitySettingsOffer?
     private static let accessibility = SystemAccessibility()
-    /// Shared by reading the selection and pasting, so macOS's Accessibility prompt shows at most once per run.
-    private static let gate = AccessibilityGate(access: accessibility)
+    /// Shared by reading the selection and pasting, so macOS's Accessibility prompt shows at most once per run, and
+    /// fudge's own offer too.
+    private static let gate = AccessibilityGate(
+        access: accessibility, offerSettings: { accessibilitySettingsOffer?.offer() })
     private static let keys = SystemCopyKey()
     private static let pasteboard = SystemPasteboard()
     private static let selectedText = SelectedText(

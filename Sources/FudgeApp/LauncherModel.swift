@@ -169,25 +169,37 @@ final class LauncherModel {
         refreshResults()
     }
 
-    /// Finds applications and installed extensions again.
+    /// Finds applications and installed extensions again: the menu's Reload Extensions, and launch.
     func reload() {
+        readInstalledExtensions()
+        applications = ApplicationIndex.scan()
+        applySettings()
+    }
+
+    /// Reads the installed extensions again and keeps the applications already scanned: the extensions folder
+    /// changed (`ExtensionsWatcher`). The root query stays, and so does the selection while its item is still
+    /// there, with the action panel open on it. A running command keeps the code it loaded.
+    func reloadExtensions() {
+        readInstalledExtensions()
+        applySettings(keepingSelection: true)
+    }
+
+    private func readInstalledExtensions() {
         // The bundled Extension Store is listed with them while it's on.
         installedExtensions = InstalledExtension.all(
             paths: paths, settings: FudgeSettings.load(from: paths.settingsFile), resources: Bundle.main.resourceURL)
         extensions = Dictionary(
             installedExtensions.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
         loadCommandMetadata(installedExtensions)
-        applications = ApplicationIndex.scan()
-        applySettings()
     }
 
     /// Rebuilds root search from `settings.json`: commands that are disabled leave it, and the rest get their
     /// aliases and hotkeys. Settings calls it after each change.
-    func applySettings() {
+    func applySettings(keepingSelection: Bool = false) {
         settings = FudgeSettings.load(from: paths.settingsFile)
         let commands = installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
         items = RootSearch.applying(settings, to: commands) + RootSearch.builtInItems + applications
-        refreshResults()
+        refreshResults(keepingSelection: keepingSelection)
         refreshCommandHotkeys()
     }
 
@@ -273,10 +285,18 @@ final class LauncherModel {
         return "Search for apps and commands…"
     }
 
-    private func refreshResults() {
+    /// Ranks root search again. The first row is selected, unless `keepingSelection` and the selected row is still
+    /// there: then the selection doesn't change, so the action panel open on it stays open.
+    private func refreshResults(keepingSelection: Bool = false) {
         calculator = evaluateCalculator()
         results = RootSearch.rank(items, query: rootQuery, history: history)
-        selectedItem = rootRows.first?.id
+        let rows = rootRows
+        if keepingSelection, let selectedItem, rows.contains(where: { $0.id == selectedItem }) {
+            // A rebuild may have changed the command's arguments.
+            syncArguments()
+            return
+        }
+        selectedItem = rows.first?.id
     }
 
     /// Root search's rows in the order they're drawn and moved through (`RootSearch.rows`): a command whose alias
@@ -301,8 +321,12 @@ final class LauncherModel {
         }
     }
 
+    /// "Same as macOS" is resolved here, for each query, so a change in System Settings applies at once.
     private func evaluateCalculator() -> CalculatorResult? {
-        Calculator.evaluate(rootQuery, locale: .current, now: Date(), timeZone: .current, currency: currency)
+        let locale = Locale.current
+        return Calculator.evaluate(
+            rootQuery, locale: locale, format: settings.numberFormat.resolve(locale), now: Date(), timeZone: .current,
+            currency: currency)
     }
 
     /// ↵ on the Calculator card: copy its answer, or what the card offers instead (turning currency on, retrying).

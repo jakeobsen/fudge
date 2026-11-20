@@ -7,7 +7,7 @@ fudge is an independent project. It is not affiliated with or endorsed by Raycas
 ## What's here
 
 - `Sources/FudgeApp`: the macOS app. It runs in the menu bar, without a Dock icon.
-- `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for fudge; `--into <folder>` installs it in that extensions folder instead.
+- `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for fudge; `--into <folder>` installs it in that extensions folder instead. A running fudge picks up an extension you install, rebuild or remove within a second, with nothing to reload.
 - `Sources/FudgeCore`: code shared by the app and the tool.
 - `runtime/`: the extension host. This is the Node.js program that runs extensions. The app talks to it over stdin/stdout.
 
@@ -82,17 +82,21 @@ The first time an extension opens another extension's command, fudge asks whethe
 
 Type a calculation in root search and the answer shows above the results: arithmetic (`5+5/10*39`), units (`13kg to lbs`), time zones (`3pm cet in pst`) and currencies (`100 usd to eur`, `€100 in usd`, `100 € in kr`). ↵ copies the answer.
 
+Numbers follow your Mac's number format, or the one you pick under **Settings… → General → Number format**: "1,234.5" or "1.234,5". In "1.234,5", `1.000 + 1` is 1.001, and `1.5` isn't a number, so it gets no answer rather than a wrong one.
+
 Currency conversion is off until you turn it on under **Settings… → General**, because it needs exchange rates from the network. Until then, a currency query shows a card saying so, and ↵ on it opens that page.
 
 ### Network
 
-fudge makes no connections of its own, with one exception you turn on yourself: with currency conversion on, it downloads the European Central Bank's daily reference rates (`https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml`). It downloads that one public file when you turn the setting on, then when the rates are a day old, at most once every 12 hours. Like any download, the server sees your IP address, and nothing else is sent: no cookies and no identifier beyond `fudge/<version>` as the user agent. The rates are kept in `exchange-rates.json` in the support folder. Turning the setting off stops the downloads. Extensions make their own connections, as they do in Raycast.
+fudge makes no connections of its own (no updater, telemetry or crash reporting), with three exceptions: the images extensions show (see **Images from the web** below), and two you turn on yourself. With currency conversion on, it downloads the European Central Bank's daily reference rates (`https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml`). It downloads that one public file when you turn the setting on, then when the rates are a day old, at most once every 12 hours. Like any download, the server sees your IP address, and nothing else is sent: no cookies and no identifier beyond `fudge/<version>` as the user agent. The rates are kept in `exchange-rates.json` in the support folder. Turning the setting off stops the downloads. Extensions make their own connections, as they do in Raycast.
 
-**The Extension Store** is the other exception, and it's off until you turn it on under **Settings… → General** and confirm what it does. While it's on, fudge connects to GitHub (github.com and its image servers) to download the list of extensions in the open-source repository github.com/raycast/extensions, the extensions you install, and their pictures, and npm downloads those extensions' packages from registry.npmjs.org. fudge never contacts Raycast's servers. Turning the store off deletes its downloaded list; extensions you installed stay installed.
+**The Extension Store** is the other one you turn on yourself, and it's off until you turn it on under **Settings… → General** and confirm what it does. While it's on, fudge connects to GitHub (github.com and its image servers) to download the list of extensions in the open-source repository github.com/raycast/extensions, the extensions you install, and their pictures, and npm downloads those extensions' packages from registry.npmjs.org. fudge never contacts Raycast's servers. Turning the store off deletes its downloaded list; extensions you installed stay installed.
 
 ### Selected text and Finder items
 
 Extensions can read the text selected in the app you were in, and the items selected in Finder. The first time, macOS asks you to allow fudge under **Privacy & Security → Accessibility** or **Automation**.
+
+macOS only asks when fudge isn't in the Accessibility list yet. If fudge is there but switched off, or the entry was left by an older build of fudge, nothing appears, and extensions are just refused. So when Accessibility is refused a second time, fudge shows its own alert, once per run, and **Open Accessibility Settings** takes you to the list. Switch fudge on there. If it's already on, select it, remove it with −, and add it again with +.
 
 When an app doesn't share its selection through Accessibility (often browsers and Electron apps such as VS Code), fudge copies it with ⌘C and puts back what was on your clipboard right after. That has some side effects:
 
@@ -103,6 +107,12 @@ When an app doesn't share its selection through Accessibility (often browsers an
 - fudge waits half a second for the copy. An app that answers ⌘C later than that copies after fudge has put your clipboard back, so the selected text ends up on your clipboard.
 
 Secure text fields, such as passwords, never give their text.
+
+### Images from the web
+
+When an extension uses an `https://` image (an icon, or an image in markdown), fudge downloads it on the extension's behalf, without cookies or credentials, and keeps it in `~/Library/Application Support/fudge/image-cache/` (up to 200 MB). A downloaded image is reused for a day, then checked for changes the next time it's shown.
+
+Loading an image tells the image's host your IP address and when you looked, as in a browser. Markdown that shows other people's content, such as issues or emails, can carry tracking images, as it can in Raycast or in a mail app that loads images. fudge doesn't load `http://` images, or images from your Mac (`localhost`) or the local network (`.local` names and private addresses).
 
 ### Pasting
 
