@@ -55,6 +55,41 @@ private let inbox = """
     #expect(!droppedAgain, "nothing left to drop")
 }
 
+@Test func commandMetadataKeepsKeysItDoesntKnow() throws {
+    let file = try Fixtures.temporaryDirectory().appendingPathComponent("command-metadata.json")
+    try Data(#"{"a/b": {"subtitle": "x", "future": [1, "two"]}, "a/c": {"other": true}}"#.utf8).write(to: file)
+    var metadata = CommandMetadata.load(from: file)
+    #expect(metadata.subtitles == ["a/b": "x"])
+
+    metadata.setSubtitle(nil, extension: "a", command: "b")
+    metadata.setSubtitle("new", extension: "a", command: "c")
+    try metadata.save(to: file)
+    let written = try JSONDecoder().decode([String: JSONValue].self, from: Data(contentsOf: file))
+    #expect(
+        written == [
+            "a/b": .object(["future": .array([.number(1), .string("two")])]),
+            "a/c": .object(["other": .bool(true), "subtitle": .string("new")]),
+        ], "a reset keeps the entry's other keys")
+
+    let dropped = metadata.prune(keeping: ["a/c"])
+    #expect(dropped)
+    try metadata.save(to: file)
+    let pruned = try JSONDecoder().decode([String: JSONValue].self, from: Data(contentsOf: file))
+    #expect(Array(pruned.keys) == ["a/c"], "pruning drops the whole entry")
+}
+
+@Test func anEmptyListingPrunesNothing() {
+    var metadata = CommandMetadata(subtitles: ["a/b": "x"])
+    let dropped = metadata.prune(keeping: [])
+    #expect(!dropped, "an extensions folder that couldn't be read doesn't wipe the file")
+    #expect(metadata.subtitles == ["a/b": "x"])
+
+    var store = MenuBarStore(active: ["a/menu"])
+    let deactivated = store.prune(keeping: [])
+    #expect(!deactivated, "nor deactivate every menu bar item")
+    #expect(store.active == ["a/menu"])
+}
+
 @Test func commandMetadataReadsTheUpdateParams() throws {
     #expect(try CommandMetadata.subtitle(fromParams: .object(["subtitle": .string("x")])) == "x")
     #expect(try CommandMetadata.subtitle(fromParams: .object(["subtitle": .null])) == nil)

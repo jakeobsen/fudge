@@ -59,8 +59,11 @@ public struct MenuBarStore: Sendable, Equatable {
     }
 
     /// Drops the commands that aren't in `installed` (command ids of menu-bar commands). Returns whether any were.
+    /// An empty `installed` drops nothing: it more likely means the extensions folder couldn't be read than that
+    /// every menu-bar command is gone, and deactivating them all would lose the user's choices.
     @discardableResult
     public mutating func prune(keeping installed: Set<String>) -> Bool {
+        guard !installed.isEmpty else { return false }
         let kept = active.filter { installed.contains($0) }
         guard kept.count != active.count else { return false }
         active = kept
