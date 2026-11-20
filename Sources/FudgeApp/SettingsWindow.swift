@@ -9,6 +9,23 @@ import SwiftUI
 final class SettingsModel {
     private(set) var extensions: [InstalledExtension] = []
     var selected: String?
+    /// The Commands page's entry in the sidebar; extension names can't start with ":".
+    static let commandsPage = ":commands"
+    /// Every installed extension, for the Commands page.
+    private(set) var allExtensions: [InstalledExtension] = []
+    /// `settings.json`, as the Commands page edits it.
+    private(set) var fudgeSettings = FudgeSettings()
+    /// The command whose hotkey is being recorded.
+    private(set) var recording: String?
+    /// A short message under a command's hotkey: why a recording was refused.
+    private(set) var hotkeyMessages: [String: String] = [:]
+    /// The launcher's own hotkey, which commands can't take; set by the app delegate.
+    @ObservationIgnored var launcherHotkey = HotKeySpec.default
+    /// Suspend and resume fudge's global hotkeys around a recording, so pressing one records it.
+    @ObservationIgnored var suspendHotkeys: () -> Void = {}
+    @ObservationIgnored var resumeHotkeys: () -> Void = {}
+    /// Registers the command hotkeys from `settings.json`; returns the command ids the system refused.
+    @ObservationIgnored var applyHotkeys: () -> Set<String> = { [] }
     private(set) var stored: [String: StoredPreferences] = [:]
     @ObservationIgnored private let store: PreferenceStore
     @ObservationIgnored private let paths: FudgePaths
@@ -25,9 +42,88 @@ final class SettingsModel {
             !installed.manifest.preferences.isEmpty || installed.manifest.commands.contains { !$0.preferences.isEmpty }
         }
         stored = Dictionary(uniqueKeysWithValues: extensions.map { ($0.manifest.name, store.load($0.manifest.name)) })
-        if selected == nil || !extensions.contains(where: { $0.manifest.name == selected }) {
-            selected = extensions.first?.manifest.name
+        allExtensions = InstalledExtension.all(in: paths.extensionsDirectory).sorted {
+            $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending
         }
+        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        if selected != Self.commandsPage, !extensions.contains(where: { $0.manifest.name == selected }) {
+            selected = Self.commandsPage
+        }
+    }
+
+    // MARK: - Command hotkeys
+
+    func hotkey(for commandID: String) -> HotKeySpec? {
+        fudgeSettings.commands[commandID]?.hotkey.flatMap(HotKeySpec.parse)
+    }
+
+    func startRecording(_ commandID: String) {
+        if recording == nil { suspendHotkeys() }
+        recording = commandID
+        hotkeyMessages[commandID] = nil
+    }
+
+    /// Ends a recording without changing anything (Esc, or the window closing).
+    func cancelRecording() {
+        guard recording != nil else { return }
+        recording = nil
+        resumeHotkeys()
+    }
+
+    /// The keys pressed while recording `commandID`. A conflict, or a shortcut the system refuses, keeps the old
+    /// hotkey and says why.
+    func record(_ spec: HotKeySpec, for commandID: String) {
+        cancelRecording()
+        if let conflict = HotKeyConflict.check(
+            spec, for: commandID, launcher: launcherHotkey, commands: fudgeSettings.commandHotkeys)
+        {
+            hotkeyMessages[commandID] = message(for: conflict)
+            return
+        }
+        let old = fudgeSettings.commands[commandID]?.hotkey
+        setHotkey(spec.text, for: commandID)
+        if applyHotkeys().contains(commandID) {
+            setHotkey(old, for: commandID)
+            _ = applyHotkeys()
+            hotkeyMessages[commandID] = "This shortcut is in use by another app"
+        }
+    }
+
+    func clearHotkey(_ commandID: String) {
+        cancelRecording()
+        hotkeyMessages[commandID] = nil
+        setHotkey(nil, for: commandID)
+        _ = applyHotkeys()
+    }
+
+    private func setHotkey(_ text: String?, for commandID: String) {
+        // Read the file again first, so hand edits made meanwhile aren't overwritten.
+        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        fudgeSettings.commands[commandID, default: .init()].hotkey = text
+        do {
+            try fudgeSettings.save(to: paths.settingsFile)
+        } catch {
+            FileHandle.standardError.write(Data("fudge: couldn't save settings: \(error)\n".utf8))
+        }
+    }
+
+    private func message(for conflict: HotKeyConflict) -> String {
+        switch conflict {
+        case .needsModifier: "Use ⌘, ⌥ or ⌃, or an F-key"
+        case .launcher: "That's fudge's own shortcut"
+        case .command(let other): "Already used by \(title(ofCommand: other))"
+        }
+    }
+
+    /// A command's title, from its id.
+    func title(ofCommand commandID: String) -> String {
+        for installed in allExtensions {
+            for command in installed.manifest.commands
+            where FudgeSettings.commandID(extension: installed.manifest.name, command: command.name) == commandID {
+                return command.title
+            }
+        }
+        return commandID
     }
 
     /// The value shown for a preference: what's stored, else its default.
@@ -103,7 +199,8 @@ final class SettingsWindowController {
 
     private func prepare(extension name: String?) {
         model.reload()
-        if let name { model.selected = name }
+        // "fudge Settings" and Settings… open on the Commands page; Configure Extension on the extension's own.
+        model.selected = name ?? SettingsModel.commandsPage
         if window == nil {
             let window = SettingsNSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 720, height: 480),
@@ -116,6 +213,13 @@ final class SettingsWindowController {
             window.contentView = NSHostingView(rootView: SettingsView(model: model))
             window.center()
             self.window = window
+            // Closing the window mid-recording gives fudge its hotkeys back.
+            let model = model
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification, object: window, queue: .main
+            ) { _ in
+                MainActor.assumeIsolated { model.cancelRecording() }
+            }
         }
     }
 
@@ -127,12 +231,19 @@ struct SettingsView: View {
 
     var body: some View {
         NavigationSplitView {
-            List(model.extensions, id: \.manifest.name, selection: $model.selected) { installed in
-                Text(installed.manifest.title)
+            List(selection: $model.selected) {
+                Label("Commands", systemImage: "command").tag(SettingsModel.commandsPage)
+                Section("Extensions") {
+                    ForEach(model.extensions, id: \.manifest.name) { installed in
+                        Text(installed.manifest.title).tag(installed.manifest.name)
+                    }
+                }
             }
             .navigationSplitViewColumnWidth(min: 180, ideal: 200)
         } detail: {
-            if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {
+            if model.selected == SettingsModel.commandsPage {
+                CommandsPage(model: model)
+            } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {
                 ExtensionPreferencesForm(model: model, installed: installed)
             } else {
                 Text("No extension has preferences.").foregroundStyle(.secondary)

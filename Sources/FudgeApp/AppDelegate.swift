@@ -9,7 +9,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var model: LauncherModel!
     private var panel: LauncherPanel!
-    private var hotKey: HotKey?
+    private let hotKeys = CarbonHotKeys()
+    private lazy var registry = HotKeyRegistry(registrar: hotKeys)
     private var settingsWindow: SettingsWindowController!
     private let hud = HUDWindow()
     private var keyMonitor: Any?
@@ -21,7 +22,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = Self.mainMenu()
         model = LauncherModel(paths: paths)
         panel = LauncherPanel(content: LauncherView(model: model))
-        settingsWindow = SettingsWindowController(model: SettingsModel(paths: paths))
+        let settingsModel = SettingsModel(paths: paths)
+        settingsWindow = SettingsWindowController(model: settingsModel)
         model.hide = { [weak self] in self?.hidePanel() }
         model.show = { [weak self] in self?.showPanel() }
         model.openSettings = { [weak self] name in self?.settingsWindow.show(extension: name) }
@@ -62,13 +64,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return handled ? nil : event
         }
 
+        // The launcher's hotkey and every command's, through one Carbon handler.
+        hotKeys.onPress = { [weak self] id in
+            guard let self else { return }
+            if id == HotKeyRegistry.launcherID {
+                self.togglePanel()
+            } else if let command = self.registry.command(for: id) {
+                self.model.openFromHotkey(command)
+            }
+        }
         let settings = FudgeSettings.load(from: paths.settingsFile)
         let spec = settings.hotkey.flatMap(HotKeySpec.parse) ?? .default
-        hotKey = HotKey(spec) { [weak self] in self?.togglePanel() }
-        if hotKey == nil {
+        let registered = registry.setLauncher(spec)
+        if !registered {
             FileHandle.standardError.write(Data("fudge: couldn't register the shortcut \(spec)\n".utf8))
         }
-        installStatusItem(shortcut: hotKey == nil ? nil : spec)
+        installStatusItem(shortcut: registered ? spec : nil)
+        applyCommandHotkeys()
+        settingsModel.launcherHotkey = spec
+        settingsModel.suspendHotkeys = { [weak self] in self?.registry.suspend() }
+        settingsModel.resumeHotkeys = { [weak self] in self?.registry.resume() }
+        settingsModel.applyHotkeys = { [weak self] in self?.applyCommandHotkeys() ?? [] }
+    }
+
+    /// Registers the hotkeys of the installed commands from `settings.json`. Hotkeys of commands that aren't
+    /// installed stay in the file, unregistered, so reinstalling the extension brings them back. Returns the
+    /// command ids whose hotkey the system refused.
+    @discardableResult
+    private func applyCommandHotkeys() -> Set<String> {
+        let installed = Set(model.installedCommandIDs)
+        let wanted = FudgeSettings.load(from: paths.settingsFile).commandHotkeys.filter { installed.contains($0.key) }
+        registry.apply(wanted)
+        model.refreshCommandHotkeys()
+        return registry.refused
     }
 
     private func installStatusItem(shortcut: HotKeySpec?) {
@@ -193,6 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func reloadExtensions() {
         model.reload()
+        applyCommandHotkeys()
     }
 
     @objc private func showSettings() {
