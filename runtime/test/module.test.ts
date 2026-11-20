@@ -20,10 +20,19 @@ test("everything fudge implements is part of @raycast/api", () => {
     }
 });
 
-test("implemented exports come through unchanged", () => {
-    const api = createApiModule();
-    assert.equal(api.List, implementation.List);
-    assert.equal(api.useNavigation, implementation.useNavigation);
+test("implemented exports keep their behaviour and a stable identity", () => {
+    const api = createApiModule() as typeof implementation;
+    assert.equal(api.List.displayName, "List");
+    assert.equal(api.Action.Style.Destructive, "destructive");
+    assert.equal(api.List.Item, api.List.Item, "React needs the same component object on every render");
+    assert.equal(createApiModule().List, api.List, "wrappers are shared");
+});
+
+test("a missing member of an implemented component names itself", () => {
+    const api = createApiModule() as { Action: Record<string, unknown>; List: { Item: Record<string, unknown> } };
+    assert.throws(() => (api.Action.CopyToClipboard as () => void)(), /^NotAvailableError: Action\.CopyToClipboard isn't available in fudge yet$/);
+    assert.throws(() => (api.List.Item.Accessory as () => void)(), /List\.Item\.Accessory isn't available/);
+    assert.equal(api.Action.displayName, "Action", "lowercase members aren't stubbed");
 });
 
 test("a missing export throws NotAvailableError naming it when called", () => {
@@ -33,9 +42,10 @@ test("a missing export throws NotAvailableError naming it when called", () => {
     assert.throws(() => new (api.Cache as new () => object)(), /Cache isn't available in fudge yet/);
 });
 
-test("members of a missing export are named in full", () => {
-    const api = createApiModule({}) as { Clipboard: { copy(text: string): void } };
+test("reading a member of a missing export throws, naming it in full", () => {
+    const api = createApiModule({}) as { Clipboard: { copy(text: string): void }; environment: { supportPath: string } };
     assert.throws(() => api.Clipboard.copy("x"), /^NotAvailableError: Clipboard\.copy isn't available in fudge yet$/);
+    assert.throws(() => api.environment.supportPath, /environment\.supportPath isn't available in fudge yet/);
 });
 
 test("stubs don't look like promises or React types", () => {
