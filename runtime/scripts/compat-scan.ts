@@ -6,18 +6,28 @@
 // Every folder with a package.json and a src/ is an extension. The report, in
 // Markdown on stdout, says how many use nothing fudge lacks and ranks the
 // missing APIs by how many extensions use them. --json also writes what each
-// extension uses and misses. Nothing is built or run.
+// extension misses, and of what kind. Nothing is built or run.
 
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { createApiModule } from "../src/api/module.ts";
-import { apiName, support, toJavaScript, uses } from "./compat/scan.ts";
+import { RAYCAST_UTILS_PATHS, RAYCAST_UTILS_VERSION } from "./compat/raycast-utils.generated.ts";
+import { gaps, isExtensionSource, support, toJavaScript, uses, type Gap, type GapKind } from "./compat/scan.ts";
+import { raycastDeclarations, vendoredTypes } from "./raycast-types.ts";
 
-/** APIs that depend on Raycast's servers, left out of fudge on purpose. */
-const byDesign = [/^AI(\.|$)/, /^BrowserExtension(\.|$)/];
+/**
+ * APIs left out of fudge on purpose, by category. AI and the Browser Extension depend on Raycast's servers. OAuth
+ * (`OAuth.PKCEClient` and the @raycast/utils exports built on it) is left out by the architect's decision D-50.
+ */
+const byDesign: Record<string, { api: RegExp; utils?: string[] }> = {
+    AI: { api: /^AI(\.|$)/ },
+    "Browser Extension": { api: /^BrowserExtension(\.|$)/ },
+    OAuth: { api: /^OAuth(\.|$)/, utils: ["OAuthService", "withAccessToken", "getAccessToken"] },
+};
 
 interface Result {
-    missing: string[];
+    gaps: Gap[];
+    notRaycast: string[];
     utils: string[];
     unreadable: string[];
 }
@@ -32,6 +42,7 @@ if (!folder) {
 }
 
 const api = createApiModule() as Record<string, unknown>;
+const declared = raycastDeclarations(vendoredTypes());
 
 function isDirectory(path: string): boolean {
     try {
@@ -42,27 +53,22 @@ function isDirectory(path: string): boolean {
 }
 
 function sources(src: string): string[] {
-    return (readdirSync(src, { recursive: true }) as string[])
-        .filter((file) => /\.(tsx?|jsx?)$/.test(file) && !file.endsWith(".d.ts") && !file.includes("node_modules"))
-        .map((file) => join(src, file));
+    return (readdirSync(src, { recursive: true }) as string[]).filter(isExtensionSource).map((file) => join(src, file));
 }
 
 async function scan(extension: string): Promise<Result> {
-    const paths = new Set<string>();
-    const utils = new Set<string>();
+    const found = { api: new Set<string>(), utils: new Set<string>() };
     const unreadable: string[] = [];
     for (const file of sources(join(extension, "src"))) {
         try {
-            const found = uses(await toJavaScript(readFileSync(file, "utf8"), file));
-            for (const path of found.api) paths.add(path);
-            for (const name of found.utils) utils.add(name);
+            const used = uses(await toJavaScript(readFileSync(file, "utf8"), file));
+            for (const path of used.api) found.api.add(path);
+            for (const name of used.utils) found.utils.add(name);
         } catch {
-            unreadable.push(file.slice(extension.length + 1));
+            unreadable.push(relative(extension, file));
         }
     }
-    const missing = new Set<string>();
-    for (const path of paths) if (support(api, path) === "missing") missing.add(apiName(path));
-    return { missing: [...missing].sort(), utils: [...utils].sort(), unreadable };
+    return { ...gaps(found, api, declared, RAYCAST_UTILS_PATHS), utils: [...found.utils].sort(), unreadable };
 }
 
 const names = readdirSync(folder)
@@ -74,55 +80,123 @@ const batch = 16;
 for (let start = 0; start < names.length; start += batch) {
     const slice = names.slice(start, start + batch);
     const scanned = await Promise.all(slice.map((name) => scan(join(folder, name))));
-    slice.forEach((name, index) => results.set(name, scanned[index]));
+    slice.forEach((name, index) => results.set(name, scanned[index]!));
+}
+
+/** The by-design category a gap belongs to, if any. */
+function category(gap: Gap): string | undefined {
+    for (const [name, { api: pattern, utils }] of Object.entries(byDesign)) {
+        if (pattern.test(gap.api)) return name;
+        if (utils && gap.kind === "via @raycast/utils" && gap.via!.every((via) => utils.includes(via))) return name;
+    }
+    return undefined;
 }
 
 const total = results.size;
 const percent = (count: number) => `${((100 * count) / Math.max(total, 1)).toFixed(1)}%`;
-const isByDesign = (name: string) => byDesign.some((pattern) => pattern.test(name));
-const clean = [...results.values()].filter((result) => result.missing.length === 0).length;
-const cleanButByDesign = [...results.values()].filter(
-    (result) => result.missing.length > 0 && result.missing.every(isByDesign),
-).length;
-const unreadable = [...results.values()].filter((result) => result.unreadable.length > 0).length;
+const all = [...results.values()];
+const clean = all.filter((result) => result.gaps.length === 0).length;
+const onlyByDesign = all.filter((result) => result.gaps.length > 0 && result.gaps.every((gap) => category(gap)));
+const rest = total - clean - onlyByDesign.length;
+const perCategory = Object.keys(byDesign).map((name) => {
+    const count = onlyByDesign.filter((result) => result.gaps.some((gap) => category(gap) === name)).length;
+    return `${name} ${count}`;
+});
+const unreadable = all.filter((result) => result.unreadable.length > 0).length;
 
-function ranked(pick: (result: Result) => string[]): [string, string[]][] {
-    const users = new Map<string, string[]>();
+/** Items ranked by how many extensions have them, then by name. */
+function ranked<T>(pick: (result: Result) => T[], key: (item: T) => string): [T, string[]][] {
+    const users = new Map<string, { item: T; names: string[] }>();
     for (const [name, result] of results) {
-        for (const item of pick(result)) users.set(item, [...(users.get(item) ?? []), name]);
+        for (const item of pick(result)) {
+            const entry = users.get(key(item)) ?? { item, names: [] };
+            entry.names.push(name);
+            users.set(key(item), entry);
+        }
     }
-    return [...users].sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]));
+    return [...users.values()]
+        .map(({ item, names }): [T, string[]] => [item, names])
+        .sort((a, b) => b[1].length - a[1].length || key(a[0]).localeCompare(key(b[0])));
 }
 
-// Extensions that miss exactly one API, by that API: what implementing it alone would unlock.
+const gapKey = (gap: Gap) => `${gap.api} ${gap.kind}`;
+
+// Extensions with exactly one gap that isn't by design, by that gap: what fixing it alone would unlock.
 const unlocks = new Map<string, number>();
-for (const result of results.values()) {
-    const gaps = result.missing.filter((name) => !isByDesign(name));
-    if (gaps.length === 1) unlocks.set(gaps[0], (unlocks.get(gaps[0]) ?? 0) + 1);
+for (const result of all) {
+    const open = result.gaps.filter((gap) => !category(gap));
+    if (open.length === 1) unlocks.set(gapKey(open[0]!), (unlocks.get(gapKey(open[0]!)) ?? 0) + 1);
 }
+
+const kinds: Record<GapKind, string> = {
+    missing: "fudge doesn't provide it",
+    "render-but-fail": "it renders, and fails when used",
+    "not-drawn": "the extension host renders it, but the app can't draw it",
+    "via @raycast/utils": "only needed through a @raycast/utils export the extension uses",
+};
 
 const lines: string[] = [
     "# Static compatibility scan",
     "",
     `${total} extensions scanned. Nothing was built or run: this reads their source, so it's an upper bound.`,
     "",
-    `- Use nothing fudge lacks: **${clean}** (${percent(clean)})`,
-    `- Lack only APIs left out by design (AI, Browser Extension): ${cleanButByDesign} (${percent(cleanButByDesign)})`,
+    `- No gaps: **${clean}** (${percent(clean)})`,
+    `- Only gaps left out by design: ${onlyByDesign.length} (${percent(onlyByDesign.length)}): ${perCategory.join(", ")}`,
+    `- The rest: ${rest} (${percent(rest)})`,
     `- Have a source file that couldn't be read: ${unreadable}`,
+    "",
+    "By design: AI and the Browser Extension depend on Raycast's servers, and OAuth is left out by decision D-50. " +
+        "An extension that lacks more than one of these counts under each.",
     "",
     "## Missing APIs",
     "",
-    "Ranked by how many extensions use each. *Alone* counts the extensions it's the only gap for.",
+    "Ranked by how many extensions use each. *Alone* counts the extensions it's the only gap for, apart from " +
+        "by-design ones. An API reached in two ways has a row for each; an extension that uses it directly counts " +
+        "only there.",
     "",
-    "| API | Extensions | Alone | By design |",
-    "|---|---:|---:|---|",
+    ...Object.entries(kinds).map(([kind, meaning]) => `- \`${kind}\`: ${meaning}`),
+    "",
+    "| API | Kind | Extensions | Alone | By design |",
+    "|---|---|---:|---:|---|",
 ];
-for (const [name, users] of ranked((result) => result.missing)) {
-    lines.push(`| \`${name}\` | ${users.length} | ${unlocks.get(name) ?? 0} | ${isByDesign(name) ? "yes" : ""} |`);
+for (const [gap, users] of ranked((result) => result.gaps, gapKey)) {
+    const design = category(gap);
+    lines.push(`| \`${gap.api}\` | ${gap.kind} | ${users.length} | ${unlocks.get(gapKey(gap)) ?? 0} | ${design ?? ""} |`);
 }
-lines.push("", "## @raycast/utils", "", "Bundled from each extension's own dependencies. Ranked by use.", "");
-lines.push("| Export | Extensions |", "|---|---:|");
-for (const [name, users] of ranked((result) => result.utils)) lines.push(`| \`${name}\` | ${users.length} |`);
+
+lines.push(
+    "",
+    "## @raycast/utils",
+    "",
+    `Bundled from each extension's own dependencies. What each export needs comes from @raycast/utils ` +
+        `${RAYCAST_UTILS_VERSION} (\`scripts/compat/raycast-utils.generated.ts\`). Ranked by use.`,
+    "",
+    "| Export | Extensions | Brings gaps |",
+    "|---|---:|---|",
+);
+for (const [name, users] of ranked((result) => result.utils, (name) => name)) {
+    const brought = (RAYCAST_UTILS_PATHS[name] ?? []).filter((path) => {
+        const result = support(api, path, declared);
+        return result !== "implemented" && result !== "not-raycast";
+    });
+    lines.push(`| \`${name}\` | ${users.length} | ${brought.map((path) => `\`${path}\``).join(", ")} |`);
+}
+
+const notRaycast = ranked((result) => result.notRaycast, (path) => path);
+const shown = 30;
+lines.push(
+    "",
+    "## Not Raycast API",
+    "",
+    "Paths through `@raycast/api` imports that Raycast's types don't declare: members it doesn't have " +
+        "(`Color.Gray`), test mocks outside test files, and members of the values themselves. They aren't gaps. " +
+        `${notRaycast.length} paths in ${all.filter((result) => result.notRaycast.length > 0).length} extensions; ` +
+        `the ${Math.min(shown, notRaycast.length)} most used:`,
+    "",
+    "| Path | Extensions |",
+    "|---|---:|",
+);
+for (const [path, users] of notRaycast.slice(0, shown)) lines.push(`| \`${path}\` | ${users.length} |`);
 console.log(lines.join("\n"));
 
 if (jsonFile) writeFileSync(jsonFile, JSON.stringify(Object.fromEntries(results), null, 2));

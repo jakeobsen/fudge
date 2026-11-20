@@ -51,6 +51,7 @@ test("updateCommandMetadata checks its argument before calling the app", async (
         assert.rejects(updateCommandMetadata(metadata as CommandMetadataUpdate), { name: "TypeError", message });
     await rejects(undefined, "updateCommandMetadata: metadata must be an object");
     await rejects("subtitle", "updateCommandMetadata: metadata must be an object");
+    await rejects([], "updateCommandMetadata: metadata must be an object");
     await rejects({ subtitle: 3 }, "updateCommandMetadata: subtitle must be a string or null");
     assert.equal(sent.length, 0, "nothing reaches the app");
 });

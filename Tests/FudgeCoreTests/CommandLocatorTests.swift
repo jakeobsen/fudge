@@ -134,7 +134,7 @@ private func request(_ params: String) throws -> LaunchRequest {
     }
 }
 
-@Test func backgroundLaunchesAreForNoViewCommandsOnly() throws {
+@Test func backgroundLaunchesAreForNoViewAndActiveMenuBarCommands() throws {
     let commands = try extensions()[0].manifest.commands
     let (list, refresh, status) = (commands[0], commands[1], commands[2])
     #expect(throws: Never.self) { try CommandLocator.checkMode(refresh, type: .background) }
@@ -145,10 +145,17 @@ private func request(_ params: String) throws -> LaunchRequest {
     #expect(
         LaunchCommandError.notInBackground(command: "list").description
             == #""list" can't be launched in the background"#)
-    for type in [LaunchRequest.LaunchType.userInitiated, .background] {
-        #expect(throws: LaunchCommandError.menuBarNotSupported) { try CommandLocator.checkMode(status, type: type) }
+    #expect(throws: Never.self) { try CommandLocator.checkMode(status, type: .userInitiated) }
+    #expect(throws: Never.self) {
+        try CommandLocator.checkMode(status, type: .userInitiated, isActiveInMenuBar: true)
     }
-    #expect(LaunchCommandError.menuBarNotSupported.description == "Menu bar commands aren't supported in Fudge yet")
+    #expect(throws: Never.self) { try CommandLocator.checkMode(status, type: .background, isActiveInMenuBar: true) }
+    #expect(throws: LaunchCommandError.notActiveInMenuBar(command: "status")) {
+        try CommandLocator.checkMode(status, type: .background)
+    }
+    #expect(
+        LaunchCommandError.notActiveInMenuBar(command: "status").description
+            == #""status" isn't active in the menu bar"#)
 }
 
 @Test func aMissingRequiredArgumentShowsTheFieldsOrFailsInTheBackground() throws {
