@@ -38,11 +38,12 @@ private struct MarkdownBlockView: View {
         case .paragraph(let text):
             Text(MarkdownView.inline(text)).font(.system(size: 13)).lineSpacing(2)
         case .code(_, let text):
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(text).font(.system(size: 12, design: .monospaced)).padding(10)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
+            // Wraps to the pane: at spaces where it can, and inside a token longer than the width.
+            Text(text).font(.system(size: 12, design: .monospaced))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 6))
         case .list(let items):
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(Array(items.enumerated()), id: \.offset) { _, item in
@@ -69,23 +70,61 @@ private struct MarkdownBlockView: View {
         case .image(let alt, let source):
             MarkdownImage(alt: alt, source: source, assets: assets)
         case .table(let header, let rows):
-            ScrollView(.horizontal, showsIndicators: false) {
-                Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
-                    GridRow {
-                        ForEach(Array(header.enumerated()), id: \.offset) { _, cell in
-                            Text(MarkdownView.inline(cell)).fontWeight(.semibold)
-                        }
+            MarkdownTable(header: header, rows: rows)
+        }
+    }
+}
+
+/// A table scrolls sideways rather than wrap, which would wreck its columns. Its scroll indicator shows, and while
+/// columns run past the right edge, that edge fades out: with macOS's overlay scroll bars the indicator only appears
+/// while scrolling, so the fade is what shows there's more.
+private struct MarkdownTable: View {
+    let header: [String]
+    let rows: [[String]]
+    /// The visible width, and where the table's right end is in the same coordinates (past `width` while columns
+    /// are hidden to the right).
+    @State private var width: CGFloat = 0
+    @State private var contentEnd: CGFloat = 0
+
+    private static let space = "markdown-table"
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: true) {
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+                GridRow {
+                    ForEach(Array(header.enumerated()), id: \.offset) { _, cell in
+                        Text(MarkdownView.inline(cell)).fontWeight(.semibold)
                     }
-                    Divider()
-                    ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                        GridRow {
-                            ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
-                                Text(MarkdownView.inline(cell))
-                            }
+                }
+                Divider()
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    GridRow {
+                        ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                            Text(MarkdownView.inline(cell))
                         }
                     }
                 }
-                .font(.system(size: 13))
+            }
+            .font(.system(size: 13))
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.onChange(of: proxy.frame(in: .named(Self.space)).maxX, initial: true) { _, end in
+                        contentEnd = end
+                    }
+                }
+            }
+        }
+        .coordinateSpace(.named(Self.space))
+        .background {
+            GeometryReader { proxy in
+                Color.clear.onChange(of: proxy.size.width, initial: true) { _, new in width = new }
+            }
+        }
+        .mask {
+            HStack(spacing: 0) {
+                Rectangle()
+                LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: contentEnd > width + 1 ? 40 : 0)
             }
         }
     }
