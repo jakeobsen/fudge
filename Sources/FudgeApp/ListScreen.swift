@@ -41,11 +41,7 @@ struct ListScreen: View {
                                     item: item, selected: item.id == selected, compact: compact, assets: command.assets
                                 )
                                 .id(item.id)
-                                .onTapGesture(count: 2) {
-                                    model.select(node: item.id)
-                                    model.activate()
-                                }
-                                .onTapGesture { model.select(node: item.id) }
+                                .onRowClick(select: { model.select(node: item.id) }, open: { model.activate() })
                                 // Scrolling near the end asks for the next page.
                                 .onAppear { model.loadMoreIfNeeded(near: item.id) }
                             }
