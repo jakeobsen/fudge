@@ -50,6 +50,8 @@ Release builds are signed ad hoc. Until fudge has a Developer ID, you grant its 
 
 Open fudge with ⌥Space, type to search applications and extension commands, and press ↵. Esc goes back, then hides the window.
 
+When you open fudge again within 90 seconds, it's as you left it. After longer, it starts over on an empty root search. **Pop to Root Search** on the **General** page of **Settings…** sets how long: Immediately, after 30 seconds, 1 minute or 90 seconds, or Never. Only the time the window is closed counts.
+
 What the fudge menu bar menu does is in root search too: "fudge Settings", **Reload Extensions** (reads the extensions and applications again) and **Quit fudge** (asks first, since fudge's hotkeys stop working until you open it again).
 
 To use another shortcut, open **Settings…** on the **General** page, click the keys next to **Launcher hotkey**, and press the new shortcut. Esc cancels. A shortcut needs ⌘, ⌥ or ⌃, unless it's an F-key. The launcher always has a hotkey, so ⌫ (or **Reset to ⌥Space**) puts ⌥Space back. fudge refuses a shortcut that a command already has, and keeps the old one when another app has the new one. If another app already holds the launcher's hotkey when fudge starts, the General page says so, and the menu bar menu's **Open fudge** still works.
