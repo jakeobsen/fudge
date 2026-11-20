@@ -54,6 +54,27 @@ public protocol AccessibilityAccess: AnyObject {
     func selectedText(pid: Int32) async -> String?
 }
 
+/// The Accessibility check, with macOS's prompt shown at most once per run, whichever feature asks first: reading the
+/// selected text, or pasting.
+@MainActor
+public final class AccessibilityGate {
+    private let access: any AccessibilityAccess
+    private var prompted = false
+
+    public init(access: any AccessibilityAccess) {
+        self.access = access
+    }
+
+    /// Whether fudge may use the Accessibility API and post key events. The first refusal shows macOS's prompt.
+    public func isTrusted() -> Bool {
+        guard access.isTrusted(prompt: !prompted) else {
+            prompted = true
+            return false
+        }
+        return true
+    }
+}
+
 /// Posts the copy shortcut.
 @MainActor
 public protocol CopyKeyPoster: AnyObject {
@@ -119,8 +140,8 @@ public final class SelectedText {
     private let ownPid: Int32
     private let copyTimeout: Duration
     private let pollInterval: Duration
-    /// macOS's Accessibility prompt is shown at most once per run.
-    private var prompted = false
+    /// macOS's Accessibility prompt is shown at most once per run, shared with `Paste`.
+    private let gate: AccessibilityGate
     /// The fallback in progress. Fallbacks run one at a time: one taking its snapshot while another's copy is on the
     /// pasteboard would restore the copied text instead of the user's clipboard.
     private var fallback: Task<Void, Never>?
@@ -130,10 +151,12 @@ public final class SelectedText {
         keys: any CopyKeyPoster,
         pasteboard: any PasteboardAccess,
         ownPid: Int32,
+        gate: AccessibilityGate? = nil,
         copyTimeout: Duration = .milliseconds(500),
         pollInterval: Duration = .milliseconds(10)
     ) {
         self.accessibility = accessibility
+        self.gate = gate ?? AccessibilityGate(access: accessibility)
         self.keys = keys
         self.pasteboard = pasteboard
         self.ownPid = ownPid
@@ -143,10 +166,7 @@ public final class SelectedText {
 
     public func read(from frontmost: FrontmostApplication?) async throws -> String {
         guard let frontmost, frontmost.pid != ownPid else { throw SelectionError.noSelectedText }
-        guard accessibility.isTrusted(prompt: !prompted) else {
-            prompted = true
-            throw SelectionError.accessibilityNeeded
-        }
+        guard gate.isTrusted() else { throw SelectionError.accessibilityNeeded }
         if let text = await accessibility.selectedText(pid: frontmost.pid), !text.isEmpty { return text }
         let previous = fallback
         let copying = Task {
@@ -196,9 +216,26 @@ public enum CopyKey {
 
     /// `translate` gives the characters a key code types with ⌘ held in the current layout.
     public static func keyCode(translate: (UInt16) -> String?) -> UInt16 {
-        func typesC(_ code: UInt16) -> Bool { translate(code)?.lowercased() == "c" }
-        if typesC(ansiKeyCode) { return ansiKeyCode }
-        return (0..<128).first(where: typesC) ?? ansiKeyCode
+        CommandKey.keyCode(typing: "c", ansiKeyCode: ansiKeyCode, translate: translate)
+    }
+}
+
+/// The key that types "v" with ⌘ held, for ⌘V on any keyboard layout.
+public enum PasteKey {
+    /// `kVK_ANSI_V`.
+    public static let ansiKeyCode: UInt16 = 9
+
+    public static func keyCode(translate: (UInt16) -> String?) -> UInt16 {
+        CommandKey.keyCode(typing: "v", ansiKeyCode: ansiKeyCode, translate: translate)
+    }
+}
+
+enum CommandKey {
+    /// The key code that types `letter` with ⌘ held: the ANSI one if it does, else the first that does.
+    static func keyCode(typing letter: String, ansiKeyCode: UInt16, translate: (UInt16) -> String?) -> UInt16 {
+        func types(_ code: UInt16) -> Bool { translate(code)?.lowercased() == letter }
+        if types(ansiKeyCode) { return ansiKeyCode }
+        return (0..<128).first(where: types) ?? ansiKeyCode
     }
 }
 
