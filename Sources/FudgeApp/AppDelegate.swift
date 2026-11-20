@@ -73,6 +73,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             Task { await self.exchangeRates.updateIfNeeded(now: Date(), explicit: true) }
         }
+        settingsModel.extensionStoreChanged = { [weak self] in
+            guard let self else { return }
+            self.model.reload()
+            self.applyCommandHotkeys()
+        }
         settingsModel.currencyRatesChanged = { [weak self] on in
             guard let self else { return }
             Task { await self.exchangeRates.setEnabled(on, now: Date()) }
