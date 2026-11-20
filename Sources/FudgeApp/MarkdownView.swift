@@ -126,11 +126,19 @@ private struct MarkdownImage: View {
 struct MetadataView: View {
     let entries: [MetadataEntry]
     let assets: URL?
+    var layout: Layout = .rows
     /// Runs a tag's `onAction`, by node id.
     let onTag: (Int) -> Void
 
+    enum Layout {
+        /// The title on the left, the value on the right (under a List's detail).
+        case rows
+        /// The title above the value (in a Detail's side column).
+        case stacked
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: layout == .stacked ? 10 : 0) {
             ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
                 row(entry)
             }
@@ -168,13 +176,22 @@ struct MetadataView: View {
         }
     }
 
-    private func line(_ title: String, @ViewBuilder value: () -> some View) -> some View {
-        HStack(spacing: 6) {
-            Text(title).foregroundStyle(.secondary).lineLimit(1)
-            Spacer(minLength: 12)
-            value()
+    @ViewBuilder private func line(_ title: String, @ViewBuilder value: () -> some View) -> some View {
+        switch layout {
+        case .rows:
+            HStack(spacing: 6) {
+                Text(title).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 12)
+                value()
+            }
+            .frame(minHeight: 26)
+        case .stacked:
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                HStack(spacing: 4) { value() }.font(.system(size: 13))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .frame(minHeight: 26)
     }
 }
 
