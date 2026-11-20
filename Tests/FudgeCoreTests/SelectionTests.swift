@@ -84,12 +84,16 @@ private let userClipboard = PasteboardContents(items: [
 private let app = FrontmostApplication(pid: 42, bundleIdentifier: "com.apple.TextEdit")
 private let fudgePid: Int32 = 99
 
+/// A copy that works ends the wait as soon as its text is there, so the long timeout only matters on a slow machine.
+/// Tests that expect nothing to be copied pass a short one.
 @MainActor
-private func reader(_ accessibility: FakeAccessibility, _ keys: FakeKeys, _ pasteboard: FakePasteboard) -> SelectedText
-{
+private func reader(
+    _ accessibility: FakeAccessibility, _ keys: FakeKeys, _ pasteboard: FakePasteboard,
+    copyTimeout: Duration = .seconds(5)
+) -> SelectedText {
     SelectedText(
         accessibility: accessibility, keys: keys, pasteboard: pasteboard, ownPid: fudgePid,
-        copyTimeout: .milliseconds(50), pollInterval: .milliseconds(1))
+        copyTimeout: copyTimeout, pollInterval: .milliseconds(1))
 }
 
 @Test @MainActor func selectedTextRejectsWhenFudgeIsFrontmost() async {
@@ -174,7 +178,7 @@ private func reader(_ accessibility: FakeAccessibility, _ keys: FakeKeys, _ past
     let keys = FakeKeys()
 
     await #expect(throws: SelectionError.noSelectedText) {
-        try await reader(FakeAccessibility(), keys, pasteboard).read(from: app)
+        try await reader(FakeAccessibility(), keys, pasteboard, copyTimeout: .milliseconds(50)).read(from: app)
     }
     #expect(keys.posted == [42])
     #expect(pasteboard.current == userClipboard)
@@ -187,7 +191,7 @@ private func reader(_ accessibility: FakeAccessibility, _ keys: FakeKeys, _ past
     keys.onCopy = { pasteboard.appCopies([[.init(type: "public.png", data: Data([1]))]]) }
 
     await #expect(throws: SelectionError.noSelectedText) {
-        try await reader(FakeAccessibility(), keys, pasteboard).read(from: app)
+        try await reader(FakeAccessibility(), keys, pasteboard, copyTimeout: .milliseconds(50)).read(from: app)
     }
     #expect(pasteboard.current == PasteboardContents(items: []))
 }
