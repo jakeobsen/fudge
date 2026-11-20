@@ -329,7 +329,8 @@ private struct RootResults: View {
                                 title: item.title,
                                 subtitle: item.subtitle,
                                 accessory: kind(of: item),
-                                selected: item.id == model.selectedItem
+                                selected: item.id == model.selectedItem,
+                                hotkey: model.commandHotkeys[item.id]
                             )
                             .id(item.id)
                             .onRowClick(
@@ -417,6 +418,8 @@ private struct Row: View {
     let subtitle: String?
     let accessory: String?
     let selected: Bool
+    /// A command's hotkey, shown as keycaps after its title.
+    var hotkey: HotKeySpec?
 
     var body: some View {
         HStack(spacing: 10) {
@@ -425,6 +428,7 @@ private struct Row: View {
             if let subtitle {
                 Text(subtitle).foregroundStyle(.secondary).lineLimit(1)
             }
+            if let hotkey { Keycaps(spec: hotkey).foregroundStyle(.secondary) }
             Spacer()
             if let accessory {
                 Text(accessory).foregroundStyle(.secondary).font(.system(size: 12))

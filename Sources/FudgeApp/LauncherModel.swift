@@ -152,6 +152,7 @@ final class LauncherModel {
         extensions = Dictionary(installed.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
         items = installed.flatMap(RootItem.commands(of:)) + RootSearch.builtInItems + ApplicationIndex.scan()
         refreshResults()
+        refreshCommandHotkeys()
     }
 
     // MARK: - Search
@@ -919,6 +920,63 @@ final class LauncherModel {
         }
     }
 
+    // MARK: - Command hotkeys
+
+    /// The `FudgeSettings` ids ("<extension>/<command>") of the installed commands.
+    var installedCommandIDs: [String] {
+        items.compactMap { item in
+            guard case .command(let extensionName, let commandName, _, _) = item.kind else { return nil }
+            return FudgeSettings.commandID(extension: extensionName, command: commandName)
+        }
+    }
+
+    /// A command's hotkey was pressed anywhere (`HotKeyLaunch`): open it as root search would, hide the panel if
+    /// it's the view command already on screen, or show root search with its fields when a required argument is
+    /// needed.
+    func openFromHotkey(_ commandID: String) {
+        guard let item = items.first(where: { $0.id == "command:\(commandID)" }),
+            case .command(let extensionName, let commandName, let mode, _) = item.kind
+        else { return }
+        let onScreen =
+            isVisible() && command?.extensionName == extensionName && command?.commandName == commandName
+        let action = HotKeyLaunch.action(
+            mode: mode, hasRequiredArgument: item.arguments.contains { $0.required == true }, isOnScreen: onScreen)
+        switch action {
+        case .hidePanel:
+            hide()
+        case .askForArguments:
+            if case .command = screen { leaveCommand() }
+            screen = .root
+            rootQuery = ""
+            refreshResults()
+            selectedItem = item.id
+            arguments.focus = 0
+            show()
+        case .open:
+            if mode == "view", case .command = screen { leaveCommand() }
+            launchOrigin = .hotkey
+            open(item)
+            launchOrigin = .rootSearch
+            if mode == "view" { show() }
+        }
+    }
+
+    /// The hotkeys of installed commands, by root item id, for their rows.
+    private(set) var commandHotkeys: [String: HotKeySpec] = [:]
+
+    /// Reads the command hotkeys from `settings.json` again, after Settings changed them.
+    func refreshCommandHotkeys() {
+        let installed = Set(installedCommandIDs)
+        commandHotkeys = Dictionary(
+            uniqueKeysWithValues: FudgeSettings.load(from: paths.settingsFile).commandHotkeys
+                .filter { installed.contains($0.key) }.map { ("command:\($0.key)", $0.value) })
+    }
+
+    /// Where the launch being opened came from.
+    @ObservationIgnored private var launchOrigin = LaunchOrigin.rootSearch
+    /// No-view sessions started by a hotkey, whose exit leaves root search alone.
+    @ObservationIgnored private var hotkeySessions: Set<String> = []
+
     // MARK: - Opening
 
     func open(_ item: RootItem) {
@@ -1034,6 +1092,7 @@ final class LauncherModel {
         } else {
             background[session] = title
             status = "Running \(title)…"
+            if !launchOrigin.clearsRootSearchWhenFinished { hotkeySessions.insert(session) }
         }
         do {
             try host.send(
@@ -1267,7 +1326,8 @@ final class LauncherModel {
                 if reason == "crashed", !quiet.failed { showHUD("\(quiet.title) failed") }
             } else if let title = background.removeValue(forKey: session) {
                 status = nil
-                if reason == "finished", case .root = screen {
+                let fromHotkey = hotkeySessions.remove(session) != nil
+                if reason == "finished", case .root = screen, !fromHotkey {
                     rootQuery = ""
                     refreshResults()
                     hide()
