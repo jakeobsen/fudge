@@ -278,9 +278,14 @@ public enum FormDates {
             if let max = options.max.map(calendar.startOfDay(for:)), day > max { day = max }
             return day
         case .dateTime:
-            var minute = calendar.dateInterval(of: .minute, for: picked)?.start ?? picked
-            if let min = options.min, minute < min { minute = min }
-            if let max = options.max, minute > max { minute = max }
+            func wholeMinute(_ date: Date) -> Date { calendar.dateInterval(of: .minute, for: date)?.start ?? date }
+            var minute = wholeMinute(picked)
+            // Limits with seconds clamp to the first and last whole minutes within them.
+            if let min = options.min, minute < min {
+                let start = wholeMinute(min)
+                minute = start < min ? start.addingTimeInterval(60) : start
+            }
+            if let max = options.max, minute > max { minute = wholeMinute(max) }
             return minute
         }
     }

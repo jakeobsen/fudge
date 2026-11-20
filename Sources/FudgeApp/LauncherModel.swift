@@ -696,13 +696,17 @@ final class LauncherModel {
         syncDropdownPanel()
     }
 
-    /// Opens the panel of the Form's first field of `kind` (a Dropdown or TagPicker), for snapshots. False when
-    /// there's none.
+    /// Opens the panel of the Form's first field of `kind` (a Dropdown, TagPicker or DatePicker), for snapshots.
+    /// False when there's none.
     func openFirstFormPicker(_ kind: FormContent.Kind) -> Bool {
         guard let field = command?.form?.fields.first(where: { $0.kind == kind }) else { return false }
         formFieldFocused(field.id)
-        if kind == .tagPicker { openTagPicker(field.id) } else { openFormDropdown(field.id) }
-        return dropdownPanel != nil
+        switch kind {
+        case .tagPicker: openTagPicker(field.id)
+        case .datePicker: openDatePanel(field.id)
+        default: openFormDropdown(field.id)
+        }
+        return dropdownPanel != nil || datePanel != nil
     }
 
     /// Opens a TagPicker's list of items to pick, starting the search with what was typed, if anything.
@@ -803,6 +807,76 @@ final class LauncherModel {
         }
     }
 
+    // MARK: - A DatePicker's calendar
+
+    struct DatePanelState: Equatable {
+        /// The DatePicker's node id: the calendar opens under it.
+        let node: Int
+        var calendar: DateCalendar
+    }
+
+    /// The open DatePicker calendar. The field keeps the keyboard, and `handleKey` gives the calendar its keys.
+    private(set) var datePanel: DatePanelState?
+
+    /// Opens a DatePicker's calendar (Space, ↵ or a click) on its day, or today. Opening picks nothing.
+    func openDatePanel(_ node: Int) {
+        guard let options = formField(node)?.dates else { return }
+        actionPanel = nil
+        closeDropdownPanel()
+        datePanel = DatePanelState(
+            node: node, calendar: DateCalendar(value: FormDates.date(fieldValue(node)), options: options))
+    }
+
+    func closeDatePanel() {
+        datePanel = nil
+    }
+
+    func moveDatePanel(days: Int) {
+        datePanel?.calendar.move(days: days)
+    }
+
+    func moveDatePanel(months: Int) {
+        datePanel?.calendar.move(months: months)
+    }
+
+    /// Picks the highlighted day, or a clicked one, as the field's value, and closes the calendar. A clicked day
+    /// outside `min` and `max` does nothing.
+    func pickDatePanelDay(_ day: Date? = nil) {
+        guard var panel = datePanel else { return }
+        if let day, !panel.calendar.highlight(day) { return }
+        datePanel = nil
+        pickDate(panel.calendar.value(current: FormDates.date(fieldValue(panel.node))), for: panel.node)
+    }
+
+    /// The calendar's keys while it's open: ←→ a day, ↑↓ a week, ⇞⇟ a month, ↵ or Space picks, Esc closes it. Any
+    /// other key closes it and then does what it always does (Tab moves on, ⌘↵ submits, ⌫ clears the field).
+    private func handleDatePanelKey(_ pressed: KeyShortcut) -> Bool {
+        guard pressed.modifiers.isEmpty else {
+            closeDatePanel()
+            return false
+        }
+        switch pressed.key {
+        case "arrowLeft": moveDatePanel(days: -1)
+        case "arrowRight": moveDatePanel(days: 1)
+        case "arrowUp": moveDatePanel(days: -7)
+        case "arrowDown": moveDatePanel(days: 7)
+        case "pageUp": moveDatePanel(months: -1)
+        case "pageDown": moveDatePanel(months: 1)
+        case "return", "enter", "space": pickDatePanelDay()
+        case "escape": closeDatePanel()
+        default:
+            closeDatePanel()
+            return false
+        }
+        return true
+    }
+
+    /// Closes the calendar when its field is gone, or is no longer a DatePicker.
+    private func syncDatePanel() {
+        guard let panel = datePanel, formField(panel.node)?.dates == nil else { return }
+        datePanel = nil
+    }
+
     /// Tells the dropdown its search text changed (`onSearchTextChange`); with `throttle`, once typing pauses.
     private func dropdownSearchChanged(_ text: String, dropdown: SearchBarDropdown, session: String) {
         dropdownSearchDebounce?.cancel()
@@ -880,6 +954,7 @@ final class LauncherModel {
             actionPanel = nil
         } else if !currentActions.isEmpty {
             closeDropdownPanel()
+            datePanel = nil
             actionPanel = ActionPanelState(selected: ActionPanelReader.flat(currentActions).first?.id)
         }
     }
@@ -989,6 +1064,7 @@ final class LauncherModel {
     /// Settings window, after the running command's own shortcuts.
     /// Returns false for everything else, which then goes to the focused field.
     func handleKey(_ pressed: KeyShortcut) -> Bool {
+        if datePanel != nil, handleDatePanelKey(pressed) { return true }
         if pressed == KeyShortcut(key: "k", modifiers: ["cmd"]) {
             toggleActionPanel()
             return true
@@ -1107,9 +1183,13 @@ final class LauncherModel {
         }
     }
 
-    /// Esc: close the dropdown's panel or the action panel (a submenu at a time), pop a pushed view, clear the
+    /// Esc: close a DatePicker's calendar, the dropdown's panel or the action panel (a submenu at a time), pop a pushed view, clear the
     /// search, leave the command, then hide.
     func escape() {
+        if datePanel != nil {
+            closeDatePanel()
+            return
+        }
         if dropdownPanel != nil {
             closeDropdownPanel()
             return
@@ -1435,6 +1515,7 @@ final class LauncherModel {
         if toast?.session == session { toast = nil }
         actionPanel = nil
         dropdownPanel = nil
+        datePanel = nil
     }
 
     // MARK: - The extension host
@@ -1504,6 +1585,7 @@ final class LauncherModel {
                 command.requestedMoreAt = nil
                 actionPanel = nil
                 dropdownPanel = nil
+                datePanel = nil
             }
             command.view = view
             command.depth = depth
@@ -1521,6 +1603,7 @@ final class LauncherModel {
             refreshForm(&command)
             screen = .command(command)
             syncDropdownPanel()
+            syncDatePanel()
             reportSelection()
 
         case .error(let session, let message, let stack, let fatal):
@@ -1688,6 +1771,7 @@ final class LauncherModel {
     private func leaveCommand() {
         actionPanel = nil
         dropdownPanel = nil
+        datePanel = nil
         if case .command(let command) = screen { send(.unload(session: command.session)) }
         screen = .root
         status = nil

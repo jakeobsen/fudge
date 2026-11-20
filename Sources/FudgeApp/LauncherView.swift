@@ -35,13 +35,16 @@ struct LauncherView: View {
                     .padding(.top, 50)
             }
         }
-        // A Form field's panel opens under the field, or above it when there's no room below.
+        // A Form field's panel (a Dropdown's or TagPicker's list, a DatePicker's calendar) opens under the field, or
+        // above it when there's no room below.
         .overlayPreferenceValue(FormFieldBounds.self) { bounds in
-            if let node = model.formPanelField, let anchor = bounds[node], let command = model.command {
+            if let node = model.formPanelField ?? model.datePanel?.node, let anchor = bounds[node],
+                let command = model.command
+            {
                 GeometryReader { proxy in
                     let field = proxy[anchor]
                     let x = max(8, min(field.minX, proxy.size.width - 288))
-                    let panel = DropdownPanelView(model: model, assets: command.assets, focus: $focus)
+                    let panel = formPanel(assets: command.assets)
                     if proxy.size.height - field.maxY >= 260 {
                         panel.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                             .padding(.leading, x).padding(.top, field.maxY + 4)
@@ -110,6 +113,15 @@ struct LauncherView: View {
     /// Puts the keyboard in the field the screen wants (`LauncherModel.keyboardTarget`), unless it's already there,
     /// with the cursor at the end. Setting `focus` to the value it already holds does nothing, even when AppKit's
     /// first responder has moved elsewhere, so it goes through nil first. Form fields are `FormScreen`'s.
+    /// The panel of the Form field whose panel is open: a DatePicker's calendar, or the dropdown panel.
+    @ViewBuilder private func formPanel(assets: URL?) -> some View {
+        if model.datePanel != nil {
+            DatePanelView(model: model)
+        } else {
+            DropdownPanelView(model: model, assets: assets, focus: $focus)
+        }
+    }
+
     private func restoreKeyboard() {
         let field: Field
         let text: String

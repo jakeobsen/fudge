@@ -29,6 +29,8 @@ struct FormScreen: View {
             if let field {
                 lastFocused = field
                 model.formFieldFocused(field)
+                // Another field took the keyboard: a DatePicker's calendar closes.
+                if let open = model.datePanel?.node, open != field { model.closeDatePanel() }
             }
         }
         // Each showing of the panel puts the keyboard back in the field the model names (the last one, or the
@@ -302,8 +304,9 @@ private struct TagPickerField: View {
     }
 }
 
-/// A Form.DatePicker: a compact date (and time) field whose calendar opens in a popover, with a button that clears
-/// it. With no date, a placeholder; Space, ↵ or a click starts it on now.
+/// A Form.DatePicker: the date, with a `DateTime`'s time beside it to edit in place, and a button that clears it.
+/// Space, ↵ or a click opens its calendar under it (`DatePanelView`), which picks nothing until a day is chosen;
+/// ⌫ clears it.
 private struct FormDateField: View {
     let model: LauncherModel
     let field: FormContent.Field
@@ -311,17 +314,50 @@ private struct FormDateField: View {
 
     var body: some View {
         let options = field.dates ?? DatePickerOptions()
-        if let date = FormDates.date(model.fieldValue(field.id)) {
+        let date = FormDates.date(model.fieldValue(field.id))
+        let isOpen = model.datePanel?.node == field.id
+        HStack(spacing: 6) {
             HStack(spacing: 6) {
+                Image(systemName: "calendar").foregroundStyle(.secondary)
+                if let date {
+                    Text(date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).year()))
+                        .lineLimit(1)
+                } else {
+                    Text(field.placeholder ?? "No date").foregroundStyle(.tertiary).lineLimit(1)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .modifier(FieldBox(isFocused: focused.wrappedValue == field.id || isOpen))
+            .focusable(true, interactions: .edit)
+            .focusEffectDisabled()
+            .focused(focused, equals: field.id)
+            .onKeyPress(keys: [.space, .return]) { _ in
+                model.openDatePanel(field.id)
+                return .handled
+            }
+            .onKeyPress(keys: [.delete, .deleteForward]) { _ in
+                model.pickDate(nil, for: field.id)
+                return .handled
+            }
+            .onTapGesture {
+                focused.wrappedValue = field.id
+                if isOpen { model.closeDatePanel() } else { model.openDatePanel(field.id) }
+            }
+            .anchorPreference(key: FormFieldBounds.self, value: .bounds) { [field.id: $0] }
+            if let date, options.type == .dateTime {
                 DatePicker(
                     "",
                     selection: Binding(get: { date }, set: { model.pickDate($0, for: field.id) }),
                     in: options.range,
-                    displayedComponents: options.type == .date ? [.date] : [.date, .hourAndMinute]
+                    displayedComponents: [.hourAndMinute]
                 )
                 .labelsHidden()
-                .datePickerStyle(.compact)
-                .focused(focused, equals: field.id)
+                .datePickerStyle(.stepperField)
+                .fixedSize()
+            }
+            if date != nil {
                 Button {
                     model.pickDate(nil, for: field.id)
                 } label: {
@@ -329,27 +365,84 @@ private struct FormDateField: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
-                .help("Clear")
-                Spacer(minLength: 0)
-            }
-        } else {
-            HStack(spacing: 6) {
-                Image(systemName: "calendar").foregroundStyle(.secondary)
-                Text(field.placeholder ?? "No date").foregroundStyle(.tertiary)
-            }
-            .modifier(FieldBox(isFocused: focused.wrappedValue == field.id))
-            .focusable(true, interactions: .edit)
-            .focusEffectDisabled()
-            .focused(focused, equals: field.id)
-            .onKeyPress(keys: [.space, .return]) { _ in
-                model.pickDate(Date(), for: field.id)
-                return .handled
-            }
-            .onTapGesture {
-                focused.wrappedValue = field.id
-                model.pickDate(Date(), for: field.id)
+                .help("Clear (⌫)")
             }
         }
+    }
+}
+
+/// A Form.DatePicker's calendar, under its field: the month, its weeks and the highlighted day. A click on a day
+/// picks it. The keys (←→↑↓, ⇞⇟, ↵, Esc) go through `LauncherModel.handleKey`, since the field keeps the keyboard.
+struct DatePanelView: View {
+    let model: LauncherModel
+
+    var body: some View {
+        if let panel = model.datePanel {
+            let today = Calendar.current.startOfDay(for: Date())
+            VStack(spacing: 6) {
+                HStack(spacing: 10) {
+                    Text(panel.calendar.day.formatted(.dateTime.month(.wide).year()))
+                        .font(.system(size: 13, weight: .semibold))
+                    Spacer()
+                    Button {
+                        model.moveDatePanel(months: -1)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                    }
+                    .help("Previous month (⇞)")
+                    Button {
+                        model.moveDatePanel(months: 1)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                    }
+                    .help("Next month (⇟)")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+                Grid(horizontalSpacing: 2, verticalSpacing: 2) {
+                    GridRow {
+                        ForEach(Array(DateCalendar.weekdaySymbols().enumerated()), id: \.offset) { _, symbol in
+                            Text(symbol).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                                .frame(width: 30, height: 18)
+                        }
+                    }
+                    ForEach(Array(panel.calendar.weeks().enumerated()), id: \.offset) { _, week in
+                        GridRow {
+                            ForEach(week) { day in
+                                cell(day, highlighted: day.date == panel.calendar.day, today: day.date == today)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(10)
+            .fixedSize()
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.12)))
+            .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+        }
+    }
+
+    private func cell(_ day: DateCalendar.Day, highlighted: Bool, today: Bool) -> some View {
+        Text("\(day.number)")
+            .font(.system(size: 12, weight: today ? .bold : .regular))
+            .foregroundStyle(
+                highlighted
+                    ? AnyShapeStyle(.white)
+                    : !day.isPickable
+                        ? AnyShapeStyle(.quaternary)
+                        : day.inMonth ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary)
+            )
+            .frame(width: 30, height: 26)
+            .background(highlighted ? Color.accentColor : .clear, in: RoundedRectangle(cornerRadius: 6))
+            .overlay {
+                if today && !highlighted {
+                    RoundedRectangle(cornerRadius: 6).strokeBorder(Color.accentColor.opacity(0.6))
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture { model.pickDatePanelDay(day.date) }
     }
 }
 

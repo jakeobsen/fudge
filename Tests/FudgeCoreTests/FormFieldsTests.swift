@@ -243,6 +243,98 @@ private func date(_ iso: String) -> Date {
             == date("2026-11-20T16:00:00.000Z"))
 }
 
+@Test func aDateTimeLimitWithSecondsClampsToAWholeMinute() {
+    let options = DatePickerOptions(min: date("2026-11-20T15:00:30.000Z"), max: date("2026-11-20T16:00:30.000Z"))
+    #expect(
+        FormDates.value(for: date("2026-11-20T14:00:00.000Z"), options: options, calendar: copenhagen)
+            == date("2026-11-20T15:01:00.000Z"), "the first whole minute after min")
+    #expect(
+        FormDates.value(for: date("2026-11-20T17:00:00.000Z"), options: options, calendar: copenhagen)
+            == date("2026-11-20T16:00:00.000Z"), "the last whole minute before max")
+}
+
+private let mondayFirst: Calendar = {
+    var calendar = copenhagen
+    calendar.firstWeekday = 2
+    return calendar
+}()
+
+@Test func theCalendarOpensOnTheFieldsDayOrTodayWithinItsLimits() {
+    let now = date("2026-11-20T09:15:00.000Z")
+    let set = DateCalendar(
+        value: date("2026-12-24T17:00:00.000Z"), options: DatePickerOptions(), now: now, calendar: copenhagen)
+    #expect(set.day == date("2026-12-23T23:00:00.000Z"), "the field's day, at local midnight")
+    let empty = DateCalendar(value: nil, options: DatePickerOptions(), now: now, calendar: copenhagen)
+    #expect(empty.day == date("2026-11-19T23:00:00.000Z"), "today")
+    let later = DatePickerOptions(min: date("2026-12-01T10:00:00.000Z"))
+    #expect(
+        DateCalendar(value: nil, options: later, now: now, calendar: copenhagen).day
+            == date("2026-11-30T23:00:00.000Z"), "today isn't allowed: min's day")
+}
+
+@Test func theCalendarsKeysMoveTheDayWithinItsLimits() {
+    let options = DatePickerOptions(
+        type: .date, min: date("2026-11-10T12:00:00.000Z"), max: date("2027-01-31T12:00:00.000Z"))
+    var calendar = DateCalendar(value: date("2026-11-19T23:00:00.000Z"), options: options, calendar: copenhagen)
+    calendar.move(days: 1, calendar: copenhagen)
+    #expect(calendar.day == date("2026-11-20T23:00:00.000Z"))
+    calendar.move(days: -7, calendar: copenhagen)
+    #expect(calendar.day == date("2026-11-13T23:00:00.000Z"))
+    calendar.move(days: -7, calendar: copenhagen)
+    #expect(calendar.day == date("2026-11-09T23:00:00.000Z"), "stops at min's day")
+    calendar.move(months: 2, calendar: copenhagen)
+    #expect(calendar.day == date("2027-01-09T23:00:00.000Z"))
+    calendar.move(months: 1, calendar: copenhagen)
+    #expect(calendar.day == date("2027-01-30T23:00:00.000Z"), "stops at max's day")
+
+    var endOfMonth = DateCalendar(
+        value: date("2027-01-30T23:00:00.000Z"), options: DatePickerOptions(), calendar: copenhagen)
+    endOfMonth.move(months: 1, calendar: copenhagen)
+    #expect(endOfMonth.day == date("2027-02-27T23:00:00.000Z"), "31 January → 28 February")
+
+    let beforeMin = calendar.highlight(date("2026-11-05T12:00:00.000Z"), calendar: copenhagen)
+    #expect(!beforeMin && calendar.day == date("2027-01-30T23:00:00.000Z"), "a click before min changes nothing")
+    let christmasEve = calendar.highlight(date("2026-12-24T12:00:00.000Z"), calendar: copenhagen)
+    #expect(christmasEve && calendar.day == date("2026-12-23T23:00:00.000Z"))
+}
+
+@Test func theCalendarShowsSixWeeksFromTheFirstWeekday() {
+    let options = DatePickerOptions(type: .date, min: date("2026-11-10T00:00:00.000Z"))
+    let weeks = DateCalendar(value: date("2026-11-19T23:00:00.000Z"), options: options, calendar: mondayFirst)
+        .weeks(calendar: mondayFirst)
+    #expect(weeks.count == 6 && weeks.allSatisfy { $0.count == 7 })
+    // 1 November 2026 is a Sunday, so the first week starts on Monday 26 October.
+    #expect(weeks[0][0].number == 26 && !weeks[0][0].inMonth)
+    #expect(weeks[0][6].number == 1 && weeks[0][6].inMonth)
+    #expect(weeks[5][6].number == 6 && !weeks[5][6].inMonth, "6 December ends the sixth week")
+    #expect(weeks.joined().filter(\.inMonth).count == 30)
+    #expect(!weeks[1][6].isPickable && weeks[1][6].number == 8, "before min's day")
+    #expect(weeks[2][1].isPickable && weeks[2][1].number == 10, "min's own day")
+    #expect(DateCalendar.weekdaySymbols(calendar: mondayFirst).count == 7)
+    #expect(
+        DateCalendar.weekdaySymbols(calendar: mondayFirst).first
+            == mondayFirst.veryShortStandaloneWeekdaySymbols[1], "Monday first")
+}
+
+@Test func pickingTheHighlightedDayKeepsTheFieldsTimeOrTakesNows() {
+    let now = date("2026-11-20T09:15:42.000Z")
+    let calendar = DateCalendar(
+        value: date("2026-12-24T17:30:00.000Z"), options: DatePickerOptions(), calendar: copenhagen)
+    #expect(
+        calendar.value(current: date("2026-12-01T17:30:00.000Z"), now: now, calendar: copenhagen)
+            == date("2026-12-24T17:30:00.000Z"), "the field's time on the picked day")
+    #expect(
+        calendar.value(current: nil, now: now, calendar: copenhagen) == date("2026-12-24T09:15:00.000Z"),
+        "an empty field takes now's time, in whole minutes")
+    let day = DateCalendar(value: nil, options: DatePickerOptions(type: .date), now: now, calendar: copenhagen)
+    #expect(day.value(current: nil, now: now, calendar: copenhagen) == date("2026-11-19T23:00:00.000Z"), "midnight")
+    let limited = DateCalendar(
+        value: nil, options: DatePickerOptions(min: date("2026-11-20T12:00:30.000Z")), now: now, calendar: copenhagen)
+    #expect(
+        limited.value(current: nil, now: now, calendar: copenhagen) == date("2026-11-20T12:01:00.000Z"),
+        "min's day at an earlier time: min's first whole minute")
+}
+
 @Test func isFullDayMeansLocalMidnight() {
     #expect(FormDates.isFullDay(date("2026-11-19T23:00:00.000Z"), calendar: copenhagen))
     #expect(!FormDates.isFullDay(date("2026-11-20T00:00:00.000Z"), calendar: copenhagen), "UTC midnight isn't local")

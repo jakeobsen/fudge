@@ -202,6 +202,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             open.beginSheetModal(for: panel) { continuation.resume(returning: $0) }
         }
         panel.makeKey()
+        // The sheet had the keyboard; give it back to the field.
+        model.restoreKeyboard()
         return response == .OK ? open.urls.map(\.path) : nil
     }
 
@@ -255,7 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// `--activate` presses ↵ after typing the query, then waits for the result. In the command that opened,
 /// `--search <text>` types into its search field, `--dropdown <value>` picks a value in its search bar dropdown,
 /// `--actions` presses ⌘K, and `--open-dropdown` presses ⌘P, or in a Form opens its first Dropdown (`--open-tags`: its
-/// first TagPicker).
+/// first TagPicker; `--open-date`: its first DatePicker's calendar).
 /// `--snapshot <file.png> --settings [<extension>]` renders the Settings window instead.
 /// For checking the layout without looking at the screen.
 @MainActor
@@ -268,6 +270,7 @@ struct Snapshot {
     let actions: Bool
     let openDropdown: Bool
     let openTags: Bool
+    let openDate: Bool
     let settings: Bool
     let settingsExtension: String?
 
@@ -285,6 +288,7 @@ struct Snapshot {
         actions = arguments.contains("--actions")
         openDropdown = arguments.contains("--open-dropdown")
         openTags = arguments.contains("--open-tags")
+        openDate = arguments.contains("--open-date")
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1
@@ -350,7 +354,10 @@ struct Snapshot {
         if openTags {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { _ = model.openFirstFormPicker(.tagPicker) }
         }
-        let waits = actions || openDropdown || openTags || inCommand
+        if openDate {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { _ = model.openFirstFormPicker(.datePicker) }
+        }
+        let waits = actions || openDropdown || openTags || openDate || inCommand
         DispatchQueue.main.asyncAfter(deadline: .now() + (waits ? 3.5 : activate ? 3 : 1)) {
             guard let view = panel.contentView else { exit(1) }
             save(view)
