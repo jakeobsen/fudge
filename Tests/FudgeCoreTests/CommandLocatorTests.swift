@@ -270,3 +270,23 @@ private func request(_ params: String) throws -> LaunchRequest {
         #expect(try Data(contentsOf: file) == Data(broken.utf8), "left byte for byte")
     }
 }
+
+@Test func aDisabledCommandOrExtensionIsRefused() throws {
+    var settings = FudgeSettings()
+    settings.commands["tools/refresh"] = .init(enabled: false)
+    #expect(throws: LaunchCommandError.disabled(command: "refresh")) {
+        try CommandLocator.locate(
+            request(#"{"name":"refresh","type":"background"}"#), caller: "tools", in: extensions(), settings: settings)
+    }
+    #expect(LaunchCommandError.disabled(command: "refresh").description == #"Command "refresh" is disabled"#)
+    settings = FudgeSettings(extensions: ["solo": .init(enabled: false)])
+    #expect(throws: LaunchCommandError.disabled(command: "run")) {
+        try CommandLocator.locate(
+            request(#"{"name":"run","type":"background","extensionName":"solo","ownerOrAuthorName":"bob"}"#),
+            caller: "tools", in: extensions(), settings: settings)
+    }
+    let enabled = try CommandLocator.locate(
+        request(#"{"name":"refresh","type":"background"}"#), caller: "tools", in: extensions(),
+        settings: FudgeSettings())
+    #expect(enabled.command.name == "refresh")
+}

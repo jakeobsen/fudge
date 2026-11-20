@@ -27,6 +27,30 @@ func rejectsHotkeysWithoutAModifierOrKey(text: String) {
     #expect(FudgeSettings.load(from: file) == FudgeSettings())
 }
 
+@Test(arguments: ["{ \"hotkey\": \"f5\", oops", "[1, 2]", "\"text\""])
+func aFileThatIsNotAJSONObjectIsNeverOverwritten(text: String) throws {
+    let folder = try Fixtures.temporaryDirectory()
+    let file = folder.appendingPathComponent("settings.json")
+    try Data(text.utf8).write(to: file)
+    #expect(!FudgeSettings.isWritable(file))
+    let settings = FudgeSettings(commands: ["a/b": .init(alias: "ab")])
+    #expect(throws: FudgeSettings.Unreadable()) { try settings.save(to: file) }
+    #expect(try String(contentsOf: file, encoding: .utf8) == text, "the user's text is untouched")
+}
+
+@Test func aMissingOrBlankFileIsWrittenFresh() throws {
+    let folder = try Fixtures.temporaryDirectory()
+    let file = folder.appendingPathComponent("settings.json")
+    let settings = FudgeSettings(commands: ["a/b": .init(alias: "ab")])
+    #expect(FudgeSettings.isWritable(file))
+    try settings.save(to: file)
+    #expect(FudgeSettings.load(from: file) == settings)
+    try Data(" \n".utf8).write(to: file)
+    #expect(FudgeSettings.isWritable(file))
+    try settings.save(to: file)
+    #expect(FudgeSettings.load(from: file) == settings)
+}
+
 @Test(arguments: [
     ("f1", 122), ("f13", 105), ("f20", 90), ("option+§", 10), ("cmd+left", 123), ("ctrl+up", 126),
     ("option+keypad5", 87), ("option+keypadplus", 69), ("option+forwarddelete", 117), ("cmd+shift+keycode:93", 93),

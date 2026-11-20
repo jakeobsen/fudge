@@ -111,6 +111,7 @@ public enum LaunchCommandError: Error, Equatable, CustomStringConvertible {
     case missingArgument(argument: String, command: String)
     case missingPreferences(extensionTitle: String, names: [String])
     case notAllowed(extensionTitle: String)
+    case disabled(command: String)
 
     public var description: String {
         switch self {
@@ -124,6 +125,7 @@ public enum LaunchCommandError: Error, Equatable, CustomStringConvertible {
         case .missingPreferences(let title, let names):
             "\"\(title)\" needs these preferences set: \(names.joined(separator: ", "))"
         case .notAllowed(let title): "Not allowed to launch commands of \"\(title)\""
+        case .disabled(let command): "Command \"\(command)\" is disabled"
         }
     }
 }
@@ -151,9 +153,10 @@ public struct LaunchTarget: Sendable, Equatable {
 public enum CommandLocator {
     /// The command `request` names: in `caller`'s own extension, or in the installed extension with that `name`
     /// whose owner (or, without one, author) is `ownerOrAuthorName`.
-    public static func locate(_ request: LaunchRequest, caller: String, in installed: [InstalledExtension]) throws
-        -> LaunchTarget
-    {
+    public static func locate(
+        _ request: LaunchRequest, caller: String, in installed: [InstalledExtension],
+        settings: FudgeSettings = FudgeSettings()
+    ) throws -> LaunchTarget {
         let found: InstalledExtension
         if let extensionName = request.extensionName {
             let owner = request.ownerOrAuthorName ?? ""
@@ -171,6 +174,10 @@ public enum CommandLocator {
         }
         guard let command = found.manifest.commands.first(where: { $0.name == request.name }) else {
             throw LaunchCommandError.commandNotFound(command: request.name, extension: found.manifest.name)
+        }
+        // A disabled command, or one of a disabled extension, can't be launched (as in Raycast).
+        guard settings.isEnabled(extension: found.manifest.name, command: command.name) else {
+            throw LaunchCommandError.disabled(command: request.name)
         }
         let arguments = Dictionary(
             command.arguments.map { ($0.name, request.arguments[$0.name] ?? "") },

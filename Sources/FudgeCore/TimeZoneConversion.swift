@@ -118,14 +118,31 @@ public enum TimeZoneConversion {
         return zone.abbreviation(for: date) ?? zone.identifier
     }
 
-    /// The standard and summer abbreviations of the zones `abbreviations` maps to.
-    static let named: [String: (String, String)] = [
-        "UTC": ("UTC", "UTC"), "GMT": ("GMT", "GMT"), "Europe/Berlin": ("CET", "CEST"),
-        "Europe/Athens": ("EET", "EEST"), "Europe/Lisbon": ("WET", "WEST"), "Europe/London": ("GMT", "BST"),
-        "America/New_York": ("EST", "EDT"), "America/Chicago": ("CST", "CDT"), "America/Denver": ("MST", "MDT"),
-        "America/Los_Angeles": ("PST", "PDT"), "Asia/Tokyo": ("JST", "JST"), "Asia/Kolkata": ("IST", "IST"),
-        "Australia/Sydney": ("AEST", "AEDT"),
-    ]
+    /// The standard and summer abbreviations of the zones `abbreviations` maps to, and of other zones for which
+    /// Foundation only has an offset (`GMT+1`). Only for display: `abbreviations` decides what can be typed. Asia/
+    /// Shanghai stays `GMT+8`, because "CST" reads as US Central.
+    static let named: [String: (String, String)] = {
+        var named: [String: (String, String)] = [
+            "UTC": ("UTC", "UTC"), "GMT": ("GMT", "GMT"), "Europe/Athens": ("EET", "EEST"),
+            "Europe/Lisbon": ("WET", "WEST"), "Europe/London": ("GMT", "BST"), "America/New_York": ("EST", "EDT"),
+            "America/Chicago": ("CST", "CDT"), "America/Denver": ("MST", "MDT"), "America/Los_Angeles": ("PST", "PDT"),
+            "Asia/Tokyo": ("JST", "JST"), "Asia/Kolkata": ("IST", "IST"), "Australia/Sydney": ("AEST", "AEDT"),
+            "America/Toronto": ("EST", "EDT"), "America/Detroit": ("EST", "EDT"), "America/Vancouver": ("PST", "PDT"),
+            "America/Phoenix": ("MST", "MST"), "Australia/Melbourne": ("AEST", "AEDT"),
+            "Australia/Brisbane": ("AEST", "AEST"), "Pacific/Auckland": ("NZST", "NZDT"), "Asia/Seoul": ("KST", "KST"),
+            "Asia/Singapore": ("SGT", "SGT"), "Asia/Hong_Kong": ("HKT", "HKT"),
+        ]
+        let central = [
+            "Amsterdam", "Andorra", "Belgrade", "Berlin", "Bratislava", "Brussels", "Budapest", "Copenhagen",
+            "Ljubljana", "Luxembourg", "Madrid", "Malta", "Monaco", "Oslo", "Paris", "Prague", "Rome", "Stockholm",
+            "Tirane", "Vienna", "Warsaw", "Zagreb", "Zurich",
+        ]
+        // Kyiv also goes by its old identifier, which macOS still lists and may report as the current zone.
+        let eastern = ["Bucharest", "Helsinki", "Kyiv", "Kiev", "Riga", "Sofia", "Tallinn", "Vilnius"]
+        for city in central { named["Europe/\(city)"] = ("CET", "CEST") }
+        for city in eastern { named["Europe/\(city)"] = ("EET", "EEST") }
+        return named
+    }()
 
     /// Each abbreviation maps to one zone. IST is India's, and CST is the US's Central time.
     static let abbreviations: [String: String] = [
