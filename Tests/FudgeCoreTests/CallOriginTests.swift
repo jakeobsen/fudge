@@ -66,3 +66,15 @@ private func step<T>(_ body: () -> T) -> T { body() }
     #expect(!step { notices.first("launch:weather/calendar") }, "a 30 s refresh doesn't repeat it")
     #expect(step { notices.first("launch:weather/mail") }, "another pair gets its own")
 }
+
+@Test func aBackgroundInstancesOwnCallWhileItsMenuIsOpenIsUserInitiated() {
+    // A decision, not an accident (#2971): an interval refresh that raises a confirm by itself, with no pick, while
+    // the user happens to have its menu open, may ask, because the user is in Fudge's menu at that moment.
+    var lifecycle = MenuBarLifecycle()
+    lifecycle.launched("s1", userInitiated: false)
+    lifecycle.menuOpened()
+    #expect(lifecycle.runningEvents == 0, "no pick is running")
+    #expect(lifecycle.origin(of: "s1") == .userInitiated)
+    lifecycle.menuClosed()
+    #expect(lifecycle.origin(of: "s1") == .background, "with the menu closed, the same call can't ask")
+}
