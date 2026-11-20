@@ -104,6 +104,8 @@ final class LauncherModel {
     /// Opens the Settings window on an extension's preferences, or on its default page for nil; set by the app
     /// delegate.
     @ObservationIgnored var openSettings: (String?) -> Void = { _ in }
+    /// Shows a FilePicker's open panel and returns the chosen paths, or nil when cancelled; set by the app delegate.
+    @ObservationIgnored var openPanel: (FilePickerOptions) async -> [String]? = { _ in nil }
     /// Shows a HUD message; set by the app delegate.
     @ObservationIgnored var showHUD: (String) -> Void = { _ in }
     /// Whether the launcher panel is on screen; set by the app delegate.
@@ -472,6 +474,29 @@ final class LauncherModel {
     /// A Form field, by node id.
     func formField(_ node: Int) -> FormContent.Field? {
         command?.form?.fields.first { $0.id == node }
+    }
+
+    /// The user picked a date in a DatePicker, or cleared it (nil): local midnight for a `Date` picker, whole
+    /// minutes for `DateTime`, within `min` and `max` (`FormDates.value`).
+    func pickDate(_ picked: Date?, for node: Int) {
+        guard let options = formField(node)?.dates else { return }
+        edit(field: node, to: FormDates.json(picked.map { FormDates.value(for: $0, options: options) }))
+    }
+
+    /// A FilePicker's Select…: the open panel, then the chosen paths added (or, without multiple selection, in place
+    /// of the old one).
+    func chooseFiles(for node: Int) async {
+        guard let options = formField(node)?.files, let chosen = await openPanel(options), !chosen.isEmpty else {
+            return
+        }
+        let paths = FilePicking.choosing(chosen, to: TagPicking.values(fieldValue(node)), options: options)
+        edit(field: node, to: .array(paths.map(JSONValue.string)))
+    }
+
+    /// Takes a path off a FilePicker (its ×).
+    func removeFile(_ path: String, from node: Int) {
+        let paths = FilePicking.removing(path, from: TagPicking.values(fieldValue(node)))
+        edit(field: node, to: .array(paths.map(JSONValue.string)))
     }
 
     /// A Form field's value as shown.

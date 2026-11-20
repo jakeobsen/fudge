@@ -13,6 +13,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: SettingsWindowController!
     private let hud = HUDWindow()
     private var keyMonitor: Any?
+    /// The app that was frontmost when a FilePicker's open panel activated fudge; it gets the keyboard back when the
+    /// launcher hides.
+    private var appToRestore: NSRunningApplication?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = Self.mainMenu()
@@ -25,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.showHUD = { [weak self] title in self?.hud.show(title) }
         model.isVisible = { [weak self] in self?.panel.isVisible ?? false }
         model.confirm = { [weak self] request in await self?.confirm(request) ?? false }
+        model.openPanel = { [weak self] options in await self?.chooseFiles(options) }
         panel.onEscape = { [weak self] in self?.model.escape() }
         panel.onResign = { [weak self] in
             // An alert sheet takes the keyboard; that's not the user leaving.
@@ -119,6 +123,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func hidePanel() {
         guard panel.isVisible else { return }
         panel.orderOut(nil)
+        // A FilePicker's open panel made fudge the active app. Give the keyboard back to the app that had it, unless
+        // the user has moved on to another one.
+        if let app = appToRestore {
+            appToRestore = nil
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+                app.activate()
+            }
+        }
+    }
+
+    /// A FilePicker's open panel, as a sheet on the launcher, so the launcher doesn't hide (`onResign` ignores
+    /// sheets). The open panel only takes typing (⌘⇧G, its search field) while fudge is the active app, so fudge
+    /// activates for it, and `hidePanel` gives the keyboard back to the app that had it.
+    private func chooseFiles(_ options: FilePickerOptions) async -> [String]? {
+        let open = NSOpenPanel()
+        open.canChooseFiles = options.canChooseFiles
+        open.canChooseDirectories = options.canChooseDirectories
+        open.allowsMultipleSelection = options.allowsMultipleSelection
+        open.showsHiddenFiles = options.showsHiddenFiles
+        if let frontmost = NSWorkspace.shared.frontmostApplication,
+            frontmost.processIdentifier != ProcessInfo.processInfo.processIdentifier
+        {
+            appToRestore = frontmost
+        }
+        NSApp.activate()
+        let response = await withCheckedContinuation { continuation in
+            open.beginSheetModal(for: panel) { continuation.resume(returning: $0) }
+        }
+        panel.makeKey()
+        return response == .OK ? open.urls.map(\.path) : nil
     }
 
     /// The key as it types with no modifier at all, so ⌘⇧, is "," with cmd and shift. `charactersIgnoringModifiers`

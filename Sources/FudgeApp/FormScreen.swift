@@ -173,6 +173,18 @@ struct FormScreen: View {
                     model.openTagPicker(field.id)
                 }
                 .anchorPreference(key: FormFieldBounds.self, value: .bounds) { [field.id: $0] }
+        case .datePicker:
+            FormDateField(model: model, field: field, focused: $focused)
+        case .filePicker:
+            FilePickerField(model: model, field: field, isFocused: focused == field.id)
+                .focusable(true, interactions: .edit)
+                .focusEffectDisabled()
+                .focused($focused, equals: field.id)
+                .onKeyPress(keys: [.space, .return]) { _ in
+                    Task { await model.chooseFiles(for: field.id) }
+                    return .handled
+                }
+                .onTapGesture { focused = field.id }
         case .unsupported(let type):
             Text("fudge can't show a \(type) yet.").foregroundStyle(.tertiary)
         case .description, .separator:
@@ -286,6 +298,91 @@ private struct TagPickerField: View {
             }
         }
         .padding(.vertical, 3)
+        .modifier(FieldBox(isFocused: isFocused))
+    }
+}
+
+/// A Form.DatePicker: a compact date (and time) field whose calendar opens in a popover, with a button that clears
+/// it. With no date, a placeholder; Space, ↵ or a click starts it on now.
+private struct FormDateField: View {
+    let model: LauncherModel
+    let field: FormContent.Field
+    var focused: FocusState<Int?>.Binding
+
+    var body: some View {
+        let options = field.dates ?? DatePickerOptions()
+        if let date = FormDates.date(model.fieldValue(field.id)) {
+            HStack(spacing: 6) {
+                DatePicker(
+                    "",
+                    selection: Binding(get: { date }, set: { model.pickDate($0, for: field.id) }),
+                    in: (options.min ?? .distantPast)...(options.max ?? .distantFuture),
+                    displayedComponents: options.type == .date ? [.date] : [.date, .hourAndMinute]
+                )
+                .labelsHidden()
+                .datePickerStyle(.compact)
+                .focused(focused, equals: field.id)
+                Button {
+                    model.pickDate(nil, for: field.id)
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Clear")
+                Spacer(minLength: 0)
+            }
+        } else {
+            HStack(spacing: 6) {
+                Image(systemName: "calendar").foregroundStyle(.secondary)
+                Text(field.placeholder ?? "No date").foregroundStyle(.tertiary)
+            }
+            .modifier(FieldBox(isFocused: focused.wrappedValue == field.id))
+            .focusable(true, interactions: .edit)
+            .focusEffectDisabled()
+            .focused(focused, equals: field.id)
+            .onKeyPress(keys: [.space, .return]) { _ in
+                model.pickDate(Date(), for: field.id)
+                return .handled
+            }
+            .onTapGesture {
+                focused.wrappedValue = field.id
+                model.pickDate(Date(), for: field.id)
+            }
+        }
+    }
+}
+
+/// A Form.FilePicker: the chosen files and folders (icon and name, the path as a tooltip), each with a ×, and a
+/// Select… button that opens the open panel as a sheet on the launcher.
+private struct FilePickerField: View {
+    let model: LauncherModel
+    let field: FormContent.Field
+    let isFocused: Bool
+
+    var body: some View {
+        let paths = TagPicking.values(model.fieldValue(field.id))
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(paths, id: \.self) { path in
+                HStack(spacing: 6) {
+                    Image(nsImage: NSWorkspace.shared.icon(forFile: path)).resizable().frame(width: 16, height: 16)
+                    Text(URL(fileURLWithPath: path).lastPathComponent).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 4)
+                    Button {
+                        model.removeFile(path, from: field.id)
+                    } label: {
+                        Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Remove")
+                }
+                .help(path)
+            }
+            Button("Select…") { Task { await model.chooseFiles(for: field.id) } }
+                .controlSize(.small)
+        }
+        .padding(.vertical, 4)
         .modifier(FieldBox(isFocused: isFocused))
     }
 }

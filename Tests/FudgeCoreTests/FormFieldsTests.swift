@@ -172,3 +172,104 @@ private let tagPickerJSON = #"""
     let plain = try #require(try form(dropdownJSON).fields.first)
     #expect(!plain.hasOnFocus && !plain.hasOnBlur)
 }
+
+private let copenhagen: Calendar = {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(identifier: "Europe/Copenhagen")!
+    return calendar
+}()
+
+private func date(_ iso: String) -> Date {
+    try! Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(iso)
+}
+
+@Test func readsADatePickerAndItsDates() throws {
+    let fields = try form(
+        #"""
+        {"id":2,"type":"Form.DatePicker","props":{"id":"due","type":"date",
+          "min":{"$date":"2026-11-01T00:00:00.000Z"},"max":{"$date":"2026-12-31T00:00:00.000Z"}},"children":[]},
+        {"id":3,"type":"Form.DatePicker","props":{"id":"at","defaultValue":{"$date":"2026-11-20T12:30:00.000Z"}},"children":[]}
+        """#
+    ).fields
+    #expect(fields[0].kind == .datePicker && fields[0].isEditable)
+    #expect(
+        fields[0].dates
+            == DatePickerOptions(
+                type: .date, min: date("2026-11-01T00:00:00.000Z"), max: date("2026-12-31T00:00:00.000Z")))
+    #expect(fields[1].dates?.type == .dateTime, "DateTime is the default")
+    #expect(fields[0].initialValue() == .null && fields[0].registeredValue == .null, "no date until one is picked")
+    #expect(fields[1].initialValue() == .object(["$date": .string("2026-11-20T12:30:00.000Z")]))
+    #expect(FormDates.date(fields[1].initialValue()) == date("2026-11-20T12:30:00.000Z"))
+    #expect(FormDates.date(.string("2026-11-20")) == nil && FormDates.date(.null) == nil)
+    #expect(FormDates.json(nil) == .null, "clearing is null")
+    #expect(FormDates.json(date("2026-11-20T12:30:00.000Z")) == .object(["$date": .string("2026-11-20T12:30:00.000Z")]))
+}
+
+@Test func aDatePickerGivesMidnightOrWholeMinutesWithinItsLimits() {
+    let picked = date("2026-11-20T14:37:42.500Z")  // 15:37:42 in Copenhagen
+    let day = DatePickerOptions(type: .date)
+    #expect(FormDates.value(for: picked, options: day, calendar: copenhagen) == date("2026-11-19T23:00:00.000Z"))
+    #expect(
+        FormDates.value(for: picked, options: DatePickerOptions(), calendar: copenhagen)
+            == date("2026-11-20T14:37:00.000Z"))
+
+    // With Date, the limits count by the day: a min later on the same day doesn't move the pick.
+    let sameDay = DatePickerOptions(type: .date, min: date("2026-11-20T10:00:00.000Z"))
+    #expect(FormDates.value(for: picked, options: sameDay, calendar: copenhagen) == date("2026-11-19T23:00:00.000Z"))
+    let later = DatePickerOptions(type: .date, min: date("2026-11-25T10:00:00.000Z"))
+    #expect(FormDates.value(for: picked, options: later, calendar: copenhagen) == date("2026-11-24T23:00:00.000Z"))
+    let earlier = DatePickerOptions(type: .date, max: date("2026-11-10T10:00:00.000Z"))
+    #expect(FormDates.value(for: picked, options: earlier, calendar: copenhagen) == date("2026-11-09T23:00:00.000Z"))
+    // With DateTime, exactly.
+    let bounded = DatePickerOptions(min: date("2026-11-20T15:00:00.000Z"), max: date("2026-11-20T16:00:00.000Z"))
+    #expect(FormDates.value(for: picked, options: bounded, calendar: copenhagen) == date("2026-11-20T15:00:00.000Z"))
+    #expect(
+        FormDates.value(for: date("2026-11-20T17:00:00.000Z"), options: bounded, calendar: copenhagen)
+            == date("2026-11-20T16:00:00.000Z"))
+}
+
+@Test func isFullDayMeansLocalMidnight() {
+    #expect(FormDates.isFullDay(date("2026-11-19T23:00:00.000Z"), calendar: copenhagen))
+    #expect(!FormDates.isFullDay(date("2026-11-20T00:00:00.000Z"), calendar: copenhagen), "UTC midnight isn't local")
+    #expect(!FormDates.isFullDay(date("2026-11-19T23:00:00.001Z"), calendar: copenhagen))
+    #expect(!FormDates.isFullDay(nil, calendar: copenhagen))
+}
+
+@Test func readsAFilePickersOptionsAndKeepsItsPaths() throws {
+    let fields = try form(
+        #"""
+        {"id":2,"type":"Form.FilePicker","props":{"id":"files"},"children":[]},
+        {"id":3,"type":"Form.FilePicker","props":{"id":"folder","canChooseFiles":false,"canChooseDirectories":true,
+          "allowMultipleSelection":false,"showHiddenFiles":true},"children":[]}
+        """#
+    ).fields
+    #expect(fields[0].kind == .filePicker && fields[0].isEditable)
+    #expect(fields[0].files == FilePickerOptions(), "Raycast's defaults")
+    let defaults = try #require(fields[0].files)
+    #expect(defaults.canChooseFiles && !defaults.canChooseDirectories && defaults.allowsMultipleSelection)
+    #expect(!defaults.showsHiddenFiles)
+    let folder = try #require(fields[1].files)
+    #expect(!folder.canChooseFiles && folder.canChooseDirectories && !folder.allowsMultipleSelection)
+    #expect(folder.showsHiddenFiles)
+    #expect(fields[0].initialValue() == .array([]) && fields[0].registeredValue == .array([]))
+
+    // Multiple: added after what's there, each once, in the order chosen. Single: in place of it.
+    let current = ["/a", "/b"]
+    #expect(FilePicking.choosing(["/c", "/a", "/d"], to: current, options: defaults) == ["/a", "/b", "/c", "/d"])
+    #expect(FilePicking.choosing(["/c"], to: current, options: folder) == ["/c"])
+    #expect(FilePicking.removing("/a", from: current) == ["/b"])
+}
+
+@Test func storedDatesAndPathsStartTheirFields() throws {
+    let fields = try form(
+        #"""
+        {"id":2,"type":"Form.DatePicker","props":{"id":"due","storeValue":true},"children":[]},
+        {"id":3,"type":"Form.FilePicker","props":{"id":"files","storeValue":true},"children":[]}
+        """#
+    ).fields
+    let stored: JSONValue = .object(["$date": .string("2026-11-20T12:00:00.000Z")])
+    #expect(fields[0].initialValue(stored: stored) == stored)
+    #expect(fields[0].initialValue(stored: .string("tomorrow")) == .null, "not a date")
+    #expect(fields[1].initialValue(stored: .array([.string("/a")])) == .array([.string("/a")]))
+    #expect(fields[1].initialValue(stored: .array([.number(1)])) == .array([]))
+}

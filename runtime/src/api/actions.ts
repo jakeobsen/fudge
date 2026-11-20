@@ -8,6 +8,8 @@ import { RAYCAST_ENUMS } from "./raycast-enums.generated.ts";
 import { NotAvailableError } from "./stubs.ts";
 import { Clipboard, getApplications, open, showInFinder, trash } from "./system.ts";
 import { callApp } from "../bridge.ts";
+import { encode } from "../protocol.ts";
+import { isFullDay } from "./dates.ts";
 import { useFormValues, useStoredFormValues } from "./form-state.ts";
 
 const Icon = RAYCAST_ENUMS.Icon;
@@ -95,7 +97,8 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
         return action({ title: "Submit Form", icon: Icon.Checkmark }, props, () => {
             // Fields with `storeValue` start the form next time; the app keeps their values.
             const keep = stored();
-            if (Object.keys(keep).length > 0) callApp("form.storeValues", { values: keep }).catch(() => {});
+            // Dates go as { "$date": iso }, as everywhere on the bridge.
+            if (Object.keys(keep).length > 0) callApp("form.storeValues", { values: encode(keep) }).catch(() => {});
             return (onSubmit as ((values: Record<string, unknown>) => unknown) | undefined)?.(values()) as void;
         });
     }
@@ -123,7 +126,7 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
         CreateQuicklink: unavailable("Action.CreateQuicklink", "Create Quicklink"),
         CreateSnippet: unavailable("Action.CreateSnippet", "Create Snippet"),
         ToggleQuickLook: unavailable("Action.ToggleQuickLook", "Quick Look"),
-        PickDate: unavailable("Action.PickDate", "Pick Date"),
+        PickDate: Object.assign(unavailable("Action.PickDate", "Pick Date"), { isFullDay }),
         InstallMCPServer: unavailable("Action.InstallMCPServer", "Install MCP Server"),
     };
 }
