@@ -46,7 +46,7 @@ export default function Command() {
                 <List.EmptyView
                     icon={Icon.ExclamationMark}
                     title="The Extension Store can't run here"
-                    description="fudge didn't say where its tool and extensions folder are."
+                    description="Fudge didn't say where its tool and extensions folder are."
                 />
             </List>
         );
