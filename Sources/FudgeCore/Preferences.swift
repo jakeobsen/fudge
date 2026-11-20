@@ -83,7 +83,7 @@ public enum PreferenceResolver {
         return ResolvedPreferences(values: values, missing: missing)
     }
 
-    static func typeDefault(_ preference: ExtensionManifest.Preference) -> JSONValue? {
+    public static func typeDefault(_ preference: ExtensionManifest.Preference) -> JSONValue? {
         switch preference.type {
         case "checkbox": .bool(false)
         case "dropdown": preference.data?.first.map { .string($0.value) }

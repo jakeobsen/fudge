@@ -14,6 +14,7 @@ fudge is a keyboard launcher for macOS, built to run extensions written for Rayc
     - `LauncherPanel` is a non-activating `NSPanel`: it takes keys while the app you were in stays frontmost.
     - `LauncherModel` holds the panel's state. Root search ranks `ApplicationIndex` and installed commands with `RootSearch` (fuzzy match, then `LaunchHistory`). Commands run through `ExtensionHost`, and its messages update the screen.
     - `LauncherView` is the SwiftUI side.
+    - `SettingsWindow.swift` is the Settings window: each extension's preferences, stored by `PreferenceStore` in `preferences/<extension>.json`. Before a launch, `PreferenceResolver` merges stored values, manifest defaults and type defaults. It turns appPicker references into Raycast `Application` objects, and the launch message carries the values to `getPreferenceValues()`. A command with an unset required preference opens this window instead of running.
   - `FudgeCLI` is the `fudge` command-line tool.
   - `FudgeCore` is shared code, and the only target with tests.
 
