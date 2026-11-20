@@ -25,6 +25,11 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("settings.json")
     }
 
+    /// The calculator's exchange rates, downloaded from the European Central Bank while that's turned on.
+    public var exchangeRatesFile: URL {
+        supportDirectory.appendingPathComponent("exchange-rates.json")
+    }
+
     /// How often and how recently root items were opened.
     public var historyFile: URL {
         supportDirectory.appendingPathComponent("history.json")
