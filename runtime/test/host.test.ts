@@ -109,6 +109,15 @@ test("a no-view command runs to completion and its console output arrives as log
     await host.close();
 });
 
+test("getPreferenceValues returns the preferences sent with the launch", async () => {
+    const host = start();
+    const preferences = { openInEditor: true, staleDays: "7", editorApp: { name: "Code", path: "/Applications/Code.app" } };
+    host.send({ type: "launch", session: "p", entry: fixture("preferences.cjs"), mode: "no-view", preferences });
+    const log = await host.next(of("p", "log"));
+    assert.deepEqual(JSON.parse(String(log.message)), preferences);
+    await host.close();
+});
+
 test("the extension and the renderer share one React", async () => {
     const host = start();
     host.send({ type: "launch", session: "r", entry: fixture("same-react.cjs"), mode: "view" });

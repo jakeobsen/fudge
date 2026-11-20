@@ -38,14 +38,19 @@ final class LauncherModel {
 
     /// Hides the panel; set by the app delegate.
     @ObservationIgnored var hide: () -> Void = {}
+    /// Opens the Settings window on an extension's preferences; set by the app delegate.
+    @ObservationIgnored var openSettings: (String) -> Void = { _ in }
 
     @ObservationIgnored private let paths: FudgePaths
     @ObservationIgnored private var items: [RootItem] = []
+    @ObservationIgnored private var extensions: [String: InstalledExtension] = [:]
     @ObservationIgnored private var history: LaunchHistory
     @ObservationIgnored private var host: ExtensionHost?
     @ObservationIgnored private var nextSession = 1
     /// No-view commands still running, by session.
     @ObservationIgnored private var background: [String: String] = [:]
+    /// The extension each session belongs to.
+    @ObservationIgnored private var sessionExtensions: [String: String] = [:]
     @ObservationIgnored private var icons: [String: NSImage] = [:]
 
     init(paths: FudgePaths) {
@@ -56,8 +61,9 @@ final class LauncherModel {
 
     /// Finds applications and installed extensions again.
     func reload() {
-        let extensions = InstalledExtension.all(in: paths.extensionsDirectory)
-        items = extensions.flatMap(RootItem.commands(of:)) + ApplicationIndex.scan()
+        let installed = InstalledExtension.all(in: paths.extensionsDirectory)
+        extensions = Dictionary(installed.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
+        items = installed.flatMap(RootItem.commands(of:)) + ApplicationIndex.scan()
         refreshResults()
     }
 
@@ -211,12 +217,41 @@ final class LauncherModel {
             NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
             searchText = ""
             hide()
-        case .command(_, _, let mode, let entry):
-            launch(item.title, entry: entry, mode: mode)
+        case .command(let extensionName, let commandName, let mode, let entry):
+            guard let installed = extensions[extensionName],
+                let command = installed.manifest.commands.first(where: { $0.name == commandName })
+            else {
+                screen = .failure(
+                    Failure(title: "Can't run \(item.title)", message: "The extension is no longer installed."))
+                return
+            }
+            let preferences = PreferenceResolver.resolve(
+                installed.manifest,
+                command: command,
+                stored: PreferenceStore(directory: paths.preferencesDirectory).load(extensionName)
+            )
+            guard preferences.missing.isEmpty else {
+                let names = preferences.missing.map { $0.title ?? $0.name }.joined(separator: ", ")
+                screen = .failure(
+                    Failure(
+                        title: "\(item.title) needs settings",
+                        message: "Set \(names) in the Settings window, then run the command again."
+                    )
+                )
+                openSettings(extensionName)
+                return
+            }
+            launch(item.title, of: extensionName, entry: entry, mode: mode, preferences: preferences.values)
         }
     }
 
-    private func launch(_ title: String, entry: URL, mode: String) {
+    private func launch(
+        _ title: String,
+        of extensionName: String,
+        entry: URL,
+        mode: String,
+        preferences: [String: JSONValue]
+    ) {
         let host: ExtensionHost
         do {
             host = try ensureHost()
@@ -226,6 +261,7 @@ final class LauncherModel {
         }
         let session = "s\(nextSession)"
         nextSession += 1
+        sessionExtensions[session] = extensionName
         if mode == "view" {
             screen = .command(CommandScreen(session: session, title: title))
         } else {
@@ -233,7 +269,11 @@ final class LauncherModel {
             status = "Running \(title)…"
         }
         do {
-            try host.send(.launch(session: session, entry: entry.path, mode: mode, launchProps: LaunchProps()))
+            try host.send(
+                .launch(
+                    session: session, entry: entry.path, mode: mode, launchProps: LaunchProps(),
+                    preferences: preferences)
+            )
         } catch {
             screen = .failure(Failure(title: "Can't run \(title)", message: String(describing: error)))
         }
@@ -310,6 +350,7 @@ final class LauncherModel {
             log(session, "error", stack ?? message)
 
         case .exit(let session, let reason):
+            sessionExtensions[session] = nil
             if let title = background.removeValue(forKey: session) {
                 status = nil
                 if reason == "finished", case .root = screen {
@@ -328,8 +369,14 @@ final class LauncherModel {
             }
 
         case .rpc(let session, let id, let method, _):
-            // The APIs that call into the app arrive with later work; until then, fail clearly.
-            send(.rpcResult(session: session, id: id, result: nil, error: "\(method) isn't available in fudge yet"))
+            switch method {
+            case "preferences.openExtension", "preferences.openCommand":
+                if let extensionName = sessionExtensions[session] { openSettings(extensionName) }
+                send(.rpcResult(session: session, id: id, result: .null, error: nil))
+            default:
+                // The other APIs that call into the app arrive with later work; until then, fail clearly.
+                send(.rpcResult(session: session, id: id, result: nil, error: "\(method) isn't available in fudge yet"))
+            }
 
         case .log(let session, let level, let message):
             log(session, level, message)

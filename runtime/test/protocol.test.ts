@@ -23,8 +23,16 @@ test("unknown types are rejected and keep the id", () => {
 });
 
 test("launch needs a session, an entry and a known mode", () => {
-    const launch = { type: "launch", session: "s1", entry: "/x/cmd.js", mode: "view", launchProps: { arguments: { a: "1" } } };
+    const launch = {
+        type: "launch",
+        session: "s1",
+        entry: "/x/cmd.js",
+        mode: "view",
+        launchProps: { arguments: { a: "1" } },
+        preferences: { loud: true },
+    };
     assert.deepEqual(parse(launch), { ok: true, message: launch });
+    assert.equal((parse({ ...launch, preferences: "nope" }) as { message: { preferences?: object } }).message.preferences, undefined);
     assert.equal(parse({ ...launch, session: "" }).ok, false);
     assert.equal(parse({ ...launch, entry: undefined }).ok, false);
     assert.equal(parse({ ...launch, mode: "menu-bar" }).ok, false);

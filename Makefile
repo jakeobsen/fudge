@@ -30,7 +30,7 @@ help:
 	@printf '  test           Run the Swift and extension host tests.\n'
 	@printf '  lint           Check Swift formatting and type-check the extension host.\n'
 	@printf '  fmt            Format all Swift code.\n'
-	@printf '  raycast-types  Copy the type definitions of @raycast/api %s into runtime/vendor and list its exports.\n' '$(RAYCAST_API_VERSION)'
+	@printf '  raycast-types  Copy the type definitions of @raycast/api %s into runtime/vendor and regenerate what is derived from them.\n' '$(RAYCAST_API_VERSION)'
 	@printf '  clean          Remove build output.\n'
 
 runtime/node_modules: runtime/package.json runtime/package-lock.json
@@ -88,7 +88,7 @@ raycast-types:
 	test "$$(node -p "require('$$tmp/package/package.json').license")" = MIT; \
 	cp "$$tmp/package/types/index.d.ts" runtime/vendor/raycast-api/index.d.ts
 	@cd runtime && npm run --silent generate
-	@printf '→ copied the type definitions of @raycast/api %s and regenerated the export list\n' '$(RAYCAST_API_VERSION)'
+	@printf '→ copied the type definitions of @raycast/api %s and regenerated the files derived from them\n' '$(RAYCAST_API_VERSION)'
 
 clean:
 	@rm -rf build .build runtime/dist

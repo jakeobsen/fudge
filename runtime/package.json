@@ -9,8 +9,8 @@
   },
   "scripts": {
     "build": "esbuild src/host.ts src/worker.ts --bundle --platform=node --format=esm --target=node22 --outdir=dist --define:process.env.NODE_ENV='\"production\"' --log-level=warning",
-    "generate": "node scripts/raycast-exports.ts",
-    "typecheck": "tsc --noEmit && node scripts/raycast-exports.ts --check",
+    "generate": "node scripts/raycast-types.ts",
+    "typecheck": "tsc --noEmit && node scripts/raycast-types.ts --check",
     "test": "node --test 'test/**/*.test.ts'"
   },
   "devDependencies": {

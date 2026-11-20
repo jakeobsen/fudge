@@ -10,11 +10,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var model: LauncherModel!
     private var panel: LauncherPanel!
     private var hotKey: HotKey?
+    private var settingsWindow: SettingsWindowController!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         model = LauncherModel(paths: paths)
         panel = LauncherPanel(content: LauncherView(model: model))
+        settingsWindow = SettingsWindowController(model: SettingsModel(paths: paths))
         model.hide = { [weak self] in self?.hidePanel() }
+        model.openSettings = { [weak self] name in self?.settingsWindow.show(extension: name) }
         panel.onEscape = { [weak self] in self?.model.escape() }
         panel.onResign = { [weak self] in self?.hidePanel() }
 
@@ -27,7 +30,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installStatusItem(shortcut: hotKey == nil ? nil : spec)
 
         if let snapshot = Snapshot(arguments: CommandLine.arguments) {
-            snapshot.take(of: panel, model: model)
+            if snapshot.settings {
+                snapshot.take(of: settingsWindow)
+            } else {
+                snapshot.take(of: panel, model: model)
+            }
         }
     }
 
@@ -65,16 +72,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func reloadExtensions() {
         model.reload()
     }
+
+    @objc private func showSettings() {
+        settingsWindow.show()
+    }
 }
 
 /// `--snapshot <file.png> [--query <text>] [--activate]`: renders the panel, saves a picture of it and quits.
 /// `--activate` presses ↵ after typing the query, then waits for the result.
+/// `--snapshot <file.png> --settings [<extension>]` renders the Settings window instead.
 /// For checking the layout without looking at the screen.
 @MainActor
 struct Snapshot {
     let file: URL
     let query: String?
     let activate: Bool
+    let settings: Bool
+    let settingsExtension: String?
 
     init?(arguments: [String]) {
         guard let index = arguments.firstIndex(of: "--snapshot"), index + 1 < arguments.count else { return nil }
@@ -85,6 +99,29 @@ struct Snapshot {
             query = nil
         }
         activate = arguments.contains("--activate")
+        if let settingsIndex = arguments.firstIndex(of: "--settings") {
+            settings = true
+            let next = settingsIndex + 1
+            settingsExtension = next < arguments.count && !arguments[next].hasPrefix("--") ? arguments[next] : nil
+        } else {
+            settings = false
+            settingsExtension = nil
+        }
+    }
+
+    func take(of controller: SettingsWindowController) {
+        controller.renderOffscreen(extension: settingsExtension)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            guard let view = controller.contentView else { exit(1) }
+            save(view)
+        }
+    }
+
+    private func save(_ view: NSView) -> Never {
+        guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { exit(1) }
+        view.cacheDisplay(in: view.bounds, to: bitmap)
+        try? bitmap.representation(using: .png, properties: [:])?.write(to: file)
+        exit(0)
     }
 
     /// Renders the panel without showing it: transparent, off-screen and never key,
@@ -98,11 +135,8 @@ struct Snapshot {
         if let query { model.searchText = query }
         if activate { model.activate() }
         DispatchQueue.main.asyncAfter(deadline: .now() + (activate ? 3 : 1)) {
-            guard let view = panel.contentView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds)
-            else { exit(1) }
-            view.cacheDisplay(in: view.bounds, to: bitmap)
-            try? bitmap.representation(using: .png, properties: [:])?.write(to: file)
-            exit(0)
+            guard let view = panel.contentView else { exit(1) }
+            save(view)
         }
     }
 }

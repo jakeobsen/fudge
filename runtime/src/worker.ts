@@ -9,13 +9,19 @@ import Module from "node:module";
 import { parentPort, workerData } from "node:worker_threads";
 import React, { createElement, type FunctionComponent } from "react";
 import * as jsxRuntime from "react/jsx-runtime";
+import { setLaunchContext } from "./api/launch.ts";
 import { createApiModule } from "./api/module.ts";
 import { NavigationRoot, type NavigationHandle } from "./api/navigation.ts";
 import { connect, settle } from "./bridge.ts";
 import { revive, type CommandMode, type HostToWorker, type LaunchProps, type WorkerMessage } from "./protocol.ts";
 import { createRoot, StaleCallbackError, type Root } from "./renderer/root.ts";
 
-export type WorkerData = { entry: string; mode: CommandMode; launchProps: LaunchProps };
+export type WorkerData = {
+    entry: string;
+    mode: CommandMode;
+    launchProps: LaunchProps;
+    preferences: Record<string, unknown>;
+};
 
 const port = parentPort;
 if (!port) throw new Error("worker.ts runs as a worker thread started by host.ts");
@@ -51,7 +57,8 @@ process.on("uncaughtException", (error) => report(error, false));
 process.on("unhandledRejection", (reason) => report(reason, false));
 connect((request) => post(request));
 
-const { entry, mode, launchProps } = workerData as WorkerData;
+const { entry, mode, launchProps, preferences } = workerData as WorkerData;
+setLaunchContext({ preferences });
 let root: Root | null = null;
 const navigation: NavigationHandle = { current: null };
 

@@ -38,6 +38,8 @@ To use another shortcut, put it in `~/Library/Application Support/fudge/settings
 
 Shortcuts are modifiers (`cmd`, `option`, `ctrl`, `shift`) plus a key, joined with `+`.
 
+Extensions' preferences are under **Settings…** in the fudge menu bar menu. A command that needs a preference you haven't set opens that window instead of running.
+
 ## License
 
 Copyright (C) 2026 Morten Jakobsen.
