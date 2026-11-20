@@ -174,8 +174,12 @@ final class LauncherModel {
     @ObservationIgnored private let dropdownStore: SearchBarDropdown.Store
     @ObservationIgnored private var searchDebounce: Task<Void, Never>?
 
+    /// When the panel was hidden, and whether it starts over on root search when it's shown again (FUD-48).
+    @ObservationIgnored let panelReset: PanelReset
+
     init(paths: FudgePaths) {
         self.paths = paths
+        panelReset = PanelReset(setting: FudgeSettings.load(from: paths.settingsFile).resetAfter)
         history = LaunchHistory.load(from: paths.historyFile)
         dropdownStore = SearchBarDropdown.Store(file: paths.dropdownValuesFile)
         reload()
@@ -220,6 +224,7 @@ final class LauncherModel {
     /// aliases and hotkeys. Settings calls it after each change.
     func applySettings(keepingSelection: Bool = false) {
         settings = FudgeSettings.load(from: paths.settingsFile)
+        panelReset.setting = settings.resetAfter
         let commands = installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
         items = RootSearch.applying(settings, to: commands) + RootSearch.builtInItems + applications
         refreshResults(keepingSelection: keepingSelection)
@@ -1336,15 +1341,18 @@ final class LauncherModel {
     /// Esc: close a DatePicker's calendar, the dropdown's panel or the action panel (a submenu at a time), pop a pushed view, clear the
     /// search, leave the command, then hide.
     func escape() {
+        // The DatePicker's calendar is a popover too: it closes first, whatever Esc is set to do.
         if datePanel != nil {
             closeDatePanel()
             return
         }
-        if dropdownPanel != nil {
+        let state = EscapeAction.State(
+            dropdownOpen: dropdownPanel != nil, actionPanelOpen: actionPanel != nil, screen: escapeScreen)
+        switch EscapeAction.next(behavior: settings.escapeBehavior, state: state) {
+        case .closeDropdown:
             closeDropdownPanel()
-            return
-        }
-        if var panel = actionPanel {
+        case .closeActionPanel:
+            guard var panel = actionPanel else { return }
             if panel.path.isEmpty {
                 actionPanel = nil
             } else {
@@ -1354,21 +1362,34 @@ final class LauncherModel {
                 let first = ActionPanelReader.flat(actionPanelSections).first?.id
                 actionPanel?.selected = first
             }
-            return
+        case .popView:
+            if case .command(let command) = screen { send(.pop(session: command.session)) }
+        case .clearSearch:
+            searchText = ""
+        case .leaveCommand:
+            leaveCommand()
+        case .dismissFailure:
+            screen = .root
+        case .hide:
+            hide()
+        case .hideAndReset:
+            // "Close window and pop to root": as Pop to Root Search's reset, but at once.
+            resetToRoot(keeping: nil)
+            hide()
         }
+    }
+
+    /// The screen as Esc sees it (`EscapeAction.State.Screen`).
+    private var escapeScreen: EscapeAction.State.Screen {
         switch screen {
         case .root:
-            if rootQuery.isEmpty { hide() } else { searchText = "" }
+            return .root(queryEmpty: rootQuery.isEmpty)
         case .failure:
-            screen = .root
+            return .failure
         case .command(let command):
-            if command.failure == nil, command.depth > 1 {
-                send(.pop(session: command.session))
-            } else if command.failure == nil, !command.searchText.isEmpty {
-                searchText = ""
-            } else {
-                leaveCommand()
-            }
+            // A command that failed has nothing to go back through.
+            guard command.failure == nil else { return .command(depth: 1, searchEmpty: true, isForm: false) }
+            return .command(depth: command.depth, searchEmpty: command.searchText.isEmpty, isForm: command.form != nil)
         }
     }
 
@@ -1389,28 +1410,64 @@ final class LauncherModel {
         guard let item = items.first(where: { $0.id == "command:\(commandID)" }),
             case .command(let extensionName, let commandName, let mode, _) = item.kind
         else { return }
-        let onScreen =
-            isVisible() && command?.extensionName == extensionName && command?.commandName == commandName
-        let action = HotKeyLaunch.action(
-            mode: mode, hasRequiredArgument: item.arguments.contains { $0.required == true }, isOnScreen: onScreen)
-        switch action {
-        case .hidePanel:
-            hide()
-        case .askForArguments:
-            if case .command = screen { leaveCommand() }
-            screen = .root
-            rootQuery = ""
-            refreshResults()
-            selectedItem = item.id
-            arguments.focus = 0
-            show()
-        case .open:
-            if mode == "view", case .command = screen { leaveCommand() }
-            launchOrigin = .hotkey
-            open(item)
-            launchOrigin = .rootSearch
-            if mode == "view" { show() }
+        // The reset comes first, so the hotkey's target is built on top of it. A no-view command's hotkey resets
+        // too while the panel is hidden: the panel's next show would reset it anyway, so this changes nothing.
+        resettingFirst {
+            let onScreen =
+                isVisible() && command?.extensionName == extensionName && command?.commandName == commandName
+            let action = HotKeyLaunch.action(
+                mode: mode, hasRequiredArgument: item.arguments.contains { $0.required == true }, isOnScreen: onScreen)
+            switch action {
+            case .hidePanel:
+                hide()
+            case .askForArguments:
+                if case .command = screen { leaveCommand() }
+                screen = .root
+                rootQuery = ""
+                refreshResults()
+                selectedItem = item.id
+                arguments.focus = 0
+                show()
+            case .open:
+                if mode == "view", case .command = screen { leaveCommand() }
+                launchOrigin = .hotkey
+                open(item)
+                launchOrigin = .rootSearch
+                if mode == "view" { show() }
+            }
         }
+    }
+
+    // MARK: - Reset after inactivity
+
+    /// Starts over on an empty root search when the panel was hidden long enough (`PanelReset`). The launcher
+    /// hotkey and the menu bar item call this before they show the panel.
+    func resetIfDue() {
+        resettingFirst {}
+    }
+
+    /// Runs `build`, a path that shows the panel, after resetting the panel if that's due. Every such path goes
+    /// through here first; `presented()` never resets, since it runs after the path has built its screen.
+    /// `keeping` is a command on screen that the path unloads itself (a `launchCommand` caller, answered first).
+    private func resettingFirst<T>(keeping session: String? = nil, _ build: () -> T) -> T {
+        panelReset.enter(reset: { resetToRoot(keeping: session) }, build: build)
+    }
+
+    /// Root search as on a first show: the command on screen unloaded as Esc to root does, an empty query and
+    /// fresh argument fields, no action or dropdown panel, and the first row selected. A no-view command still
+    /// running in the background isn't touched.
+    private func resetToRoot(keeping session: String?) {
+        actionPanel = nil
+        dropdownPanel = nil
+        if case .command(let command) = screen {
+            if command.session != session { send(.unload(session: command.session)) }
+            status = nil
+            toast = nil
+        }
+        screen = .root
+        rootQuery = ""
+        refreshResults()
+        resetArguments(for: selectedRootItem)
     }
 
     /// The hotkeys of installed commands, by root item id, for their rows.
@@ -1622,10 +1679,15 @@ final class LauncherModel {
                 missing: prepared.preferences.missing)
             return
         }
-        if let failure = launch(
-            target.command.title, of: target.installed, command: target.command, launchProps: target.launchProps,
-            prepared: prepared, quiet: !userInitiated)
-        {
+        let start = {
+            self.launch(
+                target.command.title, of: target.installed, command: target.command, launchProps: target.launchProps,
+                prepared: prepared, quiet: !userInitiated)
+        }
+        // A user-initiated view launch shows the panel, so a due reset comes first. The command on screen is left
+        // to `unloadReplaced`, after the call is answered.
+        let showsPanel = userInitiated && target.command.mode == "view"
+        if let failure = showsPanel ? resettingFirst(keeping: onScreen, start) : start() {
             // A view launch has put its failure on screen in place of the command that was there.
             let error = LaunchCommandError.invalid("couldn't start \"\(target.command.name)\": \(failure)")
             send(.rpcResult(session: session, id: id, result: nil, error: error.description))
@@ -1669,19 +1731,21 @@ final class LauncherModel {
     /// A required argument has no value: root search shows the command, its fields filled with what was given and the
     /// keyboard in the first empty required one, as ↵ on it would. The panel opens if it's hidden.
     private func showArguments(of target: LaunchTarget) {
-        screen = .root
-        rootQuery = ""
-        refreshResults()
-        selectedItem = target.rootItemID
-        // Fresh fields, even if the command was already selected with something typed into them.
-        resetArguments(for: selectedRootItem)
-        for (index, argument) in arguments.arguments.enumerated() {
-            if let value = target.launchProps.arguments[argument.name], !value.isEmpty {
-                arguments.set(value, at: index)
+        resettingFirst {
+            screen = .root
+            rootQuery = ""
+            refreshResults()
+            selectedItem = target.rootItemID
+            // Fresh fields, even if the command was already selected with something typed into them.
+            resetArguments(for: selectedRootItem)
+            for (index, argument) in arguments.arguments.enumerated() {
+                if let value = target.launchProps.arguments[argument.name], !value.isEmpty {
+                    arguments.set(value, at: index)
+                }
             }
+            _ = arguments.checkRequired()
+            if !isVisible() { show() }
         }
-        _ = arguments.checkRequired()
-        if !isVisible() { show() }
     }
 
     /// Unloads the command a `launchCommand` view launch replaced on screen.
@@ -1969,6 +2033,8 @@ final class LauncherModel {
             refreshResults()
         }
         hide()
+        // "Suspended" keeps the command for when the panel opens again, however long it stays hidden.
+        if popToRootType == "suspended" { panelReset.suspend() }
     }
 
     /// Unloads the visible command, if any, and shows root search.

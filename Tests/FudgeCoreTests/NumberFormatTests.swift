@@ -22,9 +22,18 @@ func commaDecimalCards(_ query: String, _ answer: String) throws {
     #expect(try #require(card(query, .commaDecimal)).answer == answer)
 }
 
-@Test(arguments: ["1.5 + 1", "3.14 * 2", "1.00 + 1", "1.000.00 + 1", ".5 + 1", "1,5,5 + 1", "1.0000 + 1", "1.5E3 + 1"])
+@Test(arguments: [
+    ("0.1234 + 1", "1.235"), ("1000+1+0.1234", "2.235"), ("1.5 + 1", "16"), ("3.14 * 2", "628"), ("1.00 + 1", "101"),
+    ("1.000.00 + 1", "100.001"), ("1.0000 + 1", "10.001"), ("1.5E3 + 1", "15.001"), ("1.000e3 + 1", "1.000.001"),
+])
+func commaDecimalDropsTheGroupingSeparator(_ query: String, _ answer: String) throws {
+    // "1.234,5": `.` is only for the eye, so it's dropped wherever it stands between two digits.
+    #expect(try #require(card(query, .commaDecimal)).answer == answer)
+}
+
+@Test(arguments: [".5 + 1", "5. + 1", "1..2 + 1", "1,5,5 + 1", "1.,5 + 1"])
 func commaDecimalRefusesWhatIsNoNumberThere(_ query: String) {
-    // A `.` that isn't a proper group is never read as something else: no card.
+    // A grouping separator that isn't between two digits, or a second decimal separator: no card.
     #expect(card(query, .commaDecimal) == nil)
 }
 
@@ -38,7 +47,14 @@ func dotDecimalCards(_ query: String, _ answer: String) throws {
     #expect(try #require(card(query, .dotDecimal)).answer == answer)
 }
 
-@Test(arguments: ["1,5 + 1", "13,5*2", "1,00 + 1", "1,000,00 + 1", ",5 + 1", "1,5E3 + 1"])
+@Test(arguments: [
+    ("1,5 + 1", "16"), ("13,5*2", "270"), ("1,00 + 1", "101"), ("1,000,00 + 1", "100,001"), ("1,5E3 + 1", "15,001"),
+])
+func dotDecimalDropsTheGroupingSeparator(_ query: String, _ answer: String) throws {
+    #expect(try #require(card(query, .dotDecimal)).answer == answer)
+}
+
+@Test(arguments: [",5 + 1", "5, + 1", "1,,2 + 1", "1.5.5 + 1"])
 func dotDecimalRefusesWhatIsNoNumberThere(_ query: String) {
     #expect(card(query, .dotDecimal) == nil)
 }
@@ -72,7 +88,7 @@ func dotDecimalRefusesWhatIsNoNumberThere(_ query: String) {
     let fr = Locale(identifier: "fr_FR")
     let format = NumberFormat.system(fr)
     #expect(format.decimal == ",")
-    #expect(format.typedGrouping == nil, "a space separates tokens")
+    #expect(format.typedGrouping.isEmpty, "a space separates tokens")
     let sum = try #require(card("1000,5 + 1", format, locale: fr))
     #expect(sum.answer == "1\u{202F}001,5", "fr_FR's own grouping on the card")
     #expect(sum.copyText == "1001,5")
@@ -82,35 +98,40 @@ func dotDecimalRefusesWhatIsNoNumberThere(_ query: String) {
     }
 }
 
-@Test func anotherGroupingIsShownButNeverRead() throws {
-    // de_CH groups with an apostrophe.
+@Test func anApostropheGroupingIsDroppedToo() throws {
+    // de_CH groups with an apostrophe; a typed one may be straight or curly.
     let ch = Locale(identifier: "de_CH")
     let format = NumberFormat.system(ch)
     #expect(format.decimal == ".")
-    #expect(format.typedGrouping == nil)
-    #expect(try #require(card("1234.5 * 1", format, locale: ch)).answer == "1\(ch.groupingSeparator!)234.5")
-    #expect(card("1\(ch.groupingSeparator!)000 + 1", format, locale: ch) == nil)
-    #expect(card("1,000 + 1", format, locale: ch) == nil, "`,` is neither its decimal nor a typed group")
+    #expect(format.typedGrouping == ["'", "\u{2019}"])
+    let grouping = ch.groupingSeparator!
+    #expect(try #require(card("1234.5 * 1", format, locale: ch)).answer == "1\(grouping)234.5")
+    #expect(try #require(card("1'000 + 1", format, locale: ch)).answer == "1\(grouping)001")
+    #expect(try #require(card("1\u{2019}000 + 1", format, locale: ch)).answer == "1\(grouping)001")
+    #expect(try #require(card("1'000 kg to lb", format, locale: ch)).answer == "2\(grouping)204.622622 lb")
+    #expect(card("1,000 + 1", format, locale: ch) == nil, "`,` is neither its decimal nor its grouping")
+    #expect(card("1'000 + 1", .commaDecimal) == nil, "an apostrophe means nothing in another format")
 }
 
 // MARK: - Reading
 
-@Test func numbersAreReadStrictly() {
+@Test func theGroupingSeparatorIsDroppedBetweenDigits() {
     let comma = NumberFormat.commaDecimal
-    #expect(comma.number("1.000") == 1000)
-    #expect(comma.number("12.345.678,9") == 12_345_678.9)
-    #expect(comma.number(",5") == 0.5)
-    #expect(comma.number("-1.000,5") == -1000.5)
-    #expect(comma.number("1,5E3") == 1500)
-    #expect(comma.number("1.000e3") == 1e6)
-    for bad in ["1.5", "3.14", "1.00", "1.000.00", ".5", "1,5,5", "1.000,5.5", "1.", "", "-", ",", "1,5e", "1’000"] {
+    for (literal, value) in [
+        ("1.000", 1000.0), ("12.345.678,9", 12_345_678.9), (",5", 0.5), ("-1.000,5", -1000.5), ("1,5E3", 1500),
+        ("1.000e3", 1e6), ("0.1234", 1234), ("1.5", 15), ("3.14", 314), ("1.00", 100), ("1.000.00", 100_000),
+        ("1,2.3", 1.23), ("1.", nil), ("1", 1),
+    ] as [(String, Double?)] {
+        #expect(comma.number(literal) == value, "\(literal)")
+    }
+    for bad in [".5", "5.", "1..2", "1,5,5", "1.000,5,5", "", "-", ",", "1,5e", "1'000", "1.,5", "1,.5"] {
         #expect(comma.number(bad) == nil, "\(bad)")
     }
     let dot = NumberFormat.dotDecimal
-    #expect(dot.number("1,000") == 1000)
-    #expect(dot.number("1,234,567.5") == 1_234_567.5)
-    #expect(dot.number(".5") == 0.5)
-    for bad in ["1,5", "1,00", "13,5", ",5", "1,000,00", "1,000.5.5"] {
+    for (literal, value) in [("1,000", 1000.0), ("1,234,567.5", 1_234_567.5), (".5", 0.5), ("1,5", 15), ("13,5", 135)] {
+        #expect(dot.number(literal) == value, "\(literal)")
+    }
+    for bad in [",5", "5,", "1,,2", "1.5.5", "1,000.5.5"] {
         #expect(dot.number(bad) == nil, "\(bad)")
     }
 }

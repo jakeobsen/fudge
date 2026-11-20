@@ -51,6 +51,10 @@ Release builds are signed ad hoc. Until fudge has a Developer ID, you grant its 
 
 Open fudge with ⌥Space, type to search applications and extension commands, and press ↵. Esc goes back, then hides the window.
 
+When you open fudge again within 90 seconds, it's as you left it. After longer, it starts over on an empty root search. **Pop to Root Search** on the **General** page of **Settings…** sets how long: Immediately, after 30 seconds, 1 minute or 90 seconds, or Never. Only the time the window is closed counts.
+
+**Show fudge on**, on the same page, picks the screen fudge opens on: the one with the mouse (the default), the primary screen, or the one with the app you're using. **Escape Key Behavior** picks what Esc does: by default it clears the search, then goes back, then closes the window; with "Close window and pop to root", Esc closes the window at once, and fudge opens on an empty root search next time.
+
 What the fudge menu bar menu does is in root search too: "fudge Settings", **Reload Extensions** (reads the extensions and applications again) and **Quit fudge** (asks first, since fudge's hotkeys stop working until you open it again).
 
 To use another shortcut, open **Settings…** on the **General** page, click the keys next to **Launcher hotkey**, and press the new shortcut. Esc cancels. A shortcut needs ⌘, ⌥ or ⌃, unless it's an F-key. The launcher always has a hotkey, so ⌫ (or **Reset to ⌥Space**) puts ⌥Space back. fudge refuses a shortcut that a command already has, and keeps the old one when another app has the new one. If another app already holds the launcher's hotkey when fudge starts, the General page says so, and the menu bar menu's **Open fudge** still works.
@@ -69,6 +73,12 @@ Untick **Enabled** to turn a command off, or a whole extension. A command that's
 
 **Settings…** in the fudge menu bar menu, ⌘, in the fudge window, and "fudge Settings" in root search open the Settings window on its **General** page. Extensions' preferences are in the same window, under each extension. To go straight to a command's extension, select the command and press ⌘⇧, (or ⌘K, then **Configure Extension**). A command that needs a preference you haven't set opens that window instead of running.
 
+### First run
+
+The first time fudge starts, it walks you through a few choices: the launcher hotkey, Accessibility, Open at Login and currency conversion. Each takes effect at once, and **Settings…** has them all. Until you click **Start Using fudge** at the end, fudge shows these steps again at its next start, from where you left off.
+
+**Settings… → Permissions** shows whether fudge may use Accessibility, which extensions need to read the text you've selected or to paste. **Open Accessibility Settings** lets macOS ask you first; if it doesn't ask, click it again to open **System Settings → Privacy & Security → Accessibility** and turn fudge on there. **Show Onboarding Again** goes through the first-run choices again.
+
 ### Open at Login and search history
 
 fudge doesn't start at login until you turn on **Open at Login** at the top of **Settings… → General**. macOS then shows a "Login item added" notification, and lists fudge under **System Settings → General → Login Items**, where you can also turn it off; the switch shows what's set there. If macOS asks you to allow it first, the page says so and **Open Login Items** takes you there. The login item is tied to where the app is, so after moving fudge (to `/Applications`, say), turn Open at Login off and on again.
@@ -85,13 +95,11 @@ Type a calculation in root search and the answer shows above the results: arithm
 
 Numbers follow your Mac's number format, or the one you pick under **Settings… → General → Number format**: "1,234.5" or "1.234,5". In "1.234,5", `1.000 + 1` is 1.001, and `1.5` isn't a number, so it gets no answer rather than a wrong one.
 
-Currency conversion is off until you turn it on under **Settings… → General**, because it needs exchange rates from the network. Until then, a currency query shows a card saying so, and ↵ on it opens that page.
+Currency conversion uses the European Central Bank's daily exchange rates. Turn it on under **Settings… → General**; until then, a currency query shows a card that takes you there.
 
-### Network
+### Extension Store
 
-fudge makes no connections of its own (no updater, telemetry or crash reporting), with three exceptions: the images extensions show (see **Images from the web** below), and two you turn on yourself. With currency conversion on, it downloads the European Central Bank's daily reference rates (`https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml`). It downloads that one public file when you turn the setting on, then when the rates are a day old, at most once every 12 hours. Like any download, the server sees your IP address, and nothing else is sent: no cookies and no identifier beyond `fudge/<version>` as the user agent. The rates are kept in `exchange-rates.json` in the support folder. Turning the setting off stops the downloads. Extensions make their own connections, as they do in Raycast.
-
-**The Extension Store** is the other one you turn on yourself, and it's off until you turn it on under **Settings… → General** and confirm what it does. While it's on, fudge connects to GitHub (github.com and its image servers) to download the list of extensions in the open-source repository github.com/raycast/extensions, the extensions you install, and their pictures, and npm downloads those extensions' packages from registry.npmjs.org. fudge never contacts Raycast's servers. Turning the store off deletes its downloaded list; extensions you installed stay installed.
+Turn on **Extension Store** under **Settings… → General** to browse the extensions in Raycast's open-source extensions repository and install the ones you choose. Turning it off removes the store's downloaded list; the extensions you installed stay installed.
 
 ### Selected text and Finder items
 
@@ -111,9 +119,7 @@ Secure text fields, such as passwords, never give their text.
 
 ### Images from the web
 
-When an extension uses an `https://` image (an icon, or an image in markdown), fudge downloads it on the extension's behalf, without cookies or credentials, and keeps it in `~/Library/Application Support/fudge/image-cache/` (up to 200 MB). A downloaded image is reused for a day, then checked for changes the next time it's shown.
-
-Loading an image tells the image's host your IP address and when you looked, as in a browser. Markdown that shows other people's content, such as issues or emails, can carry tracking images, as it can in Raycast or in a mail app that loads images. fudge doesn't load `http://` images, or images from your Mac (`localhost`) or the local network (`.local` names and private addresses).
+When an extension uses an `https://` image (an icon, or an image in markdown), fudge shows it and keeps it in `~/Library/Application Support/fudge/image-cache/` (up to 200 MB). A downloaded image is reused for a day, then checked for changes the next time it's shown. `http://` images, and images from your Mac or the local network, aren't shown.
 
 ### Pasting
 

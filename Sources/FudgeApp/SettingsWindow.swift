@@ -12,6 +12,7 @@ final class SettingsModel {
     /// The General and Commands pages' entries in the sidebar; extension names can't start with ":".
     static let generalPage = ":general"
     static let commandsPage = ":commands"
+    static let permissionsPage = ":permissions"
     /// Every installed extension, for the Commands page.
     private(set) var allExtensions: [InstalledExtension] = []
     /// `settings.json`, as the Commands page edits it.
@@ -36,6 +37,10 @@ final class SettingsModel {
     @ObservationIgnored var resumeHotkeys: () -> Void = {}
     /// Registers the command hotkeys from `settings.json`; returns the command ids the system refused.
     @ObservationIgnored var applyHotkeys: () -> Set<String> = { [] }
+    /// Accessibility's live status, for the Permissions page and onboarding; the app delegate sets the real one.
+    @ObservationIgnored var accessibility = AccessibilityStatus(access: FixedAccessibility(trusted: false))
+    /// Show Onboarding Again; set by the app delegate.
+    @ObservationIgnored var showOnboarding: () -> Void = {}
     private(set) var stored: [String: StoredPreferences] = [:]
     @ObservationIgnored private let store: PreferenceStore
     @ObservationIgnored private let paths: FudgePaths
@@ -60,7 +65,7 @@ final class SettingsModel {
         fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
         settingsProblem = FudgeSettings.isWritable(paths.settingsFile) ? nil : unreadableMessage
         loadLaunchPermissions()
-        if selected != Self.generalPage, selected != Self.commandsPage,
+        if selected != Self.generalPage, selected != Self.commandsPage, selected != Self.permissionsPage,
             !extensions.contains(where: { $0.manifest.name == selected })
         {
             selected = Self.generalPage
@@ -75,15 +80,9 @@ final class SettingsModel {
     @ObservationIgnored var currencyRatesChanged: (Bool) -> Void = { _ in }
 
     func setCurrencyRates(_ on: Bool) {
-        // Read the file again first, so hand edits made meanwhile aren't overwritten.
-        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
-        guard fudgeSettings.currencyRates != on else { return }
-        fudgeSettings.currencyRates = on
-        do {
-            try fudgeSettings.save(to: paths.settingsFile)
-        } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't save settings: \(error)\n".utf8))
-        }
+        // A settings.json that can't be written is refused, with the banner, and nothing is turned on.
+        guard FudgeSettings.load(from: paths.settingsFile).currencyRates != on, change({ $0.currencyRates = on })
+        else { return }
         currencyRatesChanged(on)
     }
 
@@ -232,6 +231,33 @@ final class SettingsModel {
             reload()
             extensionStoreChanged()
         }
+    }
+
+    // MARK: - Show fudge on, and Escape key behavior
+
+    var showOnScreen: ShowOnScreen { fudgeSettings.showOnScreen }
+    var escapeBehavior: EscapeBehavior { fudgeSettings.escapeBehavior }
+
+    func setShowOnScreen(_ setting: ShowOnScreen) {
+        guard setting != showOnScreen, change({ $0.showOnScreen = setting }) else { return }
+        _ = applyHotkeys()  // which applies settings.json to the launcher too
+    }
+
+    func setEscapeBehavior(_ behavior: EscapeBehavior) {
+        guard behavior != escapeBehavior, change({ $0.escapeBehavior = behavior }) else { return }
+        _ = applyHotkeys()
+    }
+
+    // MARK: - Pop to Root Search
+
+    /// How long the panel stays hidden before it opens on root search again (`resetAfterSeconds`).
+    var resetAfter: PanelResetSetting { fudgeSettings.resetAfter }
+    /// Tells the launcher; set by the app delegate.
+    @ObservationIgnored var resetAfterChanged: (PanelResetSetting) -> Void = { _ in }
+
+    func setResetAfter(_ setting: PanelResetSetting) {
+        guard change({ $0.resetAfter = setting }) else { return }
+        resetAfterChanged(setting)
     }
 
     // MARK: - Command hotkeys
@@ -468,6 +494,9 @@ final class SettingsWindowController {
         model.refreshLoginItem()
         // "fudge Settings" and Settings… open on the General page; Configure Extension on the extension's own.
         model.selected = name ?? SettingsModel.generalPage
+        if let window, window.contentView == nil {
+            window.contentView = NSHostingView(rootView: SettingsView(model: model))
+        }
         if window == nil {
             let window = SettingsNSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 880, height: 520),
@@ -491,12 +520,16 @@ final class SettingsWindowController {
                     alert.beginSheetModal(for: window) { continuation.resume(returning: $0 == .alertFirstButtonReturn) }
                 }
             }
-            // Closing the window mid-recording gives fudge its hotkeys back.
+            // Closing the window mid-recording gives fudge its hotkeys back. Its views go too, so nothing in them keeps
+            // running while it's closed (the Permissions page polls Accessibility); showing it builds them again.
             let model = model
             NotificationCenter.default.addObserver(
                 forName: NSWindow.willCloseNotification, object: window, queue: .main
-            ) { _ in
-                MainActor.assumeIsolated { model.cancelRecording() }
+            ) { [weak window] _ in
+                MainActor.assumeIsolated {
+                    model.cancelRecording()
+                    window?.dropContentWhenClosed()
+                }
             }
             // Coming back from System Settings → Login Items shows what was changed there.
             NotificationCenter.default.addObserver(
@@ -520,6 +553,7 @@ struct SettingsView: View {
         HStack(spacing: 0) {
             List(selection: $model.selected) {
                 Label("General", systemImage: "gearshape").tag(SettingsModel.generalPage)
+                Label("Permissions", systemImage: "hand.raised").tag(SettingsModel.permissionsPage)
                 Label("Commands", systemImage: "command").tag(SettingsModel.commandsPage)
                 Section("Extensions") {
                     ForEach(model.extensions, id: \.manifest.name) { installed in
@@ -535,6 +569,8 @@ struct SettingsView: View {
             Group {
                 if model.selected == SettingsModel.generalPage {
                     GeneralPage(model: model)
+                } else if model.selected == SettingsModel.permissionsPage {
+                    PermissionsPage(model: model)
                 } else if model.selected == SettingsModel.commandsPage {
                     CommandsPage(model: model)
                 } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {
