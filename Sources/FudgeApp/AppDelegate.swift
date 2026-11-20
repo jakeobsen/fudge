@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel = LauncherPanel(content: LauncherView(model: model))
         settingsWindow = SettingsWindowController(model: SettingsModel(paths: paths))
         model.hide = { [weak self] in self?.hidePanel() }
+        model.show = { [weak self] in self?.showPanel() }
         model.openSettings = { [weak self] name in self?.settingsWindow.show(extension: name) }
         model.showHUD = { [weak self] title in self?.hud.show(title) }
         model.isVisible = { [weak self] in self?.panel.isVisible ?? false }

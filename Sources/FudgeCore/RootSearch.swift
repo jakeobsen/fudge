@@ -50,13 +50,18 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         kind: .settings
     )
 
+    /// The id of a command's item, which its launches count under in `LaunchHistory`.
+    public static func commandID(extension extensionName: String, command: String) -> String {
+        "command:\(extensionName)/\(command)"
+    }
+
     /// One item per view or no-view command of the extension.
     public static func commands(of installed: InstalledExtension) -> [RootItem] {
         let manifest = installed.manifest
         return manifest.commands.filter { $0.mode == "view" || $0.mode == "no-view" }.map { command in
             let icon = (command.icon ?? manifest.icon).map { installed.assetsDirectory.appendingPathComponent($0) }
             return RootItem(
-                id: "command:\(manifest.name)/\(command.name)",
+                id: commandID(extension: manifest.name, command: command.name),
                 title: command.title,
                 subtitle: manifest.title,
                 keywords: command.keywords,

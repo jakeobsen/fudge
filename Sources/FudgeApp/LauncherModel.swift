@@ -97,6 +97,8 @@ final class LauncherModel {
 
     /// Hides the panel; set by the app delegate.
     @ObservationIgnored var hide: () -> Void = {}
+    /// Shows the panel; set by the app delegate.
+    @ObservationIgnored var show: () -> Void = {}
     /// Opens the Settings window on an extension's preferences, or on its default page for nil; set by the app
     /// delegate.
     @ObservationIgnored var openSettings: (String?) -> Void = { _ in }
@@ -123,6 +125,14 @@ final class LauncherModel {
     @ObservationIgnored private var nextSession = 1
     /// No-view commands still running, by session.
     @ObservationIgnored private var background: [String: String] = [:]
+    /// No-view commands that `launchCommand` started in the background, by session. They leave the panel alone.
+    @ObservationIgnored private var quietSessions: [String: QuietSession] = [:]
+
+    struct QuietSession {
+        var title: String
+        /// A failure was already shown, so the crash that follows it isn't shown again.
+        var failed = false
+    }
     /// The extension each session belongs to.
     @ObservationIgnored private var sessionExtensions: [String: String] = [:]
     @ObservationIgnored private var icons: [String: NSImage] = [:]
@@ -851,57 +861,37 @@ final class LauncherModel {
     // MARK: - Opening
 
     func open(_ item: RootItem) {
-        history.record(item.id)
-        try? history.save(to: paths.historyFile)
         switch item.kind {
         case .application(let url):
+            recordLaunch(item.id)
             NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
             searchText = ""
             hide()
         case .settings:
+            recordLaunch(item.id)
             searchText = ""
             showSettings(extension: nil)
-        case .command(let extensionName, let commandName, let mode, let entry):
+        case .command(let extensionName, let commandName, _, _):
             guard let installed = extensions[extensionName],
                 let command = installed.manifest.commands.first(where: { $0.name == commandName })
             else {
+                recordLaunch(item.id)
                 screen = .failure(
                     Failure(title: "Can't run \(item.title)", message: "The extension is no longer installed."))
                 return
             }
-            let preferences = PreferenceResolver.resolve(
-                installed.manifest,
-                command: command,
-                stored: PreferenceStore(directory: paths.preferencesDirectory).load(extensionName)
-            )
-            guard preferences.missing.isEmpty else {
-                let names = preferences.missing.map { $0.title ?? $0.name }.joined(separator: ", ")
-                screen = .failure(
-                    Failure(
-                        title: "\(item.title) needs settings",
-                        message: "Set \(names) in the Settings window, then run the command again."
-                    )
-                )
-                openSettings(extensionName)
+            let prepared = prepareLaunch(of: installed, command: command, userInitiated: true)
+            guard prepared.preferences.missing.isEmpty else {
+                showNeedsSettings(item.title, extension: extensionName, missing: prepared.preferences.missing)
                 return
             }
-            let environment = LaunchEnvironment.make(
-                for: installed,
-                command: command,
-                paths: paths,
-                appearance: NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-                    ? "dark" : "light"
-            )
             let entered = argumentsItem == item.id ? arguments : ArgumentInput(arguments: item.arguments)
             launch(
                 item.title,
                 of: installed,
-                command: commandName,
-                entry: entry,
-                mode: mode,
+                command: command,
                 launchProps: LaunchProps(arguments: entered.launchArguments),
-                preferences: preferences.values,
-                environment: environment
+                prepared: prepared
             )
             // The fields start empty again, for a no-view command (root search stays on screen) and for when a
             // view command returns to root search; not when the extension host couldn't run it.
@@ -910,32 +900,76 @@ final class LauncherModel {
         }
     }
 
+    private func recordLaunch(_ id: String) {
+        history.record(id)
+        try? history.save(to: paths.historyFile)
+    }
+
+    /// What a command needs before it launches: its preferences (with the required ones that aren't set in
+    /// `missing`) and its environment. Root search and `launchCommand` both prepare launches here, and a
+    /// user-initiated launch counts in the launch history.
+    private func prepareLaunch(
+        of installed: InstalledExtension, command: ExtensionManifest.Command, userInitiated: Bool
+    ) -> (preferences: ResolvedPreferences, environment: LaunchEnvironment) {
+        let name = installed.manifest.name
+        if userInitiated { recordLaunch(RootItem.commandID(extension: name, command: command.name)) }
+        let preferences = PreferenceResolver.resolve(
+            installed.manifest,
+            command: command,
+            stored: PreferenceStore(directory: paths.preferencesDirectory).load(name)
+        )
+        let environment = LaunchEnvironment.make(
+            for: installed,
+            command: command,
+            paths: paths,
+            appearance: NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? "dark" : "light"
+        )
+        return (preferences, environment)
+    }
+
+    /// A required preference isn't set: say so, and open Settings on the extension instead of running the command.
+    private func showNeedsSettings(_ title: String, extension name: String, missing: [ExtensionManifest.Preference]) {
+        let names = missing.map { $0.title ?? $0.name }.joined(separator: ", ")
+        screen = .failure(
+            Failure(
+                title: "\(title) needs settings",
+                message: "Set \(names) in the Settings window, then run the command again."
+            )
+        )
+        openSettings(name)
+    }
+
+    /// Starts a prepared command in the extension host: the one way commands launch, from root search and from
+    /// `launchCommand`. A view command takes the screen; a no-view one shows "Running …" until it exits, unless
+    /// it's `quiet` (a background launch), which leaves the panel and the status line alone.
+    /// Returns why it couldn't start, if it couldn't; except for quiet launches, that's also shown as a failure.
+    @discardableResult
     private func launch(
         _ title: String,
         of installed: InstalledExtension,
-        command commandName: String,
-        entry: URL,
-        mode: String,
+        command: ExtensionManifest.Command,
         launchProps: LaunchProps,
-        preferences: [String: JSONValue],
-        environment: LaunchEnvironment
-    ) {
+        prepared: (preferences: ResolvedPreferences, environment: LaunchEnvironment),
+        quiet: Bool = false
+    ) -> String? {
         let extensionName = installed.manifest.name
         let host: ExtensionHost
         do {
             host = try ensureHost()
         } catch {
-            screen = .failure(Failure(title: "Can't run extensions", message: String(describing: error)))
-            return
+            if !quiet { screen = .failure(Failure(title: "Can't run extensions", message: String(describing: error))) }
+            return String(describing: error)
         }
         let session = "s\(nextSession)"
         nextSession += 1
         sessionExtensions[session] = extensionName
-        if mode == "view" {
+        if command.mode == "view" {
             screen = .command(
                 CommandScreen(
-                    session: session, title: title, extensionName: extensionName, commandName: commandName,
+                    session: session, title: title, extensionName: extensionName, commandName: command.name,
                     assets: installed.assetsDirectory))
+        } else if quiet {
+            quietSessions[session] = QuietSession(title: title)
         } else {
             background[session] = title
             status = "Running \(title)…"
@@ -943,12 +977,122 @@ final class LauncherModel {
         do {
             try host.send(
                 .launch(
-                    session: session, entry: entry.path, mode: mode, launchProps: launchProps,
-                    preferences: preferences, environment: environment)
+                    session: session, entry: installed.entry(for: command.name).path, mode: command.mode,
+                    launchProps: launchProps, preferences: prepared.preferences.values,
+                    environment: prepared.environment)
             )
         } catch {
-            screen = .failure(Failure(title: "Can't run \(title)", message: String(describing: error)))
+            sessionExtensions[session] = nil
+            quietSessions[session] = nil
+            if !quiet { screen = .failure(Failure(title: "Can't run \(title)", message: String(describing: error))) }
+            return String(describing: error)
         }
+        return nil
+    }
+
+    // MARK: - launchCommand
+
+    /// `launchCommand` from the command running in `session` (the `command.launch` rpc). Finds the command
+    /// (`CommandLocator`), asks the user the first time an extension opens another extension's commands, then
+    /// launches it the way root search does. The call is answered once the launch has started, before the command
+    /// on screen is unloaded, so code after `await launchCommand(…)` still runs. Throws why it can't launch.
+    private func launchCommand(_ params: JSONValue, from session: String, call id: Int) async throws {
+        guard let callerName = sessionExtensions[session], let caller = extensions[callerName] else {
+            throw LaunchCommandError.invalid("the calling command isn't running")
+        }
+        let request = try LaunchRequest(params: params)
+        let target = try CommandLocator.locate(request, caller: callerName, in: Array(extensions.values))
+        try CommandLocator.checkMode(target.command, type: request.type)
+        if target.isOtherExtension { try await checkPermission(of: caller, toOpen: target) }
+
+        let userInitiated = request.type == .userInitiated
+        let answer = { self.send(.rpcResult(session: session, id: id, result: .null, error: nil)) }
+        // A user-initiated view launch, or what replaces it, takes the place of the command on screen.
+        let onScreen = command?.session
+
+        guard try CommandLocator.checkArguments(target, type: request.type) else {
+            answer()
+            if onScreen != nil { leaveCommand() }
+            showArguments(of: target)
+            return
+        }
+        let prepared = prepareLaunch(of: target.installed, command: target.command, userInitiated: userInitiated)
+        guard try CommandLocator.checkPreferences(prepared.preferences.missing, of: target, type: request.type) else {
+            answer()
+            if onScreen != nil { leaveCommand() }
+            showNeedsSettings(
+                target.command.title, extension: target.installed.manifest.name,
+                missing: prepared.preferences.missing)
+            return
+        }
+        if let failure = launch(
+            target.command.title, of: target.installed, command: target.command, launchProps: target.launchProps,
+            prepared: prepared, quiet: !userInitiated)
+        {
+            // A view launch has put its failure on screen in place of the command that was there.
+            let error = LaunchCommandError.invalid("couldn't start \"\(target.command.name)\": \(failure)")
+            send(.rpcResult(session: session, id: id, result: nil, error: error.description))
+            if target.command.mode == "view", let onScreen { unloadReplaced(onScreen) }
+            return
+        }
+        answer()
+        if target.command.mode == "view" {
+            if let onScreen { unloadReplaced(onScreen) }
+            if !isVisible() { show() }
+        }
+    }
+
+    /// The first time an extension opens another extension's command, the user decides, once for that pair.
+    private func checkPermission(of caller: InstalledExtension, toOpen target: LaunchTarget) async throws {
+        let file = paths.launchPermissionsFile
+        var permissions = LaunchPermissions.load(from: file)
+        let callerName = caller.manifest.name
+        let targetName = target.installed.manifest.name
+        let allowed: Bool
+        if let answer = permissions.answer(caller: callerName, target: targetName) {
+            allowed = answer
+        } else {
+            allowed = await confirm(
+                AlertRequest(
+                    title:
+                        "“\(caller.manifest.title)” wants to open “\(target.command.title)” from “\(target.installed.manifest.title)”.",
+                    message: nil,
+                    primary: "Allow",
+                    dismiss: "Don't Allow",
+                    destructive: false
+                ))
+            // Read again: another call may have stored an answer while this one waited.
+            permissions = LaunchPermissions.load(from: file)
+            permissions.record(allowed, caller: callerName, target: targetName)
+            try? permissions.save(to: file)
+        }
+        guard allowed else { throw LaunchCommandError.notAllowed(extensionTitle: target.installed.manifest.title) }
+    }
+
+    /// A required argument has no value: root search shows the command, its fields filled with what was given and the
+    /// keyboard in the first empty required one, as ↵ on it would. The panel opens if it's hidden.
+    private func showArguments(of target: LaunchTarget) {
+        screen = .root
+        rootQuery = ""
+        refreshResults()
+        selectedItem = target.rootItemID
+        // Fresh fields, even if the command was already selected with something typed into them.
+        resetArguments(for: selectedRootItem)
+        for (index, argument) in arguments.arguments.enumerated() {
+            if let value = target.launchProps.arguments[argument.name], !value.isEmpty {
+                arguments.set(value, at: index)
+            }
+        }
+        _ = arguments.checkRequired()
+        if !isVisible() { show() }
+    }
+
+    /// Unloads the command a `launchCommand` view launch replaced on screen.
+    private func unloadReplaced(_ session: String) {
+        send(.unload(session: session))
+        if toast?.session == session { toast = nil }
+        actionPanel = nil
+        dropdownPanel = nil
     }
 
     // MARK: - The extension host
@@ -990,6 +1134,7 @@ final class LauncherModel {
         guard host === stopped else { return }
         host = nil
         background.removeAll()
+        quietSessions.removeAll()
         if case .command(var command) = screen, command.failure == nil {
             command.failure = Failure(title: "\(command.title) stopped", message: "The extension host exited.")
             screen = .command(command)
@@ -1037,7 +1182,12 @@ final class LauncherModel {
             reportSelection()
 
         case .error(let session, let message, let stack, let fatal):
-            if case .command(var command) = screen, command.session == session {
+            if var quiet = quietSessions[session] {
+                // A background launch: the panel stays as it is, and the failure shows in the HUD, once.
+                if !quiet.failed { showHUD("\(quiet.title) failed — \(message)") }
+                quiet.failed = true
+                quietSessions[session] = quiet
+            } else if case .command(var command) = screen, command.session == session {
                 if fatal {
                     command.failure = Failure(title: "\(command.title) failed", message: message, details: stack)
                     screen = .command(command)
@@ -1051,7 +1201,10 @@ final class LauncherModel {
 
         case .exit(let session, let reason):
             sessionExtensions[session] = nil
-            if let title = background.removeValue(forKey: session) {
+            if let quiet = quietSessions.removeValue(forKey: session) {
+                // Unlike root search, a background launch's exit neither clears the query nor hides the panel.
+                if reason == "crashed", !quiet.failed { showHUD("\(quiet.title) failed") }
+            } else if let title = background.removeValue(forKey: session) {
                 status = nil
                 if reason == "finished", case .root = screen {
                     rootQuery = ""
@@ -1080,6 +1233,14 @@ final class LauncherModel {
                 Task {
                     let confirmed = await confirm(Self.alertRequest(params))
                     send(.rpcResult(session: session, id: id, result: .bool(confirmed), error: nil))
+                }
+            case "command.launch":
+                Task {
+                    do {
+                        try await launchCommand(params, from: session, call: id)
+                    } catch {
+                        send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
+                    }
                 }
             default:
                 Task {
