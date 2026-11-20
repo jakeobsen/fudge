@@ -59,8 +59,9 @@ Extensions can read the text selected in the app you were in, and the items sele
 When an app doesn't share its selection through Accessibility (often browsers and Electron apps such as VS Code), fudge copies it with ⌘C and puts back what was on your clipboard right after. That has some side effects:
 
 - A clipboard history app may record the copied text.
+- If your clipboard holds a password that a password manager marked as concealed, fudge leaves the clipboard empty instead of putting the password back. Put back, it would look like a new copy, and the password manager would no longer clear it.
+- Clipboard data over 50 MB (of one type) isn't put back. An app that only produces its clipboard data when asked (some design apps do this with large images) still has to produce it, so that can take a moment.
 - An app that copies something when nothing is selected hands that over instead. VS Code, for example, copies the current line.
-- An app that only produces its clipboard data when asked (some design apps do this with large images) has to produce all of it first, so it can take a moment.
 
 Secure text fields, such as passwords, never give their text.
 

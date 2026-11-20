@@ -173,6 +173,49 @@ private func reader(
     #expect(pasteboard.current == userClipboard)
 }
 
+@Test @MainActor func concealedClipboardIsClearedNotWrittenBack() async throws {
+    // A password manager's copy: written back, it would get a new changeCount and never be auto-cleared.
+    let password = PasteboardContents(items: [
+        [text("hunter2"), .init(type: "org.nspasteboard.ConcealedType", data: Data())]
+    ])
+    #expect(password.isConcealed)
+    #expect(!userClipboard.isConcealed)
+
+    let pasteboard = FakePasteboard(password)
+    let keys = FakeKeys()
+    keys.onCopy = { pasteboard.appCopies([[text("from chrome")]]) }
+    #expect(try await reader(FakeAccessibility(), keys, pasteboard).read(from: app) == "from chrome")
+    #expect(pasteboard.current == PasteboardContents(items: []))
+    #expect(pasteboard.replaced == 1)
+
+    // The same when the copy fails.
+    let untouched = FakePasteboard(password)
+    await #expect(throws: SelectionError.noSelectedText) {
+        try await reader(FakeAccessibility(), FakeKeys(), untouched, copyTimeout: .milliseconds(50)).read(from: app)
+    }
+    #expect(untouched.current == PasteboardContents(items: []))
+}
+
+@Test @MainActor func typesOver50MBAreSkipped() async throws {
+    let limit = 50 * 1024 * 1024
+    #expect(SelectedText.typeSizeLimit == limit)
+    // Zero-filled, so these cost address space, not memory.
+    let pasteboard = FakePasteboard(
+        PasteboardContents(items: [
+            [text("caption"), .init(type: "public.tiff", data: Data(count: limit + 1))],
+            [.init(type: "com.example.huge", data: Data(count: limit + 1))],
+            [.init(type: "public.png", data: Data(count: 1024))],
+        ]))
+    let keys = FakeKeys()
+    keys.onCopy = { pasteboard.appCopies([[text("from figma")]]) }
+
+    #expect(try await reader(FakeAccessibility(), keys, pasteboard).read(from: app) == "from figma")
+    // The big types are gone, and so is the item left with none.
+    #expect(
+        pasteboard.current
+            == PasteboardContents(items: [[text("caption")], [.init(type: "public.png", data: Data(count: 1024))]]))
+}
+
 @Test @MainActor func fallbackThatCopiesNothingRestoresAndRejects() async {
     let pasteboard = FakePasteboard(userClipboard)
     let keys = FakeKeys()

@@ -78,6 +78,19 @@ public struct PasteboardContents: Sendable, Equatable {
     public init(items: [[Representation]]) {
         self.items = items
     }
+
+    /// The type password managers mark their copies with (nspasteboard.org).
+    public static let concealedType = "org.nspasteboard.ConcealedType"
+
+    /// Whether any item is marked concealed: a password manager's copy.
+    public var isConcealed: Bool {
+        items.contains { $0.contains { $0.type == Self.concealedType } }
+    }
+
+    /// Without the types whose data is over `limit` bytes, and without the items that leaves empty.
+    public func dropping(typesOver limit: Int) -> PasteboardContents {
+        PasteboardContents(items: items.map { $0.filter { $0.data.count <= limit } }.filter { !$0.isEmpty })
+    }
 }
 
 /// The general pasteboard, as far as `SelectedText` needs it.
@@ -96,6 +109,10 @@ public protocol PasteboardAccess: AnyObject {
 /// nothing, by posting ⌘C and taking the text from the pasteboard, which is restored right after (D-49).
 @MainActor
 public final class SelectedText {
+    /// Types with more data than this aren't kept for the restore. That bounds what fudge holds; the app that copied
+    /// still has to produce the data when it's read.
+    public static let typeSizeLimit = 50 * 1024 * 1024
+
     private let accessibility: any AccessibilityAccess
     private let keys: any CopyKeyPoster
     private let pasteboard: any PasteboardAccess
@@ -142,10 +159,10 @@ public final class SelectedText {
 
     /// The ⌘C fallback. Never posts ⌘V or ⌘X.
     private func copy(from pid: Int32) async throws -> String {
-        let saved = pasteboard.contents()
+        let restore = Self.restoration(of: pasteboard.contents())
         let changeCount = pasteboard.changeCount
-        // Restored before the promise settles, whether or not the copy worked.
-        defer { pasteboard.replace(with: saved) }
+        // Written back before the promise settles, whether or not the copy worked.
+        defer { pasteboard.replace(with: restore) }
 
         keys.postCopy(to: pid)
         let deadline = ContinuousClock.now + copyTimeout
@@ -157,6 +174,13 @@ public final class SelectedText {
             if ContinuousClock.now >= deadline || Task.isCancelled { throw SelectionError.noSelectedText }
             try? await Task.sleep(for: pollInterval)
         }
+    }
+
+    /// What the fallback writes back: the snapshot without types over `typeSizeLimit`. A password manager's copy
+    /// isn't written back at all, and the pasteboard is left empty. Written back, it would get a new `changeCount`,
+    /// so the password manager would take it for something the user copied and never clear it.
+    static func restoration(of snapshot: PasteboardContents) -> PasteboardContents {
+        snapshot.isConcealed ? PasteboardContents(items: []) : snapshot.dropping(typesOver: typeSizeLimit)
     }
 }
 
