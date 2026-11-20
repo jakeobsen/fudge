@@ -1,5 +1,5 @@
-// Clipboard, opening things, the Trash and applications: done by the app,
-// asked for over rpc (see bridge.ts).
+// Clipboard, opening things, the Trash, applications and the selection: done
+// by the app, asked for over rpc (see bridge.ts).
 
 import { fileURLToPath } from "node:url";
 import { callApp } from "../bridge.ts";
@@ -7,6 +7,7 @@ import { notAvailable } from "./stubs.ts";
 
 type PathLike = string | Buffer | URL;
 type Application = { name: string; path: string; bundleId?: string; localizedName?: string };
+type FileSystemItem = { path: string };
 type Content = string | number | { text: string } | { file: PathLike } | { html: string; text?: string };
 
 function pathOf(path: PathLike): string {
@@ -73,4 +74,17 @@ export async function getDefaultApplication(path: PathLike): Promise<Application
 
 export async function getFrontmostApplication(): Promise<Application> {
     return callApp<Application>("applications.frontmost");
+}
+
+/**
+ * The selected text of the frontmost application. The app asks the Accessibility API, and when that gives nothing,
+ * copies with ⌘C and restores the clipboard right after. Rejects when nothing is selected.
+ */
+export async function getSelectedText(): Promise<string> {
+    return callApp<string>("selection.text");
+}
+
+/** The items selected in Finder, in Finder's order. Rejects when Finder isn't the frontmost application. */
+export async function getSelectedFinderItems(): Promise<FileSystemItem[]> {
+    return callApp<FileSystemItem[]>("selection.finderItems");
 }
