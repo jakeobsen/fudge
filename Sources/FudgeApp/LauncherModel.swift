@@ -45,6 +45,8 @@ final class LauncherModel {
         var form: FormContent?
         /// The values of the Form's fields as the user edits them, by node id.
         var fieldValues: [Int: FieldValue] = [:]
+        /// The Form field that had the keyboard last, by node id.
+        var lastFormField: Int?
     }
 
     struct DropdownState: Equatable {
@@ -61,7 +63,11 @@ final class LauncherModel {
     private(set) var screen: Screen = .root
     private(set) var results: [RootItem] = []
     var selectedItem: String? {
-        didSet { syncArguments() }
+        didSet {
+            syncArguments()
+            // The action panel belongs to the item it opened on.
+            if selectedItem != oldValue, case .root = screen { actionPanel = nil }
+        }
     }
     /// The arguments of the command selected in root search, with what the user entered into them.
     private(set) var arguments = ArgumentInput()
@@ -91,8 +97,9 @@ final class LauncherModel {
 
     /// Hides the panel; set by the app delegate.
     @ObservationIgnored var hide: () -> Void = {}
-    /// Opens the Settings window on an extension's preferences; set by the app delegate.
-    @ObservationIgnored var openSettings: (String) -> Void = { _ in }
+    /// Opens the Settings window on an extension's preferences, or on its default page for nil; set by the app
+    /// delegate.
+    @ObservationIgnored var openSettings: (String?) -> Void = { _ in }
     /// Shows a HUD message; set by the app delegate.
     @ObservationIgnored var showHUD: (String) -> Void = { _ in }
     /// Whether the launcher panel is on screen; set by the app delegate.
@@ -133,7 +140,7 @@ final class LauncherModel {
     func reload() {
         let installed = InstalledExtension.all(in: paths.extensionsDirectory)
         extensions = Dictionary(installed.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
-        items = installed.flatMap(RootItem.commands(of:)) + ApplicationIndex.scan()
+        items = installed.flatMap(RootItem.commands(of:)) + RootSearch.builtInItems + ApplicationIndex.scan()
         refreshResults()
     }
 
@@ -210,6 +217,62 @@ final class LauncherModel {
         results.first { $0.id == selectedItem }
     }
 
+    // MARK: - The keyboard
+
+    /// Counts the requests to put the keyboard back in the field the screen wants (`keyboardTarget`). The view
+    /// answers each one. Requests come each time the panel is shown and after a click on a row: either can leave
+    /// AppKit's first responder outside every field, so typing would go nowhere.
+    private(set) var keyboardRequests = 0
+
+    /// The panel was just shown.
+    func presented() {
+        // A dropdown argument takes no typing: showing the panel goes back to the search field, keeping the values.
+        if let index = arguments.focus, arguments.arguments.indices.contains(index),
+            arguments.arguments[index].type == "dropdown"
+        {
+            arguments.focus = nil
+        }
+        restoreKeyboard()
+    }
+
+    /// Asks the view to put the keyboard back in the field the screen wants.
+    func restoreKeyboard() {
+        keyboardRequests += 1
+    }
+
+    /// The field that should have the keyboard now.
+    var keyboardTarget: KeyboardFocus.Target {
+        KeyboardFocus.target(
+            for: keyboardScreen, actionPanelOpen: actionPanel != nil, dropdownPanelOpen: dropdownPanel != nil)
+    }
+
+    private var keyboardScreen: KeyboardFocus.Screen {
+        switch screen {
+        case .root:
+            let index = arguments.focus
+            let isDropdown = index.map {
+                arguments.arguments.indices.contains($0) && arguments.arguments[$0].type == "dropdown"
+            }
+            return .root(argument: index, argumentIsDropdown: isDropdown ?? false)
+        case .failure:
+            return .failure
+        case .command(let command):
+            if command.failure != nil || command.view == nil || command.list != nil { return .search }
+            guard let form = command.form else { return .noField }
+            let editable = form.fields.filter(\.isEditable)
+            let first = (editable.first(where: \.autoFocus) ?? editable.first)?.id
+            let last = command.lastFormField.flatMap { id in editable.contains { $0.id == id } ? id : nil }
+            return .form(lastField: last, firstField: first)
+        }
+    }
+
+    /// A Form field took the keyboard.
+    func formFieldFocused(_ node: Int) {
+        guard var command, command.lastFormField != node else { return }
+        command.lastFormField = node
+        screen = .command(command)
+    }
+
     // MARK: - Arguments
 
     /// Gives a command selected in root search empty argument fields, and drops them when the selection moves on
@@ -257,9 +320,11 @@ final class LauncherModel {
         return items.first { $0.id == command.selectedNode } ?? items.first
     }
 
-    /// The actions for what's selected: the selected item's; with no items, the empty view's or the List's own;
-    /// for other views, the view's own.
+    /// The actions for what's selected: in root search, fudge's own for the selected item (`RootActions`); in a
+    /// command, the selected item's; with no items, the empty view's or the List's own; for other views, the
+    /// view's own.
     var currentActions: [ActionSection] {
+        if case .root = screen { return RootActions.sections(for: selectedRootItem) }
         guard let command, let view = command.view else { return [] }
         guard let list = command.list else { return ActionPanelReader.sections(of: view.node("actions")) }
         if let item = selectedListItem { return ActionPanelReader.sections(of: item.actions) }
@@ -579,7 +644,6 @@ final class LauncherModel {
 
     /// Runs an action, or opens a submenu in the action panel.
     func run(_ entry: ActionEntry) {
-        guard case .command(let command) = screen else { return }
         if let submenu = entry.submenu {
             var state = actionPanel ?? ActionPanelState()
             state.path.append(entry.id)
@@ -589,7 +653,60 @@ final class LauncherModel {
             return
         }
         actionPanel = nil
-        send(.event(session: command.session, node: entry.id, path: ["onAction"], args: []))
+        switch entry.target {
+        case .node(let node):
+            guard case .command(let command) = screen else { return }
+            send(.event(session: command.session, node: node, path: ["onAction"], args: []))
+        case .root(let action):
+            guard case .root = screen else { return }
+            perform(action)
+        }
+    }
+
+    /// Runs one of fudge's own actions on the selected root search item.
+    private func perform(_ action: RootAction) {
+        switch action {
+        case .open:
+            activate()
+        case .configureExtension(let name):
+            showSettings(extension: name)
+        case .showInFinder(let url):
+            hide()
+            SystemCalls.showInFinder(url.path)
+        }
+    }
+
+    /// Opens the Settings window, on an extension's preferences or on its default page, and hides the panel.
+    private func showSettings(extension name: String?) {
+        hide()
+        openSettings(name)
+    }
+
+    /// ⌘, opens Settings on its default page; ⌘⇧, on the extension of the command that's selected in root search
+    /// or running. With no such command, ⌘⇧, does nothing.
+    private func handleSettingsKey(_ pressed: KeyShortcut) -> Bool {
+        if pressed == RootActions.settingsShortcut {
+            showSettings(extension: nil)
+            return true
+        }
+        if pressed == RootActions.configureExtensionShortcut {
+            if let name = currentExtensionName { showSettings(extension: name) }
+            return true
+        }
+        return false
+    }
+
+    /// The extension of the command selected in root search, or of the one running.
+    private var currentExtensionName: String? {
+        switch screen {
+        case .root:
+            if case .command(let name, _, _, _) = selectedRootItem?.kind { return name }
+            return nil
+        case .command(let command):
+            return command.extensionName
+        case .failure:
+            return nil
+        }
     }
 
     /// ↵ runs the primary action, except in a Form, where ↵ belongs to the fields and ⌘↵ submits.
@@ -605,7 +722,8 @@ final class LauncherModel {
 
     /// Keys that the launcher handles itself: ⌘K, the primary and secondary actions' keys, and the actions'
     /// shortcuts; in views without a search field (Detail, Form) also ↵ and Esc; in root search, the keys of the
-    /// argument fields (`ArgumentInput.handle`).
+    /// argument fields (`ArgumentInput.handle`) and the root actions' shortcuts; everywhere, ⌘, and ⌘⇧, for the
+    /// Settings window, after the running command's own shortcuts.
     /// Returns false for everything else, which then goes to the focused field.
     func handleKey(_ pressed: KeyShortcut) -> Bool {
         if pressed == KeyShortcut(key: "k", modifiers: ["cmd"]) {
@@ -618,16 +736,29 @@ final class LauncherModel {
             closeDropdownPanel()
             return true
         }
-        if case .root = screen {
+        guard actionPanel == nil, dropdownPanel == nil else { return false }
+        let command: CommandScreen
+        switch screen {
+        case .root:
             switch arguments.handle(pressed) {
-            case .ignored: return false
+            case .ignored: break
             case .handled: return true
             case .submit:
                 activate()
                 return true
             }
+            // ↵ stays with the fields, which submit on their own.
+            if !pressed.modifiers.isEmpty, let entry = ActionPanelReader.action(for: pressed, in: currentActions) {
+                run(entry)
+                return true
+            }
+            return handleSettingsKey(pressed)
+        case .failure:
+            return handleSettingsKey(pressed)
+        case .command(let running):
+            guard running.failure == nil else { return handleSettingsKey(pressed) }
+            command = running
         }
-        guard actionPanel == nil, dropdownPanel == nil, let command, command.failure == nil else { return false }
         let hasSearchField = command.view == nil || command.list != nil
         if !hasSearchField, pressed == KeyShortcut(key: "escape", modifiers: []) {
             escape()
@@ -650,7 +781,7 @@ final class LauncherModel {
             toggleDropdownPanel()
             return true
         }
-        return false
+        return handleSettingsKey(pressed)
     }
 
     /// Tells the command the search text changed; with `throttle`, once typing pauses.
@@ -758,6 +889,9 @@ final class LauncherModel {
             NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
             searchText = ""
             hide()
+        case .settings:
+            searchText = ""
+            showSettings(extension: nil)
         case .command(let extensionName, let commandName, let mode, let entry):
             guard let installed = extensions[extensionName],
                 let command = installed.manifest.commands.first(where: { $0.name == commandName })
@@ -1118,6 +1252,8 @@ final class LauncherModel {
         switch item.kind {
         case .application(let url):
             image = NSWorkspace.shared.icon(forFile: url.path)
+        case .settings:
+            image = NSApp.applicationIconImage
         case .command:
             image =
                 item.iconFile.flatMap(NSImage.init(contentsOf:))

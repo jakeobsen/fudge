@@ -1,10 +1,12 @@
 import Foundation
 
-/// Something the root search can open: an application or an extension command.
+/// Something the root search can open: an application, an extension command, or one of fudge's own items.
 public struct RootItem: Sendable, Equatable, Identifiable {
     public enum Kind: Sendable, Equatable {
         case application(URL)
         case command(extension: String, command: String, mode: String, entry: URL)
+        /// fudge's Settings window, on its default page.
+        case settings
     }
 
     public var id: String
@@ -40,6 +42,14 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         RootItem(id: "app:\(url.path)", title: title, kind: .application(url))
     }
 
+    /// "fudge Settings": opens the Settings window.
+    public static let settings = RootItem(
+        id: "fudge:settings",
+        title: "fudge Settings",
+        keywords: ["settings", "preferences", "config", "fudge"],
+        kind: .settings
+    )
+
     /// One item per view or no-view command of the extension.
     public static func commands(of installed: InstalledExtension) -> [RootItem] {
         let manifest = installed.manifest
@@ -65,6 +75,9 @@ public struct RootItem: Sendable, Equatable, Identifiable {
 
 /// Ranks root items for a query: fuzzy match first, launch history second.
 public enum RootSearch {
+    /// fudge's own items, searched alongside applications and commands.
+    public static let builtInItems: [RootItem] = [.settings]
+
     public static func rank(_ items: [RootItem], query: String, history: LaunchHistory, now: Date = Date())
         -> [RootItem]
     {
