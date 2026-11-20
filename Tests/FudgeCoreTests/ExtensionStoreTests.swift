@@ -94,3 +94,19 @@ private func storeFixture() throws -> (paths: FudgePaths, resources: URL) {
     #expect(environment["FUDGE_EXTENSIONS_DIR"] == "/tmp/support/extensions")
     #expect(ExtensionStore.hostEnvironment(cli: nil, paths: paths)["FUDGE_CLI"] == nil, "no tool, so the store says so")
 }
+
+@Test func theConsentSheetIsBriefAndLinksToTheIssues() {
+    #expect(ExtensionStore.Consent.title == "Turn on the Extension Store?")
+    #expect(
+        ExtensionStore.Consent.message
+            == "This adds the Extension Store to fudge. It downloads extensions from Raycast's open-source extensions "
+            + "repository on GitHub.")
+    #expect(
+        ExtensionStore.Consent.note
+            == "fudge aims to run Raycast extensions, but not all of them work yet. If you find one that doesn't, "
+            + "please file an issue.")
+    #expect(ExtensionStore.Consent.note.contains(ExtensionStore.Consent.issueLinkText), "the link is in the text")
+    #expect(ExtensionStore.Consent.issuesURL.absoluteString == "https://github.com/jakeobsen/fudge/issues")
+    #expect(ExtensionStore.Consent.confirm == "Turn On")
+    #expect(ExtensionStore.Consent.cancel == "Cancel")
+}
