@@ -72,22 +72,15 @@ test("an action that renders but fails when used is render-but-fail", () => {
 });
 
 test("a component the app doesn't draw, and any member of one, is not-drawn", () => {
-    const paths = [
-        "Grid",
-        "Grid.Item",
-        "Grid.Dropdown.Item",
-        "Grid.Inset.Small",
-        "Form.Dropdown",
-        "Form.Dropdown.Item",
-        "Form.DropdownItem",
-        "FormDropdownItem",
-        "Form.TagPicker.Item",
-        "Form.DatePicker.Type.Date",
-        "Form.FilePicker",
-        "Form.LinkAccessory",
-    ];
+    const paths = ["Form.DatePicker", "Form.DatePicker.Type.Date", "Form.FilePicker", "Form.LinkAccessory"];
     for (const path of paths) assert.equal(support(api, path, declared), "not-drawn", path);
-    for (const path of ["Form", "Form.TextField", "Form.Checkbox", "List.Item", "Detail.Metadata.Label"]) {
+    // The app draws these now, and the old names that reach them too.
+    const drawn = [
+        ...["Form", "Form.TextField", "Form.Checkbox", "List.Item", "Detail.Metadata.Label"],
+        ...["Grid", "Grid.Item", "Grid.Dropdown.Item", "Grid.Inset.Small"],
+        ...["Form.Dropdown", "Form.Dropdown.Item", "Form.DropdownItem", "FormDropdownItem", "Form.TagPicker.Item"],
+    ];
+    for (const path of drawn) {
         assert.equal(support(api, path, declared), "implemented", path);
     }
 });
