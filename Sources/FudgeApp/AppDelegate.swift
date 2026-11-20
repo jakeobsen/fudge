@@ -106,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showPanel() {
         panel.present()
+        model.presented()
     }
 
     private func hidePanel() {
@@ -136,7 +137,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: request.dismiss)
         if panel.isVisible {
             return await withCheckedContinuation { continuation in
-                alert.beginSheetModal(for: panel) { response in
+                alert.beginSheetModal(for: panel) { [weak self] response in
+                    // The sheet had the keyboard; give it back to the screen's field.
+                    self?.model.restoreKeyboard()
                     continuation.resume(returning: response == .alertFirstButtonReturn)
                 }
             }

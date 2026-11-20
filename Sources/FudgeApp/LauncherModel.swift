@@ -45,6 +45,8 @@ final class LauncherModel {
         var form: FormContent?
         /// The values of the Form's fields as the user edits them, by node id.
         var fieldValues: [Int: FieldValue] = [:]
+        /// The Form field that had the keyboard last, by node id.
+        var lastFormField: Int?
     }
 
     struct DropdownState: Equatable {
@@ -182,6 +184,62 @@ final class LauncherModel {
     /// The item selected in root search.
     var selectedRootItem: RootItem? {
         results.first { $0.id == selectedItem }
+    }
+
+    // MARK: - The keyboard
+
+    /// Counts the requests to put the keyboard back in the field the screen wants (`keyboardTarget`). The view
+    /// answers each one. Requests come each time the panel is shown and after a click on a row: either can leave
+    /// AppKit's first responder outside every field, so typing would go nowhere.
+    private(set) var keyboardRequests = 0
+
+    /// The panel was just shown.
+    func presented() {
+        // A dropdown argument takes no typing: showing the panel goes back to the search field, keeping the values.
+        if let index = arguments.focus, arguments.arguments.indices.contains(index),
+            arguments.arguments[index].type == "dropdown"
+        {
+            arguments.focus = nil
+        }
+        restoreKeyboard()
+    }
+
+    /// Asks the view to put the keyboard back in the field the screen wants.
+    func restoreKeyboard() {
+        keyboardRequests += 1
+    }
+
+    /// The field that should have the keyboard now.
+    var keyboardTarget: KeyboardFocus.Target {
+        KeyboardFocus.target(
+            for: keyboardScreen, actionPanelOpen: actionPanel != nil, dropdownPanelOpen: dropdownPanel != nil)
+    }
+
+    private var keyboardScreen: KeyboardFocus.Screen {
+        switch screen {
+        case .root:
+            let index = arguments.focus
+            let isDropdown = index.map {
+                arguments.arguments.indices.contains($0) && arguments.arguments[$0].type == "dropdown"
+            }
+            return .root(argument: index, argumentIsDropdown: isDropdown ?? false)
+        case .failure:
+            return .failure
+        case .command(let command):
+            if command.failure != nil || command.view == nil || command.list != nil { return .search }
+            guard let form = command.form else { return .noField }
+            let editable = form.fields.filter(\.isEditable)
+            let first = (editable.first(where: \.autoFocus) ?? editable.first)?.id
+            let last = command.lastFormField.flatMap { id in editable.contains { $0.id == id } ? id : nil }
+            return .form(lastField: last, firstField: first)
+        }
+    }
+
+    /// A Form field took the keyboard.
+    func formFieldFocused(_ node: Int) {
+        guard var command, command.lastFormField != node else { return }
+        command.lastFormField = node
+        screen = .command(command)
     }
 
     // MARK: - Arguments

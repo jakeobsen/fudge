@@ -26,7 +26,17 @@ struct FormScreen: View {
             if focused == nil || !ids.contains(focused!) { focusFirstField() }
         }
         .onChange(of: focused) { _, field in
-            if let field { lastFocused = field }
+            if let field {
+                lastFocused = field
+                model.formFieldFocused(field)
+            }
+        }
+        // Each showing of the panel puts the keyboard back in the field the model names (the last one, or the
+        // first). Through nil, since setting what `focused` already says does nothing.
+        .onChange(of: model.keyboardRequests) { _, _ in
+            guard case .formField(let field) = model.keyboardTarget else { return }
+            focused = nil
+            DispatchQueue.main.async { focused = field }
         }
         // The action panel takes the keyboard; give it back to the field after.
         .onChange(of: model.actionPanel == nil) { _, closed in

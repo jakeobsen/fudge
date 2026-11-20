@@ -38,6 +38,9 @@ struct LauncherView: View {
         // The panel's hidden title bar would otherwise push everything down by its height.
         .ignoresSafeArea()
         .onAppear { focus = .search }
+        // `.onAppear` runs once for the panel's lifetime, so each showing (and each row click) asks for the
+        // keyboard back explicitly.
+        .onChange(of: model.keyboardRequests) { _, _ in restoreKeyboard() }
         .onChange(of: model.actionPanel == nil) { _, closed in focus = closed ? .search : .actions }
         .onChange(of: model.dropdownPanel == nil) { _, closed in focus = closed ? .search : .dropdown }
         // The model decides which argument field has the keyboard (Tab, ⇧Tab, a required one left empty); a click
@@ -84,6 +87,27 @@ struct LauncherView: View {
             } else {
                 placeCursorAtEnd(of: text, attempts: attempts - 1)
             }
+        }
+    }
+
+    /// Puts the keyboard in the field the screen wants (`LauncherModel.keyboardTarget`), unless it's already there,
+    /// with the cursor at the end. Setting `focus` to the value it already holds does nothing, even when AppKit's
+    /// first responder has moved elsewhere, so it goes through nil first. Form fields are `FormScreen`'s.
+    private func restoreKeyboard() {
+        let field: Field
+        let text: String
+        switch model.keyboardTarget {
+        case .search: (field, text) = (.search, model.searchText)
+        case .argument(let index): (field, text) = (.argument(index), model.arguments.value(at: index))
+        case .actionPanel: (field, text) = (.actions, model.actionPanelQuery)
+        case .dropdownPanel: (field, text) = (.dropdown, model.dropdownPanelQuery)
+        case .formField, .none: return
+        }
+        if focus == field, let editor = launcherPanel?.firstResponder as? NSTextView, editor.string == text { return }
+        focus = nil
+        DispatchQueue.main.async {
+            focus = field
+            placeCursorAtEnd(of: text)
         }
     }
 
@@ -272,7 +296,13 @@ private struct RootResults: View {
                                 selected: item.id == model.selectedItem
                             )
                             .id(item.id)
-                            .onRowClick(select: { model.selectedItem = item.id }, open: { model.activate() })
+                            .onRowClick(
+                                select: {
+                                    model.selectedItem = item.id
+                                    // A click can leave the first responder outside the search field.
+                                    model.restoreKeyboard()
+                                },
+                                open: { model.activate() })
                         }
                     }
                     .padding(8)
