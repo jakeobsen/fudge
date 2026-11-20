@@ -13,7 +13,7 @@ fudge is an independent project. It is not affiliated with or endorsed by Raycas
 
 ## Building
 
-You need macOS 14 or later, Xcode 16 or later (Swift 6) and Node.js 22.18 or later.
+You need macOS 14 or later, Xcode 26 or later and Node.js 22.18 or later. The app runs on macOS 14 and later.
 
 ```bash
 make app     # build build/Fudge.app
@@ -25,6 +25,18 @@ make install-extension DIR=path/to/extension   # compile and install an extensio
 ```
 
 `make help` lists every target.
+
+## Using it
+
+Open fudge with ⌥Space, type to search applications and extension commands, and press ↵. Esc goes back, then hides the window.
+
+To use another shortcut, put it in `~/Library/Application Support/fudge/settings.json`:
+
+```json
+{ "hotkey": "cmd+space" }
+```
+
+Shortcuts are modifiers (`cmd`, `option`, `ctrl`, `shift`) plus a key, joined with `+`.
 
 ## License
 

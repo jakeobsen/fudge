@@ -20,6 +20,16 @@ public struct FudgePaths: Sendable, Equatable {
         return FudgePaths(supportDirectory: applicationSupport.appendingPathComponent("fudge", isDirectory: true))
     }
 
+    /// fudge's own settings.
+    public var settingsFile: URL {
+        supportDirectory.appendingPathComponent("settings.json")
+    }
+
+    /// How often and how recently root items were opened.
+    public var historyFile: URL {
+        supportDirectory.appendingPathComponent("history.json")
+    }
+
     /// Installed extensions, one folder each.
     public var extensionsDirectory: URL {
         supportDirectory.appendingPathComponent("extensions", isDirectory: true)
