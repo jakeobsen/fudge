@@ -68,6 +68,12 @@ public struct FudgeSettings: Sendable, Equatable {
         }
     }
 
+    /// The launcher's hotkey: `hotkey` parsed, else ⌥Space. Setting ⌥Space removes the key, as for other defaults.
+    public var launcherHotkey: HotKeySpec {
+        get { hotkey.flatMap(HotKeySpec.parse) ?? .default }
+        set { hotkey = newValue.sameKeys(as: .default) ? nil : newValue.text }
+    }
+
     /// The hotkeys commands have, parsed; entries that don't parse are left out.
     public var commandHotkeys: [String: HotKeySpec] {
         commands.compactMapValues { $0.hotkey.flatMap(HotKeySpec.parse) }

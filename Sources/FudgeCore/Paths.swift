@@ -50,6 +50,11 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("launch-permissions.json")
     }
 
+    /// What commands changed about themselves with `updateCommandMetadata` (`CommandMetadata`).
+    public var commandMetadataFile: URL {
+        supportDirectory.appendingPathComponent("command-metadata.json")
+    }
+
     /// The preference values set for each extension.
     public var preferencesDirectory: URL {
         supportDirectory.appendingPathComponent("preferences", isDirectory: true)

@@ -1,7 +1,8 @@
 import Foundation
 
-/// A List view as fudge draws it: its sections after Raycast's own filtering, the empty view when one shows,
-/// and the search bar's dropdown.
+/// A List or Grid view as fudge draws it: its sections after Raycast's own filtering, the empty view when one
+/// shows, and the search bar's dropdown. A Grid is the same content with a layout (`layout`, each section's `grid`),
+/// so everything the app does with a List applies to it unchanged.
 public struct ListContent: Sendable, Equatable {
     public struct Item: Sendable, Equatable, Identifiable {
         /// The node id, which the app uses for selection and events.
@@ -19,6 +20,8 @@ public struct ListContent: Sendable, Equatable {
         public var accessories: [Accessory]
         public var actions: UINode?
         public var detail: UINode?
+        /// A Grid item's cell: its `content`. A Grid item's `accessory` is its one accessory.
+        public var content: GridItemContent?
     }
 
     /// One accessory on the right of an item: text, a date or a tag, with an optional icon.
@@ -39,6 +42,14 @@ public struct ListContent: Sendable, Equatable {
         public var title: String?
         public var subtitle: String?
         public var items: [Item]
+        /// In a Grid, the section's layout: the Grid's, with what the section sets itself.
+        public var grid: GridSectionLayout?
+    }
+
+    /// Rows, or the cells of a Grid with its own layout (which sections may override).
+    public enum Layout: Sendable, Equatable {
+        case list
+        case grid(GridSectionLayout)
     }
 
     public struct EmptyView: Sendable, Equatable {
@@ -48,6 +59,7 @@ public struct ListContent: Sendable, Equatable {
         public var actions: UINode?
     }
 
+    public var layout: Layout
     /// The sections that have items to show, in the order to show them.
     public var sections: [Section]
     /// What to show instead of items, when the list has none to show.
@@ -64,35 +76,50 @@ public struct ListContent: Sendable, Equatable {
     }
 
     /// Whether to ask for the next page now that `index` is on screen or selected: the list has more, isn't
-    /// already loading, and `index` is within `threshold` items of the end.
-    public func wantsMore(near index: Int, threshold: Int = 5) -> Bool {
+    /// already loading, and `index` is within `threshold` items of the end. The default is 5 items in a List, and
+    /// two rows of the last section in a Grid.
+    public func wantsMore(near index: Int, threshold: Int? = nil) -> Bool {
         guard let pagination, pagination.hasMore, !isLoading else { return false }
+        let threshold = threshold ?? sections.last?.grid.map { $0.columns * 2 } ?? 5
         return index >= items.count - threshold
+    }
+
+    /// The sections as `GridNavigation` lays them out; nil for a List.
+    public var gridSections: [GridNavigation.Section]? {
+        guard case .grid = layout else { return nil }
+        return sections.map { GridNavigation.Section(count: $0.items.count, columns: $0.grid?.columns ?? 1) }
     }
 
     public var items: [Item] { sections.flatMap(\.items) }
 
-    /// Reads a `List` node, filtering it by `searchText` when Raycast would filter it itself.
+    /// The view types read as lists.
+    public static let viewTypes: Set<String> = ["List", "Grid"]
+
+    /// Reads a `List` or `Grid` node, filtering it by `searchText` when Raycast would filter it itself.
     public init(_ view: UINode, searchText: String, now: Date = Date()) {
+        let kind = view.type == "Grid" ? "Grid" : "List"
+        let grid = kind == "Grid" ? GridSectionLayout(grid: view) : nil
+        layout = grid.map(Layout.grid) ?? .list
         var sections: [Section] = []
         var loose: [Item] = []
         var emptyNode: UINode?
         func flushLoose() {
-            if let first = loose.first { sections.append(Section(id: -first.id, items: loose)) }
+            if let first = loose.first { sections.append(Section(id: -first.id, items: loose, grid: grid)) }
             loose = []
         }
         for child in view.children {
             switch child.type {
-            case "List.Section":
+            case "\(kind).Section":
                 flushLoose()
-                let items = child.children.filter { $0.type == "List.Item" }.map { Self.item($0, now: now) }
+                let items = child.children.filter { $0.type == "\(kind).Item" }.map { Self.item($0, now: now) }
                 sections.append(
                     Section(
-                        id: child.id, title: child.string("title"), subtitle: child.string("subtitle"), items: items)
+                        id: child.id, title: child.string("title"), subtitle: child.string("subtitle"), items: items,
+                        grid: grid?.overridden(by: child))
                 )
-            case "List.Item":
+            case "\(kind).Item":
                 loose.append(Self.item(child, now: now))
-            case "List.EmptyView":
+            case "\(kind).EmptyView":
                 emptyNode = child
             default:
                 break
@@ -109,7 +136,7 @@ public struct ListContent: Sendable, Equatable {
 
         self.sections = sections
         isLoading = view.bool("isLoading") == true
-        isShowingDetail = view.bool("isShowingDetail") == true
+        isShowingDetail = kind == "List" && view.bool("isShowingDetail") == true
         dropdown = view.node("searchBarAccessory").flatMap(SearchBarDropdown.init)
         if case .object(let options) = view.props["pagination"],
             case .object(let loadMore) = options["onLoadMore"], loadMore["$fn"] != nil
@@ -200,6 +227,11 @@ public struct ListContent: Sendable, Equatable {
         if oldTitle != nil || oldIcon != nil {
             accessories.append(Accessory(text: oldTitle, isTag: false, color: nil, icon: oldIcon, tooltip: nil))
         }
+        // A Grid item's single accessory: an icon with a tooltip.
+        if case .object(let accessory) = node.props["accessory"], let icon = accessory["icon"].flatMap(present) {
+            let tooltip: String? = if case .string(let tooltip) = accessory["tooltip"] { tooltip } else { nil }
+            accessories.append(Accessory(text: nil, isTag: false, color: nil, icon: icon, tooltip: tooltip))
+        }
         return Item(
             id: node.id,
             itemId: node.string("id"),
@@ -212,7 +244,8 @@ public struct ListContent: Sendable, Equatable {
             keywords: strings(node.props["keywords"]),
             accessories: accessories,
             actions: node.node("actions"),
-            detail: node.node("detail")
+            detail: node.node("detail"),
+            content: GridItemContent(node.props["content"])
         )
     }
 

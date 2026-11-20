@@ -7,6 +7,7 @@ export { useNavigation } from "./navigation.ts";
 export { getPreferenceValues, openCommandPreferences, openExtensionPreferences } from "./preferences.ts";
 export { environment } from "./environment.ts";
 export { launchCommand } from "./launch-command.ts";
+export { updateCommandMetadata } from "./command-metadata.ts";
 export {
     Cache,
     LocalStorage,
