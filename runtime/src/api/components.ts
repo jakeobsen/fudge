@@ -165,14 +165,11 @@ export const Form = Object.assign(FormView, {
 });
 
 // Components the extension host renders but the app can't draw yet. The compat scan counts every use of one, or
-// of a member of one (`Form.DatePicker.Type.Date`), as missing ("not-drawn"). Whoever teaches the app to draw one
-// removes it from this list in the same PR. Where the app would draw them:
-// - Form.DatePicker and FilePicker: `FormContent.field` (Sources/FudgeCore/FormContent.swift) reads them as
-//   `.unsupported`, and `FormScreen` (Sources/FudgeApp/FormScreen.swift) shows that.
-// - Form.LinkAccessory: `FormContent` skips it, and nothing reads a Form's `searchBarAccessory`.
+// of a member of one, as missing ("not-drawn"). Whoever teaches the app to draw one removes it from this list in
+// the same PR. Where the app would draw them:
+// - Form.LinkAccessory: `FormContent` (Sources/FudgeCore/FormContent.swift) skips it, and nothing reads a Form's
+//   `searchBarAccessory`.
 const notDrawn: Record<string, object> = {
-    "Form.DatePicker": Form.DatePicker,
-    "Form.FilePicker": Form.FilePicker,
     "Form.LinkAccessory": Form.LinkAccessory,
 };
 for (const [name, component] of Object.entries(notDrawn)) markNotDrawn(component, name);
