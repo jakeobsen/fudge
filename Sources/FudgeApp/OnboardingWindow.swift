@@ -62,17 +62,20 @@ final class OnboardingModel {
     }
 }
 
-/// The onboarding window, which can refuse the keyboard like Settings, and closes on ⌘W, since an accessory app has
-/// no File menu.
+/// The onboarding window, which can refuse the keyboard like Settings, and closes on ⌘W and ⌘Q like Settings
+/// (`WindowShortcut`), since an accessory app has no File menu. Closing it doesn't complete onboarding.
 final class OnboardingNSWindow: NSWindow {
     var refusesKey = false
+    /// Whether the hotkey step is recording, when ⌘Q and ⌘W belong to the recorder.
+    var isRecording: () -> Bool = { false }
 
     override var canBecomeKey: Bool { !refusesKey && super.canBecomeKey }
     override var canBecomeMain: Bool { !refusesKey && super.canBecomeMain }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if flags == .command, event.charactersIgnoringModifiers == "w" {
+        if event.type == .keyDown, let pressed = AppDelegate.shortcut(for: event),
+            WindowShortcut.closesWindow(pressed, recording: isRecording())
+        {
             performClose(nil)
             return true
         }
@@ -149,6 +152,7 @@ final class OnboardingWindowController {
         )
         window.title = "Set Up fudge"
         window.isReleasedWhenClosed = false
+        window.isRecording = { [settings] in settings.recording != nil }
         window.contentView = view
         self.window = window
         let settings = settings
