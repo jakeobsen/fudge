@@ -98,6 +98,8 @@ fudge makes no connections of its own (no updater, telemetry or crash reporting)
 
 Extensions can read the text selected in the app you were in, and the items selected in Finder. The first time, macOS asks you to allow fudge under **Privacy & Security → Accessibility** or **Automation**.
 
+macOS only asks when fudge isn't in the Accessibility list yet. If fudge is there but switched off, or the entry was left by an older build of fudge, nothing appears, and extensions are just refused. So when Accessibility is refused a second time, fudge shows its own alert, once per run, and **Open Accessibility Settings** takes you to the list. Switch fudge on there. If it's already on, select it, remove it with −, and add it again with +.
+
 When an app doesn't share its selection through Accessibility (often browsers and Electron apps such as VS Code), fudge copies it with ⌘C and puts back what was on your clipboard right after. That has some side effects:
 
 - A clipboard history app may record the copied text.

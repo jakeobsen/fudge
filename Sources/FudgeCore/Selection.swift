@@ -54,25 +54,74 @@ public protocol AccessibilityAccess: AnyObject {
     func selectedText(pid: Int32) async -> String?
 }
 
-/// The Accessibility check, with macOS's prompt shown at most once per run, whichever feature asks first: reading the
-/// selected text, or pasting.
+/// What `AccessibilityGate.check()` found.
+public enum AccessibilityCheck: Equatable, Sendable {
+    case trusted
+    /// `offerSettings` is true once per gate: on the first refusal after the one that asked for macOS's prompt.
+    case refused(offerSettings: Bool)
+}
+
+/// The Accessibility check, shared by reading the selected text and pasting, whichever asks first.
+///
+/// The first refusal in a run asks for macOS's prompt. macOS shows it only when fudge isn't in the Accessibility list
+/// yet: an entry that's off, or one left by an older build's signature, gets no prompt. So a second refusal means the
+/// prompt didn't help, and the gate tells the app to offer the Accessibility pane itself, once per run (FUD-47).
+/// Refusals after that just refuse.
 @MainActor
 public final class AccessibilityGate {
     private let access: any AccessibilityAccess
+    private let offerSettings: @MainActor () -> Void
     private var prompted = false
+    private var offered = false
 
-    public init(access: any AccessibilityAccess) {
+    /// `offerSettings` is called by `isTrusted()` when `check()` says to offer the Accessibility pane. It mustn't
+    /// block: the refused call is answered right after it returns.
+    public init(access: any AccessibilityAccess, offerSettings: @escaping @MainActor () -> Void = {}) {
         self.access = access
+        self.offerSettings = offerSettings
     }
 
-    /// Whether fudge may use the Accessibility API and post key events. The first refusal shows macOS's prompt.
-    public func isTrusted() -> Bool {
-        guard access.isTrusted(prompt: !prompted) else {
+    /// Whether fudge may use the Accessibility API and post key events, and on a refusal, whether it's time to offer
+    /// the Accessibility pane. Only the first refusal asks for macOS's prompt.
+    public func check() -> AccessibilityCheck {
+        if access.isTrusted(prompt: !prompted) { return .trusted }
+        guard prompted else {
             prompted = true
+            return .refused(offerSettings: false)
+        }
+        guard !offered else { return .refused(offerSettings: false) }
+        offered = true
+        return .refused(offerSettings: true)
+    }
+
+    /// `check()` for the callers, which only need a yes or no. When it's time to offer the Accessibility pane, this
+    /// tells the app.
+    public func isTrusted() -> Bool {
+        switch check() {
+        case .trusted:
+            return true
+        case .refused(let offer):
+            if offer { offerSettings() }
             return false
         }
-        return true
     }
+}
+
+/// fudge's own alert for when macOS's Accessibility prompt didn't help (FUD-47). The app shows it; the words and the
+/// pane's address live here so a test pins them.
+public enum AccessibilitySettingsAlert {
+    public static let title = "Allow fudge to use Accessibility"
+    public static let text =
+        "fudge needs Accessibility permission to read the selected text and to paste. Turn fudge on in System "
+        + "Settings → Privacy & Security → Accessibility. If fudge is already in the list, select it, remove it with "
+        + "−, and add it again with +. An older build of fudge can leave an entry that no longer matches."
+    /// The default button (↵), which opens `paneURL`.
+    public static let openButton = "Open Accessibility Settings"
+    /// The other button (Esc).
+    public static let dismissButton = "Not Now"
+    /// System Settings → Privacy & Security → Accessibility.
+    public static let paneURL = URL(
+        string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
 }
 
 /// Posts the copy shortcut.
@@ -140,7 +189,7 @@ public final class SelectedText {
     private let ownPid: Int32
     private let copyTimeout: Duration
     private let pollInterval: Duration
-    /// macOS's Accessibility prompt is shown at most once per run, shared with `Paste`.
+    /// Shared with `Paste`: macOS's Accessibility prompt shows at most once per run, and fudge's own offer too.
     private let gate: AccessibilityGate
     /// The fallback in progress. Fallbacks run one at a time: one taking its snapshot while another's copy is on the
     /// pasteboard would restore the copied text instead of the user's clipboard.
