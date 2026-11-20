@@ -37,7 +37,8 @@ export type AppMessage =
     | { type: "event"; session: string; node: number; path: string[]; args: unknown[] }
     | { type: "pop"; session: string }
     | { type: "unload"; session: string }
-    | { type: "rpcResult"; session: string; id: number; result?: unknown; error?: string };
+    | { type: "rpcResult"; session: string; id: number; result?: unknown; error?: string }
+    | { type: "toastAction"; session: string; toast: number; action: "primary" | "secondary" };
 
 /** Worker → host; the host forwards these to the app with the session added. */
 export type WorkerMessage =
@@ -52,7 +53,8 @@ export type HostToWorker =
     | { type: "event"; node: number; path: string[]; args: unknown[] }
     | { type: "pop" }
     | { type: "unload" }
-    | { type: "rpcResult"; id: number; result?: unknown; error?: string };
+    | { type: "rpcResult"; id: number; result?: unknown; error?: string }
+    | { type: "toastAction"; toast: number; action: "primary" | "secondary" };
 
 /** Host → app. */
 export type HostMessage =
@@ -119,6 +121,15 @@ export function parseAppMessage(line: string): Parsed {
             if (id === undefined) return protocolError("`rpcResult` needs a numeric `id`");
             const error = typeof value.error === "string" ? value.error : undefined;
             return { ok: true, message: { type: "rpcResult", session: session!, id, result: value.result, error } };
+        }
+        case "toastAction": {
+            const problem = needsSession();
+            if (problem) return problem;
+            if (typeof value.toast !== "number") return protocolError("`toastAction` needs a numeric `toast`");
+            if (value.action !== "primary" && value.action !== "secondary") {
+                return protocolError("`toastAction` needs an `action` of `primary` or `secondary`");
+            }
+            return { ok: true, message: { type: "toastAction", session: session!, toast: value.toast, action: value.action } };
         }
         default:
             return protocolError(`unknown message type \`${value.type}\``, id);

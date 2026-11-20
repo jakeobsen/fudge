@@ -34,12 +34,41 @@ final class LauncherModel {
     var selectedItem: String?
     /// A line for the bottom bar, e.g. "Running Create Scratch…".
     private(set) var status: String?
+
+    /// A toast an extension showed: what the bottom bar displays instead of the title.
+    struct ToastState: Equatable {
+        var session: String
+        var id: Int
+        var title: String
+        var message: String?
+        /// "SUCCESS", "FAILURE" or "ANIMATED".
+        var style: String
+        var primaryAction: String?
+        var secondaryAction: String?
+    }
+
+    private(set) var toast: ToastState?
+    @ObservationIgnored private var toastExpiry: Task<Void, Never>?
     private var rootQuery = ""
 
     /// Hides the panel; set by the app delegate.
     @ObservationIgnored var hide: () -> Void = {}
     /// Opens the Settings window on an extension's preferences; set by the app delegate.
     @ObservationIgnored var openSettings: (String) -> Void = { _ in }
+    /// Shows a HUD message; set by the app delegate.
+    @ObservationIgnored var showHUD: (String) -> Void = { _ in }
+    /// Whether the launcher panel is on screen; set by the app delegate.
+    @ObservationIgnored var isVisible: () -> Bool = { false }
+    /// Asks the user to confirm (title, message, primary, dismiss, destructive); set by the app delegate.
+    @ObservationIgnored var confirm: (AlertRequest) async -> Bool = { _ in false }
+
+    struct AlertRequest {
+        var title: String
+        var message: String?
+        var primary: String
+        var dismiss: String
+        var destructive: Bool
+    }
 
     @ObservationIgnored private let paths: FudgePaths
     @ObservationIgnored private var items: [RootItem] = []
@@ -200,9 +229,7 @@ final class LauncherModel {
             } else if command.failure == nil, !command.searchText.isEmpty {
                 searchText = ""
             } else {
-                send(.unload(session: command.session))
-                screen = .root
-                status = nil
+                leaveCommand()
             }
         }
     }
@@ -388,6 +415,14 @@ final class LauncherModel {
             case "preferences.openExtension", "preferences.openCommand":
                 if let extensionName = sessionExtensions[session] { openSettings(extensionName) }
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
+            case "toast.show", "toast.hide", "hud.show", "window.close", "window.popToRoot", "searchBar.clear":
+                windowCall(method, params, session: session)
+                send(.rpcResult(session: session, id: id, result: .null, error: nil))
+            case "alert.confirm":
+                Task {
+                    let confirmed = await confirm(Self.alertRequest(params))
+                    send(.rpcResult(session: session, id: id, result: .bool(confirmed), error: nil))
+                }
             default:
                 Task {
                     do {
@@ -408,6 +443,110 @@ final class LauncherModel {
         case .pong, .unknown:
             break
         }
+    }
+
+    // MARK: - Toasts, the HUD and the window
+
+    private func windowCall(_ method: String, _ params: JSONValue, session: String) {
+        let values: [String: JSONValue]
+        if case .object(let object) = params { values = object } else { values = [:] }
+        func string(_ key: String) -> String? { if case .string(let value) = values[key] { value } else { nil } }
+        func flag(_ key: String) -> Bool { values[key] == .bool(true) }
+        func actionTitle(_ key: String) -> String? {
+            if case .object(let action) = values[key], case .string(let title) = action["title"] { title } else { nil }
+        }
+
+        switch method {
+        case "toast.show":
+            guard case .number(let id) = values["id"] else { return }
+            let toast = ToastState(
+                session: session,
+                id: Int(id),
+                title: string("title") ?? "",
+                message: string("message"),
+                style: string("style") ?? "SUCCESS",
+                primaryAction: actionTitle("primaryAction"),
+                secondaryAction: actionTitle("secondaryAction")
+            )
+            if isVisible() {
+                self.toast = toast
+                expireToast(toast)
+            } else if toast.style != "ANIMATED" {
+                // With the window closed, a finished toast still deserves to be seen.
+                showHUD([toast.title, toast.message].compactMap { $0 }.joined(separator: " — "))
+            }
+        case "toast.hide":
+            if case .number(let id) = values["id"], toast?.id == Int(id), toast?.session == session { toast = nil }
+        case "hud.show":
+            closeWindow(clearRootSearch: flag("clearRootSearch"), popToRootType: string("popToRootType"))
+            showHUD(string("title") ?? "")
+        case "window.close":
+            closeWindow(clearRootSearch: flag("clearRootSearch"), popToRootType: string("popToRootType"))
+        case "window.popToRoot":
+            leaveCommand()
+            if flag("clearSearchBar") { rootQuery = "" }
+            refreshResults()
+        case "searchBar.clear":
+            searchText = ""
+        default:
+            break
+        }
+    }
+
+    /// Success and failure toasts go away after a few seconds; an animated one stays until it changes.
+    private func expireToast(_ shown: ToastState) {
+        toastExpiry?.cancel()
+        guard shown.style != "ANIMATED" else { return }
+        toastExpiry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(shown.primaryAction == nil ? 3 : 6))
+            guard !Task.isCancelled, let self, self.toast == shown else { return }
+            self.toast = nil
+        }
+    }
+
+    /// Runs the shown toast's primary action (clicking the toast).
+    func runToastAction() {
+        guard let toast, toast.primaryAction != nil else { return }
+        send(.toastAction(session: toast.session, toast: toast.id, action: "primary"))
+    }
+
+    private func closeWindow(clearRootSearch: Bool, popToRootType: String?) {
+        if popToRootType == "immediate" { leaveCommand() }
+        if clearRootSearch {
+            rootQuery = ""
+            refreshResults()
+        }
+        hide()
+    }
+
+    /// Unloads the visible command, if any, and shows root search.
+    private func leaveCommand() {
+        if case .command(let command) = screen { send(.unload(session: command.session)) }
+        screen = .root
+        status = nil
+        toast = nil
+    }
+
+    static func alertRequest(_ params: JSONValue) -> AlertRequest {
+        var values: [String: JSONValue] = [:]
+        if case .object(let object) = params { values = object }
+        func action(_ key: String) -> (title: String?, style: String?) {
+            guard case .object(let action) = values[key] else { return (nil, nil) }
+            let title: String? = if case .string(let title) = action["title"] { title } else { nil }
+            let style: String? = if case .string(let style) = action["style"] { style } else { nil }
+            return (title, style)
+        }
+        let primary = action("primaryAction")
+        let dismiss = action("dismissAction")
+        let title: String = if case .string(let title) = values["title"] { title } else { "" }
+        let message: String? = if case .string(let message) = values["message"] { message } else { nil }
+        return AlertRequest(
+            title: title,
+            message: message,
+            primary: primary.title ?? "OK",
+            dismiss: dismiss.title ?? "Cancel",
+            destructive: primary.style == "destructive"
+        )
     }
 
     private func log(_ session: String, _ level: String, _ message: String) {

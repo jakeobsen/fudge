@@ -69,10 +69,14 @@ struct LauncherView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 8) {
-            Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 16, height: 16)
-            Text(model.status ?? screenTitle)
-                .lineLimit(1)
-                .foregroundStyle(.secondary)
+            if let toast = model.toast {
+                ToastView(toast: toast).onTapGesture { model.runToastAction() }
+            } else {
+                Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 16, height: 16)
+                Text(model.status ?? screenTitle)
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+            }
             Spacer()
             if let label = primaryLabel {
                 Text(label).foregroundStyle(.primary)
@@ -236,6 +240,33 @@ private struct FailureView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(20)
         }
+    }
+}
+
+/// A toast in the bottom bar: the style's mark, the title, the message, and the primary action's name.
+private struct ToastView: View {
+    let toast: LauncherModel.ToastState
+
+    var body: some View {
+        HStack(spacing: 6) {
+            switch toast.style {
+            case "ANIMATED":
+                ProgressView().controlSize(.mini)
+            case "FAILURE":
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.red)
+            default:
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            }
+            Text(toast.title).fontWeight(.medium).lineLimit(1)
+            if let message = toast.message {
+                Text(message).foregroundStyle(.secondary).lineLimit(1)
+            }
+            if let action = toast.primaryAction {
+                Text("· \(action)").foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .contentShape(Rectangle())
+        .help(toast.primaryAction.map { "Click to \($0)" } ?? "")
     }
 }
 

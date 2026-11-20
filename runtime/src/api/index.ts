@@ -27,3 +27,15 @@ export {
     showInFinder,
     trash,
 } from "./system.ts";
+export {
+    Alert,
+    AlertActionStyle,
+    Toast,
+    ToastStyle,
+    clearSearchBar,
+    closeMainWindow,
+    confirmAlert,
+    popToRoot,
+    showHUD,
+    showToast,
+} from "./feedback.ts";

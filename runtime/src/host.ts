@@ -108,6 +108,9 @@ input.on("line", (line) => {
             return;
         case "unload":
             return unload(message.session, session);
+        case "toastAction":
+            session.worker.postMessage({ type: "toastAction", toast: message.toast, action: message.action } satisfies HostToWorker);
+            return;
         case "rpcResult":
             session.worker.postMessage({
                 type: "rpcResult",

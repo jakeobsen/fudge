@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var panel: LauncherPanel!
     private var hotKey: HotKey?
     private var settingsWindow: SettingsWindowController!
+    private let hud = HUDWindow()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         model = LauncherModel(paths: paths)
@@ -18,8 +19,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow = SettingsWindowController(model: SettingsModel(paths: paths))
         model.hide = { [weak self] in self?.hidePanel() }
         model.openSettings = { [weak self] name in self?.settingsWindow.show(extension: name) }
+        model.showHUD = { [weak self] title in self?.hud.show(title) }
+        model.isVisible = { [weak self] in self?.panel.isVisible ?? false }
+        model.confirm = { [weak self] request in await self?.confirm(request) ?? false }
         panel.onEscape = { [weak self] in self?.model.escape() }
-        panel.onResign = { [weak self] in self?.hidePanel() }
+        panel.onResign = { [weak self] in
+            // An alert sheet takes the keyboard; that's not the user leaving.
+            guard let self, self.panel.attachedSheet == nil else { return }
+            self.hidePanel()
+        }
 
         let settings = FudgeSettings.load(from: paths.settingsFile)
         let spec = settings.hotkey.flatMap(HotKeySpec.parse) ?? .default
@@ -67,6 +75,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func hidePanel() {
         guard panel.isVisible else { return }
         panel.orderOut(nil)
+    }
+
+    /// confirmAlert: a sheet on the panel when it's open, otherwise a standalone alert.
+    private func confirm(_ request: LauncherModel.AlertRequest) async -> Bool {
+        let alert = NSAlert()
+        alert.messageText = request.title
+        alert.informativeText = request.message ?? ""
+        let primary = alert.addButton(withTitle: request.primary)
+        primary.hasDestructiveAction = request.destructive
+        alert.addButton(withTitle: request.dismiss)
+        if panel.isVisible {
+            return await withCheckedContinuation { continuation in
+                alert.beginSheetModal(for: panel) { response in
+                    continuation.resume(returning: response == .alertFirstButtonReturn)
+                }
+            }
+        }
+        NSApp.activate()
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     @objc private func reloadExtensions() {
