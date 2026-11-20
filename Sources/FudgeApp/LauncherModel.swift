@@ -241,7 +241,21 @@ final class LauncherModel {
                 openSettings(extensionName)
                 return
             }
-            launch(item.title, of: extensionName, entry: entry, mode: mode, preferences: preferences.values)
+            let environment = LaunchEnvironment.make(
+                for: installed,
+                command: command,
+                paths: paths,
+                appearance: NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+                    ? "dark" : "light"
+            )
+            launch(
+                item.title,
+                of: extensionName,
+                entry: entry,
+                mode: mode,
+                preferences: preferences.values,
+                environment: environment
+            )
         }
     }
 
@@ -250,7 +264,8 @@ final class LauncherModel {
         of extensionName: String,
         entry: URL,
         mode: String,
-        preferences: [String: JSONValue]
+        preferences: [String: JSONValue],
+        environment: LaunchEnvironment
     ) {
         let host: ExtensionHost
         do {
@@ -368,14 +383,20 @@ final class LauncherModel {
                 screen = .command(command)
             }
 
-        case .rpc(let session, let id, let method, _):
+        case .rpc(let session, let id, let method, let params):
             switch method {
             case "preferences.openExtension", "preferences.openCommand":
                 if let extensionName = sessionExtensions[session] { openSettings(extensionName) }
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
             default:
-                // The other APIs that call into the app arrive with later work; until then, fail clearly.
-                send(.rpcResult(session: session, id: id, result: nil, error: "\(method) isn't available in fudge yet"))
+                Task {
+                    do {
+                        let result = try await SystemCalls.handle(method, params)
+                        send(.rpcResult(session: session, id: id, result: result, error: nil))
+                    } catch {
+                        send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
+                    }
+                }
             }
 
         case .log(let session, let level, let message):

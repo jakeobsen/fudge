@@ -6,6 +6,7 @@
 // when it launched it; the host strips it on the way to that command's
 // worker and adds it on the way back.
 
+import type { LaunchEnvironment } from "./api/launch.ts";
 import type { RpcRequest } from "./bridge.ts";
 import type { UINode } from "./renderer/serialize.ts";
 
@@ -30,6 +31,8 @@ export type AppMessage =
           launchProps?: LaunchProps;
           /** Resolved preference values for the command. */
           preferences?: Record<string, unknown>;
+          /** Facts for `environment` and where LocalStorage and Cache live. */
+          environment?: Partial<LaunchEnvironment>;
       }
     | { type: "event"; session: string; node: number; path: string[]; args: unknown[] }
     | { type: "pop"; session: string }
@@ -88,9 +91,10 @@ export function parseAppMessage(line: string): Parsed {
             }
             const launchProps = isObject(value.launchProps) ? (value.launchProps as LaunchProps) : undefined;
             const preferences = isObject(value.preferences) ? value.preferences : undefined;
+            const environment = isObject(value.environment) ? (value.environment as Partial<LaunchEnvironment>) : undefined;
             return {
                 ok: true,
-                message: { type: "launch", session: session!, entry: value.entry, mode: value.mode, launchProps, preferences },
+                message: { type: "launch", session: session!, entry: value.entry, mode: value.mode, launchProps, preferences, environment },
             };
         }
         case "event": {

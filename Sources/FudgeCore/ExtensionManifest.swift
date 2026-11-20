@@ -6,6 +6,8 @@ public struct ExtensionManifest: Sendable, Equatable, Decodable {
     public var title: String
     public var description: String?
     public var icon: String?
+    /// Raycast's `owner` (an organisation) or else `author`, for `environment.ownerOrAuthorName`.
+    public var ownerOrAuthorName: String
     public var commands: [Command]
     public var preferences: [Preference]
     /// True when `dependencies` or `devDependencies` lists anything.
@@ -69,7 +71,7 @@ public struct ExtensionManifest: Sendable, Equatable, Decodable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case name, title, description, icon, commands, preferences, dependencies, devDependencies
+        case name, title, description, icon, owner, author, commands, preferences, dependencies, devDependencies
     }
 
     public init(from decoder: Decoder) throws {
@@ -78,6 +80,9 @@ public struct ExtensionManifest: Sendable, Equatable, Decodable {
         title = try container.decodeIfPresent(String.self, forKey: .title) ?? name
         description = try container.decodeIfPresent(String.self, forKey: .description)
         icon = try container.decodeIfPresent(String.self, forKey: .icon)
+        ownerOrAuthorName =
+            (try? container.decodeIfPresent(String.self, forKey: .owner))
+            ?? (try? container.decodeIfPresent(String.self, forKey: .author)) ?? ""
         commands = try container.decodeIfPresent([Command].self, forKey: .commands) ?? []
         preferences = try container.decodeIfPresent([Preference].self, forKey: .preferences) ?? []
         let dependencies = try container.decodeIfPresent([String: String].self, forKey: .dependencies) ?? [:]

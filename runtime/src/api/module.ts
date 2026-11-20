@@ -8,60 +8,11 @@
 
 import * as implementation from "./index.ts";
 import { RAYCAST_EXPORTS } from "./raycast-exports.generated.ts";
+import { notAvailable } from "./stubs.ts";
 
-export class NotAvailableError extends Error {
-    readonly api: string;
-    constructor(api: string) {
-        super(`${api} isn't available in fudge yet`);
-        this.name = "NotAvailableError";
-        this.api = api;
-    }
-}
+export { NotAvailableError, notAvailable } from "./stubs.ts";
 
 const known = new Set(RAYCAST_EXPORTS);
-
-// Keys that JavaScript itself or React read from any value they're handed.
-// For these the stub answers `undefined` instead of producing another stub.
-const transparent = new Set([
-    "$$typeof",
-    "prototype",
-    "displayName",
-    "defaultProps",
-    "propTypes",
-    "contextType",
-    "contextTypes",
-    "childContextTypes",
-    "getDerivedStateFromProps",
-    "getDerivedStateFromError",
-    "then",
-    "toJSON",
-    "constructor",
-    "name",
-    "length",
-    "call",
-    "apply",
-    "bind",
-    "_payload",
-    "_init",
-    "render",
-    "compare",
-    "type",
-]);
-
-/** A stand-in for the missing API `name`: calling it, or reading a member, throws. */
-export function notAvailable(name: string): unknown {
-    const fail = () => {
-        throw new NotAvailableError(name);
-    };
-    return new Proxy(function () {}, {
-        apply: fail,
-        construct: fail,
-        get(_target, key) {
-            if (typeof key === "symbol" || transparent.has(key)) return undefined;
-            throw new NotAvailableError(`${name}.${key}`);
-        },
-    });
-}
 
 const wrappers = new WeakMap<object, unknown>();
 

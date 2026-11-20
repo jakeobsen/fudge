@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { raycastEnums, raycastExports, renderEnums, renderExports } from "../scripts/raycast-types.ts";
+import { raycastEnums, raycastExports, renderEnums, renderExports, vendoredVersion } from "../scripts/raycast-types.ts";
 import * as implementation from "../src/api/index.ts";
 import { createApiModule, NotAvailableError } from "../src/api/module.ts";
 import { RAYCAST_EXPORTS } from "../src/api/raycast-exports.generated.ts";
@@ -11,7 +11,7 @@ const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.m
 const types = read("../vendor/raycast-api/index.d.ts");
 
 test("the generated files match the vendored type definitions", () => {
-    assert.equal(read("../src/api/raycast-exports.generated.ts"), renderExports(raycastExports(types)), "run `npm run generate`");
+    assert.equal(read("../src/api/raycast-exports.generated.ts"), renderExports(raycastExports(types), vendoredVersion()), "run `npm run generate`");
     assert.equal(read("../src/api/raycast-enums.generated.ts"), renderEnums(raycastEnums(types)), "run `npm run generate`");
     assert.ok(RAYCAST_EXPORTS.includes("List") && RAYCAST_EXPORTS.includes("showToast"));
 });
