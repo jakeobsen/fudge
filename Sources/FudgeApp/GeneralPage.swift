@@ -45,12 +45,8 @@ struct GeneralPage: View {
             }
             Section("Calculator") {
                 Toggle(isOn: Binding(get: { model.currencyRates }, set: { model.setCurrencyRates($0) })) {
-                    Text("Currency conversion: download exchange rates from the European Central Bank once a day")
-                    Text(
-                        "Apart from the images extensions show, this is the only connection fudge makes on its own. It "
-                            + "downloads one public file; like any "
-                            + "download, the server sees your IP address, and nothing else is sent."
-                    )
+                    Text("Currency conversion")
+                    Text("fudge downloads exchange rates from the European Central Bank once a day.")
                 }
                 .toggleStyle(.checkbox)
                 Picker(
@@ -64,6 +60,13 @@ struct GeneralPage: View {
                     Text("Number format")
                     Text("How the calculator reads the numbers you type, and writes its answers.")
                 }
+            }
+            Section("Extension Store") {
+                Toggle(isOn: Binding(get: { model.extensionStore }, set: { model.setExtensionStore($0) })) {
+                    Text("Extension Store: browse and install extensions from github.com/raycast/extensions")
+                    Text("Off until you turn it on. Turning it on explains what it downloads and asks you first.")
+                }
+                .toggleStyle(.checkbox)
             }
             Section("Search") {
                 LabeledContent {
