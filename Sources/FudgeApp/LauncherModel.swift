@@ -108,6 +108,8 @@ final class LauncherModel {
     @ObservationIgnored var openSettings: (String?) -> Void = { _ in }
     /// Downloads the exchange rates again at once (↵ on the "Couldn't download exchange rates" card).
     @ObservationIgnored var retryExchangeRates: () -> Void = {}
+    /// The menu bar item's "Reload Extensions", for root search's item of that name; set by the app delegate.
+    @ObservationIgnored var reloadAll: () -> Void = {}
     /// Shows a HUD message; set by the app delegate.
     @ObservationIgnored var showHUD: (String) -> Void = { _ in }
     /// Whether the launcher panel is on screen; set by the app delegate.
@@ -1283,6 +1285,15 @@ final class LauncherModel {
             recordLaunch(item.id)
             searchText = ""
             showSettings(extension: nil)
+        case .reloadExtensions:
+            recordLaunch(item)
+            searchText = ""
+            reloadAll()
+        case .quit:
+            recordLaunch(item)
+            Task {
+                if await confirm(Self.quitRequest) { NSApp.terminate(nil) }
+            }
         case .command(let extensionName, let commandName, _, _):
             guard let installed = extensions[extensionName],
                 let command = installed.manifest.commands.first(where: { $0.name == commandName })
@@ -1316,6 +1327,20 @@ final class LauncherModel {
         history.record(id)
         try? history.save(to: paths.historyFile)
     }
+
+    /// Records a root item's launch, unless it's one that never counts (`RootItem.recordsLaunch`: Quit).
+    private func recordLaunch(_ item: RootItem) {
+        if item.recordsLaunch { recordLaunch(item.id) }
+    }
+
+    /// "Quit fudge" asks first: its hotkeys stop working until fudge is opened again.
+    private static let quitRequest = AlertRequest(
+        title: "Quit fudge?",
+        message: "Its hotkeys stop working until you open it again.",
+        primary: "Quit",
+        dismiss: "Cancel",
+        destructive: false
+    )
 
     /// What a command needs before it launches: its preferences (with the required ones that aren't set in
     /// `missing`) and its environment. Root search and `launchCommand` both prepare launches here, and a
@@ -1812,6 +1837,10 @@ final class LauncherModel {
             image = NSWorkspace.shared.icon(forFile: url.path)
         case .settings:
             image = NSApp.applicationIconImage
+        case .reloadExtensions:
+            image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)!
+        case .quit:
+            image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)!
         case .command:
             image =
                 item.iconFile.flatMap(NSImage.init(contentsOf:))
