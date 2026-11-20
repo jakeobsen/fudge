@@ -78,7 +78,7 @@ fudge makes no connections of its own, with one exception you turn on yourself: 
 
 ### Menu bar commands
 
-An extension's menu bar command puts its own item in the menu bar. Run it from root search to turn it on, and the item stays there, across restarts, until you select the command in root search and pick **Deactivate Menu Bar Item** from ⌘K. Running it again from root search refreshes it and opens its menu. The command refreshes itself in the background at fudge's start and as often as its extension asks, and again each time you open its menu. When a background refresh fails, the item keeps what it showed last and its menu ends with "⚠ Last refresh failed". fudge shows at most 50 of these items. The active ones are listed in `menu-bar.json` in fudge's support folder.
+An extension's menu bar command puts its own item in the menu bar. Run it from root search to turn it on, and the item stays there, across restarts, until you select the command in root search and pick **Deactivate Menu Bar Item** from ⌘K. Running it again from root search refreshes it and opens its menu. The command refreshes itself in the background at fudge's start and as often as its extension asks, and again each time you open its menu. When a background refresh fails, the item keeps what it showed last and its menu ends with "⚠ Last refresh failed". fudge shows at most 50 of these items.
 
 ### Selected text and Finder items
 
