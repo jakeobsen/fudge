@@ -13,7 +13,7 @@ fudge is an independent project. It is not affiliated with or endorsed by Raycas
 
 ## Building
 
-You need macOS 14 or later, Xcode 16 or later (Swift 6) and Node.js 22.18 or later.
+You need macOS 14 or later, Xcode 26 or later and Node.js 22.18 or later. The app runs on macOS 14 and later.
 
 ```bash
 make app     # build build/Fudge.app

@@ -49,6 +49,10 @@ app: build
 	@cp '$(SWIFT_BIN)/FudgeApp' '$(APP)/Contents/MacOS/Fudge'
 	@cp '$(SWIFT_BIN)/fudge' '$(ESBUILD)' '$(APP)/Contents/Helpers/'
 	@cp App/Info.plist '$(APP)/Contents/Info.plist'
+	@xcrun actool App/AppIcon.icon --compile '$(APP)/Contents/Resources' --app-icon AppIcon \
+		--platform macosx --target-device mac --minimum-deployment-target 14.0 \
+		--output-partial-info-plist build/AppIcon.plist >/dev/null
+	@test -f '$(APP)/Contents/Resources/Assets.car' || { printf 'actool could not compile App/AppIcon.icon (needs Xcode 26 or later)\n'; exit 1; }
 	@plutil -replace CFBundleShortVersionString -string '$(VERSION)' '$(APP)/Contents/Info.plist'
 	@cp runtime/dist/host.js runtime/dist/worker.js '$(APP)/Contents/Resources/runtime/'
 	@codesign --force --sign - '$(APP)'/Contents/Helpers/* 2>/dev/null

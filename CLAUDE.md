@@ -30,6 +30,7 @@ fudge is a keyboard launcher for macOS, built to run extensions written for Rayc
   - the `FudgeApp` binary becomes `Contents/MacOS/Fudge`
   - the `fudge` tool and esbuild's native binary go into `Contents/Helpers/`, where `ExtensionBuilder.locateEsbuild` finds esbuild next to the tool
   - `App/Info.plist` gets the version from `git describe`
+  - `App/AppIcon.icon` (an Icon Composer icon) is compiled by `actool` into `Assets.car` and an `AppIcon.icns` fallback. That needs Xcode 26 or later.
   - the host and worker bundles go into `Contents/Resources/runtime/`
   - the helpers and the bundle are signed ad hoc
 - **`runtime/vendor/raycast-api/index.d.ts` is Raycast's own type definitions** (MIT, notice alongside). It's the contract fudge implements. `make raycast-types` copies it unmodified from the `@raycast/api` release named by `RAYCAST_API_VERSION`. Never edit it by hand.
