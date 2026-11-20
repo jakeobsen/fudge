@@ -80,6 +80,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        SystemCalls.accessibilitySettingsOffer = AccessibilitySettingsOffer(
+            panel: panel, restoreKeyboard: { [weak self] in self?.model.restoreKeyboard() })
+
         // Snapshots never download; the app checks the rates now and every hour.
         exchangeRateSchedule.start(exchangeRates)
 
