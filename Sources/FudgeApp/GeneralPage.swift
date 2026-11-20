@@ -48,7 +48,7 @@ struct GeneralPage: View {
                     Text("Currency conversion")
                     Text("fudge downloads exchange rates from the European Central Bank once a day.")
                 }
-                .toggleStyle(.checkbox)
+                .toggleStyle(.switch)
                 Picker(
                     selection: Binding(get: { model.numberFormat }, set: { model.setNumberFormat($0) })
                 ) {
