@@ -43,14 +43,21 @@ final class SystemAccessibility: AccessibilityAccess {
     }
 }
 
-/// Posts ⌘C to an app.
+/// Posts ⌘C and ⌘V to an app.
 @MainActor
-final class SystemCopyKey: CopyKeyPoster {
+final class SystemCopyKey: CopyKeyPoster, PasteKeyPoster {
     func postCopy(to pid: Int32) {
+        post(CGKeyCode(CopyKey.keyCode(translate: Self.charactersWithCommand)), to: pid)
+    }
+
+    func postPaste(to pid: Int32) {
+        post(CGKeyCode(PasteKey.keyCode(translate: Self.charactersWithCommand)), to: pid)
+    }
+
+    private func post(_ key: CGKeyCode, to pid: Int32) {
         // A private source with explicit flags: modifiers the user is still holding (⌥ from ⌥Space, ⇧ from a ⌘⇧
-        // shortcut) don't merge in and turn it into ⌥⌘C or ⇧⌘C.
+        // shortcut) don't merge in and turn it into ⌥⌘C or ⇧⌘V.
         let source = CGEventSource(stateID: .privateState)
-        let key = CGKeyCode(CopyKey.keyCode(translate: Self.charactersWithCommand))
         for down in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down) else { continue }
             event.flags = .maskCommand

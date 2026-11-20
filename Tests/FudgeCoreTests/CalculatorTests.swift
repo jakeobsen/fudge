@@ -127,6 +127,75 @@ func floatingPointNoiseDoesNotShow(_ query: String, _ us: String, _ dk: String) 
     #expect(try #require(calculate("1/(3*10^7)", enDK)).copyText == "3,33333333333333E-8")
 }
 
+// MARK: - Scientific notation
+
+@Test func aNumberWithAnExponentIsOneToken() {
+    // As the card writes it, in each locale.
+    #expect(Arithmetic.tokenize("1.152921505E18", commaIsDecimal: false) == [.number(1.152921505e18)])
+    #expect(Arithmetic.tokenize("1,152921505E18", commaIsDecimal: true) == [.number(1.152921505e18)])
+    #expect(Arithmetic.tokenize("3.333333333E-8", commaIsDecimal: false) == [.number(3.333333333e-8)])
+    #expect(Arithmetic.tokenize("1e-7") == [.number(1e-7)])
+    #expect(Arithmetic.tokenize("6.02e+23") == [.number(6.02e23)])
+    #expect(Arithmetic.tokenize("2e+1") == [.number(20)], "a digit after the sign: an exponent, as in code")
+    #expect(Arithmetic.tokenize("1,000e3", commaIsDecimal: false) == [.number(1e6)], "grouping before the exponent")
+    // No digit straight after the e (and sign), or a space inside: the constant e.
+    #expect(Arithmetic.tokenize("2e") == [.number(2), .name("e")])
+    #expect(Arithmetic.tokenize("2e + 1") == [.number(2), .name("e"), .symbol("+"), .number(1)])
+    #expect(Arithmetic.tokenize("2e+ 1") == [.number(2), .name("e"), .symbol("+"), .number(1)])
+    #expect(Arithmetic.tokenize("2 e3") == [.number(2), .name("e"), .number(3)])
+    #expect(Arithmetic.tokenize("1e3e") == [.number(1000), .name("e")], "an exponent's e isn't read again")
+    #expect(Arithmetic.tokenize("2exp(0)") == [.number(2), .name("exp"), .symbol("("), .number(0), .symbol(")")])
+}
+
+@Test(arguments: [
+    ("1e-7*3", 3e-7, "3E-7", "3E-7"),
+    ("2.5E3 + 1", 2501, "2,501", "2.501"),
+    ("6.02e+23 / 2", 3.01e23, "3.01E23", "3,01E23"),
+    ("2e", 2 * M_E, "5.436563657", "5,436563657"),
+    ("2e + 1", 2 * M_E + 1, "6.436563657", "6,436563657"),
+    ("2e+1 * 2", 40, "40", "40"),
+    ("1e3e", 1000 * M_E, "2,718.281828", "2.718,281828"),
+    ("e^2", M_E * M_E, "7.389056099", "7,389056099"),
+    ("-1e2^2", -10000, "-10,000", "-10.000"),
+    ("1.152921505E18 * 2", 2.30584301e18, "2.30584301E18", "2,30584301E18"),
+])
+func scientificNotationInEachLocale(_ query: String, _ value: Double, _ us: String, _ dk: String) throws {
+    let american = try #require(calculate(query, enUS))
+    #expect(american.kind == .arithmetic)
+    #expect(american.answer == us)
+    let result = try #require(Arithmetic.evaluate(query, commaIsDecimal: false))
+    #expect(Swift.abs(result - value) <= Swift.abs(value) * 1e-12)
+    // en_DK reads `.` as a decimal point too, and writes `,`.
+    #expect(try #require(calculate(query, enDK)).answer == dk)
+    #expect(try #require(calculate(query.replacingOccurrences(of: ".", with: ","), enDK)).answer == dk)
+}
+
+@Test(arguments: [
+    "2.5E3", "1e-7", "2e+1", "-1e2", "1.152921505E18", "1e400", "1e400 + 1", "1e308*10", "-1e400*1",
+])
+func scientificNotationWithoutACard(_ query: String) {
+    // A lone number, with or without an exponent, isn't a calculation; nor is a result that overflows.
+    #expect(calculate(query, enUS) == nil)
+    #expect(calculate(query, enDK) == nil)
+}
+
+@Test func theCardsOwnAnswerCanBeCalculatedWith() throws {
+    let huge = try #require(calculate("2^60", enUS))
+    let again = try #require(calculate(huge.answer + " * 2", enUS))
+    #expect(again.answer == "2.30584301E18")
+    let copied = try #require(calculate(huge.copyText + " / 2^60", enUS))
+    #expect(copied.answer == "1")
+    let dk = try #require(calculate("2^60", enDK))
+    #expect(try #require(calculate(dk.answer + " * 2", enDK)).answer == "2,30584301E18")
+}
+
+@Test func conversionsReadAnExponent() throws {
+    #expect(try #require(calculate("1e3 kg to lb", enUS)).answer == "2,204.622622 lb")
+    #expect(try #require(calculate("1e3 kg to lb", enDK)).answer == "2.204,622622 lb")
+    #expect(try #require(calculate("1,5E3 kg to lb", enDK)).answer == "3.306,933933 lb")
+    #expect(try #require(calculate("2.5e-3 km to m", enUS)).answer == "2.5 m")
+}
+
 @Test func readingCommasDependsOnTheLocale() throws {
     #expect(try #require(calculate("1,000+1", enUS)).answer == "1,001", "grouping where `.` is the decimal")
     #expect(try #require(calculate("1,234,567.5+0.5", enUS)).copyText == "1234568")

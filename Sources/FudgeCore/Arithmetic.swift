@@ -54,9 +54,12 @@ public enum Arithmetic {
 
     /// A number as typed. Where the locale's decimal separator is `,`, both `,` and `.` are decimal points and
     /// there's no grouping. Otherwise `.` is the decimal point, and `,` groups when every group after the first
-    /// has three digits (`1,000`, `1,234,567.5`); any other single `,` is a decimal point (`13,5`).
+    /// has three digits (`1,000`, `1,234,567.5`); any other single `,` is a decimal point (`13,5`). An exponent
+    /// (`2.5E3`, `1e-7`) follows the digits, and the separators are read before it (`1,152921505E18` in en_DK).
     public static func number(_ literal: String, commaIsDecimal: Bool) -> Double? {
-        var text = literal
+        let exponentStart = literal.firstIndex { $0 == "e" || $0 == "E" } ?? literal.endIndex
+        let exponent = literal[exponentStart...]
+        var text = String(literal[..<exponentStart])
         if commaIsDecimal {
             text = text.replacingOccurrences(of: ",", with: ".")
         } else if text.contains(",") {
@@ -71,7 +74,7 @@ public enum Arithmetic {
             }
         }
         guard text.filter({ $0 == "." }).count <= 1, text.contains(where: \.isNumber) else { return nil }
-        return Double(text.hasPrefix(".") ? "0" + text : text)
+        return Double((text.hasPrefix(".") ? "0" + text : text) + exponent)
     }
 
     static func tokenize(_ text: String, commaIsDecimal: Bool = true) -> [Token]? {
@@ -86,6 +89,7 @@ public enum Arithmetic {
                 while end < text.endIndex, text[end].isNumber || text[end] == "." || text[end] == "," {
                     end = text.index(after: end)
                 }
+                end = exponentEnd(text, from: end)
                 guard let number = number(String(text[index..<end]), commaIsDecimal: commaIsDecimal) else {
                     return nil
                 }
@@ -111,6 +115,19 @@ public enum Arithmetic {
             }
         }
         return tokens
+    }
+
+    /// Where a number's exponent ends, if one starts at `index`: `e` or `E`, an optional `+` or `-`, and at least one
+    /// digit, with no spaces anywhere (`1e-7`, `2.5E3`, `2e+1`). Otherwise `index` itself, and the `e` is read as
+    /// the constant: `2e` is 2 × e, `2e + 1` is 2 × e + 1, and in `1e3e` the second `e` is.
+    private static func exponentEnd(_ text: String, from index: String.Index) -> String.Index {
+        guard index < text.endIndex, text[index] == "e" || text[index] == "E" else { return index }
+        var digits = text.index(after: index)
+        if digits < text.endIndex, text[digits] == "+" || text[digits] == "-" { digits = text.index(after: digits) }
+        guard digits < text.endIndex, text[digits].isNumber else { return index }
+        var end = digits
+        while end < text.endIndex, text[end].isNumber { end = text.index(after: end) }
+        return end
     }
 
     private static func nextIsDigit(_ text: String, _ index: String.Index) -> Bool {

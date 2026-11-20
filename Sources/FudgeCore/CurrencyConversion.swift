@@ -23,7 +23,7 @@ public enum CurrencyConversion {
     nonisolated(unsafe) private static let separator = try! NSRegularExpression(
         pattern: #"(?<=\s)(?:to|in|=)(?=\s)"#)
     nonisolated(unsafe) private static let quantityPattern = try! NSRegularExpression(
-        pattern: #"^([^\d\s.,-]*)\s*(-?[\d.,]*\d)\s*([^\d\s.,-]*)$"#)
+        pattern: #"^([^\d\s.,-]*)\s*(-?[\d.,]*\d(?:[eE][+-]?\d+)?)\s*([^\d\s.,-]*)$"#)
 
     /// The conversion `text` asks for, or nil. The amount is read like the calculator's numbers.
     public static func parse(_ text: String, locale: Locale) -> Query? {

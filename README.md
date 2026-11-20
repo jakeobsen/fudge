@@ -7,7 +7,7 @@ fudge is an independent project. It is not affiliated with or endorsed by Raycas
 ## What's here
 
 - `Sources/FudgeApp`: the macOS app. It runs in the menu bar, without a Dock icon.
-- `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for fudge.
+- `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for fudge. A running fudge picks up an extension you install, rebuild or remove within a second, with nothing to reload.
 - `Sources/FudgeCore`: code shared by the app and the tool.
 - `runtime/`: the extension host. This is the Node.js program that runs extensions. The app talks to it over stdin/stdout.
 
@@ -92,7 +92,7 @@ Currency conversion is off until you turn it on under **Settings… → General*
 
 ### Network
 
-fudge makes no connections of its own, with one exception you turn on yourself: with currency conversion on, it downloads the European Central Bank's daily reference rates (`https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml`). It downloads that one public file when you turn the setting on, then when the rates are a day old, at most once every 12 hours. Like any download, the server sees your IP address, and nothing else is sent: no cookies and no identifier beyond `fudge/<version>` as the user agent. The rates are kept in `exchange-rates.json` in the support folder. Turning the setting off stops the downloads. Extensions make their own connections, as they do in Raycast.
+fudge makes no connections of its own (no updater, telemetry or crash reporting), with two exceptions: the images extensions show (see **Images from the web** below), and one you turn on yourself: with currency conversion on, it downloads the European Central Bank's daily reference rates (`https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml`). It downloads that one public file when you turn the setting on, then when the rates are a day old, at most once every 12 hours. Like any download, the server sees your IP address, and nothing else is sent: no cookies and no identifier beyond `fudge/<version>` as the user agent. The rates are kept in `exchange-rates.json` in the support folder. Turning the setting off stops the downloads. Extensions make their own connections, as they do in Raycast.
 
 ### Selected text and Finder items
 
@@ -107,6 +107,21 @@ When an app doesn't share its selection through Accessibility (often browsers an
 - fudge waits half a second for the copy. An app that answers ⌘C later than that copies after fudge has put your clipboard back, so the selected text ends up on your clipboard.
 
 Secure text fields, such as passwords, never give their text.
+
+### Images from the web
+
+When an extension uses an `https://` image (an icon, or an image in markdown), fudge downloads it on the extension's behalf, without cookies or credentials, and keeps it in `~/Library/Application Support/fudge/image-cache/` (up to 200 MB). A downloaded image is reused for a day, then checked for changes the next time it's shown.
+
+Loading an image tells the image's host your IP address and when you looked, as in a browser. Markdown that shows other people's content, such as issues or emails, can carry tracking images, as it can in Raycast or in a mail app that loads images. fudge doesn't load `http://` images, or images from your Mac (`localhost`) or the local network (`.local` names and private addresses).
+
+### Pasting
+
+Extensions can paste into the app you were in (`Clipboard.paste`, the Paste action). fudge puts the content on your clipboard, presses ⌘V in that app, and puts back what was on your clipboard about a second later. It needs the same Accessibility permission. Without it, the content stays on your clipboard for you to paste yourself.
+
+- fudge marks what it puts on the clipboard as transient, so clipboard history apps that follow [nspasteboard.org](http://nspasteboard.org) skip it.
+- If you copy something within that second, fudge leaves your new copy alone.
+- If your clipboard held a password that a password manager marked as concealed, fudge leaves the clipboard empty instead of putting the password back, for the same reason as above.
+- Apps that read the clipboard late, such as virtual machines or remote desktops that sync it, may paste what fudge put back instead of the content.
 
 ## License
 
