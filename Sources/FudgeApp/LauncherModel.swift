@@ -187,6 +187,7 @@ final class LauncherModel {
     /// aliases and hotkeys. Settings calls it after each change.
     func applySettings() {
         settings = FudgeSettings.load(from: paths.settingsFile)
+        panelReset.setting = settings.resetAfter
         let commands = installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
         items = RootSearch.applying(settings, to: commands) + RootSearch.builtInItems + applications
         refreshResults()
@@ -1851,6 +1852,8 @@ final class LauncherModel {
             refreshResults()
         }
         hide()
+        // "Suspended" keeps the command for when the panel opens again, however long it stays hidden.
+        if popToRootType == "suspended" { panelReset.suspend() }
     }
 
     /// Unloads the visible command, if any, and shows root search.

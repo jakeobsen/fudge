@@ -196,6 +196,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The launcher's hotkey: hides the panel, or shows it, starting over on root search after a long hide.
     private func togglePanel() {
         if panel.isVisible {
+            // A sheet on the panel (a `confirm`) is waiting for an answer: hiding it, and a reset after, would
+            // unload the command behind it.
+            guard panel.attachedSheet == nil else { return }
             hidePanel()
         } else {
             model.resetIfDue()

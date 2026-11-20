@@ -84,6 +84,12 @@ public final class PanelReset {
         hiddenAt = nil
     }
 
+    /// The extension that closed the panel asked fudge not to pop back to root (Raycast's
+    /// `PopToRootType.Suspended`): this hide never resets, however long it lasts. The next hide counts as usual.
+    public func suspend() {
+        hiddenAt = nil
+    }
+
     /// Whether the panel, hidden now, has been hidden long enough to reset before a path shows it. A yes forgets
     /// the hide, so asking twice resets once. A no keeps it: a no-view command run while hidden doesn't use it up.
     public func takeDue() -> Bool {
