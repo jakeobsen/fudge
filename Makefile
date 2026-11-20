@@ -61,6 +61,9 @@ app: build
 
 run: app
 	@pkill -x Fudge 2>/dev/null || true
+	@# open hands off to a Fudge that's still quitting and fails (-600), so wait for it to exit.
+	@for _ in $$(seq 50); do pgrep -x Fudge >/dev/null || break; sleep 0.1; done
+	@! pgrep -x Fudge >/dev/null || { printf 'the running Fudge did not quit\n'; exit 1; }
 	@open '$(APP)'
 
 install-extension: app
