@@ -55,7 +55,7 @@ struct CommandsPage: View {
     private var rows: [(installed: InstalledExtension, commands: [ExtensionManifest.Command])] {
         let query = search.trimmingCharacters(in: .whitespaces).lowercased()
         return model.allExtensions.compactMap { installed in
-            let commands = installed.manifest.commands.filter { $0.mode == "view" || $0.mode == "no-view" }
+            let commands = installed.manifest.commands.filter { ["view", "no-view", "menu-bar"].contains($0.mode) }
             guard !query.isEmpty else { return (installed, commands) }
             if installed.manifest.title.lowercased().contains(query) { return (installed, commands) }
             let matching = commands.filter { $0.title.lowercased().contains(query) }
@@ -83,6 +83,7 @@ struct CommandsPage: View {
                 isOn: Binding(get: { model.isEnabled(extension: name) }, set: { model.setEnabled($0, extension: name) })
             )
             .labelsHidden()
+            .accessibilityLabel("Enabled, \(installed.manifest.title)")
             .frame(width: 60)
         }
         .opacity(model.isEnabled(extension: name) ? 1 : 0.45)
@@ -113,6 +114,7 @@ struct CommandsPage: View {
                 "", isOn: Binding(get: { model.isEnabled(command: id) }, set: { model.setEnabled($0, command: id) })
             )
             .labelsHidden()
+            .accessibilityLabel("Enabled, \(command.title)")
             .frame(width: 60)
         }
         // A disabled command, or one of a disabled extension, is dimmed.

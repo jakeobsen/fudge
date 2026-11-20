@@ -29,6 +29,8 @@ export type Root = {
     /** Calls the function at `path` in the props of node `id`, as a discrete user event. */
     dispatch(id: number, path: readonly string[], args: readonly unknown[]): unknown;
     snapshot(): Snapshot;
+    /** Calls back once the snapshot of work already committed has been sent, or now when none is waiting. */
+    whenRendered(callback: () => void): void;
     unmount(): void;
 };
 
@@ -36,12 +38,14 @@ export class StaleCallbackError extends Error {}
 
 export function createRoot(options: RootOptions): Root {
     let scheduled = false;
+    const afterRender: (() => void)[] = [];
     const container = createContainer(() => {
         if (scheduled) return;
         scheduled = true;
         setImmediate(() => {
             scheduled = false;
             options.onRender(snapshot());
+            for (const callback of afterRender.splice(0)) callback();
         });
     });
 
@@ -93,6 +97,10 @@ export function createRoot(options: RootOptions): Root {
             return result;
         },
         snapshot,
+        whenRendered(callback) {
+            if (scheduled) afterRender.push(callback);
+            else callback();
+        },
         unmount() {
             // Synchronously, so effect cleanups have run when this returns.
             reconciler.updateContainerSync(null, fiberRoot, null, null);

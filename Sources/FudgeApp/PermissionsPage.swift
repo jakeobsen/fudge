@@ -111,7 +111,8 @@ struct AccessibilityControls: View {
     }
 }
 
-/// Settings → Permissions: what fudge needs from macOS, and Show Onboarding Again.
+/// Settings → Permissions: what fudge needs from macOS, the answers about extensions opening other extensions, and
+/// Show Onboarding Again.
 struct PermissionsPage: View {
     let model: SettingsModel
 
@@ -120,6 +121,7 @@ struct PermissionsPage: View {
             Section("Accessibility") {
                 AccessibilityControls(status: model.accessibility)
             }
+            LaunchPermissionsSection(model: model)
             Section {
                 LabeledContent {
                     Button("Show Onboarding Again") { model.showOnboarding() }
@@ -129,5 +131,62 @@ struct PermissionsPage: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// The answers to "Allow <A> to open <B>'s commands?": each can be changed, or forgotten so it's asked again.
+/// Always shown, so there's one place to look even before any extension has asked.
+struct LaunchPermissionsSection: View {
+    let model: SettingsModel
+
+    var body: some View {
+        Section {
+            if model.launchPermissionsUnreadable {
+                Text(LaunchPermissions.Unreadable().description).font(.callout).foregroundStyle(.red)
+            } else if model.launchPermissions.isEmpty {
+                Text("No extension has asked to open another yet.").foregroundStyle(.secondary)
+            }
+            ForEach(model.launchPermissions) { entry in
+                HStack(spacing: 6) {
+                    name(entry.caller)
+                    Image(systemName: "arrow.right").foregroundStyle(.secondary).imageScale(.small)
+                    name(entry.target)
+                    Spacer()
+                    Picker(
+                        "",
+                        selection: Binding(
+                            get: { entry.allowed },
+                            set: { model.setLaunchPermission($0, caller: entry.caller, target: entry.target) })
+                    ) {
+                        Text("Allowed").tag(true)
+                        Text("Not allowed").tag(false)
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    Button {
+                        model.forgetLaunchPermission(caller: entry.caller, target: entry.target)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Forget: ask again the next time")
+                }
+                .disabled(model.launchPermissionsUnreadable)
+            }
+        } header: {
+            Text("Extensions that open other extensions")
+        } footer: {
+            Text("When one extension opens another, Fudge asks you once. Your answers are here.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    /// The extension's title, or its name in grey when it isn't installed.
+    @ViewBuilder private func name(_ extensionName: String) -> some View {
+        if let title = model.extensionTitle(extensionName) {
+            Text(title)
+        } else {
+            Text(extensionName).foregroundStyle(.secondary).help("Not installed")
+        }
     }
 }

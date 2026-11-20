@@ -60,6 +60,11 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("command-metadata.json")
     }
 
+    /// The menu-bar commands the user activated (`MenuBarStore`).
+    public var menuBarFile: URL {
+        supportDirectory.appendingPathComponent("menu-bar.json")
+    }
+
     /// The preference values set for each extension.
     public var preferencesDirectory: URL {
         supportDirectory.appendingPathComponent("preferences", isDirectory: true)
@@ -86,6 +91,11 @@ public struct FudgePaths: Sendable, Equatable {
     }
 
     /// Installed extensions, one folder each.
+    /// The before-import backups (`Backup.apply`): plain archives of the state an import replaced.
+    public var backupsDirectory: URL {
+        supportDirectory.appendingPathComponent("backups", isDirectory: true)
+    }
+
     public var extensionsDirectory: URL {
         supportDirectory.appendingPathComponent("extensions", isDirectory: true)
     }

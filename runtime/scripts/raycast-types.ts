@@ -6,6 +6,9 @@
 // Run it with `npm run generate`; `make raycast-types` does so after updating the
 // type definitions. `npm run typecheck` runs it with --check, which fails if
 // either file is out of date.
+//
+// It also exports `raycastDeclarations`, which the compat scan uses to tell
+// Raycast API paths from paths that aren't.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -54,6 +57,320 @@ export function raycastEnums(types: string): Enums {
         enums[name] = members;
     }
     return enums;
+}
+
+// Which member paths Raycast declares, so the compat scan can tell a Raycast API path (`Toast.Style.Failure`,
+// `environment.supportPath`) from one that isn't (`Color.Gray`, `showToast.mockResolvedValue`). This is a small
+// reader for the declaration file's own shapes, not a type checker: namespaces, enums, interfaces, type aliases,
+// consts typed with `typeof X`, object literals and intersections of those. Anything else it can't see into
+// (React's `FunctionComponent`, `Promise<…>`, string literals) has no members.
+
+/** One declaration in a scope: its kind, name and the code after the name (a body, or a type). */
+interface Declaration {
+    kind: string;
+    name: string;
+    exported: boolean;
+    rest: string;
+}
+
+interface Scope {
+    declarations: Map<string, Declaration[]>;
+    parent?: Scope;
+}
+
+/** A value or type whose members can be listed; `open` means any member is declared (an index signature). */
+interface Members {
+    names: Map<string, () => Members>;
+    open: boolean;
+}
+
+const none: Members = { names: new Map(), open: false };
+
+/** The index just past the string or template literal starting at `start`. */
+function skipLiteral(code: string, start: number): number {
+    const quote = code[start];
+    let index = start + 1;
+    while (index < code.length && code[index] !== quote) {
+        if (code[index] === "\\") index += 1;
+        else if (quote === "`" && code[index] === "$" && code[index + 1] === "{") index = closing(code, index + 1);
+        index += 1;
+    }
+    return index + 1;
+}
+
+/** The index of the bracket closing the one at `open`, skipping literals and nested brackets. */
+function closing(code: string, open: number): number {
+    const pairs: Record<string, string> = { "{": "}", "(": ")", "[": "]", "<": ">" };
+    const stack: string[] = [];
+    for (let index = open; index < code.length; index += 1) {
+        const char = code[index]!;
+        if (char === '"' || char === "'" || char === "`") {
+            index = skipLiteral(code, index) - 1;
+        } else if (char === "=" && code[index + 1] === ">") {
+            index += 1;
+        } else if (char in pairs && (char !== "<" || code[open] === "<")) {
+            stack.push(pairs[char]!);
+        } else if (char === stack.at(-1)) {
+            stack.pop();
+            if (stack.length === 0) return index;
+        }
+    }
+    return code.length - 1;
+}
+
+/** The index of the next top-level `separator` from `from`, outside literals and brackets (and `<…>` when `angles`). */
+function next(code: string, from: number, separator: string, angles: boolean): number {
+    for (let index = from; index < code.length; index += 1) {
+        const char = code[index]!;
+        if (char === separator) return index;
+        if (char === '"' || char === "'" || char === "`") index = skipLiteral(code, index) - 1;
+        else if (char === "=" && code[index + 1] === ">") index += 1;
+        else if ("{([".includes(char) || (angles && char === "<")) index = closing(code, index);
+    }
+    return code.length;
+}
+
+/** Splits `code` at each top-level `separator`. */
+function split(code: string, separator: string, angles = true): string[] {
+    const parts: string[] = [];
+    for (let start = 0; start < code.length; ) {
+        const end = next(code, start, separator, angles);
+        parts.push(code.slice(start, end).trim());
+        start = end + 1;
+    }
+    return parts.filter((part) => part !== "");
+}
+
+/** The code without comments; literals are kept, so `"//"` and `'/*'` in them aren't mistaken for comments. */
+function withoutComments(code: string): string {
+    let result = "";
+    let index = 0;
+    while (index < code.length) {
+        const char = code[index]!;
+        if (char === '"' || char === "'" || char === "`") {
+            const end = skipLiteral(code, index);
+            result += code.slice(index, end);
+            index = end;
+        } else if (char === "/" && code[index + 1] === "*") {
+            const end = code.indexOf("*/", index + 2);
+            index = end === -1 ? code.length : end + 2;
+        } else if (char === "/" && code[index + 1] === "/") {
+            const end = code.indexOf("\n", index);
+            index = end === -1 ? code.length : end;
+        } else {
+            result += char;
+            index += 1;
+        }
+    }
+    return result;
+}
+
+const declarationStart =
+    /(export\s+)?(?:declare\s+)?(?:abstract\s+)?(const|let|var|function|class|enum|namespace|module|interface|type)\s+([\w$]+)/y;
+const blockKinds = new Set(["class", "enum", "namespace", "module", "interface"]);
+
+/** The declarations directly inside `code` (a file, or a namespace's body). Other statements are skipped. */
+function declarations(code: string): Declaration[] {
+    const found: Declaration[] = [];
+    let index = 0;
+    while (index < code.length) {
+        if (/[\s;]/.test(code[index]!)) {
+            index += 1;
+            continue;
+        }
+        declarationStart.lastIndex = index;
+        const match = declarationStart.exec(code);
+        let end: number;
+        if (match && blockKinds.has(match[2]!)) {
+            // The body is the first top-level `{`, after any type parameters and heritage clause.
+            let open = declarationStart.lastIndex;
+            while (open < code.length && code[open] !== "{") open = code[open] === "<" ? closing(code, open) + 1 : open + 1;
+            end = closing(code, open);
+            found.push({
+                kind: match[2]!,
+                name: match[3]!,
+                exported: match[1] !== undefined,
+                rest: code.slice(declarationStart.lastIndex, end + 1),
+            });
+        } else {
+            const from = match ? declarationStart.lastIndex : index;
+            end = next(code, from, ";", true);
+            const rest = code.slice(from, end);
+            if (match) found.push({ kind: match[2]!, name: match[3]!, exported: match[1] !== undefined, rest });
+        }
+        index = end + 1;
+    }
+    return found;
+}
+
+function scopeOf(code: string, parent?: Scope): Scope {
+    const map = new Map<string, Declaration[]>();
+    for (const declaration of declarations(code)) map.set(declaration.name, [...(map.get(declaration.name) ?? []), declaration]);
+    return { declarations: map, parent };
+}
+
+function lookup(scope: Scope | undefined, name: string): { found: Declaration[]; scope: Scope } | undefined {
+    for (let current = scope; current; current = current.parent) {
+        const found = current.declarations.get(name);
+        if (found) return { found, scope: current };
+    }
+    return undefined;
+}
+
+function merge(all: Members[]): Members {
+    const names = new Map<string, () => Members>();
+    for (const members of all) {
+        for (const [name, resolve] of members.names) {
+            const before = names.get(name);
+            names.set(name, before ? memo(() => merge([before(), resolve()])) : resolve);
+        }
+    }
+    return { names, open: all.some((members) => members.open) };
+}
+
+/** Evaluates once; a cycle (an interface naming itself) sees no members rather than recursing forever. */
+function memo(compute: () => Members): () => Members {
+    let value: Members | undefined;
+    let busy = false;
+    return () => {
+        if (value) return value;
+        if (busy) return none;
+        busy = true;
+        value = compute();
+        busy = false;
+        return value;
+    };
+}
+
+/** The body between a block declaration's braces. */
+function body(rest: string): string {
+    const open = rest.indexOf("{");
+    return open === -1 ? "" : rest.slice(open + 1, closing(rest, open));
+}
+
+/** The members a declaration gives the name it declares. */
+function declarationMembers(declaration: Declaration, scope: Scope): Members {
+    switch (declaration.kind) {
+        case "namespace":
+        case "module": {
+            const inner = scopeOf(body(declaration.rest), scope);
+            const names = new Map<string, () => Members>();
+            for (const [name, found] of inner.declarations) {
+                names.set(name, memo(() => merge(found.map((each) => declarationMembers(each, inner)))));
+            }
+            return { names, open: false };
+        }
+        case "enum": {
+            const names = new Map<string, () => Members>();
+            for (const member of split(body(declaration.rest), ",", false)) {
+                const name = /^(?:([\w$]+)|"((?:[^"\\]|\\.)*)")/.exec(member);
+                if (name) names.set(name[1] ?? JSON.parse(`"${name[2]}"`), () => none);
+            }
+            return { names, open: false };
+        }
+        case "class": {
+            // Only static members are reached through the class's name.
+            const names = new Map<string, () => Members>();
+            for (const member of split(body(declaration.rest), ";")) {
+                const name = /^(?:(?:public|protected|private)\s+)?static\s+(?:readonly\s+)?(?:get\s+|set\s+)?([\w$]+)/.exec(member);
+                if (name) names.set(name[1]!, () => none);
+            }
+            return { names, open: false };
+        }
+        case "interface": {
+            const heading = declaration.rest.slice(0, declaration.rest.indexOf("{"));
+            const bases = /\bextends\s+([\s\S]*)$/.exec(heading.replace(/^\s*<[\s\S]*?>/, ""));
+            const inherited = bases ? split(bases[1]!, ",", true).map((base) => typeMembers(base, scope)) : [];
+            return merge([objectMembers(body(declaration.rest), scope), ...inherited]);
+        }
+        case "type": {
+            const assigned = /^\s*(?:<[\s\S]*?>\s*)?=([\s\S]*)$/.exec(declaration.rest);
+            return assigned ? typeMembers(assigned[1]!, scope) : none;
+        }
+        case "const":
+        case "let":
+        case "var": {
+            const annotated = /^\s*:([\s\S]*)$/.exec(declaration.rest);
+            return annotated ? typeMembers(annotated[1]!, scope) : none;
+        }
+        default:
+            return none;
+    }
+}
+
+/** The members of an object type literal's body (`{ … }`, an interface's body). */
+function objectMembers(code: string, scope: Scope): Members {
+    const names = new Map<string, () => Members>();
+    let open = false;
+    for (const member of split(code, ";").flatMap((part) => split(part, ","))) {
+        if (member.startsWith("[")) {
+            open = true;
+            continue;
+        }
+        const named = /^(?:readonly\s+)?(?:get\s+|set\s+)?(?:([\w$]+)|"((?:[^"\\]|\\.)*)"|'([^']*)')\s*(\??)\s*([:(<])/.exec(member);
+        if (!named) continue;
+        const name = named[1] ?? named[2] ?? named[3]!;
+        const type = named[5] === ":" ? member.slice(named[0].length) : "";
+        names.set(name, memo(() => typeMembers(type, scope)));
+    }
+    return { names, open };
+}
+
+/** The members of a value of type `code`. */
+function typeMembers(code: string, scope: Scope): Members {
+    const type = code.trim().replace(/^[|&]\s*/, "");
+    const union = split(type, "|", true);
+    if (union.length > 1) return merge(union.map((part) => typeMembers(part, scope)));
+    const intersection = split(type, "&", true);
+    if (intersection.length > 1) return merge(intersection.map((part) => typeMembers(part, scope)));
+    if (type.startsWith("(")) {
+        const end = closing(type, 0);
+        // A function type has no members; a parenthesised type is the type inside.
+        return /^\s*=>/.test(type.slice(end + 1)) ? none : typeMembers(type.slice(1, end), scope);
+    }
+    if (type.startsWith("{")) return objectMembers(type.slice(1, closing(type, 0)), scope);
+    const reference = /^(typeof\s+)?([\w$]+(?:\.[\w$]+)*)\s*(<[\s\S]*>)?$/.exec(type);
+    if (!reference) return none;
+    const [first, ...path] = reference[2]!.split(".");
+    const declared = lookup(scope, first!);
+    if (!declared && path.length === 0 && reference[3]) {
+        // TypeScript's own utility types: a Record has any key, and the others keep their argument's members.
+        if (first === "Record") return { names: new Map(), open: true };
+        if (["Partial", "Readonly", "Required"].includes(first!)) return typeMembers(reference[3].slice(1, -1), scope);
+    }
+    if (!declared) return none;
+    let members = merge(declared.found.map((declaration) => declarationMembers(declaration, declared.scope)));
+    for (const segment of path) members = members.names.get(segment)?.() ?? none;
+    return members;
+}
+
+/** Whether Raycast's types declare `path` (`Toast.Style.Failure`): an export, then a member of each segment before. */
+export type RaycastDeclarations = (path: string) => boolean;
+
+export function raycastDeclarations(types: string): RaycastDeclarations {
+    const file = scopeOf(withoutComments(types));
+    const exported = new Map<string, () => Members>();
+    for (const [name, found] of file.declarations) {
+        if (!found.some((declaration) => declaration.exported)) continue;
+        exported.set(name, memo(() => merge(found.map((declaration) => declarationMembers(declaration, file)))));
+    }
+    return (path) => {
+        const [first, ...rest] = path.split(".");
+        let members = exported.get(first!)?.();
+        if (!members) return false;
+        for (const segment of rest) {
+            if (members.open) return true;
+            const next = members.names.get(segment);
+            if (!next) return false;
+            members = next();
+        }
+        return true;
+    };
+}
+
+/** Raycast's vendored type definitions. */
+export function vendoredTypes(): string {
+    return readFileSync(typesPath, "utf8");
 }
 
 export function renderExports(names: readonly string[], version: string): string {

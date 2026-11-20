@@ -75,10 +75,25 @@ const navigation: NavigationHandle = { current: null };
 port.on("message", (message: HostToWorker) => {
     switch (message.type) {
         case "event": {
-            if (!root) return;
+            // Every event is answered with one `eventSettled`, so the app knows when no handler is running. It
+            // comes after the render the handler caused: React renders a state update on a later turn (its
+            // scheduler's setImmediate, queued before this one), and the root sends the snapshot a turn after that.
+            const settled = () =>
+                setImmediate(() => {
+                    const done = () => post({ type: "eventSettled" });
+                    if (root) root.whenRendered(done);
+                    else done();
+                });
+            if (!root) return settled();
             try {
                 const result = root.dispatch(message.node, message.path, revive(message.args) as unknown[]);
-                if (isPromiseLike(result)) result.then(undefined, (error: unknown) => report(error, false));
+                if (isPromiseLike(result)) {
+                    result.then(settled, (error: unknown) => {
+                        report(error, false);
+                        settled();
+                    });
+                    return;
+                }
             } catch (error) {
                 if (error instanceof StaleCallbackError) {
                     post({ type: "log", level: "error", message: `ignored an event: ${error.message}` });
@@ -86,6 +101,7 @@ port.on("message", (message: HostToWorker) => {
                     report(error, false);
                 }
             }
+            settled();
             return;
         }
         case "pop":
@@ -114,7 +130,8 @@ try {
         typeof exported === "function" ? exported : (exported as { default?: unknown } | null | undefined)?.default;
     if (typeof command !== "function") throw new Error(`${entry} has no default export to run`);
 
-    if (mode === "view") {
+    // A menu-bar command renders like a view command: its MenuBarExtra is the view.
+    if (mode === "view" || mode === "menu-bar") {
         root = createRoot({
             onRender: (snapshot) => post({ type: "render", ...snapshot }),
             onError: (error) => report(error, true),

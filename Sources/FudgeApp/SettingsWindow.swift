@@ -108,6 +108,15 @@ final class SettingsModel {
     /// Clears root search's launch history; set by the app delegate.
     @ObservationIgnored var clearSearchHistory: () -> Void = {}
 
+    /// Import / Export on the General page.
+    @ObservationIgnored private(set) lazy var backup = BackupController(paths: paths, settings: self)
+    /// Onboarding's Restore from a Backup…: the same flow, with its own sheets, so they show on the onboarding
+    /// window and not on General as well.
+    @ObservationIgnored private(set) lazy var onboardingBackup = BackupController(paths: paths, settings: self)
+    /// After an import: the launcher reloads, and the hotkeys and the currency setting are applied again. Set by
+    /// the app delegate.
+    @ObservationIgnored var imported: () -> Void = {}
+
     /// Reads the login item's status again: a change made in System Settings shows too.
     func refreshLoginItem() {
         loginItemState = LoginItemState(loginItem.status)
@@ -442,9 +451,23 @@ final class SettingsModel {
 /// The Settings window, which can refuse the keyboard: snapshots render it without taking anyone's typing.
 final class SettingsNSWindow: NSWindow {
     var refusesKey = false
+    /// Whether a hotkey is being recorded, when ⌘Q and ⌘W belong to the recorder.
+    var isRecording: () -> Bool = { false }
 
     override var canBecomeKey: Bool { !refusesKey && super.canBecomeKey }
     override var canBecomeMain: Bool { !refusesKey && super.canBecomeMain }
+
+    /// ⌘Q closes the window as ⌘W and its close button do, and fudge keeps running (`WindowShortcut`). The key is
+    /// the one that types "q" in the current layout, as for the panel's shortcuts.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.type == .keyDown, let pressed = AppDelegate.shortcut(for: event),
+            WindowShortcut.closesWindow(pressed, recording: isRecording())
+        {
+            performClose(nil)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
 }
 
 @MainActor
@@ -506,6 +529,7 @@ final class SettingsWindowController {
             )
             window.title = "fudge Settings"
             window.isReleasedWhenClosed = false
+            window.isRecording = { [model] in model.recording != nil }
             window.contentView = NSHostingView(rootView: SettingsView(model: model))
             window.center()
             self.window = window
@@ -514,6 +538,7 @@ final class SettingsWindowController {
                 let alert = NSAlert()
                 alert.messageText = request.title
                 alert.informativeText = request.message ?? ""
+                if let footnote = request.footnote { alert.accessoryView = Self.footnoteView(footnote) }
                 alert.addButton(withTitle: request.primary).hasDestructiveAction = request.destructive
                 alert.addButton(withTitle: request.dismiss)
                 return await withCheckedContinuation { continuation in
@@ -541,6 +566,27 @@ final class SettingsWindowController {
     }
 
     var contentView: NSView? { window?.contentView }
+
+    /// A sheet's last paragraph, as selectable text with a working link: an alert's own text can't hold one.
+    /// Clicking the link opens the browser and leaves the sheet open.
+    private static func footnoteView(_ footnote: LauncherModel.AlertRequest.Footnote) -> NSView {
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let text = NSMutableAttributedString(
+            string: footnote.text, attributes: [.font: font, .foregroundColor: NSColor.labelColor])
+        let range = (footnote.text as NSString).range(of: footnote.linkText)
+        if range.location != NSNotFound { text.addAttribute(.link, value: footnote.url, range: range) }
+        let view = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 0))
+        view.isEditable = false
+        view.isSelectable = true
+        view.drawsBackground = false
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.textStorage?.setAttributedString(text)
+        view.layoutManager?.ensureLayout(for: view.textContainer!)
+        let height = view.layoutManager?.usedRect(for: view.textContainer!).height ?? 0
+        view.frame.size.height = ceil(height)
+        return view
+    }
 }
 
 struct SettingsView: View {
@@ -667,15 +713,17 @@ private struct PreferenceField: View {
     @ViewBuilder private var control: some View {
         switch preference.type {
         case "checkbox":
-            LabeledContent(preference.title ?? "") {
-                Toggle(
-                    preference.label ?? preference.name,
-                    isOn: Binding(
-                        get: { if case .bool(let value) = current { value } else { false } },
-                        set: { set(.bool($0)) }
-                    )
+            // A switch on the right, as everywhere in Settings: the title, with the manifest's `label` under it.
+            Toggle(
+                isOn: Binding(
+                    get: { if case .bool(let value) = current { value } else { false } },
+                    set: { set(.bool($0)) }
                 )
+            ) {
+                Text(title)
+                if preference.title != nil, let label = preference.label { Text(label) }
             }
+            .toggleStyle(.switch)
         case "dropdown":
             Picker(title, selection: text) {
                 ForEach(preference.data ?? [], id: \.value) { option in
