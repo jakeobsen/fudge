@@ -108,6 +108,12 @@ final class SettingsModel {
     /// Clears root search's launch history; set by the app delegate.
     @ObservationIgnored var clearSearchHistory: () -> Void = {}
 
+    /// Import / Export on the General page.
+    @ObservationIgnored private(set) lazy var backup = BackupController(paths: paths, settings: self)
+    /// After an import: the launcher reloads, and the hotkeys and the currency setting are applied again. Set by
+    /// the app delegate.
+    @ObservationIgnored var imported: () -> Void = {}
+
     /// Reads the login item's status again: a change made in System Settings shows too.
     func refreshLoginItem() {
         loginItemState = LoginItemState(loginItem.status)

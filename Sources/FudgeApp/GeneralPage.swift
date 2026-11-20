@@ -2,7 +2,7 @@ import FudgeCore
 import SwiftUI
 
 /// The Settings window's General page: Open at Login, the launcher's hotkey, whether the calculator downloads
-/// exchange rates, and clearing root search's history.
+/// exchange rates, clearing root search's history, and Import / Export.
 struct GeneralPage: View {
     @Bindable var model: SettingsModel
     @State private var confirmingClear = false
@@ -70,6 +70,7 @@ struct GeneralPage: View {
                     Text("Root search ranks what you open often first.")
                 }
             }
+            BackupSection(model: model)
         }
         .formStyle(.grouped)
         .onAppear { model.refreshLoginItem() }

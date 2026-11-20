@@ -3,9 +3,12 @@ import Foundation
 /// What commands changed about themselves with `updateCommandMetadata`, by command id (`FudgeSettings.commandID`).
 /// Stored in `command-metadata.json` as `{ "<extension>/<command>": { "subtitle": "…" } }`. The manifest is never
 /// touched, so reinstalling an extension keeps its entries; entries of commands that aren't installed are pruned.
+/// Keys of an entry that this version doesn't know are kept as they are.
 public struct CommandMetadata: Sendable, Equatable {
     /// The subtitles commands set for root search, replacing the manifest's.
     public private(set) var subtitles: [String: String]
+    /// Each entry's other keys, by command id: written back untouched.
+    private var otherKeys: [String: [String: JSONValue]] = [:]
 
     public init(subtitles: [String: String] = [:]) {
         self.subtitles = subtitles
@@ -21,11 +24,18 @@ public struct CommandMetadata: Sendable, Equatable {
     }
 
     /// Drops the entries of commands that aren't in `installed` (command ids). Returns whether any were dropped.
+    /// An empty `installed` drops nothing: it more likely means the extensions folder couldn't be read than that
+    /// every extension is gone, and a stale entry is harmless.
     @discardableResult
     public mutating func prune(keeping installed: Set<String>) -> Bool {
-        let kept = subtitles.filter { installed.contains($0.key) }
-        guard kept.count != subtitles.count else { return false }
-        subtitles = kept
+        guard !installed.isEmpty else { return false }
+        let ids = Set(subtitles.keys).union(otherKeys.keys)
+        let dropped = ids.subtracting(installed)
+        guard !dropped.isEmpty else { return false }
+        for id in dropped {
+            subtitles[id] = nil
+            otherKeys[id] = nil
+        }
         return true
     }
 
@@ -46,25 +56,34 @@ public struct CommandMetadata: Sendable, Equatable {
         public var description: String { "updateCommandMetadata: \(reason)" }
     }
 
-    /// Reads the file tolerantly: a missing or unreadable file is empty, and entries that aren't
-    /// `{ "subtitle": string }` are skipped.
+    /// Reads the file tolerantly: a missing or unreadable file is empty, an entry that isn't an object is skipped,
+    /// and a `subtitle` that isn't a string is ignored. An entry's other keys are kept for `save`.
     public static func load(from file: URL) -> CommandMetadata {
         guard let data = try? Data(contentsOf: file),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let object = try? JSONDecoder().decode([String: JSONValue].self, from: data)
         else { return CommandMetadata() }
-        var subtitles: [String: String] = [:]
+        var metadata = CommandMetadata()
         for (id, entry) in object {
-            if let subtitle = (entry as? [String: Any])?["subtitle"] as? String { subtitles[id] = subtitle }
+            guard case .object(var fields) = entry else { continue }
+            if case .string(let subtitle) = fields["subtitle"] { metadata.subtitles[id] = subtitle }
+            fields["subtitle"] = nil
+            if !fields.isEmpty { metadata.otherKeys[id] = fields }
         }
-        return CommandMetadata(subtitles: subtitles)
+        return metadata
     }
 
-    /// Writes the file atomically.
+    /// Writes the file atomically, with each entry's other keys as they were read. An entry left with no keys is
+    /// left out.
     public func save(to file: URL) throws {
-        let object = subtitles.mapValues { ["subtitle": $0] }
-        let data = try JSONSerialization.data(
-            withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        var object: [String: JSONValue] = [:]
+        for id in Set(subtitles.keys).union(otherKeys.keys) {
+            var fields = otherKeys[id] ?? [:]
+            if let subtitle = subtitles[id] { fields["subtitle"] = .string(subtitle) }
+            if !fields.isEmpty { object[id] = .object(fields) }
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: file, options: .atomic)
+        try encoder.encode(object).write(to: file, options: .atomic)
     }
 }
