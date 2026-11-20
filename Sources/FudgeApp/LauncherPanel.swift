@@ -50,6 +50,8 @@ final class LauncherPanel: NSPanel {
             hosting.bottomAnchor.constraint(equalTo: background.bottomAnchor),
         ])
         contentView = background
+        // The size is the whole window, title bar area included.
+        setFrame(NSRect(origin: .zero, size: Self.size), display: false)
     }
 
     /// Lets the panel sit off-screen; only snapshots use this.

@@ -15,7 +15,9 @@ struct LauncherView: View {
             Divider()
             bottomBar
         }
-        .frame(width: LauncherPanel.size.width, height: LauncherPanel.size.height)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The panel's hidden title bar would otherwise push everything down by its height.
+        .ignoresSafeArea()
         .onAppear { searchFocused = true }
     }
 
