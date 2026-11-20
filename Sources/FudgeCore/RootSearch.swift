@@ -19,6 +19,8 @@ public struct RootItem: Sendable, Equatable, Identifiable {
     public var iconFile: URL?
     /// A command's `arguments`, entered in fields after the query.
     public var arguments: [ExtensionManifest.Argument]
+    /// A command's alias, from `settings.json`.
+    public var alias: String?
 
     public init(
         id: String,
@@ -83,6 +85,20 @@ public enum RootSearch {
     /// fudge's own items, searched alongside applications and commands.
     public static let builtInItems: [RootItem] = [.settings]
 
+    /// Applies `settings` to command items: disabled commands (or commands of disabled extensions) are left out,
+    /// and each command gets its alias.
+    public static func applying(_ settings: FudgeSettings, to items: [RootItem]) -> [RootItem] {
+        items.compactMap { item in
+            guard case .command(let extensionName, let commandName, _, _) = item.kind else { return item }
+            guard settings.isEnabled(extension: extensionName, command: commandName) else { return nil }
+            var item = item
+            item.alias =
+                settings.commands[FudgeSettings.commandID(extension: extensionName, command: commandName)]?
+                .alias
+            return item
+        }
+    }
+
     public static func rank(_ items: [RootItem], query: String, history: LaunchHistory, now: Date = Date())
         -> [RootItem]
     {
@@ -106,7 +122,16 @@ public enum RootSearch {
         }.map(\.0)
     }
 
+    /// An exact alias outranks everything, and an alias the query starts outranks any fuzzy match of a title.
+    static let exactAliasScore = 1_000_000
+    static let aliasPrefixScore = 100_000
+
     static func bestMatch(_ query: String, for item: RootItem) -> Int? {
+        if let alias = item.alias?.lowercased() {
+            let typed = query.lowercased()
+            if alias == typed { return exactAliasScore }
+            if alias.hasPrefix(typed) { return aliasPrefixScore + typed.count }
+        }
         var best = Fuzzy.match(query, in: item.title)?.score
         for keyword in item.keywords {
             if let score = Fuzzy.match(query, in: keyword)?.score, score - 5 > (best ?? .min) { best = score - 5 }

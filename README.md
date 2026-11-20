@@ -44,6 +44,12 @@ Any command can have its own hotkey. Open **Settings…** on the **Commands** pa
 
 fudge refuses a shortcut that's its own (⌥Space) or another command's, and one another app has registered. That last check is best-effort: macOS doesn't report system shortcuts such as ⌘Space or ⌃↑, so one of those can be recorded but never fire. Hotkeys are kept in `settings.json` under `commands`, e.g. `{ "commands": { "scratch/scratch-folders": { "hotkey": "option+s" } } }`. fudge keeps anything else you put in that file.
 
+### Aliases and turning commands off
+
+On the same page, a command can have an **Alias**: a short word such as `sf`. Click the Alias cell, type it, and press ↵ (Esc puts back what was there, and an empty alias removes it). An alias is 1 to 32 characters with no spaces, and two commands can't share one (letter case doesn't count). Typing the alias in root search puts its command first, above a calculator result. For a command with arguments, typing the alias and a space moves to its first argument field, and the rest of what you type goes there.
+
+Untick **Enabled** to turn a command off, or a whole extension. A command that's off isn't in root search, its hotkey doesn't fire, and other extensions can't launch it; its alias and hotkey are kept for when you turn it back on. Both are kept in `settings.json`, e.g. `{ "commands": { "scratch/scratch-folders": { "alias": "sf", "enabled": false } }, "extensions": { "scratch": { "enabled": false } } }`.
+
 Extensions' preferences are under **Settings…** in the fudge menu bar menu, or ⌘, in the fudge window. You can also search root search for "fudge Settings". To go straight to a command's extension, select the command and press ⌘⇧, (or ⌘K, then **Configure Extension**). A command that needs a preference you haven't set opens that window instead of running.
 
 ## License

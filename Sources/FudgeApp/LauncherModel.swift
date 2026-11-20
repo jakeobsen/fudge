@@ -148,12 +148,27 @@ final class LauncherModel {
 
     /// Finds applications and installed extensions again.
     func reload() {
-        let installed = InstalledExtension.all(in: paths.extensionsDirectory)
-        extensions = Dictionary(installed.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
-        items = installed.flatMap(RootItem.commands(of:)) + RootSearch.builtInItems + ApplicationIndex.scan()
+        installedExtensions = InstalledExtension.all(in: paths.extensionsDirectory)
+        extensions = Dictionary(
+            installedExtensions.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
+        applications = ApplicationIndex.scan()
+        applySettings()
+    }
+
+    /// Rebuilds root search from `settings.json`: commands that are disabled leave it, and the rest get their
+    /// aliases and hotkeys. Settings calls it after each change.
+    func applySettings() {
+        settings = FudgeSettings.load(from: paths.settingsFile)
+        let commands = installedExtensions.flatMap(RootItem.commands(of:))
+        items = RootSearch.applying(settings, to: commands) + RootSearch.builtInItems + applications
         refreshResults()
         refreshCommandHotkeys()
     }
+
+    @ObservationIgnored private var installedExtensions: [InstalledExtension] = []
+    @ObservationIgnored private var applications: [RootItem] = []
+    /// `settings.json`: command hotkeys, aliases and enabled states.
+    @ObservationIgnored private(set) var settings = FudgeSettings()
 
     // MARK: - Search
 
@@ -178,8 +193,17 @@ final class LauncherModel {
                 commandSearchChanged(command)
                 reportSelection()
             case .root, .failure:
-                rootQuery = newValue
                 if case .failure = screen { screen = .root }
+                // An alias and a space hand the rest of the query to that command's first argument (as in Raycast).
+                if let handed = CommandAliases.handOff(newValue, in: items) {
+                    rootQuery = String(newValue.prefix { $0 != " " })
+                    refreshResults()
+                    selectedItem = handed.item.id
+                    arguments.set(handed.rest, at: 0)
+                    arguments.focus = 0
+                    return
+                }
+                rootQuery = newValue
                 refreshResults()
             }
         }
@@ -195,8 +219,13 @@ final class LauncherModel {
     private func refreshResults() {
         calculator = Calculator.evaluate(rootQuery, locale: .current, now: Date(), timeZone: .current)
         results = RootSearch.rank(items, query: rootQuery, history: history)
-        selectedItem = calculator != nil ? Self.calculatorID : results.first?.id
+        let typed = rootQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        aliasMatch = typed.isEmpty ? nil : results.first { $0.alias?.lowercased() == typed }
+        selectedItem = aliasMatch?.id ?? (calculator != nil ? Self.calculatorID : results.first?.id)
     }
+
+    /// The command whose alias the query is exactly. It comes first, above the Calculator card.
+    private(set) var aliasMatch: RootItem?
 
     // MARK: - The calculator
 
@@ -208,7 +237,8 @@ final class LauncherModel {
 
     /// Root search's rows in order: the Calculator card, then the results.
     private var rootRowIDs: [String] {
-        (calculator == nil ? [] : [Self.calculatorID]) + results.map(\.id)
+        let rest = results.map(\.id).filter { $0 != aliasMatch?.id }
+        return (aliasMatch.map { [$0.id] } ?? []) + (calculator == nil ? [] : [Self.calculatorID]) + rest
     }
 
     /// Copies the calculator's answer (or the question and answer), then closes the panel with a HUD, as Raycast
@@ -899,9 +929,9 @@ final class LauncherModel {
 
     // MARK: - Command hotkeys
 
-    /// The `FudgeSettings` ids ("<extension>/<command>") of the installed commands.
+    /// The `FudgeSettings` ids ("<extension>/<command>") of the installed commands, enabled or not.
     var installedCommandIDs: [String] {
-        items.compactMap { item in
+        installedExtensions.flatMap(RootItem.commands(of:)).compactMap { item in
             guard case .command(let extensionName, let commandName, _, _) = item.kind else { return nil }
             return FudgeSettings.commandID(extension: extensionName, command: commandName)
         }
@@ -943,10 +973,9 @@ final class LauncherModel {
 
     /// Reads the command hotkeys from `settings.json` again, after Settings changed them.
     func refreshCommandHotkeys() {
-        let installed = Set(installedCommandIDs)
         commandHotkeys = Dictionary(
-            uniqueKeysWithValues: FudgeSettings.load(from: paths.settingsFile).commandHotkeys
-                .filter { installed.contains($0.key) }.map { ("command:\($0.key)", $0.value) })
+            uniqueKeysWithValues: settings.availableHotkeys(installed: Set(installedCommandIDs))
+                .map { ("command:\($0.key)", $0.value) })
     }
 
     /// Where the launch being opened came from.
@@ -1098,7 +1127,8 @@ final class LauncherModel {
             throw LaunchCommandError.invalid("the calling command isn't running")
         }
         let request = try LaunchRequest(params: params)
-        let target = try CommandLocator.locate(request, caller: callerName, in: Array(extensions.values))
+        let target = try CommandLocator.locate(
+            request, caller: callerName, in: Array(extensions.values), settings: settings)
         try CommandLocator.checkMode(target.command, type: request.type)
         if target.isOtherExtension { try await checkPermission(of: caller, toOpen: target) }
 

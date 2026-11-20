@@ -283,6 +283,8 @@ private struct RootResults: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 2) {
+                        // A query that's exactly a command's alias puts that command first, above the card.
+                        if let match = model.aliasMatch { row(match) }
                         if let calculator = model.calculator {
                             Text("Calculator")
                                 .font(.system(size: 12, weight: .medium))
@@ -304,23 +306,8 @@ private struct RootResults: View {
                             )
                             .padding(.bottom, 6)
                         }
-                        ForEach(model.results) { item in
-                            Row(
-                                icon: Image(nsImage: model.icon(for: item)),
-                                title: item.title,
-                                subtitle: item.subtitle,
-                                accessory: kind(of: item),
-                                selected: item.id == model.selectedItem,
-                                hotkey: model.commandHotkeys[item.id]
-                            )
-                            .id(item.id)
-                            .onRowClick(
-                                select: {
-                                    model.selectedItem = item.id
-                                    // A click can leave the first responder outside the search field.
-                                    model.restoreKeyboard()
-                                },
-                                open: { model.activate() })
+                        ForEach(model.results.filter { $0.id != model.aliasMatch?.id }) { item in
+                            row(item)
                         }
                     }
                     .padding(8)
@@ -328,6 +315,26 @@ private struct RootResults: View {
                 .onChange(of: model.selectedItem) { _, id in proxy.scrollTo(id) }
             }
         }
+    }
+
+    private func row(_ item: RootItem) -> some View {
+        Row(
+            icon: Image(nsImage: model.icon(for: item)),
+            title: item.title,
+            subtitle: item.subtitle,
+            accessory: kind(of: item),
+            selected: item.id == model.selectedItem,
+            alias: item.alias,
+            hotkey: model.commandHotkeys[item.id]
+        )
+        .id(item.id)
+        .onRowClick(
+            select: {
+                model.selectedItem = item.id
+                // A click can leave the first responder outside the search field.
+                model.restoreKeyboard()
+            },
+            open: { model.activate() })
     }
 
     private func kind(of item: RootItem) -> String {
@@ -399,6 +406,8 @@ private struct Row: View {
     let subtitle: String?
     let accessory: String?
     let selected: Bool
+    /// A command's alias, shown as an outlined tag after its title.
+    var alias: String?
     /// A command's hotkey, shown as keycaps after its title.
     var hotkey: HotKeySpec?
 
@@ -408,6 +417,14 @@ private struct Row: View {
             Text(title).lineLimit(1)
             if let subtitle {
                 Text(subtitle).foregroundStyle(.secondary).lineLimit(1)
+            }
+            if let alias {
+                Text(alias)
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(Color.secondary.opacity(0.6)))
             }
             if let hotkey { Keycaps(spec: hotkey).foregroundStyle(.secondary) }
             Spacer()

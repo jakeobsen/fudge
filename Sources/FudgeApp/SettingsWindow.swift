@@ -19,6 +19,8 @@ final class SettingsModel {
     private(set) var recording: String?
     /// A short message under a command's hotkey: why a recording was refused.
     private(set) var hotkeyMessages: [String: String] = [:]
+    /// A short message under a command's alias: why it was refused.
+    private(set) var aliasMessages: [String: String] = [:]
     /// The launcher's own hotkey, which commands can't take; set by the app delegate.
     @ObservationIgnored var launcherHotkey = HotKeySpec.default
     /// Suspend and resume fudge's global hotkeys around a recording, so pressing one records it.
@@ -97,14 +99,63 @@ final class SettingsModel {
     }
 
     private func setHotkey(_ text: String?, for commandID: String) {
-        // Read the file again first, so hand edits made meanwhile aren't overwritten.
+        change { $0.commands[commandID, default: .init()].hotkey = text }
+    }
+
+    /// Changes `settings.json`, read again first so hand edits made meanwhile aren't overwritten.
+    private func change(_ edit: (inout FudgeSettings) -> Void) {
         fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
-        fudgeSettings.commands[commandID, default: .init()].hotkey = text
+        edit(&fudgeSettings)
         do {
             try fudgeSettings.save(to: paths.settingsFile)
         } catch {
             FileHandle.standardError.write(Data("fudge: couldn't save settings: \(error)\n".utf8))
         }
+    }
+
+    // MARK: - Aliases and enabled
+
+    func alias(for commandID: String) -> String? {
+        fudgeSettings.commands[commandID]?.alias
+    }
+
+    /// Saves `text` as the command's alias; empty removes it. Returns false, with a message, when it's refused.
+    @discardableResult
+    func setAlias(_ text: String, for commandID: String) -> Bool {
+        let alias = text.trimmingCharacters(in: .whitespaces)
+        if !alias.isEmpty, let problem = CommandAliases.problem(with: alias, for: commandID, in: fudgeSettings) {
+            aliasMessages[commandID] =
+                switch problem {
+                case .length: "Use 1 to 32 characters"
+                case .spaces: "No spaces"
+                case .duplicate(let other): "Already used by \(title(ofCommand: other))"
+                }
+            return false
+        }
+        aliasMessages[commandID] = nil
+        change { $0.commands[commandID, default: .init()].alias = alias.isEmpty ? nil : alias }
+        _ = applyHotkeys()
+        return true
+    }
+
+    func isEnabled(command commandID: String) -> Bool {
+        fudgeSettings.commands[commandID]?.enabled != false
+    }
+
+    func isEnabled(extension name: String) -> Bool {
+        fudgeSettings.extensions[name]?.enabled != false
+    }
+
+    /// Enables or disables a command: a disabled one leaves root search, and its hotkey stops working.
+    func setEnabled(_ enabled: Bool, command commandID: String) {
+        change { $0.commands[commandID, default: .init()].enabled = enabled ? nil : false }
+        _ = applyHotkeys()
+    }
+
+    /// Enables or disables every command of an extension.
+    func setEnabled(_ enabled: Bool, extension name: String) {
+        change { $0.extensions[name, default: .init()].enabled = enabled ? nil : false }
+        _ = applyHotkeys()
     }
 
     private func message(for conflict: HotKeyConflict) -> String {
@@ -203,7 +254,7 @@ final class SettingsWindowController {
         model.selected = name ?? SettingsModel.commandsPage
         if window == nil {
             let window = SettingsNSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 720, height: 480),
+                contentRect: NSRect(x: 0, y: 0, width: 880, height: 520),
                 styleMask: [.titled, .closable, .resizable, .miniaturizable],
                 backing: .buffered,
                 defer: false
