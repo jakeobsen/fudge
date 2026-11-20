@@ -47,6 +47,8 @@ final class LauncherModel {
         var fieldValues: [Int: FieldValue] = [:]
         /// The values stored for this command's Form fields (`storeValue`), read when the Form first shows.
         var storedFormValues: [String: JSONValue]?
+        /// Stored values still waiting for their fields' items, by node id (`FormContent.Field.start`).
+        var pendingStoredValues: [Int: JSONValue] = [:]
         /// The Form field that had the keyboard last, by node id.
         var lastFormField: Int?
     }
@@ -418,15 +420,17 @@ final class LauncherModel {
 
     // MARK: - Forms
 
-    /// Reads the top view's Form again, keeping what the user typed (see `FieldValue`). A field seen for the first
-    /// time starts on its `initialValue`, which may be a value stored for it (`storeValue`). When that isn't what the
-    /// extension's Form registered (a stored value, a dropdown's first item), the extension hears it through
-    /// `onChange`, as with the List's dropdown. A dropdown whose items arrive later takes the first one then.
+    /// Reads the top view's Form again, keeping what the user typed (see `FieldValue`). Each field's value comes from
+    /// `FormContent.Field.start`: a field seen for the first time may start on a value stored for it
+    /// (`storeValue`), one whose items haven't arrived keeps its stored value pending until they do, and a dropdown
+    /// whose items arrive later takes the first one. When that isn't what the extension's Form holds, the extension
+    /// hears it through `onChange`, as with the List's dropdown.
     private func refreshForm(_ command: inout CommandScreen) {
         guard let view = command.view, view.type == "Form" else {
             command.form = nil
             command.fieldValues = [:]
             command.storedFormValues = nil
+            command.pendingStoredValues = [:]
             return
         }
         let form = FormContent(view)
@@ -435,25 +439,23 @@ final class LauncherModel {
                 .load(extension: command.extensionName, command: command.commandName)
         }
         var values: [Int: FieldValue] = [:]
+        var pending: [Int: JSONValue] = [:]
         var changes: [(node: Int, value: JSONValue)] = []
         for field in form.fields where field.isEditable {
-            var value: FieldValue
-            if let existing = command.fieldValues[field.id] {
-                value = existing
-                if let first = field.firstItemValue(replacing: existing.value) {
-                    value = FieldValue(first)
-                    changes.append((field.id, first))
-                }
-            } else {
-                let initial = field.initialValue(stored: field.fieldId.flatMap { command.storedFormValues?[$0] })
-                value = FieldValue(initial)
-                if initial != field.registeredValue { changes.append((field.id, initial)) }
-            }
+            let existing = command.fieldValues[field.id]
+            let stored =
+                existing == nil
+                ? field.fieldId.flatMap { command.storedFormValues?[$0] } : command.pendingStoredValues[field.id]
+            let start = field.start(current: existing?.value, stored: stored)
+            var value = existing.flatMap { $0.value == start.value ? $0 : nil } ?? FieldValue(start.value)
+            if start.reports { changes.append((field.id, start.value)) }
+            if let waiting = start.pending { pending[field.id] = waiting }
             value.render(controlled: field.value)
             values[field.id] = value
         }
         command.form = form
         command.fieldValues = values
+        command.pendingStoredValues = pending
         for change in changes {
             send(.event(session: command.session, node: change.node, path: ["onChange"], args: [change.value]))
         }
@@ -508,6 +510,8 @@ final class LauncherModel {
     func edit(field node: Int, to value: JSONValue) {
         guard var command, command.fieldValues[node] != nil, command.fieldValues[node]?.value != value else { return }
         command.fieldValues[node]?.edit(value)
+        // The user's choice wins over a stored value still waiting for the field's items.
+        command.pendingStoredValues[node] = nil
         screen = .command(command)
         send(.event(session: command.session, node: node, path: ["onChange"], args: [value]))
     }

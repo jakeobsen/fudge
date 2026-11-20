@@ -102,6 +102,47 @@ public struct FormContent: Sendable, Equatable {
             return .string(first.value)
         }
 
+        /// Whether a stored value that doesn't fit yet could fit once more items arrive: a Dropdown's or TagPicker's
+        /// value of the right type whose items aren't (all) there. Extensions often load their items after the
+        /// first render (`useFetch`, `useCachedPromise`).
+        public func mayAcceptLater(_ stored: JSONValue) -> Bool {
+            guard storesValue, value == nil else { return false }
+            switch (kind, stored) {
+            case (.dropdown, .string): return true
+            case (.tagPicker, .array(let values)):
+                return values.allSatisfy { if case .string = $0 { true } else { false } }
+            default: return false
+            }
+        }
+
+        /// What the field shows after a render. `current` is what it showed before (nil the first time), and
+        /// `stored` the value stored for it (the first time) or one still waiting for its items (after that). A
+        /// stored value that fits starts the field, ahead of `defaultValue` and a dropdown's first item; one that
+        /// may fit once the items arrive stays pending, and is taken as soon as they include it, unless the field
+        /// has been changed meanwhile (the app drops the pending value then). `reports` says the extension should
+        /// hear the value (`onChange`), because it isn't what the extension's Form holds.
+        public func start(current: JSONValue?, stored: JSONValue?) -> FieldStart {
+            guard let current else {
+                if let stored, accepts(stored) {
+                    return FieldStart(value: stored, reports: stored != registeredValue, pending: nil)
+                }
+                let initial = initialValue()
+                let pending = stored.flatMap { mayAcceptLater($0) ? $0 : nil }
+                return FieldStart(value: initial, reports: initial != registeredValue, pending: pending)
+            }
+            if let stored, value == nil {
+                if accepts(stored) { return FieldStart(value: stored, reports: stored != current, pending: nil) }
+                if mayAcceptLater(stored) {
+                    let first = firstItemValue(replacing: current)
+                    return FieldStart(value: first ?? current, reports: first != nil, pending: stored)
+                }
+            }
+            if let first = firstItemValue(replacing: current) {
+                return FieldStart(value: first, reports: true, pending: nil)
+            }
+            return FieldStart(value: current, reports: false, pending: nil)
+        }
+
         /// The argument of `onFocus` and `onBlur`: Raycast's `FormEvent`.
         public func focusEvent(_ type: String, value: JSONValue) -> JSONValue {
             .object([
@@ -269,6 +310,21 @@ public enum FilePicking {
 
     public static func removing(_ path: String, from current: [String]) -> [String] {
         current.filter { $0 != path }
+    }
+}
+
+/// What a Form field shows after a render (`FormContent.Field.start`).
+public struct FieldStart: Sendable, Equatable {
+    public var value: JSONValue
+    /// The extension should hear `value` through `onChange`.
+    public var reports: Bool
+    /// A stored value still waiting for the field's items.
+    public var pending: JSONValue?
+
+    public init(value: JSONValue, reports: Bool, pending: JSONValue?) {
+        self.value = value
+        self.reports = reports
+        self.pending = pending
     }
 }
 
