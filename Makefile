@@ -64,11 +64,23 @@ app: build
 	@codesign --force --sign - '$(APP)' 2>/dev/null
 	@printf '→ built %s (%s, %s)\n' '$(APP)' '$(VERSION)' '$(CONFIG)'
 
+# The user's fudge: Fudge processes launched as the app, by LaunchServices (their parent is launchd), with no
+# arguments. `--snapshot` runs, key probes and test harnesses that agents start from a shell are left alone.
+USER_FUDGE_PIDS = for pid in $$(pgrep -x Fudge); do \
+		[ "$$(ps -o ppid= -p $$pid | tr -d ' ')" = 1 ] && [ "$$(ps -o args= -p $$pid)" = "$$(ps -o comm= -p $$pid)" ] \
+			&& echo $$pid; \
+	done; true
+
 run: app
-	@pkill -x Fudge 2>/dev/null || true
-	@# open hands off to a Fudge that's still quitting and fails (-600), so wait for it to exit.
-	@for _ in $$(seq 50); do pgrep -x Fudge >/dev/null || break; sleep 0.1; done
-	@! pgrep -x Fudge >/dev/null || { printf 'the running Fudge did not quit\n'; exit 1; }
+	@# Quit the user's fudge and wait for exactly those processes: open hands off to a Fudge that's still quitting
+	@# and fails (-600).
+	@pids=$$($(USER_FUDGE_PIDS)); \
+	[ -z "$$pids" ] || kill $$pids 2>/dev/null; \
+	for _ in $$(seq 50); do \
+		alive=; for pid in $$pids; do kill -0 $$pid 2>/dev/null && alive=$$pid; done; \
+		[ -z "$$alive" ] && break; sleep 0.1; \
+	done; \
+	[ -z "$$alive" ] || { printf 'the running Fudge did not quit\n'; exit 1; }
 	@open '$(APP)'
 
 install-extension: app
