@@ -159,6 +159,8 @@ private struct LauncherHotkeyCell: View {
                 Text(message).font(.system(size: 10)).foregroundStyle(.red)
             } else if model.launcherHotkeyInUse {
                 Text("In use by another app").font(.system(size: 10)).foregroundStyle(.red)
+            } else if let note = model.hotkeyNotes[SettingsModel.launcherRecording] {
+                Text(note).font(.system(size: 10)).foregroundStyle(.secondary)
             }
         }
     }

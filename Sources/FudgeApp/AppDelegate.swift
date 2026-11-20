@@ -144,11 +144,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         launcherHotkeyChanged()
         model.menuBar.start()
         applyCommandHotkeys()
-        settingsModel.registerLauncherHotkey = { [weak self] spec in
-            guard let self else { return false }
-            let registered = self.registry.setLauncher(spec)
+        settingsModel.changeLauncherHotkey = { [weak self] spec, save in
+            guard let self else { return .notSaved }
+            let result = self.registry.changeLauncher(to: spec, save: save)
             self.launcherHotkeyChanged()
-            return registered
+            return result
         }
         settingsModel.suspendHotkeys = { [weak self] in self?.registry.suspend() }
         settingsModel.resumeHotkeys = { [weak self] in
