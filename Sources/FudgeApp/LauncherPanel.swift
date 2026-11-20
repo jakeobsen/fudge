@@ -76,11 +76,9 @@ final class LauncherPanel: NSPanel {
         onResign()
     }
 
-    /// Shows the panel on the screen with the mouse, a little above the middle.
-    func present() {
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main
-        if let visible = screen?.visibleFrame {
+    /// Shows the panel on `screen` ("Show fudge on", `PanelScreen`), a little above the middle.
+    func present(on screen: NSScreen?) {
+        if let visible = (screen ?? NSScreen.main)?.visibleFrame {
             let origin = NSPoint(
                 x: visible.midX - Self.size.width / 2,
                 y: visible.minY + visible.height * 0.62 - Self.size.height / 2

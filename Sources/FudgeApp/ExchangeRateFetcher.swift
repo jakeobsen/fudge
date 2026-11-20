@@ -1,8 +1,8 @@
 import Foundation
 import FudgeCore
 
-/// Downloads the European Central Bank's daily reference rates: the one connection fudge makes on its own, and only
-/// while currency conversion is turned on. Its session keeps no cookies, credentials or cache.
+/// Downloads the European Central Bank's daily reference rates, while currency conversion is turned on. Its session
+/// keeps no cookies, credentials or cache.
 struct ECBRatesFetcher: RatesFetcher {
     static let url = URL(string: "https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml")!
     /// The file is about 1.5 KB; anything near this is not it.
