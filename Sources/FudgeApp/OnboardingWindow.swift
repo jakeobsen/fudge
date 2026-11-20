@@ -100,6 +100,8 @@ final class OnboardingWindowController {
         Self.center(window, on: NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) })
         NSApp.activate()
         window.makeKeyAndOrderFront(nil)
+        // Since macOS 14 activation can be declined (at login, say); the window still comes to the front.
+        window.orderFrontRegardless()
     }
 
     /// Show Onboarding Again: every step, from what's set now.
