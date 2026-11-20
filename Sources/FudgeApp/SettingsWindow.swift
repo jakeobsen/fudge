@@ -110,6 +110,9 @@ final class SettingsModel {
 
     /// Import / Export on the General page.
     @ObservationIgnored private(set) lazy var backup = BackupController(paths: paths, settings: self)
+    /// Onboarding's Restore from a Backup…: the same flow, with its own sheets, so they show on the onboarding
+    /// window and not on General as well.
+    @ObservationIgnored private(set) lazy var onboardingBackup = BackupController(paths: paths, settings: self)
     /// After an import: the launcher reloads, and the hotkeys and the currency setting are applied again. Set by
     /// the app delegate.
     @ObservationIgnored var imported: () -> Void = {}
