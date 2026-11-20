@@ -6,7 +6,7 @@ struct LauncherView: View {
     @Bindable var model: LauncherModel
     @FocusState private var focus: Field?
 
-    enum Field { case search, actions }
+    enum Field { case search, actions, dropdown }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,10 +25,18 @@ struct LauncherView: View {
                     .padding(.bottom, 46)
             }
         }
+        .overlay(alignment: .topTrailing) {
+            if model.dropdownPanel != nil, let command = model.command, let dropdown = command.list?.dropdown {
+                DropdownPanelView(model: model, dropdown: dropdown, assets: command.assets, focus: $focus)
+                    .padding(.trailing, 14)
+                    .padding(.top, 50)
+            }
+        }
         // The panel's hidden title bar would otherwise push everything down by its height.
         .ignoresSafeArea()
         .onAppear { focus = .search }
         .onChange(of: model.actionPanel == nil) { _, closed in focus = closed ? .search : .actions }
+        .onChange(of: model.dropdownPanel == nil) { _, closed in focus = closed ? .search : .dropdown }
     }
 
     private var searchBar: some View {
@@ -64,14 +72,8 @@ struct LauncherView: View {
                     }
             }
             if let command = model.command, let dropdown = command.list?.dropdown {
-                SearchBarDropdownButton(
-                    dropdown: dropdown,
-                    value: model.dropdownValue,
-                    openRequests: model.dropdownOpenRequests,
-                    assets: command.assets,
-                    onSelect: { model.selectDropdownValue($0) }
-                )
-                .fixedSize()
+                SearchBarDropdownButton(model: model, dropdown: dropdown, assets: command.assets)
+                    .fixedSize()
             }
         }
         .padding(.horizontal, 18)

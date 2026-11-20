@@ -179,6 +179,53 @@ private let folders = #"""
     #expect(stored.initialValue(stored: "home") == "work", "a controlled value wins")
 }
 
+@Test func searchesTheDropdownsOwnItems() throws {
+    let node = try JSONDecoder().decode(
+        UINode.self,
+        from: Data(
+            #"""
+            {"id":2,"type":"List.Dropdown","props":{"tooltip":"Kind","placeholder":"Find a kind"},"children":[
+              {"id":3,"type":"List.Dropdown.Item","props":{"title":"Everything","value":"all"},"children":[]},
+              {"id":4,"type":"List.Dropdown.Section","props":{"title":"Fruit"},"children":[
+                {"id":5,"type":"List.Dropdown.Item","props":{"title":"Apple","value":"apple"},"children":[]},
+                {"id":6,"type":"List.Dropdown.Item","props":{"title":"Banana","value":"banana","keywords":["yellow"]},"children":[]}
+              ]},
+              {"id":7,"type":"List.Dropdown.Section","props":{"title":"Empty"},"children":[]}
+            ]}
+            """#.utf8))
+    var dropdown = try #require(SearchBarDropdown(node))
+    #expect(dropdown.placeholder == "Find a kind" && dropdown.filtersLocally && !dropdown.handlesSearch)
+    #expect(dropdown.sections(matching: "").map(\.title) == [nil, "Fruit"], "empty sections are left out")
+    #expect(dropdown.sections(matching: "ban").flatMap(\.items).map(\.value) == ["banana"])
+    #expect(dropdown.sections(matching: "yellow").flatMap(\.items).map(\.value) == ["banana"], "keywords match")
+    #expect(
+        dropdown.sections(matching: "fruit").flatMap(\.items).map(\.value) == ["apple"],
+        "keywords default to the section's title")
+    dropdown.filtersLocally = false
+    #expect(dropdown.sections(matching: "zzz").flatMap(\.items).count == 3, "the extension filters")
+}
+
+@Test func asksForMorePagesNearTheEnd() throws {
+    var view = try node(folders)
+    #expect(ListContent(view, searchText: "").pagination == nil)
+    view.props["pagination"] = .object([
+        "pageSize": .number(20), "hasMore": .bool(true),
+        "onLoadMore": .object(["$fn": .array([.string("pagination"), .string("onLoadMore")])]),
+    ])
+    let list = ListContent(view, searchText: "")
+    #expect(list.pagination == .init(pageSize: 20, hasMore: true))
+    #expect(list.wantsMore(near: 3, threshold: 1), "4 items: index 3 is the last")
+    #expect(!list.wantsMore(near: 1, threshold: 1))
+    view.props["isLoading"] = .bool(true)
+    #expect(!ListContent(view, searchText: "").wantsMore(near: 3), "not while a page loads")
+    view.props["isLoading"] = .bool(false)
+    view.props["pagination"] = .object([
+        "pageSize": .number(20), "hasMore": .bool(false),
+        "onLoadMore": .object(["$fn": .array([.string("pagination"), .string("onLoadMore")])]),
+    ])
+    #expect(!ListContent(view, searchText: "").wantsMore(near: 3), "not when there's no more")
+}
+
 @Test func keepsStoredDropdownValues() throws {
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: folder) }

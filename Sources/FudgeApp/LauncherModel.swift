@@ -37,6 +37,10 @@ final class LauncherModel {
         var followedItemId: String?
         /// The search changed and the command filters itself: select the first item of what it sends back.
         var selectFirstOnRender = false
+        /// The search text as the user types it, reconciled with a `searchText` the extension sets.
+        var searchField = FieldValue(.string(""))
+        /// How many items the List had when it was last asked for the next page.
+        var requestedMoreAt: Int?
         /// The Form the top view shows.
         var form: FormContent?
         /// The values of the Form's fields as the user edits them, by node id.
@@ -108,8 +112,6 @@ final class LauncherModel {
     @ObservationIgnored private var icons: [String: NSImage] = [:]
     @ObservationIgnored private let dropdownStore: SearchBarDropdown.Store
     @ObservationIgnored private var searchDebounce: Task<Void, Never>?
-    /// Bumped by ⌘P; the search bar's dropdown opens its menu when it changes.
-    private(set) var dropdownOpenRequests = 0
 
     init(paths: FudgePaths) {
         self.paths = paths
@@ -138,6 +140,7 @@ final class LauncherModel {
             switch screen {
             case .command(var command):
                 command.searchText = newValue
+                command.searchField.edit(.string(newValue))
                 refreshList(&command, selectFirst: true)
                 command.selectFirstOnRender = command.view.map { !ListContent.filtersLocally($0) } ?? false
                 screen = .command(command)
@@ -331,6 +334,112 @@ final class LauncherModel {
         }
     }
 
+    // MARK: - The dropdown's panel (⌘P)
+
+    struct DropdownPanelState: Equatable {
+        var query = ""
+        /// The highlighted item's value.
+        var selected: String?
+    }
+
+    /// The search bar dropdown's open panel: its own search field and items.
+    private(set) var dropdownPanel: DropdownPanelState?
+    @ObservationIgnored private var dropdownSearchDebounce: Task<Void, Never>?
+
+    /// The items the open dropdown panel shows, filtered by its search text when fudge filters them.
+    var dropdownPanelSections: [SearchBarDropdown.Section] {
+        guard let dropdownPanel, let dropdown = command?.list?.dropdown else { return [] }
+        return dropdown.sections(matching: dropdownPanel.query)
+    }
+
+    var dropdownPanelQuery: String {
+        get { dropdownPanel?.query ?? "" }
+        set {
+            guard dropdownPanel != nil, let command, let dropdown = command.list?.dropdown else { return }
+            dropdownPanel?.query = newValue
+            let first = dropdownPanelSections.flatMap(\.items).first?.value
+            dropdownPanel?.selected = first
+            dropdownSearchChanged(newValue, dropdown: dropdown, session: command.session)
+        }
+    }
+
+    func toggleDropdownPanel() {
+        if dropdownPanel != nil {
+            closeDropdownPanel()
+        } else if command?.list?.dropdown != nil {
+            actionPanel = nil
+            dropdownPanel = DropdownPanelState(selected: dropdownValue)
+        }
+    }
+
+    func closeDropdownPanel() {
+        guard let panel = dropdownPanel else { return }
+        dropdownPanel = nil
+        // The dropdown's search text clears with it.
+        if !panel.query.isEmpty, let command, let dropdown = command.list?.dropdown {
+            dropdownSearchChanged("", dropdown: dropdown, session: command.session)
+        }
+    }
+
+    func moveDropdownSelection(by offset: Int) {
+        let items = dropdownPanelSections.flatMap(\.items)
+        guard !items.isEmpty else { return }
+        let index = items.firstIndex { $0.value == dropdownPanel?.selected } ?? 0
+        dropdownPanel?.selected = items[max(0, min(items.count - 1, index + offset))].value
+    }
+
+    /// Picks an item in the dropdown's panel and closes it.
+    func pickDropdownItem(_ value: String? = nil) {
+        guard let value = value ?? dropdownPanel?.selected else { return }
+        closeDropdownPanel()
+        selectDropdownValue(value)
+    }
+
+    /// Keeps the open panel's highlight on an item that's still shown, as the extension's search results change.
+    private func syncDropdownPanel() {
+        guard dropdownPanel != nil else { return }
+        guard command?.list?.dropdown != nil else {
+            dropdownPanel = nil
+            return
+        }
+        let items = dropdownPanelSections.flatMap(\.items)
+        if !items.contains(where: { $0.value == dropdownPanel?.selected }) {
+            let first = items.first?.value
+            dropdownPanel?.selected = first
+        }
+    }
+
+    /// Tells the dropdown its search text changed (`onSearchTextChange`); with `throttle`, once typing pauses.
+    private func dropdownSearchChanged(_ text: String, dropdown: SearchBarDropdown, session: String) {
+        dropdownSearchDebounce?.cancel()
+        guard dropdown.handlesSearch else { return }
+        let event = AppMessage.event(
+            session: session, node: dropdown.id, path: ["onSearchTextChange"], args: [.string(text)])
+        guard dropdown.throttle else {
+            send(event)
+            return
+        }
+        dropdownSearchDebounce = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            self?.send(event)
+        }
+    }
+
+    // MARK: - Pages
+
+    /// Asks the List for its next page (`pagination.onLoadMore`) when the item `node` is near the end,
+    /// at most once for each length the list has had.
+    func loadMoreIfNeeded(near node: Int) {
+        guard var command, let view = command.view, let list = command.list,
+            let index = list.items.firstIndex(where: { $0.id == node }),
+            list.wantsMore(near: index), command.requestedMoreAt != list.items.count
+        else { return }
+        command.requestedMoreAt = list.items.count
+        screen = .command(command)
+        send(.event(session: command.session, node: view.id, path: ["pagination", "onLoadMore"], args: []))
+    }
+
     /// What ↵ does.
     var primaryAction: ActionEntry? { ActionPanelReader.primary(currentActions) }
 
@@ -376,6 +485,7 @@ final class LauncherModel {
         if actionPanel != nil {
             actionPanel = nil
         } else if !currentActions.isEmpty {
+            closeDropdownPanel()
             actionPanel = ActionPanelState(selected: ActionPanelReader.flat(currentActions).first?.id)
         }
     }
@@ -427,7 +537,13 @@ final class LauncherModel {
             toggleActionPanel()
             return true
         }
-        guard actionPanel == nil, let command, command.failure == nil else { return false }
+        // ⌘P opens and closes the search bar dropdown, unless an action takes the shortcut.
+        let commandP = KeyShortcut(key: "p", modifiers: ["cmd"])
+        if pressed == commandP, dropdownPanel != nil {
+            closeDropdownPanel()
+            return true
+        }
+        guard actionPanel == nil, dropdownPanel == nil, let command, command.failure == nil else { return false }
         let hasSearchField = command.view == nil || command.list != nil
         if !hasSearchField, pressed == KeyShortcut(key: "escape", modifiers: []) {
             escape()
@@ -446,9 +562,8 @@ final class LauncherModel {
             run(entry)
             return true
         }
-        // ⌘P opens the search bar dropdown, unless an action took the shortcut.
-        if pressed == KeyShortcut(key: "p", modifiers: ["cmd"]), command.list?.dropdown != nil {
-            dropdownOpenRequests += 1
+        if pressed == commandP, command.list?.dropdown != nil {
+            toggleDropdownPanel()
             return true
         }
         return false
@@ -485,6 +600,7 @@ final class LauncherModel {
             command.selectedNode = rows[max(0, min(rows.count - 1, index + offset))].id
             screen = .command(command)
             reportSelection()
+            if let node = command.selectedNode { loadMoreIfNeeded(near: node) }
         case .failure:
             break
         }
@@ -502,9 +618,13 @@ final class LauncherModel {
         }
     }
 
-    /// Esc: close the action panel (a submenu at a time), pop a pushed view, clear the search,
-    /// leave the command, then hide.
+    /// Esc: close the dropdown's panel or the action panel (a submenu at a time), pop a pushed view, clear the
+    /// search, leave the command, then hide.
     func escape() {
+        if dropdownPanel != nil {
+            closeDropdownPanel()
+            return
+        }
         if var panel = actionPanel {
             if panel.path.isEmpty {
                 actionPanel = nil
@@ -688,15 +808,27 @@ final class LauncherModel {
                 command.reportedSelection = nil
                 command.followedItemId = nil
                 command.selectFirstOnRender = false
+                command.searchField = FieldValue(.string(command.searchText))
+                command.requestedMoreAt = nil
                 actionPanel = nil
+                dropdownPanel = nil
             }
             command.view = view
             command.depth = depth
+            // The extension can set the search text (`searchText`); echoes of what was typed don't undo typing.
+            if let view, view.type == "List", let controlled = view.string("searchText") {
+                command.searchField.render(controlled: .string(controlled))
+                if case .string(let text) = command.searchField.value, text != command.searchText {
+                    command.searchText = text
+                    command.selectFirstOnRender = true
+                }
+            }
             refreshList(&command, selectFirst: command.selectFirstOnRender)
             // Results for a new search may come after a loading render or two.
             if command.list?.isLoading != true { command.selectFirstOnRender = false }
             refreshForm(&command)
             screen = .command(command)
+            syncDropdownPanel()
             reportSelection()
 
         case .error(let session, let message, let stack, let fatal):
@@ -843,6 +975,7 @@ final class LauncherModel {
     /// Unloads the visible command, if any, and shows root search.
     private func leaveCommand() {
         actionPanel = nil
+        dropdownPanel = nil
         if case .command(let command) = screen { send(.unload(session: command.session)) }
         screen = .root
         status = nil

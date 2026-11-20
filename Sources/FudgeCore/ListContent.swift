@@ -55,6 +55,20 @@ public struct ListContent: Sendable, Equatable {
     public var isLoading: Bool
     public var isShowingDetail: Bool
     public var dropdown: SearchBarDropdown?
+    /// Set when the list loads in pages (`pagination`).
+    public var pagination: Pagination?
+
+    public struct Pagination: Sendable, Equatable {
+        public var pageSize: Int
+        public var hasMore: Bool
+    }
+
+    /// Whether to ask for the next page now that `index` is on screen or selected: the list has more, isn't
+    /// already loading, and `index` is within `threshold` items of the end.
+    public func wantsMore(near index: Int, threshold: Int = 5) -> Bool {
+        guard let pagination, pagination.hasMore, !isLoading else { return false }
+        return index >= items.count - threshold
+    }
 
     public var items: [Item] { sections.flatMap(\.items) }
 
@@ -97,6 +111,14 @@ public struct ListContent: Sendable, Equatable {
         isLoading = view.bool("isLoading") == true
         isShowingDetail = view.bool("isShowingDetail") == true
         dropdown = view.node("searchBarAccessory").flatMap(SearchBarDropdown.init)
+        if case .object(let options) = view.props["pagination"],
+            case .object(let loadMore) = options["onLoadMore"], loadMore["$fn"] != nil
+        {
+            let pageSize: Int = if case .number(let size) = options["pageSize"] { max(1, Int(size)) } else { 10 }
+            pagination = Pagination(pageSize: pageSize, hasMore: options["hasMore"] == .bool(true))
+        } else {
+            pagination = nil
+        }
 
         // Raycast never shows the empty view while the list loads with an empty search bar.
         if sections.isEmpty, !(isLoading && searchText.isEmpty) {
@@ -296,6 +318,15 @@ public struct SearchBarDropdown: Sendable, Equatable {
     public var defaultValue: String?
     public var storesValue: Bool
     public var hasOnChange: Bool
+    /// The placeholder of the dropdown's own search field.
+    public var placeholder: String?
+    /// Whether fudge filters the items by the dropdown's search text, or the extension does
+    /// (`onSearchTextChange`), as with a List.
+    public var filtersLocally: Bool
+    /// Whether the extension wants to hear the dropdown's search text (`onSearchTextChange`).
+    public var handlesSearch: Bool
+    public var throttle: Bool
+    public var isLoading: Bool
     public var sections: [Section]
 
     public var items: [Item] { sections.flatMap(\.items) }
@@ -309,14 +340,25 @@ public struct SearchBarDropdown: Sendable, Equatable {
         defaultValue = node.string("defaultValue")
         storesValue = node.bool("storeValue") == true
         hasOnChange = node.hasCallback("onChange")
+        placeholder = node.string("placeholder")
+        filtersLocally = ListContent.filtersLocally(node)
+        handlesSearch = node.hasCallback("onSearchTextChange")
+        throttle = node.bool("throttle") == true
+        isLoading = node.bool("isLoading") == true
         var sections: [Section] = []
         var loose: [Item] = []
         for child in node.children {
             if child.type.hasSuffix(".Dropdown.Section") {
                 if !loose.isEmpty { sections.append(Section(title: nil, items: loose)) }
                 loose = []
-                let items = child.children.compactMap(Self.item)
-                sections.append(Section(title: child.string("title"), items: items))
+                let title = child.string("title")
+                // An item's keywords default to its section's title.
+                let items = child.children.compactMap(Self.item).map { item in
+                    var item = item
+                    if item.keywords.isEmpty, let title { item.keywords = [title] }
+                    return item
+                }
+                sections.append(Section(title: title, items: items))
             } else if let item = Self.item(child) {
                 loose.append(item)
             }
@@ -333,6 +375,19 @@ public struct SearchBarDropdown: Sendable, Equatable {
             icon: node.props["icon"].flatMap(ListContent.present),
             keywords: ListContent.strings(node.props["keywords"])
         )
+    }
+
+    /// The sections to show for the dropdown's search text: filtered by title and keywords when fudge filters,
+    /// all of them when the extension does. Sections left empty are dropped.
+    public func sections(matching query: String) -> [Section] {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard filtersLocally, !trimmed.isEmpty else { return sections.filter { !$0.items.isEmpty } }
+        return sections.compactMap { section in
+            let items = section.items.filter { item in
+                ([item.title] + item.keywords).contains { Fuzzy.match(trimmed, in: $0) != nil }
+            }
+            return items.isEmpty ? nil : Section(title: section.title, items: items)
+        }
     }
 
     /// The value a newly shown dropdown starts with: the controlled value, else the stored one if it's still
