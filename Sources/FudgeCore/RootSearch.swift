@@ -145,6 +145,11 @@ public struct LaunchHistory: Sendable, Equatable, Codable {
         entries[id] = Entry(count: count, lastUsed: date)
     }
 
+    /// Forgets every launch: root search ranks by match alone again (Clear Search History).
+    public mutating func clear() {
+        entries = [:]
+    }
+
     /// Uses, discounted by age: a launch a week ago counts half as much as one today.
     public func score(_ id: String, now: Date = Date()) -> Double {
         guard let entry = entries[id] else { return 0 }

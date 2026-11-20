@@ -156,6 +156,17 @@ final class LauncherModel {
         reload()
     }
 
+    /// Clear Search History: root search forgets which results were opened, in memory and in `history.json`.
+    func clearHistory() {
+        history.clear()
+        do {
+            try history.save(to: paths.historyFile)
+        } catch {
+            FileHandle.standardError.write(Data("fudge: couldn't clear the search history: \(error)\n".utf8))
+        }
+        refreshResults()
+    }
+
     /// Finds applications and installed extensions again.
     func reload() {
         let installed = InstalledExtension.all(in: paths.extensionsDirectory)

@@ -60,6 +60,12 @@ fudge refuses a shortcut that's the launcher's or another command's, and one ano
 
 **Settings…** in the fudge menu bar menu, ⌘, in the fudge window, and "fudge Settings" in root search open the Settings window on its **General** page. Extensions' preferences are in the same window, under each extension. To go straight to a command's extension, select the command and press ⌘⇧, (or ⌘K, then **Configure Extension**). A command that needs a preference you haven't set opens that window instead of running.
 
+### Open at Login and search history
+
+fudge doesn't start at login until you turn on **Open at Login** at the top of **Settings… → General**. macOS then shows a "Login item added" notification, and lists fudge under **System Settings → General → Login Items**, where you can also turn it off; the switch shows what's set there. If macOS asks you to allow it first, the page says so and **Open Login Items** takes you there. The login item is tied to where the app is, so after moving fudge (to `/Applications`, say), turn Open at Login off and on again.
+
+Root search ranks what you open often first. **Clear Search History…** on the same page makes it forget, after asking.
+
 ### Calculator and currency
 
 Type a calculation in root search and the answer shows above the results: arithmetic (`5+5/10*39`), units (`13kg to lbs`), time zones (`3pm cet in pst`) and currencies (`100 usd to eur`, `€100 in usd`, `100 € in kr`). ↵ copies the answer.
