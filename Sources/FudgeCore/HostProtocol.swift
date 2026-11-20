@@ -65,11 +65,20 @@ public struct LaunchProps: Sendable, Equatable, Encodable {
     public var arguments: [String: String]
     public var launchType: String
     public var fallbackText: String?
+    /// `launchCommand`'s `context`, carried untouched: the worker turns its `$date` and `$buffer` markers back into
+    /// Dates and Buffers.
+    public var launchContext: JSONValue?
 
-    public init(arguments: [String: String] = [:], launchType: String = "userInitiated", fallbackText: String? = nil) {
+    public init(
+        arguments: [String: String] = [:],
+        launchType: String = "userInitiated",
+        fallbackText: String? = nil,
+        launchContext: JSONValue? = nil
+    ) {
         self.arguments = arguments
         self.launchType = launchType
         self.fallbackText = fallbackText
+        self.launchContext = launchContext
     }
 }
 

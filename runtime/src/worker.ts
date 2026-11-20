@@ -60,6 +60,10 @@ process.on("unhandledRejection", (reason) => report(reason, false));
 connect((request) => post(request));
 
 const { entry, mode, launchProps, preferences, environment } = workerData as WorkerData;
+// launchCommand's context carries Dates and Buffers as markers (see protocol.ts `encode`).
+if (launchProps.launchContext !== undefined) {
+    launchProps.launchContext = revive(launchProps.launchContext) as Record<string, unknown>;
+}
 setLaunchContext({
     preferences,
     environment: { ...placeholderEnvironment, commandMode: mode, ...environment },
