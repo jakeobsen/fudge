@@ -258,3 +258,13 @@ public enum ActionPanelReader {
         }
     }
 }
+
+/// fudge's own windows (Settings, and onboarding) close on ⌘Q as on ⌘W, and fudge keeps running: quitting fudge is
+/// "Quit fudge" in the menu bar item and root search (D-58). While a hotkey is being recorded the recorder takes
+/// every key, ⌘Q included, so it's recorded rather than closing the window.
+public enum WindowShortcut {
+    public static func closesWindow(_ pressed: KeyShortcut, recording: Bool) -> Bool {
+        guard !recording, pressed.modifiers == ["cmd"] else { return false }
+        return pressed.key == "q" || pressed.key == "w"
+    }
+}
