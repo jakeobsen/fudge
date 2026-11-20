@@ -46,7 +46,12 @@ struct ListScreen: View {
                                     model.activate()
                                 }
                                 .onTapGesture { model.select(node: item.id) }
+                                // Scrolling near the end asks for the next page.
+                                .onAppear { model.loadMoreIfNeeded(near: item.id) }
                             }
+                        }
+                        if list.isLoading, let pagination = list.pagination, pagination.hasMore {
+                            ForEach(0..<min(pagination.pageSize, 8), id: \.self) { _ in PlaceholderRow() }
                         }
                     }
                     .padding(8)
@@ -188,69 +193,137 @@ private struct ListDetailPane: View {
     }
 }
 
-/// The dropdown at the right of the search field, as a native pop-up button so ⌘P can open it.
-struct SearchBarDropdownButton: NSViewRepresentable {
-    let dropdown: SearchBarDropdown
-    let value: String?
-    /// Opens the menu whenever this changes.
-    let openRequests: Int
-    let assets: URL?
-    let onSelect: (String) -> Void
-
-    @MainActor final class Coordinator: NSObject {
-        var onSelect: (String) -> Void = { _ in }
-        var shown: SearchBarDropdown?
-        var openRequests = 0
-
-        @objc func changed(_ sender: NSPopUpButton) {
-            if let value = sender.selectedItem?.representedObject as? String { onSelect(value) }
+/// A row standing in for an item of the page that's loading.
+private struct PlaceholderRow: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 4).frame(width: 20, height: 20)
+            RoundedRectangle(cornerRadius: 4).frame(width: 180, height: 10)
+            Spacer()
         }
+        .foregroundStyle(Color.primary.opacity(0.08))
+        .padding(.horizontal, 10)
+        .frame(height: 38)
     }
+}
 
-    func makeCoordinator() -> Coordinator { Coordinator() }
+/// The dropdown at the right of the search field: the current value; a click or ⌘P opens its panel.
+struct SearchBarDropdownButton: View {
+    let model: LauncherModel
+    let dropdown: SearchBarDropdown
+    let assets: URL?
 
-    func makeNSView(context: Context) -> NSPopUpButton {
-        let button = NSPopUpButton(frame: .zero, pullsDown: false)
-        button.target = context.coordinator
-        button.action = #selector(Coordinator.changed(_:))
-        button.autoenablesItems = false
-        // Keep typing in the search field after picking a value.
-        button.refusesFirstResponder = true
-        button.font = .systemFont(ofSize: 13)
-        context.coordinator.openRequests = openRequests
-        return button
-    }
-
-    func updateNSView(_ button: NSPopUpButton, context: Context) {
-        let coordinator = context.coordinator
-        coordinator.onSelect = onSelect
-        if coordinator.shown != dropdown {
-            coordinator.shown = dropdown
-            let menu = NSMenu()
-            for (index, section) in dropdown.sections.enumerated() {
-                if let title = section.title {
-                    menu.addItem(.sectionHeader(title: title))
-                } else if index > 0 {
-                    menu.addItem(.separator())
+    var body: some View {
+        let current = dropdown.items.first { $0.value == model.dropdownValue } ?? dropdown.items.first
+        Button {
+            model.toggleDropdownPanel()
+        } label: {
+            HStack(spacing: 6) {
+                if let current {
+                    ExtensionImage(source: current.icon, assets: assets, size: 14)
+                    Text(current.title).lineLimit(1)
                 }
-                for item in section.items {
-                    let menuItem = NSMenuItem(title: item.title, action: nil, keyEquivalent: "")
-                    menuItem.representedObject = item.value
-                    menuItem.image = ExtensionImages.nsImage(item.icon, assets: assets, size: 16)
-                    menu.addItem(menuItem)
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .font(.system(size: 13))
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(
+                Color.primary.opacity(model.dropdownPanel == nil ? 0.08 : 0.14), in: RoundedRectangle(cornerRadius: 7))
+        }
+        .buttonStyle(.plain)
+        .tooltip(dropdown.tooltip.map { "\($0) (⌘P)" })
+    }
+}
+
+/// The dropdown's open panel: its own search field, then its sections, with the current value checked.
+struct DropdownPanelView: View {
+    @Bindable var model: LauncherModel
+    let dropdown: SearchBarDropdown
+    let assets: URL?
+    var focus: FocusState<LauncherView.Field?>.Binding
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                TextField(dropdown.placeholder ?? "Search…", text: $model.dropdownPanelQuery)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 13))
+                    .focused(focus, equals: .dropdown)
+                    .onSubmit { model.pickDropdownItem() }
+                    .onKeyPress(.upArrow) {
+                        model.moveDropdownSelection(by: -1)
+                        return .handled
+                    }
+                    .onKeyPress(.downArrow) {
+                        model.moveDropdownSelection(by: 1)
+                        return .handled
+                    }
+                    .onKeyPress(.escape) {
+                        model.escape()
+                        return .handled
+                    }
+                if dropdown.isLoading { ProgressView().controlSize(.mini) }
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 36)
+            Divider()
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 1) {
+                        let sections = model.dropdownPanelSections
+                        ForEach(Array(sections.enumerated()), id: \.offset) { index, section in
+                            if let title = section.title {
+                                Text(title)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundStyle(.secondary)
+                                    .padding(.horizontal, 8)
+                                    .padding(.top, index == 0 ? 2 : 8)
+                            } else if index > 0 {
+                                Divider().padding(.vertical, 4)
+                            }
+                            ForEach(section.items) { item in
+                                row(item)
+                                    .id(item.value)
+                                    .onTapGesture { model.pickDropdownItem(item.value) }
+                            }
+                        }
+                        if sections.isEmpty {
+                            Text(dropdown.isLoading ? "Loading…" : "No results").foregroundStyle(.secondary).padding(8)
+                        }
+                    }
+                    .padding(6)
+                }
+                .onChange(of: model.dropdownPanel?.selected) { _, value in
+                    if let value { proxy.scrollTo(value) }
                 }
             }
-            button.menu = menu
+            .frame(maxHeight: 280)
         }
-        let values = button.itemArray.map { $0.representedObject as? String }
-        if let index = values.firstIndex(where: { $0 != nil && $0 == value }) ?? values.firstIndex(where: { $0 != nil })
-        {
-            button.selectItem(at: index)
+        .frame(width: 280)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.12)))
+        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+    }
+
+    private func row(_ item: SearchBarDropdown.Item) -> some View {
+        HStack(spacing: 8) {
+            ExtensionImage(source: item.icon, assets: assets, size: 16)
+            Text(item.title).lineLimit(1)
+            Spacer()
+            if item.value == model.dropdownValue {
+                Image(systemName: "checkmark").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+            }
         }
-        button.toolTip = dropdown.tooltip
-        if openRequests != coordinator.openRequests {
-            coordinator.openRequests = openRequests
-            DispatchQueue.main.async { button.performClick(nil) }
-        }
+        .font(.system(size: 13))
+        .padding(.horizontal, 8)
+        .frame(height: 30)
+        .background(
+            item.value == model.dropdownPanel?.selected ? Color.primary.opacity(0.1) : .clear,
+            in: RoundedRectangle(cornerRadius: 6)
+        )
+        .contentShape(Rectangle())
     }
 }

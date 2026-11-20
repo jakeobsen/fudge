@@ -133,7 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// `--snapshot <file.png> [--query <text>] [--activate]`: renders the panel, saves a picture of it and quits.
 /// `--activate` presses ↵ after typing the query, then waits for the result. In the command that opened,
 /// `--search <text>` types into its search field, `--dropdown <value>` picks a value in its search bar dropdown,
-/// and `--actions` presses ⌘K.
+/// `--actions` presses ⌘K, and `--open-dropdown` presses ⌘P.
 /// `--snapshot <file.png> --settings [<extension>]` renders the Settings window instead.
 /// For checking the layout without looking at the screen.
 @MainActor
@@ -144,6 +144,7 @@ struct Snapshot {
     let search: String?
     let dropdown: String?
     let actions: Bool
+    let openDropdown: Bool
     let settings: Bool
     let settingsExtension: String?
 
@@ -159,6 +160,7 @@ struct Snapshot {
         dropdown = value("--dropdown")
         activate = arguments.contains("--activate")
         actions = arguments.contains("--actions")
+        openDropdown = arguments.contains("--open-dropdown")
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1
@@ -204,7 +206,11 @@ struct Snapshot {
         if actions {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { model.toggleActionPanel() }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + (actions || inCommand ? 3.5 : activate ? 3 : 1)) {
+        if openDropdown {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { model.toggleDropdownPanel() }
+        }
+        let waits = actions || openDropdown || inCommand
+        DispatchQueue.main.asyncAfter(deadline: .now() + (waits ? 3.5 : activate ? 3 : 1)) {
             guard let view = panel.contentView else { exit(1) }
             save(view)
         }
