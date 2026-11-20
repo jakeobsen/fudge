@@ -7,7 +7,7 @@ fudge is an independent project. It is not affiliated with or endorsed by Raycas
 ## What's here
 
 - `Sources/FudgeApp`: the macOS app. It runs in the menu bar, without a Dock icon.
-- `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for fudge. A running fudge picks up an extension you install, rebuild or remove within a second, with nothing to reload.
+- `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for fudge; `--into <folder>` installs it in that extensions folder instead. A running fudge picks up an extension you install, rebuild or remove within a second, with nothing to reload.
 - `Sources/FudgeCore`: code shared by the app and the tool.
 - `runtime/`: the extension host. This is the Node.js program that runs extensions. The app talks to it over stdin/stdout.
 
@@ -88,7 +88,9 @@ Currency conversion is off until you turn it on under **Settings… → General*
 
 ### Network
 
-fudge makes no connections of its own (no updater, telemetry or crash reporting), with two exceptions: the images extensions show (see **Images from the web** below), and one you turn on yourself: with currency conversion on, it downloads the European Central Bank's daily reference rates (`https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml`). It downloads that one public file when you turn the setting on, then when the rates are a day old, at most once every 12 hours. Like any download, the server sees your IP address, and nothing else is sent: no cookies and no identifier beyond `fudge/<version>` as the user agent. The rates are kept in `exchange-rates.json` in the support folder. Turning the setting off stops the downloads. Extensions make their own connections, as they do in Raycast.
+fudge makes no connections of its own (no updater, telemetry or crash reporting), with three exceptions: the images extensions show (see **Images from the web** below), and two you turn on yourself. With currency conversion on, it downloads the European Central Bank's daily reference rates (`https://www.ecb.europa.eu/stats/eurofxref/eurofxref-daily.xml`). It downloads that one public file when you turn the setting on, then when the rates are a day old, at most once every 12 hours. Like any download, the server sees your IP address, and nothing else is sent: no cookies and no identifier beyond `fudge/<version>` as the user agent. The rates are kept in `exchange-rates.json` in the support folder. Turning the setting off stops the downloads. Extensions make their own connections, as they do in Raycast.
+
+**The Extension Store** is the other one you turn on yourself, and it's off until you turn it on under **Settings… → General** and confirm what it does. While it's on, fudge connects to GitHub (github.com and its image servers) to download the list of extensions in the open-source repository github.com/raycast/extensions, the extensions you install, and their pictures, and npm downloads those extensions' packages from registry.npmjs.org. fudge never contacts Raycast's servers. Turning the store off deletes its downloaded list; extensions you installed stay installed.
 
 ### Selected text and Finder items
 
