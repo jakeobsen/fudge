@@ -112,18 +112,17 @@ private struct HotkeyCell: View {
     let model: SettingsModel
     let commandID: String
     @State private var hovering = false
-    @State private var monitor: Any?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             if model.recording == commandID {
-                Text("Press a shortcut…")
-                    .foregroundStyle(Color.accentColor)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color.accentColor))
-                    .onAppear(perform: startMonitor)
-                    .onDisappear(perform: stopMonitor)
+                HotkeyRecordingPrompt { [model, commandID] key in
+                    switch key {
+                    case .cancel: model.cancelRecording()
+                    case .clear: model.clearHotkey(commandID)
+                    case .record(let spec): model.record(spec, for: commandID)
+                    }
+                }
             } else if let spec = model.hotkey(for: commandID) {
                 HStack(spacing: 4) {
                     Button {
@@ -152,34 +151,6 @@ private struct HotkeyCell: View {
             }
         }
         .onHover { hovering = $0 }
-    }
-
-    private func startMonitor() {
-        let model = model
-        let commandID = commandID
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            MainActor.assumeIsolated {
-                let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-                let modified = !flags.intersection([.command, .option, .control, .shift]).isEmpty
-                if !modified, event.keyCode == UInt16(kVK_Escape) {
-                    model.cancelRecording()
-                } else if !modified, event.keyCode == UInt16(kVK_Delete) || event.keyCode == UInt16(kVK_ForwardDelete) {
-                    model.clearHotkey(commandID)
-                } else {
-                    let spec = HotKeySpec(
-                        keyCode: UInt32(event.keyCode), command: flags.contains(.command),
-                        option: flags.contains(.option), control: flags.contains(.control),
-                        shift: flags.contains(.shift))
-                    model.record(spec, for: commandID)
-                }
-            }
-            return nil
-        }
-    }
-
-    private func stopMonitor() {
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        monitor = nil
     }
 }
 
