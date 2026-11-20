@@ -60,13 +60,14 @@ public enum ExtensionStore {
     public enum Consent {
         public static let title = "Turn on the Extension Store?"
         public static let message =
-            "The Extension Store lists the extensions published in the open-source repository "
-            + "github.com/raycast/extensions, and installs the ones you choose. While it's on, fudge connects to "
-            + "GitHub (github.com and its image servers) to download the list, the extensions you install, and "
-            + "their pictures. npm downloads their packages from registry.npmjs.org; the store refuses extensions "
-            + "that get packages from anywhere else. fudge never contacts Raycast's servers. An extension you "
-            + "install runs its own code on your Mac with your permissions, like any app you install, so only "
-            + "install extensions you trust."
+            "This adds the Extension Store to Fudge. It downloads extensions from Raycast's open-source extensions "
+            + "repository on GitHub."
+        /// The second paragraph, with `issueLinkText` linking to `issuesURL`.
+        public static let note =
+            "Fudge aims to run Raycast extensions, but not all of them work yet. If you find one that doesn't, "
+            + "please file an issue."
+        public static let issueLinkText = "file an issue"
+        public static let issuesURL = URL(string: "https://github.com/jakeobsen/fudge/issues")!
         public static let confirm = "Turn On"
         public static let cancel = "Cancel"
     }
