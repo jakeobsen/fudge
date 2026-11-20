@@ -664,15 +664,17 @@ private struct PreferenceField: View {
     @ViewBuilder private var control: some View {
         switch preference.type {
         case "checkbox":
-            LabeledContent(preference.title ?? "") {
-                Toggle(
-                    preference.label ?? preference.name,
-                    isOn: Binding(
-                        get: { if case .bool(let value) = current { value } else { false } },
-                        set: { set(.bool($0)) }
-                    )
+            // A switch on the right, as everywhere in Settings: the title, with the manifest's `label` under it.
+            Toggle(
+                isOn: Binding(
+                    get: { if case .bool(let value) = current { value } else { false } },
+                    set: { set(.bool($0)) }
                 )
+            ) {
+                Text(title)
+                if preference.title != nil, let label = preference.label { Text(label) }
             }
+            .toggleStyle(.switch)
         case "dropdown":
             Picker(title, selection: text) {
                 ForEach(preference.data ?? [], id: \.value) { option in
