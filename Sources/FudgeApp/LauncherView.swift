@@ -11,7 +11,7 @@ struct LauncherView: View {
     var body: some View {
         VStack(spacing: 0) {
             searchBar
-            Divider()
+            if model.isLoading { LoadingBar() } else { Divider() }
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
@@ -55,6 +55,16 @@ struct LauncherView: View {
                     model.escape()
                     return .handled
                 }
+            if let command = model.command, let dropdown = command.list?.dropdown {
+                SearchBarDropdownButton(
+                    dropdown: dropdown,
+                    value: model.dropdownValue,
+                    openRequests: model.dropdownOpenRequests,
+                    assets: command.assets,
+                    onSelect: { model.selectDropdownValue($0) }
+                )
+                .fixedSize()
+            }
         }
         .padding(.horizontal, 18)
         .frame(height: 58)
@@ -67,8 +77,10 @@ struct LauncherView: View {
         case .command(let command):
             if let failure = command.failure {
                 FailureView(failure: failure)
+            } else if let list = command.list {
+                ListScreen(model: model, command: command, list: list)
             } else if let view = command.view {
-                CommandContent(view: view, rows: model.commandItems, selected: command.selectedNode)
+                CommandContent(view: view, assets: command.assets)
             } else {
                 ProgressView().controlSize(.small)
             }
@@ -167,45 +179,16 @@ private struct RootResults: View {
     }
 }
 
-/// A command's view. Lists and details render simply here; their full look comes with later work.
+/// A command's view other than a List. Details render simply here; their full look comes with later work.
 private struct CommandContent: View {
     let view: UINode
-    let rows: [UINode]
-    let selected: Int?
+    let assets: URL?
 
     var body: some View {
         switch view.type {
-        case "List":
-            if rows.isEmpty {
-                Text(view.bool("isLoading") == true ? "Loading…" : "No results")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        LazyVStack(spacing: 2) {
-                            ForEach(rows) { row in
-                                Row(
-                                    icon: Image(systemName: "circle.fill"),
-                                    title: row.string("title") ?? "",
-                                    subtitle: row.string("subtitle"),
-                                    accessory: nil,
-                                    selected: row.id == (selected ?? rows.first?.id)
-                                )
-                                .id(row.id)
-                            }
-                        }
-                        .padding(8)
-                    }
-                    .onChange(of: selected) { _, id in proxy.scrollTo(id) }
-                }
-            }
         case "Detail":
             ScrollView {
-                Text((try? AttributedString(markdown: view.string("markdown") ?? "")) ?? "")
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(20)
+                MarkdownView(markdown: view.string("markdown") ?? "", assets: assets).padding(20)
             }
         default:
             Text("fudge can't show a \(view.type) yet.")

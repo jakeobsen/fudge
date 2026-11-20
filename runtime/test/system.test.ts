@@ -113,6 +113,19 @@ test("Cache subscribers hear sets, removals and clears", () => {
     assert.deepEqual(heard, [["k", "v"], ["k", undefined], [undefined, undefined]]);
 });
 
+test("Cache methods work detached, as useSyncExternalStore calls subscribe", () => {
+    const { get, has, set, remove, clear, subscribe } = new Cache({ namespace: "detached" });
+    const heard: (string | undefined)[] = [];
+    const unsubscribe = subscribe((key) => heard.push(key));
+    set("k", "v");
+    assert.equal(get("k"), "v");
+    assert.equal(has("k"), true);
+    assert.equal(remove("k"), true);
+    clear();
+    unsubscribe();
+    assert.deepEqual(heard, ["k", "k", undefined]);
+});
+
 test("Clipboard calls go to the app", async () => {
     await Clipboard.copy("hello", { concealed: true });
     await Clipboard.copy(42);

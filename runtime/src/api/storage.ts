@@ -110,7 +110,14 @@ export class Cache {
         return this.#directory;
     }
 
-    get(key: string): string | undefined {
+    get isEmpty(): boolean {
+        return this.#store.entries.size === 0;
+    }
+
+    // The methods are bound to the instance: @raycast/utils hands `cache.subscribe` to
+    // useSyncExternalStore on its own, and Raycast's Cache works when called that way.
+
+    get = (key: string): string | undefined => {
         const value = this.#store.entries.get(key);
         if (value !== undefined) {
             // Most recently used last.
@@ -118,17 +125,13 @@ export class Cache {
             this.#store.entries.set(key, value);
         }
         return value;
-    }
+    };
 
-    has(key: string): boolean {
+    has = (key: string): boolean => {
         return this.#store.entries.has(key);
-    }
+    };
 
-    get isEmpty(): boolean {
-        return this.#store.entries.size === 0;
-    }
-
-    set(key: string, data: string): void {
+    set = (key: string, data: string): void => {
         const { entries } = this.#store;
         entries.delete(key);
         entries.set(key, data);
@@ -141,27 +144,27 @@ export class Cache {
         }
         this.#save();
         this.#notify(key, data);
-    }
+    };
 
-    remove(key: string): boolean {
+    remove = (key: string): boolean => {
         const removed = this.#store.entries.delete(key);
         if (removed) {
             this.#save();
             this.#notify(key, undefined);
         }
         return removed;
-    }
+    };
 
-    clear(options: { notifySubscribers: boolean } = { notifySubscribers: true }): void {
+    clear = (options: { notifySubscribers: boolean } = { notifySubscribers: true }): void => {
         this.#store.entries.clear();
         this.#save();
         if (options.notifySubscribers) this.#notify(undefined, undefined);
-    }
+    };
 
-    subscribe(subscriber: Subscriber): () => void {
+    subscribe = (subscriber: Subscriber): (() => void) => {
         this.#store.subscribers.add(subscriber);
         return () => this.#store.subscribers.delete(subscriber);
-    }
+    };
 
     #save(): void {
         writeJSON(this.#store.file, Object.fromEntries(this.#store.entries));

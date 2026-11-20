@@ -131,7 +131,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 /// `--snapshot <file.png> [--query <text>] [--activate]`: renders the panel, saves a picture of it and quits.
-/// `--activate` presses ↵ after typing the query, then waits for the result; `--actions` then presses ⌘K.
+/// `--activate` presses ↵ after typing the query, then waits for the result. In the command that opened,
+/// `--search <text>` types into its search field, `--dropdown <value>` picks a value in its search bar dropdown,
+/// and `--actions` presses ⌘K.
 /// `--snapshot <file.png> --settings [<extension>]` renders the Settings window instead.
 /// For checking the layout without looking at the screen.
 @MainActor
@@ -139,6 +141,8 @@ struct Snapshot {
     let file: URL
     let query: String?
     let activate: Bool
+    let search: String?
+    let dropdown: String?
     let actions: Bool
     let settings: Bool
     let settingsExtension: String?
@@ -146,11 +150,13 @@ struct Snapshot {
     init?(arguments: [String]) {
         guard let index = arguments.firstIndex(of: "--snapshot"), index + 1 < arguments.count else { return nil }
         file = URL(fileURLWithPath: arguments[index + 1])
-        if let queryIndex = arguments.firstIndex(of: "--query"), queryIndex + 1 < arguments.count {
-            query = arguments[queryIndex + 1]
-        } else {
-            query = nil
+        func value(_ flag: String) -> String? {
+            guard let index = arguments.firstIndex(of: flag), index + 1 < arguments.count else { return nil }
+            return arguments[index + 1]
         }
+        query = value("--query")
+        search = value("--search")
+        dropdown = value("--dropdown")
         activate = arguments.contains("--activate")
         actions = arguments.contains("--actions")
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
@@ -188,10 +194,17 @@ struct Snapshot {
         panel.orderFrontRegardless()
         if let query { model.searchText = query }
         if activate { model.activate() }
+        let inCommand = search != nil || dropdown != nil
+        if inCommand {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [search, dropdown] in
+                if let dropdown { model.selectDropdownValue(dropdown) }
+                if let search { model.searchText = search }
+            }
+        }
         if actions {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { model.toggleActionPanel() }
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + (actions ? 3.5 : activate ? 3 : 1)) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (actions || inCommand ? 3.5 : activate ? 3 : 1)) {
             guard let view = panel.contentView else { exit(1) }
             save(view)
         }

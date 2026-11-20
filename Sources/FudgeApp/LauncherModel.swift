@@ -16,11 +16,32 @@ final class LauncherModel {
     struct CommandScreen: Equatable {
         var session: String
         var title: String
+        var extensionName = ""
+        var commandName = ""
+        /// The extension's assets folder, for its icons and images.
+        var assets: URL?
         var view: UINode?
         var depth = 1
         var searchText = ""
+        /// The search text of each view below the top one, restored when it's shown again.
+        var searchStack: [String] = []
         var selectedNode: Int?
         var failure: Failure?
+        /// The List the top view shows, filtered by the search text.
+        var list: ListContent?
+        /// The search bar dropdown on screen, by node id, and its value.
+        var dropdown: DropdownState?
+        /// What onSelectionChange last reported; nil until it first does.
+        var reportedSelection: String??
+        /// The `selectedItemId` the selection last followed.
+        var followedItemId: String?
+        /// The search changed and the command filters itself: select the first item of what it sends back.
+        var selectFirstOnRender = false
+    }
+
+    struct DropdownState: Equatable {
+        var node: Int
+        var value: String?
     }
 
     enum Screen: Equatable {
@@ -81,10 +102,15 @@ final class LauncherModel {
     /// The extension each session belongs to.
     @ObservationIgnored private var sessionExtensions: [String: String] = [:]
     @ObservationIgnored private var icons: [String: NSImage] = [:]
+    @ObservationIgnored private let dropdownStore: SearchBarDropdown.Store
+    @ObservationIgnored private var searchDebounce: Task<Void, Never>?
+    /// Bumped by ⌘P; the search bar's dropdown opens its menu when it changes.
+    private(set) var dropdownOpenRequests = 0
 
     init(paths: FudgePaths) {
         self.paths = paths
         history = LaunchHistory.load(from: paths.historyFile)
+        dropdownStore = SearchBarDropdown.Store(file: paths.dropdownValuesFile)
         reload()
     }
 
@@ -108,8 +134,11 @@ final class LauncherModel {
             switch screen {
             case .command(var command):
                 command.searchText = newValue
+                refreshList(&command, selectFirst: true)
+                command.selectFirstOnRender = command.view.map { !ListContent.filtersLocally($0) } ?? false
                 screen = .command(command)
                 commandSearchChanged(command)
+                reportSelection()
             case .root, .failure:
                 rootQuery = newValue
                 if case .failure = screen { screen = .root }
@@ -132,40 +161,131 @@ final class LauncherModel {
 
     // MARK: - Command views
 
-    /// The rows of the running command's List, after filtering.
-    var commandItems: [UINode] {
-        guard case .command(let command) = screen, let view = command.view, view.type == "List" else { return [] }
-        let all = Self.listItems(in: view)
-        guard Self.filtersLocally(view), !command.searchText.isEmpty else { return all }
-        return all.filter { item in
-            let texts =
-                [item.string("title"), item.string("subtitle")].compactMap { $0 }
-                + Self.keywords(of: item)
-            return texts.contains { Fuzzy.match(command.searchText, in: $0) != nil }
+    /// The running command's screen, if one is showing.
+    var command: CommandScreen? {
+        if case .command(let command) = screen { return command }
+        return nil
+    }
+
+    /// Whether the top view says it's loading.
+    var isLoading: Bool {
+        command?.view?.bool("isLoading") == true
+    }
+
+    /// The selected item of the running command's List.
+    var selectedListItem: ListContent.Item? {
+        guard let command, let items = command.list?.items else { return nil }
+        return items.first { $0.id == command.selectedNode } ?? items.first
+    }
+
+    /// The actions for what's selected: the selected item's; with no items, the empty view's or the List's own;
+    /// for other views, the view's own.
+    var currentActions: [ActionSection] {
+        guard let command, let view = command.view else { return [] }
+        guard let list = command.list else { return ActionPanelReader.sections(of: view.node("actions")) }
+        if let item = selectedListItem { return ActionPanelReader.sections(of: item.actions) }
+        return ActionPanelReader.sections(of: list.emptyView?.actions ?? view.node("actions"))
+    }
+
+    /// Reads the top view's List again, after it or the search text changed, and keeps the selection on the
+    /// same item where it can.
+    private func refreshList(_ command: inout CommandScreen, selectFirst: Bool) {
+        guard let view = command.view, view.type == "List" else {
+            command.list = nil
+            command.dropdown = nil
+            return
+        }
+        let previous = command.list?.items.first { $0.id == command.selectedNode }
+        let list = ListContent(view, searchText: command.searchText)
+        command.list = list
+        let wanted = view.string("selectedItemId")
+        if let wanted, wanted != command.followedItemId,
+            let match = list.items.first(where: { $0.itemId == wanted })
+        {
+            command.selectedNode = match.id
+            command.followedItemId = wanted
+        } else if selectFirst {
+            command.selectedNode = list.items.first?.id
+        } else {
+            command.selectedNode = list.reselect(node: command.selectedNode, itemId: previous?.itemId)
+        }
+        if wanted == nil { command.followedItemId = nil }
+        syncDropdown(&command, list.dropdown)
+    }
+
+    /// Tells the command which item is selected (`onSelectionChange`) when that changed.
+    private func reportSelection() {
+        guard var command, let view = command.view, let list = command.list,
+            view.hasCallback("onSelectionChange")
+        else { return }
+        let item = list.items.first { $0.id == command.selectedNode }
+        // Nothing to report until the first items arrive.
+        if item == nil, list.isLoading { return }
+        let id = item.map { $0.itemId ?? String($0.id) }
+        if let reported = command.reportedSelection, reported == id { return }
+        command.reportedSelection = .some(id)
+        screen = .command(command)
+        send(
+            .event(
+                session: command.session, node: view.id, path: ["onSelectionChange"],
+                args: [id.map { .string($0) } ?? .null]))
+    }
+
+    /// Selects an item of the List (a click).
+    func select(node: Int) {
+        guard var command, command.list?.items.contains(where: { $0.id == node }) == true else { return }
+        command.selectedNode = node
+        screen = .command(command)
+        reportSelection()
+    }
+
+    /// Calls a function prop of a node, e.g. a metadata tag's `onAction`.
+    func call(node: Int, _ path: [String]) {
+        guard let command else { return }
+        send(.event(session: command.session, node: node, path: path, args: []))
+    }
+
+    // MARK: - The search bar dropdown
+
+    /// What the search bar dropdown shows: the extension's value when it controls it, else the user's pick.
+    var dropdownValue: String? {
+        command?.list?.dropdown?.value ?? command?.dropdown?.value
+    }
+
+    /// Starts a newly shown dropdown on its first value and tells the command (`onChange`), as Raycast does;
+    /// afterwards follows the value when the extension controls it.
+    private func syncDropdown(_ command: inout CommandScreen, _ dropdown: SearchBarDropdown?) {
+        guard let dropdown else {
+            command.dropdown = nil
+            return
+        }
+        if command.dropdown?.node == dropdown.id, command.dropdown?.value != nil {
+            if let controlled = dropdown.value { command.dropdown?.value = controlled }
+            return
+        }
+        let key = SearchBarDropdown.Store.key(
+            extension: command.extensionName, command: command.commandName, dropdown: dropdown.name)
+        let stored = dropdown.storesValue ? dropdownStore.value(for: key) : nil
+        let initial = dropdown.initialValue(stored: stored)
+        command.dropdown = DropdownState(node: dropdown.id, value: initial)
+        if let initial, dropdown.hasOnChange {
+            send(.event(session: command.session, node: dropdown.id, path: ["onChange"], args: [.string(initial)]))
         }
     }
 
-    static func listItems(in view: UINode) -> [UINode] {
-        view.children.flatMap { child in child.type == "List.Section" ? child.children : [child] }
-            .filter { $0.type == "List.Item" }
-    }
-
-    /// Raycast filters a List itself unless the command handles search (onSearchTextChange) or says not to.
-    static func filtersLocally(_ view: UINode) -> Bool {
-        if let filtering = view.bool("filtering") { return filtering }
-        return !view.hasCallback("onSearchTextChange")
-    }
-
-    static func keywords(of item: UINode) -> [String] {
-        guard case .array(let values) = item.props["keywords"] else { return [] }
-        return values.compactMap { if case .string(let keyword) = $0 { keyword } else { nil } }
-    }
-
-    /// The actions for what's selected: the selected row's, else the view's own.
-    var currentActions: [ActionSection] {
-        guard case .command(let command) = screen, let view = command.view else { return [] }
-        let row = commandItems.first { $0.id == command.selectedNode } ?? commandItems.first
-        return ActionPanelReader.sections(of: row?.node("actions") ?? view.node("actions"))
+    /// The user picked a value in the search bar dropdown.
+    func selectDropdownValue(_ value: String) {
+        guard var command, let dropdown = command.list?.dropdown else { return }
+        command.dropdown = DropdownState(node: dropdown.id, value: value)
+        screen = .command(command)
+        if dropdown.storesValue {
+            let key = SearchBarDropdown.Store.key(
+                extension: command.extensionName, command: command.commandName, dropdown: dropdown.name)
+            try? dropdownStore.set(value, for: key)
+        }
+        if dropdown.hasOnChange {
+            send(.event(session: command.session, node: dropdown.id, path: ["onChange"], args: [.string(value)]))
+        }
     }
 
     /// What ↵ does.
@@ -257,24 +377,33 @@ final class LauncherModel {
             if let secondaryAction { run(secondaryAction) }
             return true
         }
-        guard !pressed.modifiers.isEmpty, let entry = ActionPanelReader.action(for: pressed, in: currentActions) else {
-            return false
+        guard !pressed.modifiers.isEmpty else { return false }
+        if let entry = ActionPanelReader.action(for: pressed, in: currentActions) {
+            run(entry)
+            return true
         }
-        run(entry)
-        return true
+        // ⌘P opens the search bar dropdown, unless an action took the shortcut.
+        if pressed == KeyShortcut(key: "p", modifiers: ["cmd"]), command?.list?.dropdown != nil {
+            dropdownOpenRequests += 1
+            return true
+        }
+        return false
     }
 
+    /// Tells the command the search text changed; with `throttle`, once typing pauses.
     private func commandSearchChanged(_ command: CommandScreen) {
-        guard let view = command.view else { return }
-        if view.hasCallback("onSearchTextChange") {
-            send(
-                .event(
-                    session: command.session, node: view.id, path: ["onSearchTextChange"],
-                    args: [.string(command.searchText)]))
+        searchDebounce?.cancel()
+        guard let view = command.view, view.hasCallback("onSearchTextChange") else { return }
+        let event = AppMessage.event(
+            session: command.session, node: view.id, path: ["onSearchTextChange"], args: [.string(command.searchText)])
+        guard view.bool("throttle") == true else {
+            send(event)
+            return
         }
-        if case .command(var updated) = screen {
-            updated.selectedNode = commandItems.first?.id
-            screen = .command(updated)
+        searchDebounce = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            self?.send(event)
         }
     }
 
@@ -287,11 +416,11 @@ final class LauncherModel {
             let index = results.firstIndex { $0.id == selectedItem } ?? 0
             selectedItem = results[max(0, min(results.count - 1, index + offset))].id
         case .command(var command):
-            let rows = commandItems
-            guard !rows.isEmpty else { return }
+            guard let rows = command.list?.items, !rows.isEmpty else { return }
             let index = rows.firstIndex { $0.id == command.selectedNode } ?? 0
             command.selectedNode = rows[max(0, min(rows.count - 1, index + offset))].id
             screen = .command(command)
+            reportSelection()
         case .failure:
             break
         }
@@ -383,7 +512,8 @@ final class LauncherModel {
             )
             launch(
                 item.title,
-                of: extensionName,
+                of: installed,
+                command: commandName,
                 entry: entry,
                 mode: mode,
                 preferences: preferences.values,
@@ -394,12 +524,14 @@ final class LauncherModel {
 
     private func launch(
         _ title: String,
-        of extensionName: String,
+        of installed: InstalledExtension,
+        command commandName: String,
         entry: URL,
         mode: String,
         preferences: [String: JSONValue],
         environment: LaunchEnvironment
     ) {
+        let extensionName = installed.manifest.name
         let host: ExtensionHost
         do {
             host = try ensureHost()
@@ -411,7 +543,10 @@ final class LauncherModel {
         nextSession += 1
         sessionExtensions[session] = extensionName
         if mode == "view" {
-            screen = .command(CommandScreen(session: session, title: title))
+            screen = .command(
+                CommandScreen(
+                    session: session, title: title, extensionName: extensionName, commandName: commandName,
+                    assets: installed.assetsDirectory))
         } else {
             background[session] = title
             status = "Running \(title)…"
@@ -420,7 +555,7 @@ final class LauncherModel {
             try host.send(
                 .launch(
                     session: session, entry: entry.path, mode: mode, launchProps: LaunchProps(),
-                    preferences: preferences)
+                    preferences: preferences, environment: environment)
             )
         } catch {
             screen = .failure(Failure(title: "Can't run \(title)", message: String(describing: error)))
@@ -476,13 +611,28 @@ final class LauncherModel {
         switch message {
         case .render(let session, let view, let depth):
             guard case .command(var command) = screen, command.session == session else { return }
+            if depth != command.depth {
+                // A view was pushed or popped. Each view has its own search text and selection.
+                if depth > command.depth {
+                    command.searchStack.append(command.searchText)
+                    command.searchText = ""
+                } else {
+                    while command.searchStack.count >= depth { command.searchText = command.searchStack.removeLast() }
+                }
+                command.selectedNode = nil
+                command.dropdown = nil
+                command.reportedSelection = nil
+                command.followedItemId = nil
+                command.selectFirstOnRender = false
+                actionPanel = nil
+            }
             command.view = view
             command.depth = depth
+            refreshList(&command, selectFirst: command.selectFirstOnRender)
+            // Results for a new search may come after a loading render or two.
+            if command.list?.isLoading != true { command.selectFirstOnRender = false }
             screen = .command(command)
-            if case .command(var updated) = screen, !commandItems.contains(where: { $0.id == updated.selectedNode }) {
-                updated.selectedNode = commandItems.first?.id
-                screen = .command(updated)
-            }
+            reportSelection()
 
         case .error(let session, let message, let stack, let fatal):
             if case .command(var command) = screen, command.session == session {
