@@ -9,6 +9,11 @@ struct GeneralPage: View {
 
     var body: some View {
         Form {
+            if let problem = model.settingsProblem {
+                Label(problem, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.red)
+            }
             Section {
                 Toggle(
                     "Open at Login",

@@ -26,6 +26,8 @@ public struct RootItem: Sendable, Equatable, Identifiable {
     public var iconFile: URL?
     /// A command's `arguments`, entered in fields after the query.
     public var arguments: [ExtensionManifest.Argument]
+    /// A command's alias, from `settings.json`.
+    public var alias: String?
 
     public init(
         id: String,
@@ -114,9 +116,56 @@ public struct RootItem: Sendable, Equatable, Identifiable {
 }
 
 /// Ranks root items for a query: fuzzy match first, launch history second.
+/// One row of root search: a ranked item, or the Calculator card.
+public enum RootRow: Sendable, Equatable, Identifiable {
+    case item(RootItem)
+    case calculator
+
+    /// The Calculator card's id, as the selection holds it.
+    public static let calculatorID = "calculator"
+
+    public var id: String {
+        switch self {
+        case .item(let item): item.id
+        case .calculator: Self.calculatorID
+        }
+    }
+}
+
 public enum RootSearch {
     /// fudge's own items, searched alongside applications and commands.
     public static let builtInItems: [RootItem] = [.settings, .reloadExtensions, .quit]
+
+    /// Applies `settings` to command items: disabled commands (or commands of disabled extensions) are left out,
+    /// and each command gets its alias.
+    public static func applying(_ settings: FudgeSettings, to items: [RootItem]) -> [RootItem] {
+        items.compactMap { item in
+            guard case .command(let extensionName, let commandName, _, _) = item.kind else { return item }
+            guard settings.isEnabled(extension: extensionName, command: commandName) else { return nil }
+            var item = item
+            item.alias =
+                settings.commands[FudgeSettings.commandID(extension: extensionName, command: commandName)]?
+                .alias
+            return item
+        }
+    }
+
+    /// Root search's rows in order: the command whose alias the query is exactly, then the Calculator card when the
+    /// query is a calculation, then the other `results` as ranked. The panel draws these, and ↑↓ moves through
+    /// them, so the two always agree.
+    public static func rows(_ results: [RootItem], query: String, hasCalculator: Bool) -> [RootRow] {
+        let match = exactAliasMatch(in: results, query: query)
+        var rows = match.map { [RootRow.item($0)] } ?? []
+        if hasCalculator { rows.append(.calculator) }
+        return rows + results.filter { $0.id != match?.id }.map(RootRow.item)
+    }
+
+    /// The result whose alias is exactly `query`, ignoring case and surrounding spaces.
+    public static func exactAliasMatch(in results: [RootItem], query: String) -> RootItem? {
+        let typed = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !typed.isEmpty else { return nil }
+        return results.first { $0.alias?.lowercased() == typed }
+    }
 
     public static func rank(_ items: [RootItem], query: String, history: LaunchHistory, now: Date = Date())
         -> [RootItem]
@@ -141,7 +190,16 @@ public enum RootSearch {
         }.map(\.0)
     }
 
+    /// An exact alias outranks everything, and an alias the query starts outranks any fuzzy match of a title.
+    static let exactAliasScore = 1_000_000
+    static let aliasPrefixScore = 100_000
+
     static func bestMatch(_ query: String, for item: RootItem) -> Int? {
+        if let alias = item.alias?.lowercased() {
+            let typed = query.lowercased()
+            if alias == typed { return exactAliasScore }
+            if alias.hasPrefix(typed) { return aliasPrefixScore + typed.count }
+        }
         var best = Fuzzy.match(query, in: item.title)?.score
         for keyword in item.keywords {
             if let score = Fuzzy.match(query, in: keyword)?.score, score - 5 > (best ?? .min) { best = score - 5 }

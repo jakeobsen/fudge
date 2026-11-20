@@ -171,15 +171,28 @@ final class LauncherModel {
 
     /// Finds applications and installed extensions again.
     func reload() {
-        let installed = InstalledExtension.all(in: paths.extensionsDirectory)
-        extensions = Dictionary(installed.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
-        loadCommandMetadata(installed)
-        items =
-            installed.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) } + RootSearch.builtInItems
-            + ApplicationIndex.scan()
+        installedExtensions = InstalledExtension.all(in: paths.extensionsDirectory)
+        extensions = Dictionary(
+            installedExtensions.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
+        loadCommandMetadata(installedExtensions)
+        applications = ApplicationIndex.scan()
+        applySettings()
+    }
+
+    /// Rebuilds root search from `settings.json`: commands that are disabled leave it, and the rest get their
+    /// aliases and hotkeys. Settings calls it after each change.
+    func applySettings() {
+        settings = FudgeSettings.load(from: paths.settingsFile)
+        let commands = installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
+        items = RootSearch.applying(settings, to: commands) + RootSearch.builtInItems + applications
         refreshResults()
         refreshCommandHotkeys()
     }
+
+    @ObservationIgnored private var installedExtensions: [InstalledExtension] = []
+    @ObservationIgnored private var applications: [RootItem] = []
+    /// `settings.json`: command hotkeys, aliases and enabled states.
+    @ObservationIgnored private(set) var settings = FudgeSettings()
 
     /// Reads `command-metadata.json`, dropping the entries of commands that aren't installed.
     private func loadCommandMetadata(_ installed: [InstalledExtension]) {
@@ -204,8 +217,10 @@ final class LauncherModel {
         metadata.setSubtitle(subtitle, extension: extensionName, command: commandName)
         try metadata.save(to: paths.commandMetadataFile)
         commandMetadata = metadata
+        // Through the settings too, so the command keeps its alias.
         let fresh = Dictionary(
-            RootItem.commands(of: installed, metadata: metadata).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            RootSearch.applying(settings, to: RootItem.commands(of: installed, metadata: metadata)).map { ($0.id, $0) },
+            uniquingKeysWith: { a, _ in a })
         items = items.map { fresh[$0.id] ?? $0 }
         results = results.map { fresh[$0.id] ?? $0 }
     }
@@ -233,8 +248,17 @@ final class LauncherModel {
                 commandSearchChanged(command)
                 reportSelection()
             case .root, .failure:
-                rootQuery = newValue
                 if case .failure = screen { screen = .root }
+                // An alias and a space hand the rest of the query to that command's first argument (as in Raycast).
+                if let handed = CommandAliases.handOff(newValue, in: items) {
+                    rootQuery = String(newValue.prefix { $0 != " " })
+                    refreshResults()
+                    selectedItem = handed.item.id
+                    arguments.set(handed.rest, at: 0)
+                    arguments.focus = 0
+                    return
+                }
+                rootQuery = newValue
                 refreshResults()
             }
         }
@@ -250,12 +274,18 @@ final class LauncherModel {
     private func refreshResults() {
         calculator = evaluateCalculator()
         results = RootSearch.rank(items, query: rootQuery, history: history)
-        selectedItem = calculator != nil ? Self.calculatorID : results.first?.id
+        selectedItem = rootRows.first?.id
+    }
+
+    /// Root search's rows in the order they're drawn and moved through (`RootSearch.rows`): a command whose alias
+    /// the query is exactly, then the Calculator card, then the other results.
+    var rootRows: [RootRow] {
+        RootSearch.rows(results, query: rootQuery, hasCalculator: calculator != nil)
     }
 
     // MARK: - The calculator
 
-    /// The Calculator card's answer to the root query, when it's a calculation. The card is the first row.
+    /// The Calculator card's answer to the root query, when it's a calculation.
     private(set) var calculator: CalculatorResult?
 
     /// What the calculator knows about exchange rates, from the app's `ExchangeRateUpdater`. A change redraws the
@@ -284,12 +314,9 @@ final class LauncherModel {
     }
 
     /// The `selectedItem` of the Calculator card.
-    static let calculatorID = "calculator"
+    static let calculatorID = RootRow.calculatorID
 
-    /// Root search's rows in order: the Calculator card, then the results.
-    private var rootRowIDs: [String] {
-        (calculator == nil ? [] : [Self.calculatorID]) + results.map(\.id)
-    }
+    private var rootRowIDs: [String] { rootRows.map(\.id) }
 
     /// Copies the calculator's answer (or the question and answer), then closes the panel with a HUD, as Raycast
     /// does. The clipboard is written the way extensions' `Clipboard.copy` writes it.
@@ -1191,9 +1218,9 @@ final class LauncherModel {
 
     // MARK: - Command hotkeys
 
-    /// The `FudgeSettings` ids ("<extension>/<command>") of the installed commands.
+    /// The `FudgeSettings` ids ("<extension>/<command>") of the installed commands, enabled or not.
     var installedCommandIDs: [String] {
-        items.compactMap { item in
+        installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }.compactMap { item in
             guard case .command(let extensionName, let commandName, _, _) = item.kind else { return nil }
             return FudgeSettings.commandID(extension: extensionName, command: commandName)
         }
@@ -1235,10 +1262,9 @@ final class LauncherModel {
 
     /// Reads the command hotkeys from `settings.json` again, after Settings changed them.
     func refreshCommandHotkeys() {
-        let installed = Set(installedCommandIDs)
         commandHotkeys = Dictionary(
-            uniqueKeysWithValues: FudgeSettings.load(from: paths.settingsFile).commandHotkeys
-                .filter { installed.contains($0.key) }.map { ("command:\($0.key)", $0.value) })
+            uniqueKeysWithValues: settings.availableHotkeys(installed: Set(installedCommandIDs))
+                .map { ("command:\($0.key)", $0.value) })
     }
 
     /// Where the launch being opened came from.
@@ -1415,7 +1441,8 @@ final class LauncherModel {
             throw LaunchCommandError.invalid("the calling command isn't running")
         }
         let request = try LaunchRequest(params: params)
-        let target = try CommandLocator.locate(request, caller: callerName, in: Array(extensions.values))
+        let target = try CommandLocator.locate(
+            request, caller: callerName, in: Array(extensions.values), settings: settings)
         try CommandLocator.checkMode(target.command, type: request.type)
         if target.isOtherExtension { try await checkPermission(of: caller, toOpen: target) }
 
