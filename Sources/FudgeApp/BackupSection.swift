@@ -301,6 +301,8 @@ struct ImportSummaryStep: View {
         buttons {
             Button("Cancel", role: .cancel) { controller.sheet = nil }.keyboardShortcut(.cancelAction)
             Button("Import", role: .destructive) { controller.confirmImport(contents) }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
         }
     }
 }
