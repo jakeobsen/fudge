@@ -11,6 +11,7 @@
 import { createElement, isValidElement, useState, type FunctionComponent, type ReactNode } from "react";
 import { SLOT } from "../renderer/serialize.ts";
 import { builtInActions } from "./actions.ts";
+import { isFullDay } from "./dates.ts";
 import { FormValuesContext, useFormField, type FormRegistry } from "./form-state.ts";
 import { useNavigation } from "./navigation.ts";
 import { RAYCAST_ENUMS } from "./raycast-enums.generated.ts";
@@ -147,7 +148,7 @@ export const Form = Object.assign(FormView, {
     PasswordField: field("Form.PasswordField", ""),
     TextArea: field("Form.TextArea", ""),
     Checkbox: field("Form.Checkbox", false),
-    DatePicker: Object.assign(field("Form.DatePicker", null), { Type: DatePickerType }),
+    DatePicker: Object.assign(field("Form.DatePicker", null), { Type: DatePickerType, isFullDay }),
     Dropdown: Object.assign(field("Form.Dropdown", undefined), { Item: FormDropdownItem, Section: FormDropdownSection }),
     TagPicker: Object.assign(field("Form.TagPicker", []), { Item: FormTagPickerItem }),
     FilePicker: field("Form.FilePicker", []),

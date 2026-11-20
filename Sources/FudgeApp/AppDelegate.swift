@@ -19,6 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var openItem: NSMenuItem?
     private let hud = HUDWindow()
     private var keyMonitor: Any?
+    /// The app that was frontmost when a FilePicker's open panel activated fudge; it gets the keyboard back when the
+    /// launcher hides.
+    private var appToRestore: NSRunningApplication?
     private var exchangeRates: ExchangeRateUpdater!
     private let exchangeRateSchedule = ExchangeRateSchedule()
     /// Not in snapshot runs, which install nothing that outlives them.
@@ -44,6 +47,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.showHUD = { [weak self] title in self?.hud.show(title) }
         model.isVisible = { [weak self] in self?.panel.isVisible ?? false }
         model.confirm = { [weak self] request in await self?.confirm(request) ?? false }
+        model.openPanel = { [weak self] options in await self?.chooseFiles(options) }
         // The calculator's exchange rates: the cached ones now, downloads only while the setting is on.
         exchangeRates = ExchangeRateUpdater(
             fetcher: ECBRatesFetcher(), cacheFile: paths.exchangeRatesFile,
@@ -57,10 +61,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             Task { await self.exchangeRates.updateIfNeeded(now: Date(), explicit: true) }
         }
+        settingsModel.extensionStoreChanged = { [weak self] in
+            guard let self else { return }
+            self.model.reload()
+            self.applyCommandHotkeys()
+        }
         settingsModel.currencyRatesChanged = { [weak self] on in
             guard let self else { return }
             Task { await self.exchangeRates.setEnabled(on, now: Date()) }
         }
+        // The model reads the setting again, and the open query's card is evaluated again in the new format.
+        settingsModel.numberFormatChanged = { [weak self] in self?.model.applySettings() }
         panel.onEscape = { [weak self] in self?.model.escape() }
         panel.onResign = { [weak self] in
             // An alert sheet takes the keyboard; that's not the user leaving.
@@ -234,6 +245,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func hidePanel() {
         guard panel.isVisible else { return }
         panel.orderOut(nil)
+        // A FilePicker's open panel made fudge the active app. Give the keyboard back to the app that had it, unless
+        // the user has moved on to another one.
+        if let app = appToRestore {
+            appToRestore = nil
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+                app.activate()
+            }
+        }
+    }
+
+    /// A FilePicker's open panel, as a sheet on the launcher, so the launcher doesn't hide (`onResign` ignores
+    /// sheets). The open panel only takes typing (⌘⇧G, its search field) while fudge is the active app, so fudge
+    /// activates for it, and `hidePanel` gives the keyboard back to the app that had it.
+    private func chooseFiles(_ options: FilePickerOptions) async -> [String]? {
+        let open = NSOpenPanel()
+        open.canChooseFiles = options.canChooseFiles
+        open.canChooseDirectories = options.canChooseDirectories
+        open.allowsMultipleSelection = options.allowsMultipleSelection
+        open.showsHiddenFiles = options.showsHiddenFiles
+        if let frontmost = NSWorkspace.shared.frontmostApplication,
+            frontmost.processIdentifier != ProcessInfo.processInfo.processIdentifier
+        {
+            appToRestore = frontmost
+        }
+        NSApp.activate()
+        let response = await withCheckedContinuation { continuation in
+            open.beginSheetModal(for: panel) { continuation.resume(returning: $0) }
+        }
+        panel.makeKey()
+        // The sheet had the keyboard; give it back to the field.
+        model.restoreKeyboard()
+        return response == .OK ? open.urls.map(\.path) : nil
     }
 
     /// The key as it types with no modifier at all, so ⌘⇧, is "," with cmd and shift. `charactersIgnoringModifiers`
@@ -286,7 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// `--activate` presses ↵ after typing the query, then waits for the result. In the command that opened,
 /// `--search <text>` types into its search field, `--dropdown <value>` picks a value in its search bar dropdown,
 /// `--actions` presses ⌘K, and `--open-dropdown` presses ⌘P, or in a Form opens its first Dropdown (`--open-tags`: its
-/// first TagPicker).
+/// first TagPicker; `--open-date`: its first DatePicker's calendar).
 /// `--snapshot <file.png> --settings [<extension>]` renders the Settings window instead, with a fake login item
 /// whose status `--login-item <status>` sets (`enabled`, `requiresApproval`, `notRegistered`, `notFound`).
 /// For checking the layout without looking at the screen.
@@ -300,6 +343,7 @@ struct Snapshot {
     let actions: Bool
     let openDropdown: Bool
     let openTags: Bool
+    let openDate: Bool
     let settings: Bool
     let settingsExtension: String?
     /// `--login-item <status>`: what the General page's Open at Login shows (`notRegistered` by default).
@@ -319,6 +363,7 @@ struct Snapshot {
         actions = arguments.contains("--actions")
         openDropdown = arguments.contains("--open-dropdown")
         openTags = arguments.contains("--open-tags")
+        openDate = arguments.contains("--open-date")
         loginItem = value("--login-item").flatMap(LoginItemStatus.init(rawValue:)) ?? .notRegistered
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
@@ -385,7 +430,10 @@ struct Snapshot {
         if openTags {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { _ = model.openFirstFormPicker(.tagPicker) }
         }
-        let waits = actions || openDropdown || openTags || inCommand
+        if openDate {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { _ = model.openFirstFormPicker(.datePicker) }
+        }
+        let waits = actions || openDropdown || openTags || openDate || inCommand
         DispatchQueue.main.asyncAfter(deadline: .now() + (waits ? 3.5 : activate ? 3 : 1)) {
             guard let view = panel.contentView else { exit(1) }
             save(view)
