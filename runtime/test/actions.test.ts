@@ -119,6 +119,16 @@ test("Action.Paste pastes into the app the user is in, then calls onPaste", asyn
     assert.equal(calls.some((call) => call.method === "toast.show"), false, "no not-available toast");
 });
 
+test("every Action.Paste in one render shares one frontmost lookup", async () => {
+    const pastes = Array.from({ length: 50 }, (_, i) => h(Action.Paste, { key: i, content: `row ${i}` }));
+    const { mounted } = await panelWith(...pastes);
+    await flush();
+    assert.equal(calls.filter((call) => call.method === "applications.frontmost").length, 1);
+    const entries = (mounted.snapshots.at(-1)!.view!.props.actions as unknown as UINode).children;
+    assert.equal(entries.length, 50);
+    assert.ok(entries.every((entry) => entry.props.title === "Paste to TextEdit"));
+});
+
 test("Action.Paste keeps Raycast's default title until it knows the app, and shows a failure as a toast", async () => {
     const pasted: unknown[] = [];
     connect((request) => {

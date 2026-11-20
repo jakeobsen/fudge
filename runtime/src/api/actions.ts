@@ -14,6 +14,21 @@ const Icon = RAYCAST_ENUMS.Icon;
 type Props = Record<string, unknown>;
 type HostAction = FunctionComponent<Props>;
 
+/**
+ * The frontmost application, asked once for all the `Action.Paste`s mounted in one render: their effects run in the
+ * same turn, and a list with a Paste on every row would otherwise send one call per row.
+ */
+let frontmostLookup: ReturnType<typeof getFrontmostApplication> | null = null;
+function frontmostOnce(): ReturnType<typeof getFrontmostApplication> {
+    if (!frontmostLookup) {
+        frontmostLookup = getFrontmostApplication();
+        setTimeout(() => {
+            frontmostLookup = null;
+        }, 0);
+    }
+    return frontmostLookup;
+}
+
 /** Builds the built-in actions on top of the host `Action` and `ActionPanel.Submenu`. */
 export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
     const action = (defaults: Props, props: Props, run: () => Promise<void> | void) =>
@@ -94,7 +109,7 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
         const [target, setTarget] = useState<string | null>(null);
         useEffect(() => {
             let current = true;
-            getFrontmostApplication().then(
+            frontmostOnce().then(
                 (app) => current && setTarget(app.name),
                 () => {},
             );
