@@ -136,13 +136,57 @@ export function parseAppMessage(line: string): Parsed {
     }
 }
 
-/** Turns `{ "$date": iso }` markers from the app back into Dates. */
+/** Turns `{ "$date": iso }` and `{ "$buffer": base64 }` markers from the app back into Dates and Buffers. */
 export function revive(value: unknown): unknown {
     if (Array.isArray(value)) return value.map(revive);
     if (!isObject(value)) return value;
     const keys = Object.keys(value);
     if (keys.length === 1 && keys[0] === "$date" && typeof value.$date === "string") return new Date(value.$date);
+    if (keys.length === 1 && keys[0] === "$buffer" && typeof value.$buffer === "string") {
+        return Buffer.from(value.$buffer, "base64");
+    }
     return Object.fromEntries(keys.map((key) => [key, revive(value[key])]));
+}
+
+/**
+ * The reverse of `revive`, for data sent to the app as JSON: Dates become `{ "$date": iso }` and Buffers (any
+ * Uint8Array) `{ "$buffer": base64 }`, at any depth. Everything else follows `JSON.stringify`: `toJSON` is used,
+ * functions and `undefined` are left out of objects (null in arrays), and non-finite numbers become null. Throws a
+ * TypeError for a BigInt or a cycle.
+ */
+export function encode(value: unknown, ancestors: Set<object> = new Set()): unknown {
+    if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : { $date: value.toISOString() };
+    if (value instanceof Uint8Array) {
+        return { $buffer: Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("base64") };
+    }
+    switch (typeof value) {
+        case "number":
+            return Number.isFinite(value) ? value : null;
+        case "bigint":
+            throw new TypeError("a BigInt can't be sent");
+        case "function":
+        case "symbol":
+        case "undefined":
+            return undefined;
+        case "object":
+            break;
+        default:
+            return value;
+    }
+    if (value === null) return null;
+    const object = value as Record<string, unknown> & { toJSON?: () => unknown };
+    if (typeof object.toJSON === "function") return encode(object.toJSON(), ancestors);
+    if (ancestors.has(object)) throw new TypeError("a value that contains itself can't be sent");
+    ancestors.add(object);
+    let result: unknown;
+    if (Array.isArray(object)) {
+        result = object.map((item) => encode(item, ancestors) ?? null);
+    } else {
+        const entries = Object.keys(object).map((key) => [key, encode(object[key], ancestors)] as const);
+        result = Object.fromEntries(entries.filter(([, item]) => item !== undefined));
+    }
+    ancestors.delete(object);
+    return result;
 }
 
 function protocolError(message: string, id?: number): Parsed {

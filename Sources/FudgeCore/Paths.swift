@@ -35,6 +35,11 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("dropdown-values.json")
     }
 
+    /// Which extensions the user allowed to open other extensions' commands (`launchCommand`).
+    public var launchPermissionsFile: URL {
+        supportDirectory.appendingPathComponent("launch-permissions.json")
+    }
+
     /// The preference values set for each extension.
     public var preferencesDirectory: URL {
         supportDirectory.appendingPathComponent("preferences", isDirectory: true)

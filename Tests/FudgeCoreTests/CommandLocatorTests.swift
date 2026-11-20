@@ -1,0 +1,226 @@
+import Foundation
+import Testing
+
+@testable import FudgeCore
+
+private func installed(_ json: String) throws -> InstalledExtension {
+    let manifest = try JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8))
+    return InstalledExtension(manifest: manifest, directory: URL(fileURLWithPath: "/nonexistent/\(manifest.name)"))
+}
+
+private func extensions() throws -> [InstalledExtension] {
+    [
+        try installed(
+            #"""
+            {"name":"tools","title":"Tools","author":"me","commands":[
+              {"name":"list","title":"List Things","mode":"view","arguments":[
+                {"name":"query","type":"text","required":true},{"name":"mode","type":"dropdown","data":[]}]},
+              {"name":"refresh","title":"Refresh","mode":"no-view"},
+              {"name":"status","title":"Status","mode":"menu-bar"}]}
+            """#),
+        try installed(
+            #"""
+            {"name":"other","title":"Other Tools","owner":"acme","author":"alice","commands":[
+              {"name":"show","title":"Show","mode":"view"}]}
+            """#),
+        try installed(
+            #"""
+            {"name":"solo","title":"Solo","author":"bob","commands":[{"name":"run","title":"Run","mode":"no-view"}]}
+            """#),
+    ]
+}
+
+private func request(_ params: String) throws -> LaunchRequest {
+    try LaunchRequest(params: JSONDecoder().decode(JSONValue.self, from: Data(params.utf8)))
+}
+
+@Test func readsALaunchRequestWithNullAsAbsentAndArgumentsAsStrings() throws {
+    let read = try request(
+        #"""
+        {"name":"list","type":"background","extensionName":"other","ownerOrAuthorName":"acme",
+         "arguments":{"query":"x","count":3,"ratio":1.5,"on":true,"gone":null},
+         "context":{"at":{"$date":"2026-11-20T12:00:00.000Z"}},"fallbackText":null}
+        """#)
+    #expect(read.name == "list")
+    #expect(read.type == .background)
+    #expect(read.extensionName == "other")
+    #expect(read.ownerOrAuthorName == "acme")
+    #expect(read.arguments == ["query": "x", "count": "3", "ratio": "1.5", "on": "true"])
+    #expect(read.context == .object(["at": .object(["$date": .string("2026-11-20T12:00:00.000Z")])]))
+    #expect(read.fallbackText == nil)
+
+    let plain = try request(#"{"name":"list","type":"userInitiated","arguments":null,"context":null}"#)
+    #expect(plain.type == .userInitiated && plain.arguments.isEmpty && plain.context == nil)
+}
+
+@Test func refusesMalformedLaunchRequests() {
+    func message(_ params: String) -> String? {
+        do {
+            _ = try request(params)
+            return nil
+        } catch {
+            return String(describing: error)
+        }
+    }
+    #expect(message(#"{"type":"userInitiated"}"#) == "launchCommand: name is required")
+    #expect(
+        message(#"{"name":"a","type":"later"}"#)
+            == "launchCommand: type must be LaunchType.UserInitiated or LaunchType.Background")
+    #expect(
+        message(#"{"name":"a","type":"background","extensionName":"x"}"#)
+            == "launchCommand: ownerOrAuthorName is required with extensionName")
+    #expect(
+        message(#"{"name":"a","type":"background","ownerOrAuthorName":"x"}"#)
+            == "launchCommand: extensionName is required with ownerOrAuthorName")
+    #expect(
+        message(#"{"name":"a","type":"background","arguments":{"q":["x"]}}"#)
+            == #"launchCommand: argument "q" must be a string"#)
+    #expect(message(#"{"name":"a","type":"background","context":"x"}"#) == "launchCommand: context must be an object")
+}
+
+@Test func findsACommandOfTheCallersOwnExtensionAndFillsItsArguments() throws {
+    let target = try CommandLocator.locate(
+        LaunchRequest(
+            name: "list", type: .userInitiated, arguments: ["query": "x", "extra": "dropped"],
+            context: .object(["from": .string("a")]), fallbackText: "typed"),
+        caller: "tools", in: extensions())
+    #expect(target.installed.manifest.name == "tools")
+    #expect(target.command.name == "list")
+    #expect(!target.isOtherExtension)
+    #expect(target.rootItemID == "command:tools/list")
+    #expect(
+        target.launchProps
+            == LaunchProps(
+                arguments: ["query": "x", "mode": ""], launchType: "userInitiated", fallbackText: "typed",
+                launchContext: .object(["from": .string("a")])))
+    #expect(target.missingArgument == nil)
+}
+
+@Test func findsAnotherExtensionsCommandByOwnerOrElseAuthor() throws {
+    let byOwner = try CommandLocator.locate(
+        LaunchRequest(name: "show", type: .userInitiated, extensionName: "other", ownerOrAuthorName: "acme"),
+        caller: "tools", in: extensions())
+    #expect(byOwner.installed.manifest.name == "other")
+    #expect(byOwner.isOtherExtension)
+
+    let byAuthor = try CommandLocator.locate(
+        LaunchRequest(name: "run", type: .background, extensionName: "solo", ownerOrAuthorName: "bob"),
+        caller: "tools", in: extensions())
+    #expect(byAuthor.installed.manifest.name == "solo")
+    #expect(byAuthor.launchProps.launchType == "background")
+
+    // With an owner, the author doesn't name the extension.
+    #expect(throws: LaunchCommandError.extensionNotInstalled(owner: "alice", name: "other")) {
+        try CommandLocator.locate(
+            LaunchRequest(name: "show", type: .userInitiated, extensionName: "other", ownerOrAuthorName: "alice"),
+            caller: "tools", in: extensions())
+    }
+}
+
+@Test func namesWhatIsMissing() throws {
+    #expect(
+        LaunchCommandError.extensionNotInstalled(owner: "acme", name: "gone").description
+            == #"Extension "acme/gone" isn't installed"#)
+    #expect(throws: LaunchCommandError.commandNotFound(command: "nope", extension: "tools")) {
+        try CommandLocator.locate(LaunchRequest(name: "nope", type: .userInitiated), caller: "tools", in: extensions())
+    }
+    #expect(
+        LaunchCommandError.commandNotFound(command: "nope", extension: "tools").description
+            == #"No command "nope" in extension "tools""#)
+    #expect(throws: LaunchCommandError.extensionNotInstalled(owner: "acme", name: "gone")) {
+        try CommandLocator.locate(
+            LaunchRequest(name: "x", type: .userInitiated, extensionName: "gone", ownerOrAuthorName: "acme"),
+            caller: "tools", in: extensions())
+    }
+}
+
+@Test func backgroundLaunchesAreForNoViewCommandsOnly() throws {
+    let commands = try extensions()[0].manifest.commands
+    let (list, refresh, status) = (commands[0], commands[1], commands[2])
+    #expect(throws: Never.self) { try CommandLocator.checkMode(refresh, type: .background) }
+    #expect(throws: Never.self) { try CommandLocator.checkMode(list, type: .userInitiated) }
+    #expect(throws: LaunchCommandError.notInBackground(command: "list")) {
+        try CommandLocator.checkMode(list, type: .background)
+    }
+    #expect(
+        LaunchCommandError.notInBackground(command: "list").description
+            == #""list" can't be launched in the background"#)
+    for type in [LaunchRequest.LaunchType.userInitiated, .background] {
+        #expect(throws: LaunchCommandError.menuBarNotSupported) { try CommandLocator.checkMode(status, type: type) }
+    }
+    #expect(LaunchCommandError.menuBarNotSupported.description == "Menu bar commands aren't supported in fudge yet")
+}
+
+@Test func aMissingRequiredArgumentShowsTheFieldsOrFailsInTheBackground() throws {
+    let target = try CommandLocator.locate(
+        LaunchRequest(name: "list", type: .userInitiated, arguments: ["mode": "all"]), caller: "tools",
+        in: extensions())
+    #expect(target.missingArgument?.name == "query")
+    #expect(try CommandLocator.checkArguments(target, type: .userInitiated) == false)
+    #expect(throws: LaunchCommandError.missingArgument(argument: "query", command: "list")) {
+        try CommandLocator.checkArguments(target, type: .background)
+    }
+    #expect(
+        LaunchCommandError.missingArgument(argument: "query", command: "list").description
+            == #"Missing required argument "query" for "list""#)
+
+    let filled = try CommandLocator.locate(
+        LaunchRequest(name: "list", type: .background, arguments: ["query": "x"]), caller: "tools", in: extensions())
+    #expect(try CommandLocator.checkArguments(filled, type: .background))
+}
+
+@Test func anUnsetRequiredPreferenceOpensSettingsOrFailsInTheBackground() throws {
+    let target = try CommandLocator.locate(
+        LaunchRequest(name: "refresh", type: .background), caller: "tools", in: extensions())
+    let token = try JSONDecoder().decode(
+        ExtensionManifest.Preference.self,
+        from: Data(#"{"name":"token","type":"password","title":"API Token","required":true}"#.utf8))
+    let host = try JSONDecoder().decode(
+        ExtensionManifest.Preference.self, from: Data(#"{"name":"host","type":"textfield","required":true}"#.utf8))
+    #expect(try CommandLocator.checkPreferences([], of: target, type: .background))
+    #expect(try CommandLocator.checkPreferences([token], of: target, type: .userInitiated) == false)
+    #expect(throws: LaunchCommandError.missingPreferences(extensionTitle: "Tools", names: ["API Token", "host"])) {
+        try CommandLocator.checkPreferences([token, host], of: target, type: .background)
+    }
+    #expect(
+        LaunchCommandError.missingPreferences(extensionTitle: "Tools", names: ["API Token", "host"]).description
+            == #""Tools" needs these preferences set: API Token, host"#)
+}
+
+@Test func remembersWhichExtensionsMayOpenOthers() throws {
+    var permissions = LaunchPermissions()
+    #expect(permissions.answer(caller: "tools", target: "other") == nil)
+    permissions.record(true, caller: "tools", target: "other")
+    permissions.record(false, caller: "tools", target: "solo")
+    #expect(permissions.answer(caller: "tools", target: "other") == true)
+    #expect(permissions.answer(caller: "tools", target: "solo") == false, "a denial is remembered too")
+    #expect(permissions.answer(caller: "other", target: "tools") == nil, "each direction is asked separately")
+
+    let file = try Fixtures.temporaryDirectory().appendingPathComponent("nested/launch-permissions.json")
+    try permissions.save(to: file)
+    #expect(LaunchPermissions.load(from: file) == permissions)
+    let json = try JSONDecoder().decode([String: [String: Bool]].self, from: Data(contentsOf: file))
+    #expect(json == ["tools": ["other": true, "solo": false]])
+    #expect(LaunchPermissions.load(from: file.appendingPathExtension("missing")) == LaunchPermissions())
+    #expect(
+        LaunchCommandError.notAllowed(extensionTitle: "Other Tools").description
+            == #"Not allowed to launch commands of "Other Tools""#)
+}
+
+@Test func theLaunchMessageCarriesTheContext() throws {
+    let message = AppMessage.launch(
+        session: "s1", entry: "/x.cjs", mode: "view",
+        launchProps: LaunchProps(arguments: [:], launchContext: .object(["from": .string("a")])))
+    let json = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(message))
+    guard case .object(let object) = json, case .object(let props) = object["launchProps"] else {
+        Issue.record("no launchProps")
+        return
+    }
+    #expect(props["launchContext"] == .object(["from": .string("a")]))
+    let without = try JSONDecoder().decode(
+        JSONValue.self,
+        from: JSONEncoder().encode(
+            AppMessage.launch(session: "s1", entry: "/x.cjs", mode: "view", launchProps: .init())))
+    guard case .object(let plain) = without, case .object(let plainProps) = plain["launchProps"] else { return }
+    #expect(plainProps["launchContext"] == nil, "no context, no key")
+}
