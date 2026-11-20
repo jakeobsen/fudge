@@ -30,6 +30,11 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("history.json")
     }
 
+    /// The values of search bar dropdowns that ask for theirs to be kept (`storeValue`).
+    public var dropdownValuesFile: URL {
+        supportDirectory.appendingPathComponent("dropdown-values.json")
+    }
+
     /// The preference values set for each extension.
     public var preferencesDirectory: URL {
         supportDirectory.appendingPathComponent("preferences", isDirectory: true)
