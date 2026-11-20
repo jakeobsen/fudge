@@ -6,7 +6,10 @@ struct LauncherView: View {
     @Bindable var model: LauncherModel
     @FocusState private var focus: Field?
 
-    enum Field { case search, actions, dropdown }
+    enum Field: Hashable {
+        case search, actions, dropdown
+        case argument(Int)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -37,6 +40,63 @@ struct LauncherView: View {
         .onAppear { focus = .search }
         .onChange(of: model.actionPanel == nil) { _, closed in focus = closed ? .search : .actions }
         .onChange(of: model.dropdownPanel == nil) { _, closed in focus = closed ? .search : .dropdown }
+        // The model decides which argument field has the keyboard (Tab, ⇧Tab, a required one left empty); a click
+        // into a field tells it.
+        .onChange(of: model.arguments.focus) { _, index in
+            let field = argumentField(index)
+            focus = field
+            if field == nil {
+                // A dropdown argument: no text field may keep the keyboard, or typing would go into it.
+                launcherPanel?.makeFirstResponder(nil)
+            } else {
+                placeCursorAtEnd(of: index.map { model.arguments.value(at: $0) } ?? model.searchText)
+            }
+        }
+        .onChange(of: focus) { _, field in
+            switch field {
+            case .search: model.focusArgument(nil)
+            case .argument(let index): model.focusArgument(index)
+            default: break
+            }
+        }
+    }
+
+    /// Where the keyboard goes for an argument (nil: the search field). A dropdown argument takes no text, so no
+    /// field has it then, and the launcher's key handling gives it ↑↓.
+    private func argumentField(_ index: Int?) -> Field? {
+        guard let index else { return .search }
+        guard model.arguments.arguments.indices.contains(index) else { return .search }
+        return model.arguments.arguments[index].type == "dropdown" ? nil : .argument(index)
+    }
+
+    /// AppKit selects all of a field's text when it takes the keyboard, so the next key would replace the query.
+    /// Moving between the query and the arguments puts the cursor at the end instead, as Raycast does. SwiftUI
+    /// moves the keyboard a moment later, and the fields share one field editor, so this waits until the editor
+    /// holds `text`, all selected.
+    private func placeCursorAtEnd(of text: String, attempts: Int = 20) {
+        guard !text.isEmpty, attempts > 0 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+            let length = (text as NSString).length
+            if let editor = launcherPanel?.firstResponder as? NSTextView, editor.string == text,
+                editor.selectedRange() == NSRange(location: 0, length: length)
+            {
+                editor.setSelectedRange(NSRange(location: length, length: 0))
+            } else {
+                placeCursorAtEnd(of: text, attempts: attempts - 1)
+            }
+        }
+    }
+
+    /// The panel this view is in. Not NSApp.keyWindow: the panel doesn't activate fudge, and that's nil while fudge
+    /// isn't the active app.
+    private var launcherPanel: NSWindow? {
+        NSApp.windows.first { $0 is LauncherPanel }
+    }
+
+    /// Root search shows the selected command's argument fields after the query.
+    private var showsArguments: Bool {
+        if case .root = model.screen { return !model.arguments.isEmpty }
+        return false
     }
 
     private var searchBar: some View {
@@ -53,6 +113,45 @@ struct LauncherView: View {
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
+                searchField
+                if showsArguments, let item = model.selectedRootItem {
+                    Image(nsImage: model.icon(for: item))
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 18, height: 18)
+                    let generation = model.argumentsGeneration
+                    ForEach(Array(model.arguments.arguments.enumerated()), id: \.offset) { index, argument in
+                        ArgumentField(
+                            model: model, generation: generation, index: index, argument: argument, focus: $focus
+                        )
+                        // New fields when the arguments start over, so the old ones' late writes go nowhere.
+                        .id("\(generation).\(index)")
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+            if let command = model.command, let dropdown = command.list?.dropdown {
+                SearchBarDropdownButton(model: model, dropdown: dropdown, assets: command.assets)
+                    .fixedSize()
+            }
+        }
+        .padding(.horizontal, 18)
+        .frame(height: 58)
+    }
+
+    /// The search field. With argument fields after it, it's only as wide as its text, so they follow the query,
+    /// and it's what gives way when the bar is full. It's the same view either way, so it keeps the keyboard when
+    /// the fields come and go.
+    private var searchField: some View {
+        let text = model.searchText.isEmpty ? model.placeholder : model.searchText
+        // A hidden copy of the text sets the width: its ideal width, or less when that doesn't fit.
+        return Text(verbatim: text)
+            .font(.system(size: 20))
+            .lineLimit(1)
+            .padding(.trailing, showsArguments ? 6 : 0)
+            .hidden()
+            .frame(maxWidth: showsArguments ? nil : .infinity, alignment: .leading)
+            .overlay(alignment: .leading) {
                 TextField(model.placeholder, text: $model.searchText)
                     .textFieldStyle(.plain)
                     .font(.system(size: 20))
@@ -71,13 +170,8 @@ struct LauncherView: View {
                         return .handled
                     }
             }
-            if let command = model.command, let dropdown = command.list?.dropdown {
-                SearchBarDropdownButton(model: model, dropdown: dropdown, assets: command.assets)
-                    .fixedSize()
-            }
-        }
-        .padding(.horizontal, 18)
-        .frame(height: 58)
+            // Offered the whole width first, less what the fixed-size argument fields need.
+            .layoutPriority(1)
     }
 
     @ViewBuilder private var content: some View {
@@ -229,6 +323,89 @@ private struct Row: View {
         .frame(height: 38)
         .background(selected ? Color.primary.opacity(0.1) : .clear, in: RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
+    }
+}
+
+/// One of a command's arguments in the root search bar: a text or password field, or a dropdown, sized to its
+/// placeholder or value. A required one left empty at ↵ is outlined in red until it gets a value.
+private struct ArgumentField: View {
+    @Bindable var model: LauncherModel
+    let generation: Int
+    let index: Int
+    let argument: ExtensionManifest.Argument
+    var focus: FocusState<LauncherView.Field?>.Binding
+
+    private var placeholder: String { argument.placeholder ?? argument.name }
+    private var value: String { model.arguments.value(at: index) }
+    private var isFocused: Bool { model.arguments.focus == index }
+
+    var body: some View {
+        Group {
+            if argument.type == "dropdown" {
+                dropdown
+            } else {
+                textField
+            }
+        }
+        .font(.system(size: 14))
+        .padding(.horizontal, 8)
+        .frame(height: 28)
+        .background(Color.primary.opacity(isFocused ? 0.13 : 0.07), in: RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6).strokeBorder(
+                model.arguments.missing == index ? Color.red : isFocused ? Color.accentColor.opacity(0.7) : .clear)
+        )
+        .help(argument.required == true ? "\(placeholder) (required)" : placeholder)
+    }
+
+    private var textField: some View {
+        let binding = Binding(get: { value }, set: { model.setArgument($0, at: index, generation: generation) })
+        let shown = argument.type == "password" ? String(repeating: "•", count: value.count) : value
+        // Sized by a hidden copy of its text, so it grows as the user types, up to a limit that keeps three
+        // fields and some of the query in the bar.
+        return Text(verbatim: String((shown.count > placeholder.count ? shown : placeholder).prefix(18)))
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.trailing, 4)
+            .hidden()
+            .overlay(alignment: .leading) {
+                Group {
+                    if argument.type == "password" {
+                        SecureField(placeholder, text: binding)
+                    } else {
+                        TextField(placeholder, text: binding)
+                    }
+                }
+                .textFieldStyle(.plain)
+                .focused(focus, equals: .argument(index))
+                .onSubmit { model.activate() }
+                // The keyboard may have been sent here before the field was on screen.
+                .onAppear { if model.arguments.focus == index { focus.wrappedValue = .argument(index) } }
+            }
+    }
+
+    private var dropdown: some View {
+        let options = argument.data ?? []
+        let title = options.first { $0.value == value }?.title
+        return Menu {
+            ForEach(options, id: \.value) { option in
+                Button(option.title) {
+                    model.setArgument(option.value, at: index, generation: generation)
+                    model.focusArgument(index)
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(title ?? placeholder)
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 9, weight: .semibold))
+            }
+            // A menu's label ignores foregroundStyle, so the placeholder is dimmed this way.
+            .opacity(title == nil ? 0.5 : 1)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
     }
 }
 

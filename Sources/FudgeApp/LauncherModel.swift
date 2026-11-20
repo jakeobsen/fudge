@@ -60,7 +60,16 @@ final class LauncherModel {
 
     private(set) var screen: Screen = .root
     private(set) var results: [RootItem] = []
-    var selectedItem: String?
+    var selectedItem: String? {
+        didSet { syncArguments() }
+    }
+    /// The arguments of the command selected in root search, with what the user entered into them.
+    private(set) var arguments = ArgumentInput()
+    /// The root item `arguments` belongs to.
+    @ObservationIgnored private var argumentsItem: String?
+    /// Counts the times `arguments` started over. Each field's edits carry the count it was drawn with, so a late
+    /// write from a field that's gone can't refill the new ones.
+    private(set) var argumentsGeneration = 0
     /// A line for the bottom bar, e.g. "Running Create Scratch…".
     private(set) var status: String?
 
@@ -137,6 +146,10 @@ final class LauncherModel {
             return rootQuery
         }
         set {
+            // SwiftUI's TextField writes its unchanged text back now and then, three times on ↵ before onSubmit.
+            // Taken as a new search, that would move the selection back to the first item. The action panel's
+            // and the dropdown's search fields ignore such writes for the same reason.
+            guard newValue != searchText else { return }
             switch screen {
             case .command(var command):
                 command.searchText = newValue
@@ -164,6 +177,39 @@ final class LauncherModel {
     private func refreshResults() {
         results = RootSearch.rank(items, query: rootQuery, history: history)
         selectedItem = results.first?.id
+    }
+
+    /// The item selected in root search.
+    var selectedRootItem: RootItem? {
+        results.first { $0.id == selectedItem }
+    }
+
+    // MARK: - Arguments
+
+    /// Gives a command selected in root search empty argument fields, and drops them when the selection moves on
+    /// or the command's arguments change (Reload Extensions). They're kept while a command or a failure is on
+    /// screen, so a launch that couldn't start doesn't lose what was typed; a launch clears them.
+    private func syncArguments() {
+        let item = selectedRootItem
+        guard item?.id != argumentsItem || (item?.arguments ?? []) != arguments.arguments else { return }
+        resetArguments(for: item)
+    }
+
+    private func resetArguments(for item: RootItem?) {
+        argumentsItem = item?.id
+        arguments = ArgumentInput(arguments: item?.arguments ?? [])
+        argumentsGeneration += 1
+    }
+
+    /// The user edited an argument field drawn for `generation`.
+    func setArgument(_ value: String, at index: Int, generation: Int) {
+        guard generation == argumentsGeneration else { return }
+        arguments.set(value, at: index)
+    }
+
+    /// The user clicked into an argument field (an index) or the search field (nil).
+    func focusArgument(_ index: Int?) {
+        if arguments.focus != index { arguments.focus = index }
     }
 
     // MARK: - Command views
@@ -355,7 +401,9 @@ final class LauncherModel {
     var dropdownPanelQuery: String {
         get { dropdownPanel?.query ?? "" }
         set {
-            guard dropdownPanel != nil, let command, let dropdown = command.list?.dropdown else { return }
+            guard dropdownPanel != nil, newValue != dropdownPanelQuery, let command,
+                let dropdown = command.list?.dropdown
+            else { return }
             dropdownPanel?.query = newValue
             let first = dropdownPanelSections.flatMap(\.items).first?.value
             dropdownPanel?.selected = first
@@ -473,7 +521,7 @@ final class LauncherModel {
     var actionPanelQuery: String {
         get { actionPanel?.query ?? "" }
         set {
-            guard actionPanel != nil else { return }
+            guard actionPanel != nil, newValue != actionPanelQuery else { return }
             actionPanel?.query = newValue
             // Read before writing: assigning while reading actionPanel is an exclusivity violation.
             let first = ActionPanelReader.flat(actionPanelSections).first?.id
@@ -530,7 +578,8 @@ final class LauncherModel {
     }
 
     /// Keys that the launcher handles itself: ⌘K, the primary and secondary actions' keys, and the actions'
-    /// shortcuts; in views without a search field (Detail, Form) also ↵ and Esc.
+    /// shortcuts; in views without a search field (Detail, Form) also ↵ and Esc; in root search, the keys of the
+    /// argument fields (`ArgumentInput.handle`).
     /// Returns false for everything else, which then goes to the focused field.
     func handleKey(_ pressed: KeyShortcut) -> Bool {
         if pressed == KeyShortcut(key: "k", modifiers: ["cmd"]) {
@@ -542,6 +591,15 @@ final class LauncherModel {
         if pressed == commandP, dropdownPanel != nil {
             closeDropdownPanel()
             return true
+        }
+        if case .root = screen {
+            switch arguments.handle(pressed) {
+            case .ignored: return false
+            case .handled: return true
+            case .submit:
+                activate()
+                return true
+            }
         }
         guard actionPanel == nil, dropdownPanel == nil, let command, command.failure == nil else { return false }
         let hasSearchField = command.view == nil || command.list != nil
@@ -610,7 +668,13 @@ final class LauncherModel {
     func activate() {
         switch screen {
         case .root:
-            if let item = results.first(where: { $0.id == selectedItem }) { open(item) }
+            guard let item = selectedRootItem else { return }
+            // A required argument left empty takes the keyboard instead.
+            if case .command = item.kind, !arguments.checkRequired() { return }
+            open(item)
+            // The launch couldn't start (e.g. a required preference is unset). The values stay for the next try,
+            // and the failure's search field gets the keyboard.
+            if case .failure = screen { arguments.focus = nil }
         case .command:
             if let primaryAction { run(primaryAction) }
         case .failure:
@@ -694,15 +758,21 @@ final class LauncherModel {
                 appearance: NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
                     ? "dark" : "light"
             )
+            let entered = argumentsItem == item.id ? arguments : ArgumentInput(arguments: item.arguments)
             launch(
                 item.title,
                 of: installed,
                 command: commandName,
                 entry: entry,
                 mode: mode,
+                launchProps: LaunchProps(arguments: entered.launchArguments),
                 preferences: preferences.values,
                 environment: environment
             )
+            // The fields start empty again, for a no-view command (root search stays on screen) and for when a
+            // view command returns to root search; not when the extension host couldn't run it.
+            if case .failure = screen { return }
+            if argumentsItem == item.id { resetArguments(for: item) }
         }
     }
 
@@ -712,6 +782,7 @@ final class LauncherModel {
         command commandName: String,
         entry: URL,
         mode: String,
+        launchProps: LaunchProps,
         preferences: [String: JSONValue],
         environment: LaunchEnvironment
     ) {
@@ -738,7 +809,7 @@ final class LauncherModel {
         do {
             try host.send(
                 .launch(
-                    session: session, entry: entry.path, mode: mode, launchProps: LaunchProps(),
+                    session: session, entry: entry.path, mode: mode, launchProps: launchProps,
                     preferences: preferences, environment: environment)
             )
         } catch {

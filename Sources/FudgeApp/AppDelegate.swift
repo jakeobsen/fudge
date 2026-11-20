@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var keyMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.mainMenu = Self.mainMenu()
         model = LauncherModel(paths: paths)
         panel = LauncherPanel(content: LauncherView(model: model))
         settingsWindow = SettingsWindowController(model: SettingsModel(paths: paths))
@@ -36,6 +37,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let window = event.window
             let handled = MainActor.assumeIsolated {
                 guard let self, window === self.panel else { return false }
+                // While an input method is composing (Japanese, Chinese, …), its keys are its own: ↑↓ pick a
+                // candidate, Esc cancels and ↵ confirms.
+                if (self.panel.firstResponder as? NSTextView)?.hasMarkedText() == true { return false }
                 return self.model.handleKey(pressed)
             }
             return handled ? nil : event
@@ -74,6 +78,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(withTitle: "Quit fudge", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.menu = menu
         statusItem = item
+    }
+
+    /// A main menu with the standard Edit menu. An accessory app never shows it, but text fields get ⌘Z, ⇧⌘Z,
+    /// ⌘X, ⌘C, ⌘V and ⌘A from its key equivalents; without them those keys beep.
+    private static func mainMenu() -> NSMenu {
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        // An uppercase key equivalent means ⇧.
+        edit.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+        let menu = NSMenu()
+        // The first item is the application menu, by convention.
+        menu.addItem(withTitle: "fudge", action: nil, keyEquivalent: "").submenu = NSMenu(title: "fudge")
+        menu.addItem(withTitle: "Edit", action: nil, keyEquivalent: "").submenu = edit
+        return menu
     }
 
     private func togglePanel() {
