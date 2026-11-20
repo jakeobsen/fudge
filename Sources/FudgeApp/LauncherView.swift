@@ -295,7 +295,11 @@ private struct RootResults: View {
                             )
                             .id(LauncherModel.calculatorID)
                             .onRowClick(
-                                select: { model.selectedItem = LauncherModel.calculatorID },
+                                select: {
+                                    model.selectedItem = LauncherModel.calculatorID
+                                    // A click can leave the first responder outside the search field.
+                                    model.restoreKeyboard()
+                                },
                                 open: { model.activate() }
                             )
                             .padding(.bottom, 6)

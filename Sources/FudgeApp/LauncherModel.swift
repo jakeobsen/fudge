@@ -324,7 +324,10 @@ final class LauncherModel {
     /// command, the selected item's; with no items, the empty view's or the List's own; for other views, the
     /// view's own.
     var currentActions: [ActionSection] {
-        if case .root = screen { return RootActions.sections(for: selectedRootItem) }
+        if case .root = screen {
+            if selectedItem == Self.calculatorID { return RootActions.calculatorSections() }
+            return RootActions.sections(for: selectedRootItem)
+        }
         guard let command, let view = command.view else { return [] }
         guard let list = command.list else { return ActionPanelReader.sections(of: view.node("actions")) }
         if let item = selectedListItem { return ActionPanelReader.sections(of: item.actions) }
@@ -673,6 +676,10 @@ final class LauncherModel {
         case .showInFinder(let url):
             hide()
             SystemCalls.showInFinder(url.path)
+        case .copyAnswer:
+            copyCalculatorAnswer()
+        case .copyQuestionAndAnswer:
+            copyCalculatorAnswer(withQuestion: true)
         }
     }
 
