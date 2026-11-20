@@ -426,7 +426,9 @@ struct SettingsView: View {
                 Text("No extension has preferences.").foregroundStyle(.secondary)
             }
         }
-        .frame(minWidth: 620, minHeight: 400)
+        // The width it opens at: any narrower and the Commands table squeezes its Name column, truncating names and
+        // running a command's subtitle into the Type column.
+        .frame(minWidth: 880, minHeight: 400)
     }
 }
 
