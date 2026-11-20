@@ -107,8 +107,8 @@ private func seeded() throws -> Folder {
         fudgeVersion: "1.0", now: now)
     #expect(export.leftOut.isEmpty && export.skipped == 0)
     #expect(
-        export.summary.text == "Settings, 1 extension's preferences, 2 extensions' data, 1 installed extension listed",
-        "alpha's data and the store's installed.json")
+        export.summary.text == "Settings, 1 extension's preferences, 1 extension's data, 1 installed extension listed",
+        "alpha's data; the store's folder is never backed up")
     let exported = try #require(export.entries.first { $0.path == "settings.json" })
     let exportedSettings = try #require(try JSONSerialization.jsonObject(with: exported.data) as? [String: Any])
     #expect(exportedSettings["extensionStoreConsentAt"] == nil, "the consent never goes into a backup")
@@ -134,7 +134,6 @@ private func seeded() throws -> Folder {
     for path in [
         "launch-permissions.json", "history.json", "preferences/alpha.json", "local-storage/alpha.json",
         "form-values/alpha.json", "extension-data/alpha/notes/a.txt",
-        "extension-data/fudge-extension-store/installed.json",
     ] {
         #expect(target.read(path) == source.read(path), "\(path)")
     }
@@ -145,6 +144,7 @@ private func seeded() throws -> Folder {
     #expect(target.json("settings.json")?["commands"] != nil)
     for path in [
         "cache/alpha/cache.json", "exchange-rates.json", "onboarding.json", "extensions/alpha/package.json",
+        "extension-data/fudge-extension-store/installed.json",
         "extension-data/fudge-extension-store/repo/extensions/alpha/package.json",
     ] {
         #expect(!target.exists(path), "\(path) is left out")
@@ -276,6 +276,7 @@ private func seeded() throws -> Folder {
 
 @Test func aWriteThatFailsPartwayPutsEverythingBack() throws {
     let source = try seeded()
+    try source.write("extension-data/beta/b.txt", "beta's data")
     let contents = try Backup.contents(
         of: Backup.collect(from: source.paths, installed: [], fudgeVersion: "1.0", now: now).entries)
     let target = try Folder()
@@ -355,17 +356,20 @@ private func file(_ path: String, _ text: String = "x") -> BackupArchive.RawEntr
         }
         #expect(error as? BackupError == .unreadable, "\(path)")
         // fudge's own check refuses them too, should a decoder ever let one through.
-        #expect(throws: BackupError.refused(.path(path))) {
-            try Backup.contents(of: [BackupEntry(path: path, data: Data("x".utf8))])
-        }
+        #expect(throws: BackupError.refused(.path(path))) { try Backup.part(of: path) }
     }
     #expect(refusal(try crafted([file("other/x.json")])) == .path("other/x.json"))
     #expect(refusal(try crafted([file("preferences/a/b.json")])) == .path("preferences/a/b.json"))
     #expect(refusal(try crafted([file("extension-data/alpha")])) == .path("extension-data/alpha"))
+    // The store's folder is its clone of the store: never imported, in any case (#57 review).
+    for path in [
+        "extension-data/fudge-extension-store/repo/x", "extension-data/fudge-extension-store/REPO/.git/config",
+        "extension-data/fudge-extension-store/installed.json",
+    ] {
+        #expect(refusal(try crafted([file(path)])) == .path(path))
+    }
     #expect(
-        refusal(try crafted([file("extension-data/fudge-extension-store/repo/x")]))
-            == .path("extension-data/fudge-extension-store/repo/x"), "the store's clone is never imported")
-    #expect(refusal(try crafted([file("settings.json"), file("settings.json")])) == .duplicate("settings.json"))
+        refusal(try crafted([file("settings.json", "{}"), file("settings.json", "{}")])) == .duplicate("settings.json"))
 }
 
 @Test func craftedExtensionNamesAreRefused() throws {
@@ -402,4 +406,91 @@ private func file(_ path: String, _ text: String = "x") -> BackupArchive.RawEntr
     #expect(throws: BackupError.refused(.noManifest)) {
         try Backup.contents(of: [BackupEntry(path: "settings.json", data: Data("{}".utf8))])
     }
+}
+
+@Test func fudgesOwnBeforeImportBackupsAreReadWithoutTheSizeLimits() throws {
+    let folder = try Folder()
+    let paths = folder.paths
+    let own = paths.backupsDirectory.appendingPathComponent("before-import-x.fudgebackup")
+    #expect(Backup.readLimits(for: own, password: nil, paths: paths) == (Int.max, Int.max))
+    let elsewhere = folder.url.appendingPathComponent("before-import-x.fudgebackup")
+    #expect(
+        Backup.readLimits(for: elsewhere, password: nil, paths: paths) == (
+            BackupArchive.entryLimit, BackupArchive.totalLimit
+        ))
+    #expect(
+        Backup.readLimits(for: own, password: "secret", paths: paths) == (
+            BackupArchive.entryLimit, BackupArchive.totalLimit
+        ))
+    #expect(
+        Backup.readLimits(for: own, password: nil, paths: nil) == (BackupArchive.entryLimit, BackupArchive.totalLimit))
+
+    // A real before-import backup opens again, through the same call the Import button makes.
+    let source = try seeded()
+    let contents = try Backup.contents(
+        of: Backup.collect(from: source.paths, installed: [], fudgeVersion: "1.0", now: now).entries)
+    let target = try seeded()
+    let result = try Backup.apply(contents, to: target.paths, installed: [], fudgeVersion: "1.0", now: now)
+    #expect(try Backup.open(result.beforeImport, password: nil, paths: target.paths).root["settings.json"] != nil)
+}
+
+@Test func pathsAndEntriesAreCappedAndCountedWhileReading() throws {
+    let long = "extension-data/alpha/" + String(repeating: "a/", count: 600) + "x"
+    #expect(refusal(try crafted([file(long)])) == .path(String(long.prefix(80)) + "…"), "over 1,024 bytes")
+    let wideSegment = "extension-data/alpha/" + String(repeating: "b", count: 300)
+    #expect(
+        refusal(try crafted([file(wideSegment)])) == .path(String(wideSegment.prefix(80)) + "…"), "a 300-byte segment")
+    // Path bytes count toward the total: long valid paths with no data still run out of room.
+    let paths = (1...6).map { file("extension-data/alpha/\(String(repeating: "p", count: 200))\($0)", "") }
+    #expect(refusal(try crafted(paths, limits: (1_000, 1_000))) == .tooBig)
+
+    let folder = try Folder()
+    let archive = folder.url.appendingPathComponent("many.fudgebackup")
+    try BackupArchive.writeRaw((1...5).map { file("extension-data/alpha/\($0)") }, to: archive, password: password)
+    #expect(throws: BackupError.refused(.tooBig)) {
+        try BackupArchive.read(from: archive, password: password, entryCountLimit: 4)
+    }
+    // Each path is checked as it's read, before the entries after it.
+    let seen = Counter()
+    try BackupArchive.writeRaw(
+        [file("history.json", "{}"), file("../escape"), file("history.json", "{}")], to: archive, password: nil)
+    #expect(throws: BackupError.self) {
+        try BackupArchive.read(
+            from: archive, password: nil,
+            checkPath: {
+                _ = seen.next()
+                _ = try Backup.part(of: $0)
+            })
+    }
+    #expect(seen.next() <= 3, "stopped at the refused path")
+}
+
+@Test func aNewerFormatIsRefusedBeforeItsPathsAreJudged() throws {
+    let folder = try Folder()
+    let archive = folder.url.appendingPathComponent("newer.fudgebackup")
+    let manifest = file(
+        "manifest.json", #"{"format":2,"fudgeVersion":"9.0","created":"2030-01-01T00:00:00Z","extensions":[]}"#)
+    try BackupArchive.writeRaw([manifest, file("future/thing.json", "{}")], to: archive, password: password)
+    #expect(throws: BackupError.newerFormat(2)) { try Backup.open(archive, password: password) }
+}
+
+@Test func settingsAndKeyedFilesMustBeJSONObjects() throws {
+    #expect(refusal(try crafted([file("settings.json", "[1, 2]")])) == .invalidPart("settings.json"))
+    #expect(refusal(try crafted([file("dropdown-values.json", "not json")])) == .invalidPart("dropdown-values.json"))
+    #expect(throws: Never.self) { try crafted([file("history.json", "[1, 2]")]).get() }
+}
+
+@Test func theBeforeImportBackupJustWrittenIsKeptEvenIfTheClockWentBack() throws {
+    let contents = try Backup.contents(
+        of: Backup.collect(from: try seeded().paths, installed: [], fudgeVersion: "1.0", now: now).entries)
+    let target = try Folder()
+    for minute in 0..<3 {
+        _ = try Backup.apply(
+            contents, to: target.paths, installed: [], fudgeVersion: "1.0",
+            now: now.addingTimeInterval(Double(minute) * 60))
+    }
+    let earlier = try Backup.apply(
+        contents, to: target.paths, installed: [], fudgeVersion: "1.0", now: now.addingTimeInterval(-86_400))
+    let kept = try FileManager.default.contentsOfDirectory(atPath: target.paths.backupsDirectory.path)
+    #expect(kept.count == 3 && kept.contains(earlier.beforeImport.lastPathComponent))
 }

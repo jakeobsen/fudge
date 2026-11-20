@@ -52,7 +52,12 @@ final class BackupController {
         DispatchQueue.main.async { [self] in
             let panel = NSSavePanel()
             panel.allowedContentTypes = [Self.fileType]
-            panel.nameFieldStringValue = "fudge-backup-\(Date().formatted(.iso8601.year().month().day())).fudgebackup"
+            // The local date: ISO 8601 formatting would use GMT, and name the file yesterday after local midnight.
+            let day = Date().formatted(
+                .verbatim(
+                    "\(year: .defaultDigits)-\(month: .twoDigits)-\(day: .twoDigits)", timeZone: .current,
+                    calendar: .current))
+            panel.nameFieldStringValue = "fudge-backup-\(day).fudgebackup"
             panel.directoryURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
             guard panel.runModal() == .OK, let file = panel.url else { return }
             sheet = .working("Encrypting the backup…")
@@ -94,7 +99,9 @@ final class BackupController {
     func open(_ file: URL, password: String?) {
         sheet = .working("Opening the backup…")
         Task {
-            let result = await Task.detached { Result { try Backup.open(file, password: password) } }.value
+            let paths = paths
+            let result = await Task.detached { Result { try Backup.open(file, password: password, paths: paths) } }
+                .value
             switch result {
             case .success(let contents): sheet = .importSummary(file, contents)
             case .failure(BackupError.wrongPassword):

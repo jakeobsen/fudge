@@ -18,10 +18,6 @@ public enum Backup {
     /// The consent itself never goes into a backup. The switch does, so an import can say the store was on.
     static let exportStrippedKeys = ["extensionStoreConsentAt"]
 
-    /// The Extension Store's own extension: its `installed.json` says which extensions came from the store, and its
-    /// clone (`repo/`) is never backed up or imported.
-    public static let storeExtension = "fudge-extension-store"
-
     /// Single files at the top of the support folder.
     static let rootFiles = [
         "settings.json", "launch-permissions.json", "history.json", "dropdown-values.json", "command-metadata.json",
@@ -151,10 +147,27 @@ public enum Backup {
 
     // MARK: - Import: checking an untrusted backup
 
-    /// Reads and checks a backup file without writing anything: `BackupArchive.read`, then `contents(of:)`. A plain
-    /// file (a before-import backup) takes no password.
-    public static func open(_ file: URL, password: String?) throws -> Contents {
-        try contents(of: BackupArchive.read(from: file, password: password))
+    /// Reads and checks a backup file without writing anything. Each path is checked as it's read (`part(of:)`),
+    /// and the manifest's format as soon as it's read, so a backup from a newer fudge says so. A plain file (a
+    /// before-import backup) takes no password; one in this support folder's `backups/` is fudge's own, and is read
+    /// without the size limits (`readLimits`), since it may hold more than an export.
+    public static func open(_ file: URL, password: String?, paths: FudgePaths? = nil) throws -> Contents {
+        let limits = readLimits(for: file, password: password, paths: paths)
+        let entries = try BackupArchive.read(
+            from: file, password: password, entryLimit: limits.entry, totalLimit: limits.total,
+            checkPath: { _ = try part(of: $0) },
+            checkEntry: { entry in if entry.path == manifestFile { try checkFormat(entry.data) } })
+        return try contents(of: entries)
+    }
+
+    /// The size limits a backup file is read with: an export's, unless it's a plain file in this support folder's
+    /// own `backups/` (a before-import backup, written uncapped).
+    public static func readLimits(for file: URL, password: String?, paths: FudgePaths?) -> (entry: Int, total: Int) {
+        guard password == nil, let paths,
+            file.resolvingSymlinksInPath().deletingLastPathComponent().path
+                == paths.backupsDirectory.resolvingSymlinksInPath().path
+        else { return (BackupArchive.entryLimit, BackupArchive.totalLimit) }
+        return (.max, .max)
     }
 
     /// A checked backup: every path is one fudge writes, and every extension name is valid.
@@ -177,52 +190,81 @@ public enum Backup {
         }
     }
 
+    /// What a path in a backup is: one of the parts fudge writes, or refused.
+    enum Part: Equatable {
+        case manifest
+        case root(String)
+        case perExtension(folder: String, name: String)
+        case data(name: String, path: String)
+    }
+
+    /// The part a backup path names. Anything else is refused: an absolute path, a segment that's empty, `.` or
+    /// `..`, a folder or file fudge doesn't write, an invalid extension name, and the Extension Store's own folder,
+    /// whose data is its clone of the store and is never imported.
+    static func part(of path: String) throws -> Part {
+        let segments = path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard !path.hasPrefix("/"), segments.allSatisfy(isPlainSegment) else {
+            throw BackupError.refused(.path(path))
+        }
+        switch (segments.first ?? "", segments.count) {
+        case (manifestFile, 1):
+            return .manifest
+        case (let name, 1) where rootFiles.contains(name):
+            return .root(name)
+        case (let folder, 2) where perExtensionFolders.contains(folder):
+            let file = segments[1]
+            guard file.hasSuffix(".json") else { throw BackupError.refused(.path(path)) }
+            let name = String(file.dropLast(5))
+            guard ExtensionManifest.isValidName(name) else { throw BackupError.refused(.extensionName(name)) }
+            return .perExtension(folder: folder, name: name)
+        case (dataFolder, 3...):
+            let name = segments[1]
+            guard ExtensionManifest.isValidName(name) else { throw BackupError.refused(.extensionName(name)) }
+            guard name != ExtensionStore.extensionName else { throw BackupError.refused(.path(path)) }
+            return .data(name: name, path: segments.dropFirst(2).joined(separator: "/"))
+        default:
+            throw BackupError.refused(.path(path))
+        }
+    }
+
+    /// A newer format is refused as soon as its manifest is read, before its paths are judged by this format.
+    static func checkFormat(_ manifest: Data) throws {
+        if let format = formatOf(manifest), format > formatVersion { throw BackupError.newerFormat(format) }
+    }
+
     /// Checks a backup's entries as untrusted input: a path fudge doesn't write, an invalid extension name, a
-    /// duplicate, no manifest or a newer format refuses the whole backup. (Links, non-files and sizes are refused
-    /// while reading, by `BackupArchive.read`.)
+    /// duplicate, a `settings.json` or keyed file that isn't a JSON object, no manifest or a newer format refuses
+    /// the whole backup. (Links, non-files and sizes are refused while reading, by `BackupArchive.read`.)
     public static func contents(of entries: [BackupEntry]) throws -> Contents {
+        guard let manifestData = entries.first(where: { $0.path == manifestFile })?.data else {
+            throw BackupError.refused(.noManifest)
+        }
+        try checkFormat(manifestData)
+        guard let manifest = decodeManifest(manifestData) else { throw BackupError.unreadable }
+        for listed in manifest.extensions where !ExtensionManifest.isValidName(listed.name) {
+            throw BackupError.refused(.extensionName(listed.name))
+        }
         var seen: Set<String> = []
-        var manifestData: Data?
         var root: [String: Data] = [:]
         var perExtension: [String: [String: Data]] = [:]
         var data: [String: [String: Data]] = [:]
         for entry in entries {
             guard seen.insert(entry.path).inserted else { throw BackupError.refused(.duplicate(entry.path)) }
-            let segments = entry.path.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
-            guard !entry.path.hasPrefix("/"), segments.allSatisfy(isPlainSegment) else {
-                throw BackupError.refused(.path(entry.path))
-            }
-            switch (segments.first ?? "", segments.count) {
-            case (manifestFile, 1):
-                manifestData = entry.data
-            case (let name, 1) where rootFiles.contains(name):
-                root[name] = entry.data
-            case (let folder, 2) where perExtensionFolders.contains(folder):
-                let file = segments[1]
-                guard file.hasSuffix(".json") else { throw BackupError.refused(.path(entry.path)) }
-                let name = String(file.dropLast(5))
-                guard ExtensionManifest.isValidName(name) else { throw BackupError.refused(.extensionName(name)) }
-                perExtension[folder, default: [:]][name] = entry.data
-            case (dataFolder, 3...):
-                let name = segments[1]
-                guard ExtensionManifest.isValidName(name) else { throw BackupError.refused(.extensionName(name)) }
-                guard !(name == storeExtension && segments[2] == "repo") else {
-                    throw BackupError.refused(.path(entry.path))
+            switch try part(of: entry.path) {
+            case .manifest:
+                break
+            case .root(let name):
+                if name == "settings.json" || keyedFiles.contains(name) {
+                    guard (try? JSONSerialization.jsonObject(with: entry.data)) is [String: Any] else {
+                        throw BackupError.refused(.invalidPart(name))
+                    }
                 }
-                data[name, default: [:]][segments.dropFirst(2).joined(separator: "/")] = entry.data
-            default:
-                throw BackupError.refused(.path(entry.path))
+                root[name] = entry.data
+            case .perExtension(let folder, let name):
+                perExtension[folder, default: [:]][name] = entry.data
+            case .data(let name, let path):
+                data[name, default: [:]][path] = entry.data
             }
-        }
-        guard let manifestData else { throw BackupError.refused(.noManifest) }
-        guard let manifest = decodeManifest(manifestData) else {
-            // A newer format may not decode as this one: say that rather than "damaged".
-            if let format = formatOf(manifestData), format > formatVersion { throw BackupError.newerFormat(format) }
-            throw BackupError.unreadable
-        }
-        guard manifest.format <= formatVersion else { throw BackupError.newerFormat(manifest.format) }
-        for listed in manifest.extensions where !ExtensionManifest.isValidName(listed.name) {
-            throw BackupError.refused(.extensionName(listed.name))
         }
         let settings = root["settings.json"].flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         return Contents(
@@ -292,7 +334,6 @@ public enum Backup {
         }
 
         let staging = support.appendingPathComponent(".import-\(UUID().uuidString)", isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: staging) }
         var undo: [() throws -> Void] = []
         do {
             for (file, data) in changes {
@@ -326,11 +367,17 @@ public enum Backup {
                 }
             }
         } catch {
+            // Every step is tried, even after one fails. If any did, the staging folder stays: it may hold an
+            // extension's old data that couldn't be moved back.
+            var restored = true
             for step in undo.reversed() {
-                do { try step() } catch { throw BackupError.restoreFailed(beforeImport: beforeImport.path) }
+                do { try step() } catch { restored = false }
             }
+            guard restored else { throw BackupError.restoreFailed(beforeImport: beforeImport.path) }
+            try? FileManager.default.removeItem(at: staging)
             throw BackupError.importFailed(error.localizedDescription)
         }
+        try? FileManager.default.removeItem(at: staging)
 
         let installedNames = Set(installed.map(\.manifest.name))
         return ImportResult(
@@ -360,7 +407,8 @@ public enum Backup {
         let kept = ((try? manager.contentsOfDirectory(atPath: folder.path)) ?? [])
             .filter { $0.hasPrefix("before-import-") && $0.hasSuffix(".fudgebackup") }
             .sorted()
-        for old in kept.dropLast(beforeImportKept) {
+        // The one just written always stays, even if the clock was set back and it sorts first.
+        for old in kept.filter({ $0 != file.lastPathComponent }).dropLast(beforeImportKept - 1) {
             try? manager.removeItem(at: folder.appendingPathComponent(old))
         }
         return file
@@ -401,7 +449,8 @@ public enum Backup {
 
     /// The names the Extension Store recorded as its installs.
     static func storeInstalledNames(_ paths: FudgePaths) -> Set<String> {
-        let file = paths.supportDirectory(forExtension: storeExtension).appendingPathComponent("installed.json")
+        let file = paths.supportDirectory(forExtension: ExtensionStore.extensionName)
+            .appendingPathComponent("installed.json")
         guard let data = try? Data(contentsOf: file),
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return [] }
@@ -468,17 +517,17 @@ private final class SupportReader {
         }
     }
 
-    /// Each extension's data folder: its files as backup entries, sorted. The Extension Store's clone is left out.
+    /// Each extension's data folder: its files as backup entries, sorted. The Extension Store's is left out: its
+    /// data is its clone of the store, and a backup never carries or imports it.
     func dataFolders(_ folder: URL) -> [(String, [BackupEntry])] {
         guard isPlainFolder(folder) else { return [] }
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
         return names.sorted().compactMap { name in
-            guard ExtensionManifest.isValidName(name) else { return nil }
+            guard ExtensionManifest.isValidName(name), name != ExtensionStore.extensionName else { return nil }
             let root = folder.appendingPathComponent(name, isDirectory: true)
             guard isPlainFolder(root) else { return nil }
             var entries: [BackupEntry] = []
             walk(root, relative: []) { relative, data in
-                if name == Backup.storeExtension, relative.first == "repo" { return }
                 entries.append(
                     BackupEntry(path: "\(Backup.dataFolder)/\(name)/\(relative.joined(separator: "/"))", data: data))
             }
@@ -505,7 +554,6 @@ private final class SupportReader {
             guard let values = try? url.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey]) else {
                 continue
             }
-            if relative.isEmpty, name == "repo", folder.lastPathComponent == Backup.storeExtension { continue }
             if values.isSymbolicLink != true, values.isDirectory == true {
                 walk(url, relative: relative + [name], visit)
             } else if let data = file(url) {

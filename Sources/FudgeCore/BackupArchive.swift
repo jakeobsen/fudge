@@ -37,6 +37,8 @@ public enum BackupError: Error, Equatable, CustomStringConvertible {
         case tooBig
         case duplicate(String)
         case noManifest
+        /// A `settings.json` or keyed file that isn't a JSON object.
+        case invalidPart(String)
     }
 
     public var description: String {
@@ -54,6 +56,7 @@ public enum BackupError: Error, Equatable, CustomStringConvertible {
             case .tooBig: "This backup is bigger than fudge imports, so it wasn't imported."
             case .duplicate(let path): "This backup contains \(path) twice, so it wasn't imported."
             case .noManifest: "This file isn't a fudge backup, or it's damaged."
+            case .invalidPart(let name): "This backup's \(name) isn't valid, so it wasn't imported."
             }
         case .writeFailed(let reason): "The backup couldn't be written: \(reason)"
         case .importFailed(let reason): "The import failed, and nothing was changed: \(reason)"
@@ -96,10 +99,19 @@ public enum BackupArchive {
         return ArchiveEncryptionContext(from: stream) != nil
     }
 
-    /// Reads every entry, refusing links, anything that isn't a regular file, and entries over `entryLimit` or
-    /// more than `totalLimit` together, before keeping any of it. Paths are checked by `Backup.contents`.
+    /// The most entries a backup may hold, and the longest path and path segment, in bytes.
+    public static let entryCountLimit = 100_000
+    static let pathLimit = 1024
+    static let segmentLimit = 255
+
+    /// Reads every entry, refusing links, anything that isn't a regular file, more than `entryCountLimit` entries,
+    /// a path over `pathLimit` bytes or with a segment over `segmentLimit`, and data over `entryLimit` in one entry or
+    /// `totalLimit` in all, with path bytes counted too. Each path goes to `checkPath` as soon as it's read, before
+    /// its data, and each whole entry to `checkEntry`, so a refusal comes before the rest is read.
     public static func read(
-        from file: URL, password: String?, entryLimit: Int = entryLimit, totalLimit: Int = totalLimit
+        from file: URL, password: String?, entryLimit: Int = entryLimit, totalLimit: Int = totalLimit,
+        entryCountLimit: Int = entryCountLimit, checkPath: (String) throws -> Void = { _ in },
+        checkEntry: (BackupEntry) throws -> Void = { _ in }
     ) throws -> [BackupEntry] {
         guard
             let stream = ArchiveByteStream.fileStream(
@@ -124,7 +136,11 @@ public enum BackupArchive {
         defer { try? decoder.close() }
 
         var entries: [BackupEntry] = []
-        var total = 0
+        var total: UInt64 = 0
+        func count(_ bytes: UInt64) throws {
+            total += bytes
+            guard total <= UInt64(totalLimit) else { throw BackupError.refused(.tooBig) }
+        }
         while true {
             let header: ArchiveHeader?
             do { header = try decoder.readHeader() } catch { throw BackupError.unreadable }
@@ -136,18 +152,26 @@ public enum BackupArchive {
             }
             guard header.entryType == .regularFile else { throw BackupError.refused(.notAFile) }
             guard case .string(_, let path)? = header.field(forKey: Key.path) else { throw BackupError.unreadable }
+            guard entries.count < entryCountLimit else { throw BackupError.refused(.tooBig) }
+            guard path.utf8.count <= pathLimit,
+                path.split(separator: "/", omittingEmptySubsequences: false).allSatisfy({
+                    $0.utf8.count <= segmentLimit
+                })
+            else { throw BackupError.refused(.path(String(path.prefix(80)) + "…")) }
+            try count(UInt64(path.utf8.count))
+            try checkPath(path)
             var data = Data()
             if case .blob(_, let size, _)? = header.field(forKey: Key.data) {
-                guard size <= UInt64(entryLimit), total + Int(size) <= totalLimit else {
-                    throw BackupError.refused(.tooBig)
-                }
+                guard size <= UInt64(entryLimit) else { throw BackupError.refused(.tooBig) }
+                try count(size)
                 data = Data(count: Int(size))
                 do {
                     try data.withUnsafeMutableBytes { try decoder.readBlob(key: Key.data, into: $0) }
                 } catch { throw BackupError.unreadable }
-                total += data.count
             }
-            entries.append(BackupEntry(path: path, data: data))
+            let entry = BackupEntry(path: path, data: data)
+            try checkEntry(entry)
+            entries.append(entry)
         }
         return entries
     }
@@ -176,7 +200,9 @@ public enum BackupArchive {
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try encode(entries, to: temporary, password: password)
-            _ = try FileManager.default.replaceItemAt(file, withItemAt: temporary)
+            let written = try FileManager.default.replaceItemAt(file, withItemAt: temporary) ?? file
+            // Replacing an existing file keeps its old mode; a backup is readable by its owner only.
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: written.path)
         } catch {
             try? FileManager.default.removeItem(at: temporary)
             if let error = error as? BackupError { throw error }
