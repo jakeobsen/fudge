@@ -6,7 +6,7 @@ import { createElement, useEffect, useState, type FunctionComponent } from "reac
 import { closeMainWindow, showHUD, showToast, Toast } from "./feedback.ts";
 import { RAYCAST_ENUMS } from "./raycast-enums.generated.ts";
 import { NotAvailableError } from "./stubs.ts";
-import { Clipboard, getApplications, open, showInFinder, trash } from "./system.ts";
+import { Clipboard, getApplications, getFrontmostApplication, open, showInFinder, trash } from "./system.ts";
 import { useFormValues } from "./form-state.ts";
 
 const Icon = RAYCAST_ENUMS.Icon;
@@ -88,6 +88,31 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
         );
     }
 
+    /** Pastes `content` into the app the user is in, then calls `onPaste`. A failure shows as a toast. */
+    function Paste({ content, onPaste, title, ...props }: Props) {
+        const [target, setTarget] = useState<string | null>(null);
+        useEffect(() => {
+            let current = true;
+            getFrontmostApplication().then(
+                (app) => current && setTarget(app.name),
+                () => {},
+            );
+            return () => {
+                current = false;
+            };
+        }, []);
+        const defaultTitle = target ? `Paste to ${target}` : "Paste in Active App";
+        return action({ title: title ?? defaultTitle, icon: Icon.Clipboard }, props, async () => {
+            try {
+                await Clipboard.paste(content as string);
+            } catch (error) {
+                await showToast({ style: Toast.Style.Failure, title: error instanceof Error ? error.message : String(error) });
+                return;
+            }
+            (onPaste as ((content: unknown) => void) | undefined)?.(content);
+        });
+    }
+
     function SubmitForm({ onSubmit, ...props }: Props) {
         const values = useFormValues();
         return action({ title: "Submit Form", icon: Icon.Checkmark }, props, () =>
@@ -114,7 +139,7 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
         ShowInFinder,
         Trash,
         SubmitForm,
-        Paste: unavailable("Action.Paste", "Paste"),
+        Paste,
         CreateQuicklink: unavailable("Action.CreateQuicklink", "Create Quicklink"),
         CreateSnippet: unavailable("Action.CreateSnippet", "Create Snippet"),
         ToggleQuickLook: unavailable("Action.ToggleQuickLook", "Quick Look"),

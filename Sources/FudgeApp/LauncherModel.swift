@@ -1332,6 +1332,15 @@ final class LauncherModel {
                     let confirmed = await confirm(Self.alertRequest(params))
                     send(.rpcResult(session: session, id: id, result: .bool(confirmed), error: nil))
                 }
+            case "clipboard.paste":
+                Task {
+                    do {
+                        try await SystemCalls.paste(params, hideWindow: { await self.hideForPaste() })
+                        send(.rpcResult(session: session, id: id, result: .null, error: nil))
+                    } catch {
+                        send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
+                    }
+                }
             case "command.launch":
                 Task {
                     do {
@@ -1408,6 +1417,14 @@ final class LauncherModel {
         default:
             break
         }
+    }
+
+    /// `Clipboard.paste` hides the panel first, as `closeMainWindow()` does, and waits until it's really gone: key
+    /// status goes back to the app the user was in asynchronously, so ⌘V waits a run-loop turn plus about 50 ms.
+    private func hideForPaste() async {
+        closeWindow(clearRootSearch: false, popToRootType: nil)
+        await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }
+        try? await Task.sleep(for: .milliseconds(50))
     }
 
     /// Success and failure toasts go away after a few seconds; an animated one stays until it changes.
