@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { createElement as h } from "react";
-import { Action, ActionPanel, Detail, Keyboard } from "../src/api/index.ts";
+import { Action, ActionPanel, Detail, Icon, Keyboard } from "../src/api/index.ts";
 import { connect, settle, type RpcRequest } from "../src/bridge.ts";
 import type { UINode } from "../src/renderer/serialize.ts";
 import { mount } from "./support/mount.ts";
@@ -12,7 +12,9 @@ beforeEach(() => {
     calls = [];
     connect((request) => {
         calls.push(request);
-        const answer = request.method === "applications.list" ? [{ name: "TextEdit", path: "/System/Applications/TextEdit.app" }] : null;
+        const textEdit = { name: "TextEdit", path: "/System/Applications/TextEdit.app" };
+        const answer =
+            request.method === "applications.list" ? [textEdit] : request.method === "applications.frontmost" ? textEdit : null;
         setImmediate(() => settle(request.id, answer));
     });
 });
@@ -95,12 +97,53 @@ test("Open With is a submenu of the applications that can open the path", async 
 });
 
 test("an action fudge can't perform still shows, and says so when picked", async () => {
-    const { mounted, entries } = await panelWith(h(Action.Paste, { content: "x" }));
-    assert.equal(entries[0]!.props.title, "Paste");
+    const { mounted, entries } = await panelWith(h(Action.CreateQuicklink, { quicklink: { link: "https://example.com" } }));
+    assert.equal(entries[0]!.props.title, "Create Quicklink");
     await mounted.root.dispatch(entries[0]!.id, ["onAction"], []);
     const toast = calls.find((call) => call.method === "toast.show")!.params as { title: string; style: string };
-    assert.equal(toast.title, "Action.Paste isn't available in fudge yet");
+    assert.equal(toast.title, "Action.CreateQuicklink isn't available in fudge yet");
     assert.equal(toast.style, "FAILURE");
+});
+
+test("Action.Paste pastes into the app the user is in, then calls onPaste", async () => {
+    const pasted: unknown[] = [];
+    const { mounted } = await panelWith(h(Action.Paste, { content: "hello", onPaste: (content: unknown) => pasted.push(content) }));
+    await flush();
+    const entry = (mounted.snapshots.at(-1)!.view!.props.actions as unknown as UINode).children[0]!;
+    assert.equal(entry.props.title, "Paste to TextEdit", "named after the frontmost app");
+    assert.equal(entry.props.icon, Icon.Clipboard);
+    await mounted.root.dispatch(entry.id, ["onAction"], []);
+    await flush();
+    assert.deepEqual(calls.find((call) => call.method === "clipboard.paste")!.params, { text: "hello", closeMainWindow: true });
+    assert.deepEqual(pasted, ["hello"]);
+    assert.equal(calls.some((call) => call.method === "toast.show"), false, "no not-available toast");
+});
+
+test("every Action.Paste in one render shares one frontmost lookup", async () => {
+    const pastes = Array.from({ length: 50 }, (_, i) => h(Action.Paste, { key: i, content: `row ${i}` }));
+    const { mounted } = await panelWith(...pastes);
+    await flush();
+    assert.equal(calls.filter((call) => call.method === "applications.frontmost").length, 1);
+    const entries = (mounted.snapshots.at(-1)!.view!.props.actions as unknown as UINode).children;
+    assert.equal(entries.length, 50);
+    assert.ok(entries.every((entry) => entry.props.title === "Paste to TextEdit"));
+});
+
+test("Action.Paste keeps Raycast's default title until it knows the app, and shows a failure as a toast", async () => {
+    const pasted: unknown[] = [];
+    connect((request) => {
+        calls.push(request);
+        const error = request.method === "clipboard.paste" ? "fudge needs Accessibility permission to paste." : undefined;
+        setImmediate(() => (request.method === "applications.frontmost" ? undefined : settle(request.id, null, error)));
+    });
+    const { mounted, entries } = await panelWith(h(Action.Paste, { content: "x", onPaste: () => pasted.push("x") }));
+    assert.equal(entries[0]!.props.title, "Paste in Active App");
+    await mounted.root.dispatch(entries[0]!.id, ["onAction"], []);
+    await flush();
+    const toast = calls.find((call) => call.method === "toast.show")!.params as { title: string; style: string };
+    assert.equal(toast.title, "fudge needs Accessibility permission to paste.");
+    assert.equal(toast.style, "FAILURE");
+    assert.deepEqual(pasted, [], "onPaste only after a paste");
 });
 
 test("Submit Form outside a Form submits no values", async () => {

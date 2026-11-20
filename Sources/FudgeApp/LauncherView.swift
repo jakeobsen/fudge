@@ -35,14 +35,24 @@ struct LauncherView: View {
                     .padding(.top, 50)
             }
         }
-        // A Form field's panel opens under the field, or above it when there's no room below.
+        // A Form field's panel (a Dropdown's or TagPicker's list, a DatePicker's calendar) opens under the field, or
+        // above it when there's no room below.
         .overlayPreferenceValue(FormFieldBounds.self) { bounds in
-            if let node = model.formPanelField, let anchor = bounds[node], let command = model.command {
+            if let node = model.formPanelField ?? model.datePanel?.node, let anchor = bounds[node],
+                let command = model.command
+            {
                 GeometryReader { proxy in
                     let field = proxy[anchor]
                     let x = max(8, min(field.minX, proxy.size.width - 288))
-                    let panel = DropdownPanelView(model: model, assets: command.assets, focus: $focus)
-                    if proxy.size.height - field.maxY >= 260 {
+                    let panel = formPanel(assets: command.assets)
+                    let below = proxy.size.height - field.maxY
+                    // The calendar has a fixed height, so it opens where it fits; a Dropdown's list can shrink.
+                    let opensBelow =
+                        model.datePanel != nil
+                        ? PanelPlacement.opensBelow(
+                            spaceBelow: below, spaceAbove: field.minY, height: DatePanelView.height)
+                        : below >= 260
+                    if opensBelow {
                         panel.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                             .padding(.leading, x).padding(.top, field.maxY + 4)
                     } else {
@@ -110,6 +120,15 @@ struct LauncherView: View {
     /// Puts the keyboard in the field the screen wants (`LauncherModel.keyboardTarget`), unless it's already there,
     /// with the cursor at the end. Setting `focus` to the value it already holds does nothing, even when AppKit's
     /// first responder has moved elsewhere, so it goes through nil first. Form fields are `FormScreen`'s.
+    /// The panel of the Form field whose panel is open: a DatePicker's calendar, or the dropdown panel.
+    @ViewBuilder private func formPanel(assets: URL?) -> some View {
+        if model.datePanel != nil {
+            DatePanelView(model: model)
+        } else {
+            DropdownPanelView(model: model, assets: assets, focus: $focus)
+        }
+    }
+
     private func restoreKeyboard() {
         let field: Field
         let text: String
@@ -198,11 +217,14 @@ struct LauncherView: View {
                     .font(.system(size: 20))
                     .focused($focus, equals: .search)
                     .onSubmit { model.activate() }
+                    // While an input method is composing, ↑↓ pick its candidates, as the key monitor leaves them.
                     .onKeyPress(.upArrow) {
+                        guard !composing else { return .ignored }
                         model.moveSelection(by: -1)
                         return .handled
                     }
                     .onKeyPress(.downArrow) {
+                        guard !composing else { return .ignored }
                         model.moveSelection(by: 1)
                         return .handled
                     }
@@ -218,18 +240,38 @@ struct LauncherView: View {
             .layoutPriority(1)
     }
 
-    /// ← and → in a Grid move the selection when the field is empty or its cursor is at the end
-    /// (`GridNavigation.arrowMovesSelection`). Otherwise, and with ⇧, ⌥, ⌘ or ⌃ (text selection and word moves),
-    /// the field keeps them.
+    /// ← and → in a Grid move the selection when `GridNavigation.arrowMovesSelection` says so: with the field
+    /// empty or its cursor at the end, and no ⇧, ⌥, ⌘ or ⌃. Otherwise the field keeps them, and while an input
+    /// method is composing, it does.
     private func gridArrow(_ press: KeyPress) -> KeyPress.Result {
-        guard press.modifiers.intersection([.shift, .option, .command, .control]).isEmpty else { return .ignored }
-        // The field editor holds the cursor. The panel isn't always the key window, so it's found by type.
-        let editor = NSApp.windows.first { $0 is LauncherPanel }?.firstResponder as? NSTextView
+        let editor = fieldEditor
         let range = editor?.selectedRange()
         let length = editor?.string.utf16.count ?? model.searchText.utf16.count
         let move: GridNavigation.Move = press.key == .leftArrow ? .left : .right
-        return model.moveGridSelection(move, textLength: length, selection: range.map { ($0.location, $0.length) })
-            ? .handled : .ignored
+        return model.moveGridSelection(
+            move, modifiers: Self.names(press.modifiers), composing: editor?.hasMarkedText() == true,
+            textLength: length, selection: range.map { ($0.location, $0.length) }) ? .handled : .ignored
+    }
+
+    /// The search field's editor, which holds the cursor and any marked text. The panel isn't always the key window,
+    /// so it's found by type.
+    private var fieldEditor: NSTextView? {
+        NSApp.windows.first { $0 is LauncherPanel }?.firstResponder as? NSTextView
+    }
+
+    /// Whether an input method is composing in the search field (marked text). Its keys are its own then.
+    private var composing: Bool {
+        fieldEditor?.hasMarkedText() == true
+    }
+
+    /// A key press's modifiers, named as `KeyShortcut` names them. `fn`, `numpad` and `capslock` are passed on too,
+    /// for the rules to ignore: arrow keys always carry the first two.
+    private static func names(_ modifiers: EventModifiers) -> Set<String> {
+        let all: [(EventModifiers, String)] = [
+            (.shift, "shift"), (.option, "opt"), (.command, "cmd"), (.control, "ctrl"), (.function, "fn"),
+            (.numericPad, "numpad"), (.capsLock, "capslock"),
+        ]
+        return Set(all.filter { modifiers.contains($0.0) }.map(\.1))
     }
 
     @ViewBuilder private var content: some View {

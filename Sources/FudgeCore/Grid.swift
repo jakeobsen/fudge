@@ -48,9 +48,14 @@ public struct GridSectionLayout: Sendable, Equatable {
         return layout
     }
 
-    /// `columns`, else the deprecated `itemSize`: small is 8 columns, medium 5, large 3.
+    /// `columns`, else the deprecated `itemSize`: small is 8 columns, medium 5, large 3. `columns` is clamped to
+    /// 1–8 while it's still a `Double`, so a huge or infinite value can't trap in the conversion; `NaN` counts as
+    /// not set.
     static func columns(_ node: UINode) -> Int? {
-        if case .number(let columns) = node.props["columns"], columns.isFinite { return Int(columns) }
+        if case .number(let columns) = node.props["columns"], !columns.isNaN {
+            let range = Double(columnRange.lowerBound)...Double(columnRange.upperBound)
+            return Int(min(max(columns, range.lowerBound), range.upperBound))
+        }
         switch node.string("itemSize") {
         case "small": return 8
         case "medium": return 5
@@ -125,6 +130,66 @@ public struct GridItemContent: Sendable, Equatable {
     private static func isImageObject(_ object: [String: JSONValue]) -> Bool {
         object["source"] != nil || object["fileIcon"] != nil
     }
+
+    /// How a cell draws its content.
+    public enum Drawing: Sendable, Equatable {
+        /// An asset, a file path or an http(s) image: it follows the section's `fit`.
+        case picture
+        /// A file's or application's icon (`fileIcon`), one of Raycast's icons, or an emoji: always drawn whole,
+        /// centred and fitted inside the inset, so `Grid.Fit.Fill` never crops it.
+        case icon
+        /// A color, filling the cell.
+        case color
+    }
+
+    public var drawing: Drawing {
+        switch kind {
+        case .color: .color
+        case .image(let json): Self.drawing(ofImage: json)
+        }
+    }
+
+    /// Whether the content covers the whole space inside the inset: a color always, a picture when the section's
+    /// `fit` is `.fill`, an icon never.
+    public func fills(_ fit: GridSectionLayout.Fit) -> Bool {
+        switch drawing {
+        case .color: true
+        case .picture: fit == .fill
+        case .icon: false
+        }
+    }
+
+    /// An `Image.ImageLike`: a `{ fileIcon }` is an icon, and `{ source }` (light first when themed) or its
+    /// `fallback` is read as a plain source.
+    static func drawing(ofImage json: JSONValue) -> Drawing {
+        switch json {
+        case .string(let source):
+            return drawing(ofSource: source)
+        case .object(let object):
+            if object["fileIcon"] != nil { return .icon }
+            switch object["source"] {
+            case .string(let source):
+                return drawing(ofSource: source)
+            case .object(let themed):
+                if case .string(let source) = themed["light"] ?? themed["dark"] { return drawing(ofSource: source) }
+            default:
+                break
+            }
+            if case .string(let fallback) = object["fallback"] { return drawing(ofSource: fallback) }
+            return .picture
+        default:
+            return .picture
+        }
+    }
+
+    /// An `Image.Source`, read in the order the app resolves it: a URL or a file path is a picture, a name ending
+    /// in `-16` is one of Raycast's icons, one or two characters are an emoji, and anything else names an asset.
+    static func drawing(ofSource source: String) -> Drawing {
+        let isURL = source.hasPrefix("http://") || source.hasPrefix("https://")
+        if isURL || source.hasPrefix("/") || source.hasPrefix("~") { return .picture }
+        if source.hasSuffix("-16") || (!source.isEmpty && source.count <= 2) { return .icon }
+        return .picture
+    }
 }
 
 /// Moving the selection through a Grid with the arrow keys.
@@ -194,17 +259,30 @@ public enum GridNavigation {
         return item(inRow: (previous.count - 1) / previous.columns, of: current - 1)
     }
 
-    /// Whether an arrow key moves the Grid's selection rather than the search field's cursor. ↑ and ↓ always do.
-    /// ← and → do when the search field is empty, or when its cursor is at the end with nothing selected; otherwise
-    /// they move the cursor. Lengths and the selection are in UTF-16 units, as `NSTextView` counts them; a nil
-    /// selection means the field isn't being edited, and only the empty-field case applies.
+    /// The modifiers that leave ← and → to the search field: ⇧ selects text, ⌥ moves by word, ⌘ to the line's ends,
+    /// ⌃ as Emacs does. Named as `KeyShortcut` names them.
+    public static let fieldModifiers: Set<String> = ["shift", "opt", "cmd", "ctrl"]
+
+    /// Whether an arrow key moves the Grid's selection rather than the search field's cursor.
+    /// - While an input method is composing (`composing`: the field has marked text), no arrow does: they pick a
+    ///   candidate.
+    /// - ↑ and ↓ always do otherwise.
+    /// - ← and → don't with ⇧, ⌥, ⌘ or ⌃ (`fieldModifiers`). Other flags an event carries don't count: arrow keys
+    ///   always come with `fn` and `numpad`. Without those four, they do when the search field is empty, or when its
+    ///   cursor is at the end with nothing selected; otherwise they move the cursor.
+    ///
+    /// Lengths and the selection are in UTF-16 units, as `NSTextView` counts them; a nil selection means the field
+    /// isn't being edited, and only the empty-field case applies.
     public static func arrowMovesSelection(
-        _ move: Move, textLength: Int, selection: (location: Int, length: Int)?
+        _ move: Move, modifiers: Set<String> = [], composing: Bool = false, textLength: Int,
+        selection: (location: Int, length: Int)?
     ) -> Bool {
+        if composing { return false }
         switch move {
         case .up, .down:
             return true
         case .left, .right:
+            guard modifiers.isDisjoint(with: fieldModifiers) else { return false }
             if textLength == 0 { return true }
             guard let selection else { return false }
             return selection.length == 0 && selection.location == textLength

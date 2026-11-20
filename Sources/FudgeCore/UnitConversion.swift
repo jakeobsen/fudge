@@ -19,16 +19,16 @@ public enum UnitConversion {
     nonisolated(unsafe) private static let separator = try! NSRegularExpression(
         pattern: #"(?<=\s)(?:to|in|as|into|=|->)(?=\s)"#)
     nonisolated(unsafe) private static let quantityPattern = try! NSRegularExpression(
-        pattern: #"^\s*(-?[\d.,]*\d)\s*(.+?)\s*$"#)
+        pattern: #"^\s*(-?[\d.,]*\d(?:[eE][+-]?\d+)?)\s*(.+?)\s*$"#)
 
-    /// The conversion `text` asks for, or nil. Its number is read by `Arithmetic.number(_:commaIsDecimal:)`.
-    public static func evaluate(_ text: String, commaIsDecimal: Bool = true) -> Result? {
+    /// The conversion `text` asks for, or nil. Its number is read in `format` (`NumberFormat.number`).
+    public static func evaluate(_ text: String, format: NumberFormat = .dotDecimal) -> Result? {
         let lowered = text.lowercased().trimmingCharacters(in: .whitespaces)
         // Try each `to`/`in`/`as`/`into`/`=`, so `5 in to cm` (inches) still works.
         let range = NSRange(lowered.startIndex..., in: lowered)
         for match in separator.matches(in: lowered, range: range) {
             guard let split = Range(match.range, in: lowered) else { continue }
-            guard let (amount, from) = quantity(String(lowered[..<split.lowerBound]), commaIsDecimal: commaIsDecimal),
+            guard let (amount, from) = quantity(String(lowered[..<split.lowerBound]), format: format),
                 let to = unit(String(lowered[split.upperBound...])),
                 sameQuantity(from.unit, to.unit)
             else { continue }
@@ -45,10 +45,10 @@ public enum UnitConversion {
     }
 
     /// `13kg`, `13 kg`, `13,5 kg`.
-    private static func quantity(_ text: String, commaIsDecimal: Bool) -> (Double, Known)? {
+    private static func quantity(_ text: String, format: NumberFormat) -> (Double, Known)? {
         guard let match = quantityPattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
             let number = Range(match.range(at: 1), in: text), let name = Range(match.range(at: 2), in: text),
-            let amount = Arithmetic.number(String(text[number]), commaIsDecimal: commaIsDecimal),
+            let amount = Arithmetic.number(String(text[number]), format: format),
             let known = unit(String(text[name]))
         else { return nil }
         return (amount, known)

@@ -51,13 +51,21 @@ struct GeneralPage: View {
             }
             Section("Calculator") {
                 Toggle(isOn: Binding(get: { model.currencyRates }, set: { model.setCurrencyRates($0) })) {
-                    Text("Currency conversion: download exchange rates from the European Central Bank once a day")
-                    Text(
-                        "This is the only connection fudge makes on its own. It downloads one public file; like any "
-                            + "download, the server sees your IP address, and nothing else is sent."
-                    )
+                    Text("Currency conversion")
+                    Text("fudge downloads exchange rates from the European Central Bank once a day.")
                 }
                 .toggleStyle(.checkbox)
+                Picker(
+                    selection: Binding(get: { model.numberFormat }, set: { model.setNumberFormat($0) })
+                ) {
+                    Text("Same as macOS (\(Calculator.format(1234.5, locale: .current, for: .card)))")
+                        .tag(NumberFormatSetting.system)
+                    Text("1,234.5").tag(NumberFormatSetting.dotDecimal)
+                    Text("1.234,5").tag(NumberFormatSetting.commaDecimal)
+                } label: {
+                    Text("Number format")
+                    Text("How the calculator reads the numbers you type, and writes its answers.")
+                }
             }
             Section("Search") {
                 LabeledContent {
