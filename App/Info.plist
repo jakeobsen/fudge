@@ -30,5 +30,7 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>fudge asks Finder for its selection when an extension needs it.</string>
 </dict>
 </plist>

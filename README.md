@@ -26,6 +26,26 @@ make install-extension DIR=path/to/extension   # compile and install an extensio
 
 `make help` lists every target.
 
+### Keeping permissions across builds
+
+macOS remembers the permissions you give fudge (Accessibility, Automation) by its code signature. An ad hoc signature changes with every build, so macOS would forget them each time. `make app` signs with the first of these that your keychain has:
+
+1. a code-signing identity named **fudge local signing**;
+2. an **Apple Development** identity, which Xcode creates when you add your Apple Account under **Xcode → Settings → Accounts**;
+3. otherwise none: it signs ad hoc.
+
+Its last line says which identity it used. `make app SIGN_IDENTITY=-` builds ad hoc anyway, and `SIGN_IDENTITY=<name>` picks another identity.
+
+**The first build that signs with an identity shows a keychain prompt** ("codesign wants to sign using key … in your keychain"). Enter your login password and click **Always Allow**, once. Otherwise every later build stops at that prompt, and a build nobody is watching hangs on it.
+
+Without an Apple Development identity, you can create the self-signed one:
+
+1. In Keychain Access, choose **Keychain Access → Certificate Assistant → Create a Certificate…**. Name it `fudge local signing`, with identity type **Self-Signed Root** and certificate type **Code Signing**.
+2. Open the certificate, expand **Trust**, and set **Code Signing** to **Always Trust**.
+3. Expand the certificate in **My Certificates**, open its private key, and under **Access Control** add `/usr/bin/codesign` to the allowed applications (⌘⇧G in the file dialog lets you type the path). Or answer the first build's prompt with **Always Allow**, as above.
+
+Release builds are signed ad hoc. Until fudge has a Developer ID, you grant its permissions again after each update.
+
 ## Using it
 
 Open fudge with ⌥Space, type to search applications and extension commands, and press ↵. Esc goes back, then hides the window.
@@ -39,6 +59,20 @@ To use another shortcut, put it in `~/Library/Application Support/fudge/settings
 Shortcuts are modifiers (`cmd`, `option`, `ctrl`, `shift`) plus a key, joined with `+`.
 
 Extensions' preferences are under **Settings…** in the fudge menu bar menu, or ⌘, in the fudge window. You can also search root search for "fudge Settings". To go straight to a command's extension, select the command and press ⌘⇧, (or ⌘K, then **Configure Extension**). A command that needs a preference you haven't set opens that window instead of running.
+
+### Selected text and Finder items
+
+Extensions can read the text selected in the app you were in, and the items selected in Finder. The first time, macOS asks you to allow fudge under **Privacy & Security → Accessibility** or **Automation**.
+
+When an app doesn't share its selection through Accessibility (often browsers and Electron apps such as VS Code), fudge copies it with ⌘C and puts back what was on your clipboard right after. That has some side effects:
+
+- A clipboard history app may record the copied text.
+- If your clipboard holds a password that a password manager marked as concealed, fudge leaves the clipboard empty instead of putting the password back. Put back, it would look like a new copy, and the password manager would no longer clear it.
+- Clipboard data over 50 MB (of one type) isn't put back. An app that only produces its clipboard data when asked (some design apps do this with large images) still has to produce it, so that can take a moment.
+- An app that copies something when nothing is selected hands that over instead. VS Code, for example, copies the current line.
+- fudge waits half a second for the copy. An app that answers ⌘C later than that copies after fudge has put your clipboard back, so the selected text ends up on your clipboard.
+
+Secure text fields, such as passwords, never give their text.
 
 ## License
 
