@@ -50,6 +50,11 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("launch-permissions.json")
     }
 
+    /// Which onboarding steps the user has answered (`Onboarding`).
+    public var onboardingFile: URL {
+        supportDirectory.appendingPathComponent("onboarding.json")
+    }
+
     /// What commands changed about themselves with `updateCommandMetadata` (`CommandMetadata`).
     public var commandMetadataFile: URL {
         supportDirectory.appendingPathComponent("command-metadata.json")
