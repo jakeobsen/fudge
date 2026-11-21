@@ -16,6 +16,7 @@ import { Duplex } from "node:stream";
 import tls from "node:tls";
 import {
     decide,
+    relayTLSOptions,
     isRaycastHost,
     needsDecision,
     redirectedMessage,
@@ -25,6 +26,8 @@ import {
     type OAuthProvider,
     type ServerAnswer,
 } from "./oauth-fetch.ts";
+
+export { relayTLSOptions };
 
 type Server = (provider: string) => Promise<ServerAnswer>;
 type RequestFunction = typeof Http.request;
@@ -100,28 +103,6 @@ function dechunk(raw: Buffer): Buffer {
 type Caller = { original: RequestFunction; self: unknown; args: unknown[]; options: Record<string, unknown> };
 
 /**
- * The caller's TLS options a connection to the relay keeps, from the request and its agent: only what adds trust or
- * proves who the client is (a CA, a revocation list, a client certificate), and a `minVersion` no lower than Node's
- * default. Nothing that weakens verification goes along (`rejectUnauthorized: false`, `checkServerIdentity`, ciphers,
- * `secureOptions`, a lower version, …), since the request carries the code and verifier, or the refresh token. A
- * request passed through unchanged keeps all its options; it goes where the caller sent it.
- */
-const relayTLSKeys = ["ca", "crl", "cert", "key", "pfx", "passphrase"];
-const tlsVersions = ["TLSv1", "TLSv1.1", "TLSv1.2", "TLSv1.3"];
-
-export function relayTLSOptions(options: Record<string, unknown>): Record<string, unknown> {
-    const agent = options.agent as { options?: Record<string, unknown> } | undefined;
-    const picked: Record<string, unknown> = {};
-    for (const source of [agent && typeof agent === "object" ? (agent.options ?? {}) : {}, options]) {
-        for (const key of relayTLSKeys) if (source[key] !== undefined) picked[key] = source[key];
-        const version = tlsVersions.indexOf(String(source.minVersion));
-        const floor = tlsVersions.indexOf(tls.DEFAULT_MIN_VERSION);
-        if (version >= 0 && version >= floor) picked.minVersion = source.minVersion;
-    }
-    return picked;
-}
-
-/**
  * The socket of a request that needs a decision. It holds what the `ClientRequest` writes until the request has
  * finished, then decides, and connects to the relay or the original host itself; the response comes back through it
  * unchanged, unless the relay answers with a redirect.
@@ -195,6 +176,13 @@ class Gate extends Duplex {
         for (const [name, value] of headers) {
             const had = merged[name];
             merged[name] = had === undefined ? value : [...(Array.isArray(had) ? had : [had]), value];
+        }
+        // A Host the caller set itself goes along; the one Node wrote for Fudge's socket doesn't.
+        const given = this.caller.options.headers;
+        if (given && typeof given === "object") {
+            for (const [name, value] of Object.entries(given)) {
+                if (name.toLowerCase() === "host" && value !== undefined) merged[name] = String(value);
+            }
         }
         const [first, second] = this.caller.args;
         const options = { method: this.method, headers: merged };
