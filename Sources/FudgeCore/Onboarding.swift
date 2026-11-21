@@ -8,6 +8,7 @@ public enum OnboardingStep: String, CaseIterable, Sendable {
     case accessibility
     case openAtLogin
     case currency
+    case updates
     case done
 }
 

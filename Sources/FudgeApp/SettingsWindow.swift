@@ -127,6 +127,26 @@ final class SettingsModel {
         numberFormatChanged()
     }
 
+    // MARK: - Updates
+
+    /// How often Fudge checks for a new release (`updateCheck` in `settings.json`); nil until it's chosen.
+    var updateCheck: UpdateCheckSetting? { fudgeSettings.updateCheck }
+    /// What the last check found, and whether one is running; kept current by the app delegate.
+    var updateStatus = UpdateStatus()
+    /// Tells the update checker; set by the app delegate.
+    @ObservationIgnored var updateCheckChanged: (UpdateCheckSetting) -> Void = { _ in }
+    /// Check Now; set by the app delegate.
+    @ObservationIgnored var checkForUpdates: () -> Void = {}
+    /// Download…: the release's page in the browser; set by the app delegate.
+    @ObservationIgnored var openReleasePage: (Release) -> Void = { _ in }
+
+    /// Saved through `change {}`, so a broken `settings.json` is refused and the banner says why. The value shown
+    /// while it's unset counts as a change, so onboarding's Continue saves its preselected Daily.
+    func setUpdateCheck(_ setting: UpdateCheckSetting) {
+        guard setting != updateCheck, change({ $0.updateCheck = setting }) else { return }
+        updateCheckChanged(setting)
+    }
+
     // MARK: - Open at Login and search history
 
     /// fudge as a login item; the app delegate sets the real one, and snapshots a fake.
