@@ -12,6 +12,10 @@ import Foundation
 /// The stream is made, started, stopped and released on a serial queue of its own, which it also delivers on, never
 /// on the main thread: each of those calls asks `fseventsd`, which can take seconds on a busy Mac, or not answer at
 /// all, and the main thread must never wait for it (FUD-153). So `start` and `stop` return at once.
+///
+/// FSEvents reports only what happens once the stream exists, so a change made between `start` and the stream
+/// starting would go unreported. The folder's `FolderStamp` is read at `start` and again once the stream has started,
+/// and when they differ that counts as a batch for the folder itself (FUD-156).
 @MainActor
 public final class ExtensionsWatcher {
     /// How long FSEvents gathers events into one batch.
@@ -49,7 +53,8 @@ public final class ExtensionsWatcher {
     var hasPendingChange: Bool { pending != nil }
 
     /// Starts watching, creating the folder first when it's missing (as `ExtensionBuilder` would). The stream starts
-    /// on the watcher's queue; one FSEvents refuses is reported on stderr, and then nothing is ever delivered.
+    /// on the watcher's queue; one FSEvents refuses is reported on stderr, and then nothing is ever delivered. A change
+    /// to the folder before the stream has started is one batch once it has.
     public func start() throws {
         guard stream == nil else { return }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -59,7 +64,8 @@ public final class ExtensionsWatcher {
         self.stream = stream
         let sink = ExtensionsWatcherSink(self, run: run)
         let path = directory.path
-        queue.async { stream.start(path: path, sink: sink) }
+        let stamp = FolderStamp(path: path)
+        queue.async { stream.start(path: path, sink: sink, unchangedSince: stamp) }
     }
 
     /// Stops watching. Nothing calls back after this, not even a reload that was waiting for its debounce. The stream
@@ -119,6 +125,22 @@ public final class ExtensionsWatcher {
     }
 }
 
+/// What changes when an entry of a folder is added, removed or renamed, as every install, rebuild and removal does: its
+/// modification time, and its inode, in case the folder itself was replaced. Nil when the folder can't be read.
+struct FolderStamp: Equatable, Sendable {
+    let inode: UInt64
+    let seconds: Int
+    let nanoseconds: Int
+
+    init?(path: String) {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return nil }
+        inode = UInt64(info.st_ino)
+        seconds = Int(info.st_mtimespec.tv_sec)
+        nanoseconds = Int(info.st_mtimespec.tv_nsec)
+    }
+}
+
 /// What a stream's context points to: its watcher, held weakly so the stream never keeps it alive and read only on
 /// the main queue, and the run the stream belongs to.
 private final class ExtensionsWatcherSink: @unchecked Sendable {
@@ -138,7 +160,9 @@ private final class WatcherStream: @unchecked Sendable {
 
     init(queue: DispatchQueue) { self.queue = queue }
 
-    func start(path: String, sink: ExtensionsWatcherSink) {
+    /// Makes and starts the stream, then reads the folder's stamp again: one that differs from `stamp`, read at
+    /// `start`, is a change FSEvents won't report, which goes to the watcher as a batch for the folder.
+    func start(path: String, sink: ExtensionsWatcherSink, unchangedSince stamp: FolderStamp?) {
         let info = Unmanaged.passRetained(sink).toOpaque()
         var context = FSEventStreamContext(
             version: 0, info: info, retain: nil,
@@ -165,6 +189,7 @@ private final class WatcherStream: @unchecked Sendable {
             return
         }
         self.stream = stream
+        if FolderStamp(path: path) != stamp { deliver([path], to: sink) }
     }
 
     func stop() {
@@ -184,7 +209,11 @@ private func extensionsWatcherCallback(
 ) {
     guard let info, let paths = unsafeBitCast(paths, to: NSArray.self) as? [String] else { return }
     let sink = Unmanaged<ExtensionsWatcherSink>.fromOpaque(info).takeUnretainedValue()
-    let batch = Array(paths.prefix(count))
+    deliver(Array(paths.prefix(count)), to: sink)
+}
+
+/// Hands a batch to the watcher on the main queue, in order behind the ones before it.
+private func deliver(_ batch: [String], to sink: ExtensionsWatcherSink) {
     DispatchQueue.main.async {
         MainActor.assumeIsolated { sink.watcher?.received(batch, run: sink.run) }
     }

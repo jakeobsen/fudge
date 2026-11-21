@@ -1,24 +1,82 @@
 name: Release
 
-# A v* tag becomes a GitHub Release with the app's disk image, signed with the Developer ID identity, notarized and
-# stapled (scripts/release.sh). Tags are pushed only with the maintainer's explicit permission. The build job runs the
-# repo's code with a read-only token; only the publish job, which runs none of it, may write. Run by hand
-# (workflow_dispatch), it's the dry run: it builds, signs and notarizes, the disk image is an artifact, and nothing is
-# published.
+# A merge into mainline is a release (SPEC-128). The maintainer says yes before a release/vX.Y.Z branch is pushed at a
+# development commit and its pull request into mainline opened, and again before it's merged; nothing else starts this
+# workflow, and no one pushes a v* tag. It works out the version from the commits since the last release
+# (scripts/next-version.sh), builds the release commit's disk image, signed with the Developer ID identity, notarized
+# and stapled (scripts/release.sh), and only then creates the tag on the release commit, the merge's second parent,
+# with the GitHub Release. The tag is then in development's history too, so `git describe` there finds it. If
+# anything fails, nothing is published and there's no tag. The jobs that run the repo's code have a read-only token;
+# only the publish job, which runs none of it, may write.
 
 on:
   push:
-    tags: ["v*"]
-  workflow_dispatch:
+    branches: [mainline]
 
 permissions:
   contents: read
 
+# One release at a time: a second merge waits for the first one's run to end, rather than cancel it half-way or
+# publish beside it.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
+  # On Linux, before any macOS runner starts, so a run with nothing to release, or whose version is already tagged,
+  # costs seconds of Linux time.
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ steps.version.outputs.sha }}
+    steps:
+      # The whole history and its tags: a shallow checkout has no tags, and the script refuses it rather than call
+      # every release v0.1.0.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      # The release commit is the merge's second parent, the head of the release branch. What's published is its tree,
+      # the one CI and the reviewer tested, so the merge must have the same. And it's the version the maintainer said
+      # yes to, by its branch's name, in GitHub's title for the merge, so a merge of any other branch never publishes.
+      - name: Work out the release commit and its version
+        id: version
+        run: |
+          if ! sha=$(git rev-parse --verify --quiet 'HEAD^2^{commit}'); then
+            echo "::error::$GITHUB_SHA isn't a merge, so it has no release commit"
+            exit 1
+          fi
+          if ! git diff --quiet "$sha" HEAD; then
+            echo "::error::The merge's tree isn't the release commit's ($sha)"
+            exit 1
+          fi
+          version=$(scripts/next-version.sh "$sha")
+          subject=$(git log -1 --format=%s HEAD)
+          if ! printf '%s\n' "$subject" | grep -Eq '^Merge pull request #[0-9]+ from ' ||
+            [ "${subject#* from }" != "$GITHUB_REPOSITORY_OWNER/release/$version" ]; then
+            echo "::error::The merge isn't release/$version's pull request: $subject"
+            exit 1
+          fi
+          if git rev-parse --quiet --verify "refs/tags/$version" >/dev/null; then
+            echo "::error::$version already exists, so this merge isn't released"
+            exit 1
+          fi
+          printf 'version=%s\nsha=%s\n' "$version" "$sha" >> "$GITHUB_OUTPUT"
+          printf 'Releasing %s from %s\n' "$version" "$sha" >> "$GITHUB_STEP_SUMMARY"
+
   build:
+    needs: version
     runs-on: macos-latest
-    # The signing secrets are the release environment's, which only mainline and v* tags may use, so a workflow on
-    # any other branch, one an unreviewed branch adds included, can't read them.
+    # A release takes about 10 minutes; the cap keeps a stuck one from using up the Actions budget. Notarization waits
+    # 10 minutes at most per submission (scripts/release.sh).
+    timeout-minutes: 30
+    # The signing secrets are the release environment's, which only mainline may use, so a workflow on any other
+    # branch or a tag, one an unreviewed branch adds included, can't read them.
     environment: release
     permissions:
       contents: read
@@ -26,20 +84,14 @@ jobs:
       signing: ${{ steps.release.outputs.signing }}
       first: ${{ steps.notes.outputs.first }}
     env:
-      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - name: Check the tag
-        if: github.event_name == 'push'
-        run: |
-          if ! printf '%s\n' "$TAG" | grep -Eqx 'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?'; then
-            echo "::error::$TAG isn't v and a semantic version (v1.2.0, v1.2.0-rc.1)"
-            exit 1
-          fi
-
-      # The whole history, so the build number (`git rev-list --count HEAD`) counts every commit and a run by hand
-      # finds the tags `git describe` names.
+      # The release commit itself, not the merge, with the whole history: the build number (`git rev-list --count
+      # HEAD`) is then the release commit's, as in any later build of its tag, and the release notes can tell the first
+      # release.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.version.outputs.sha }}
           persist-credentials: false
           fetch-depth: 0
 
@@ -47,21 +99,18 @@ jobs:
       # notes; scripts/first-release.sh decides, from the whole history (a shallow checkout fails it).
       - name: Choose the release notes
         id: notes
-        if: github.event_name == 'push'
-        run: scripts/first-release.sh "$TAG" >> "$GITHUB_OUTPUT"
+        run: scripts/first-release.sh "$VERSION" >> "$GITHUB_OUTPUT"
 
       # No setup-node: the Makefile downloads the Node.js Fudge bundles, checks it against its pinned checksum, and
       # runs every Node step with it, the release build's included.
-
-      # Well above a normal run (4 to 5 minutes), so a hang fails the job instead of holding a runner (FUD-153).
       - name: Test
-        timeout-minutes: 20
+        timeout-minutes: 15
         run: make test
 
-      # The signing secrets reach this step only, and the script builds with none of them in its environment. Without
-      # them a tag still makes a release, signed ad hoc and saying so (a fork has none); a run by hand, which is there
-      # to try them, fails instead. A tag's build names it (--tag), and the Makefile checks it's on this commit; a run
-      # by hand takes the version `git describe` gives the commit, as `make app` does.
+      # The signing secrets reach this step only, and the script builds with none of them in its environment. The tag
+      # doesn't exist yet, so the build gets the version in the tag's form (--version v0.2.0), and the app and the disk
+      # image show it as a tag build would. Without the secrets, a release here fails; a fork, which has none, gets one
+      # signed ad hoc.
       - name: Build, sign and notarize the disk image
         id: release
         env:
@@ -71,10 +120,10 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = push ]; then
-            scripts/release.sh --tag "$TAG" --ad-hoc-without-secrets
+          if [ "$GITHUB_REPOSITORY" = jakeobsen/fudge ]; then
+            scripts/release.sh --version "$VERSION"
           else
-            scripts/release.sh
+            scripts/release.sh --version "$VERSION" --ad-hoc-without-secrets
           fi
 
       - name: Checksum
@@ -98,13 +147,14 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: build
-    if: github.event_name == 'push'
+    needs: [version, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: write
     env:
-      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.version.outputs.version }}
+      SHA: ${{ needs.version.outputs.sha }}
       SIGNING: ${{ needs.build.outputs.signing }}
       FIRST: ${{ needs.build.outputs.first }}
     steps:
@@ -119,18 +169,21 @@ jobs:
           name: notes
           path: notes
 
+      # The tag is created here, with the Release, on the release commit: GitHub makes it when the release is
+      # published, after the disk image is uploaded.
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
-          if ! printf '%s\n' "$TAG" | grep -Eqx 'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?'; then
-            echo "::error::$TAG isn't v and a semantic version"
+          if ! printf '%s\n' "$VERSION" | grep -Eqx 'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'; then
+            echo "::error::$VERSION isn't v and a version (v1.2.0)"
             exit 1
           fi
-          # A tag with a pre-release suffix (v1.2.0-rc.1) is a pre-release.
-          prerelease=()
-          case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
+          if gh api --silent "repos/$REPO/git/ref/tags/$VERSION" 2>/dev/null; then
+            echo "::error::$VERSION already exists, so this merge isn't released"
+            exit 1
+          fi
           if [ "$SIGNING" = developer-id ]; then
             notes="Fudge is signed with a Developer ID and notarized by Apple: the first time you open it, macOS asks once, as for any app downloaded from the internet."
           else
@@ -139,9 +192,9 @@ jobs:
           if [ "$FIRST" = true ]; then
             # The first release: the signing note, then the hand-written notes.
             { printf '%s\n\n' "$notes"; cat notes/first-release-notes.md; } > "$RUNNER_TEMP/notes.md"
-            gh release create "$TAG" release/* --repo "$REPO" --verify-tag --title "$TAG" \
-              --notes-file "$RUNNER_TEMP/notes.md" "${prerelease[@]}"
+            gh release create "$VERSION" release/* --repo "$REPO" --target "$SHA" --title "$VERSION" \
+              --notes-file "$RUNNER_TEMP/notes.md"
           else
-            gh release create "$TAG" release/* --repo "$REPO" --verify-tag --title "$TAG" \
-              --notes "$notes" --generate-notes "${prerelease[@]}"
+            gh release create "$VERSION" release/* --repo "$REPO" --target "$SHA" --title "$VERSION" \
+              --notes "$notes" --generate-notes
           fi

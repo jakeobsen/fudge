@@ -440,6 +440,7 @@ make install-extension DIR=path/to/extension   # compile and install an extensio
 ```
 
 `make help` lists every target.
+Published releases are built on GitHub when a release's pull request is merged into `mainline`; `make release` builds one on your Mac.
 
 ### Keeping permissions across builds
 

@@ -1,16 +1,45 @@
 name: CI
 
+# CI runs only on a pull request into mainline, which is a release (SPEC-128). macOS runners cost money, so pull
+# requests into development are tested locally instead, by their builder and the reviewer. A release's pull request
+# comes from release/vX.Y.Z, pushed once at the commit the maintainer said yes to and never moved, so CI runs once per
+# release. `test` is the check mainline's ruleset requires.
+
 on:
-  push:
-    branches: [mainline]
   pull_request:
+    branches: [mainline]
 
 permissions:
   contents: read
 
+# A new push to the pull request cancels the run before it.
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  # On Linux, before any macOS runner: a pull request into mainline from anything but this repository's release
+  # branch fails here, for seconds of Linux time.
+  release-branch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Check the pull request comes from a release branch
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ] ||
+            ! printf '%s\n' "$HEAD_REF" | grep -Eqx 'release/v[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::A pull request into mainline comes from this repository's release/vX.Y.Z branch, not $HEAD_REPO $HEAD_REF"
+            exit 1
+          fi
+
+  macos:
+    needs: release-branch
     runs-on: macos-latest
+    # A run takes about 5 minutes; the cap, the only one, keeps a hang from using up the Actions budget.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -19,10 +48,25 @@ jobs:
       # No setup-node: the Makefile downloads the Node.js Fudge bundles, checks it against its pinned checksum, and
       # runs every Node step with it.
       - name: Lint
-        timeout-minutes: 20
         run: make lint
 
-      # Well above a normal run (4 to 5 minutes), so a hang fails the job instead of holding a runner (FUD-153).
       - name: Test
-        timeout-minutes: 20
         run: make test
+
+  # The required check. A job skipped because the one before it failed counts as passed, so this one always runs, even
+  # in a cancelled run, and passes only when both passed.
+  test:
+    needs: [release-branch, macos]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - name: Check the release branch and the macOS run both passed
+        env:
+          BRANCH: ${{ needs.release-branch.result }}
+          MACOS: ${{ needs.macos.result }}
+        run: |
+          if [ "$BRANCH" != success ] || [ "$MACOS" != success ]; then
+            echo "::error::release-branch: $BRANCH, macos: $MACOS"
+            exit 1
+          fi
