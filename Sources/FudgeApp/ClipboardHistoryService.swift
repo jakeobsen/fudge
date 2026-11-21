@@ -17,6 +17,9 @@ final class ClipboardHistoryService {
     private var pruning: Timer?
     /// Decrypted image copies for the command's detail pane, in a private folder deleted when it's done with them.
     private var previews: URL?
+    /// Saves, image writes and deletions run in order, off the main thread.
+    private let saving = DispatchQueue(label: "Clipboard History saving", qos: .utility)
+    private var swept = false
     /// The change count last looked at.
     private var lastChange = NSPasteboard.general.changeCount
     /// A snapshot run's fixed history, which counts as on and is never saved or watched.
@@ -54,6 +57,7 @@ final class ClipboardHistoryService {
         }
         loadIfNeeded()
         prune()
+        sweepStalePreviews()
         guard watching == nil else { return }
         lastChange = NSPasteboard.general.changeCount
         watching = Task { [weak self] in
@@ -101,6 +105,8 @@ final class ClipboardHistoryService {
             types: types, changeCount: count, isOwn: turns.isOwn, frontmost: frontmost?.bundleIdentifier,
             ignored: Set(settings.clipboardHistoryIgnoredApps))
         guard skip == nil, let copy = Self.copy(from: pasteboard) else { return }
+        // Changed again while it was read: the next poll records the newer copy instead.
+        guard pasteboard.changeCount == count else { return }
         let source = frontmost.flatMap { app in
             app.bundleIdentifier.map { ClipboardSource(bundleId: $0, name: app.localizedName) }
         }
@@ -110,11 +116,13 @@ final class ClipboardHistoryService {
     private func record(_ copy: ClipboardCopy, source: ClipboardSource?) {
         loadIfNeeded()
         let change = history.record(copy, source: source, now: Date())
-        if case .image(let png, _, _) = copy, let entry = change.recorded, let file = entry.imageFile,
-            !FileManager.default.fileExists(
-                atPath: store.folder.appendingPathComponent(file + ".enc").path)
-        {
-            try? store.writeImage(png, file: file)
+        if case .image(let png, _, _) = copy, let entry = change.recorded, let file = entry.imageFile {
+            let store = store
+            saving.async {
+                guard !FileManager.default.fileExists(atPath: store.folder.appendingPathComponent(file + ".enc").path)
+                else { return }
+                try? store.writeImage(png, file: file)
+            }
         }
         settle(change)
     }
@@ -122,13 +130,30 @@ final class ClipboardHistoryService {
     /// Deletes what a change dropped and saves the history.
     private func settle(_ change: ClipboardHistory.Change) {
         guard !fixed else { return }
-        store.deleteImages(change.removedImages)
-        do {
-            try store.save(history)
-        } catch {
-            FileHandle.standardError.write(Data("fudge: clipboard history: \(error)\n".utf8))
+        let (store, history, removed) = (store, history, change.removedImages)
+        saving.async {
+            store.deleteImages(removed)
+            do {
+                try store.save(history)
+            } catch {
+                FileHandle.standardError.write(Data("fudge: clipboard history: \(error)\n".utf8))
+            }
         }
     }
+
+    /// Decrypted image copies a run that ended without cleaning up left in the temporary folder.
+    private func sweepStalePreviews() {
+        guard !swept else { return }
+        swept = true
+        let temporary = FileManager.default.temporaryDirectory
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: temporary.path)) ?? []
+        for name in names where name.hasPrefix(Self.previewPrefix) && temporary.appendingPathComponent(name) != previews
+        {
+            try? FileManager.default.removeItem(at: temporary.appendingPathComponent(name))
+        }
+    }
+
+    private static let previewPrefix = "fudge-clipboard-"
 
     private func prune() {
         guard loaded else { return }
@@ -239,7 +264,7 @@ final class ClipboardHistoryService {
         let folder =
             previews
             ?? FileManager.default.temporaryDirectory.appendingPathComponent(
-                "fudge-clipboard-\(UUID().uuidString)", isDirectory: true)
+                "\(Self.previewPrefix)\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(
             at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         previews = folder
@@ -266,10 +291,14 @@ final class ClipboardHistoryService {
     func deleteAll() {
         history = ClipboardHistory()
         clearPreviews()
-        do {
-            try store.deleteAll()
-        } catch {
-            FileHandle.standardError.write(Data("fudge: clipboard history: \(error)\n".utf8))
+        let store = store
+        // After any save still waiting, so nothing writes the folder again.
+        saving.async {
+            do {
+                try store.deleteAll()
+            } catch {
+                FileHandle.standardError.write(Data("fudge: clipboard history: \(error)\n".utf8))
+            }
         }
     }
 }

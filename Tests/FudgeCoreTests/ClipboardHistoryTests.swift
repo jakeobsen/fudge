@@ -392,3 +392,43 @@ extension JSONValue {
         #expect(!ClipboardHistory.mayCall(caller), "\(caller ?? "nil")")
     }
 }
+
+/// A Keychain that fails to read, as a locked one does.
+private final class FailingSecretStore: SecretStore, @unchecked Sendable {
+    struct Locked: Error {}
+    let inner = MemorySecretStore()
+    var failing = false
+    func read(account: String) throws -> Data? {
+        if failing { throw Locked() }
+        return try inner.read(account: account)
+    }
+    func write(_ data: Data, account: String) throws { try inner.write(data, account: account) }
+    func delete(account: String) throws { try inner.delete(account: account) }
+    func accounts() throws -> [String] { try inner.accounts() }
+}
+
+@Test func aKeychainErrorIsntAMissingKeyAndLeavesTheHistoryWhereItIs() throws {
+    let paths = FudgePaths(supportDirectory: try Fixtures.temporaryDirectory())
+    let secrets = FailingSecretStore()
+    let store = ClipboardHistoryStore(paths: paths, secrets: secrets)
+    var history = ClipboardHistory()
+    _ = history.record(.text("kept"), source: nil, now: start)
+    try store.save(history)
+
+    secrets.failing = true
+    #expect(store.load().entries.isEmpty)
+    #expect(throws: (any Error).self) { try store.save(ClipboardHistory()) }
+    let names = try FileManager.default.contentsOfDirectory(atPath: store.folder.path)
+    #expect(names.contains(ClipboardHistoryStore.historyFile) && !names.contains { $0.contains(".unreadable-") })
+
+    secrets.failing = false
+    #expect(store.load() == history, "readable again once the Keychain is")
+}
+
+@Test func anImageFilesNameSaysNothingAboutTheImage() {
+    var history = ClipboardHistory()
+    let entry = history.record(.image(png: png(8), width: 1, height: 1), source: nil, now: start).recorded!
+    let digest = ClipboardHistoryStore.digest(png(8))
+    #expect(entry.imageDigest == digest)
+    #expect(!(entry.imageFile ?? "").contains(digest))
+}

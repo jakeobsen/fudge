@@ -32,6 +32,8 @@ public struct ClipboardEntry: Sendable, Equatable, Codable {
     public var files: [String]?
     /// The image's file name in the store.
     public var imageFile: String?
+    /// The image's PNG digest, so the same image is found again. It's only in the sealed history, never a file name.
+    public var imageDigest: String?
     public var width: Int?
     public var height: Int?
     public var source: ClipboardSource?
@@ -77,7 +79,7 @@ public struct ClipboardEntry: Sendable, Equatable, Codable {
         case .text(let value): kind == .text && text == ClipboardHistory.capped(value).text
         case .link(let value): kind == .link && text == value
         case .files(let paths): kind == .files && files == paths
-        case .image: kind == .image && imageDigest != nil && imageFile?.hasPrefix(imageDigest!) == true
+        case .image: kind == .image && imageDigest != nil && self.imageDigest == imageDigest
         }
     }
 }
@@ -119,11 +121,11 @@ public struct ClipboardHistory: Sendable, Equatable, Codable {
     }
 
     /// Records a copy made at `now` in `source`. An empty text and an image over `imageLimit` aren't kept. A copy the
-    /// history already holds moves that entry to the top, as the newest. `imageFile` names a new image's file (the
-    /// store writes it), starting with its PNG's digest, so the same image is found again.
+    /// history already holds moves that entry to the top, as the newest; an image is found by its PNG's digest.
+    /// `imageFile` names a new image's file, which the store writes: random, so a name says nothing about the image.
     public mutating func record(
         _ copy: ClipboardCopy, source: ClipboardSource?, now: Date, id: String = UUID().uuidString,
-        imageFile: (_ digest: String) -> String = { "\($0)-\(UUID().uuidString).png" }
+        imageFile: () -> String = { "\(UUID().uuidString).png" }
     ) -> Change {
         var digest: String?
         if case .image(let png, _, _) = copy { digest = ClipboardHistoryStore.digest(png) }
@@ -151,7 +153,8 @@ public struct ClipboardHistory: Sendable, Equatable, Codable {
         case .image(let png, let width, let height):
             guard png.count <= Self.imageLimit, let digest else { return Change() }
             entry.kind = .image
-            entry.imageFile = imageFile(digest)
+            entry.imageFile = imageFile()
+            entry.imageDigest = digest
             entry.width = width
             entry.height = height
             entry.size = png.count

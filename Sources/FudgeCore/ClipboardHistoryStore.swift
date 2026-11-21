@@ -27,13 +27,21 @@ public final class ClipboardHistoryStore: @unchecked Sendable {
         SHA256.hash(data: data).prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
-    /// Reads the history. A missing file is an empty history; an unreadable one is set aside, and the history starts
-    /// empty. Never throws.
+    /// Reads the history. A missing file is an empty history; one whose key is gone, or that won't open, is set aside,
+    /// and the history starts empty. A Keychain error leaves the file alone. Never throws.
     public func load(now: Date = Date()) -> ClipboardHistory {
         lock.withLock {
             let file = folder.appendingPathComponent(Self.historyFile)
             guard let sealed = try? Data(contentsOf: file) else { return ClipboardHistory() }
-            guard let key = try? existingKey(),
+            // The Keychain failing (locked, say) isn't the key being gone: the file stays where it is for the next
+            // read, and saving fails rather than replace it.
+            let key: SymmetricKey?
+            do {
+                key = try existingKey()
+            } catch {
+                return ClipboardHistory()
+            }
+            guard let key,
                 let data = try? open(sealed, name: Self.historyFile, key: key),
                 let history = try? JSONDecoder().decode(ClipboardHistory.self, from: data)
             else {
