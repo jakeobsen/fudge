@@ -26,6 +26,9 @@ public struct ListContent: Sendable, Equatable {
         public var quickLook: QuickLookItem?
         /// The slots the host held back (`ItemSlots`): the item has them, and `filled(with:)` puts them in.
         public var deferred: Deferred = []
+        /// The shortcuts of the held-back `actions`, which the host names with the item so they work before the
+        /// actions come (`waitsForActions`).
+        public var deferredShortcuts: [KeyShortcut] = []
 
         public struct Deferred: OptionSet, Sendable, Equatable {
             public let rawValue: Int
@@ -41,7 +44,14 @@ public struct ListContent: Sendable, Equatable {
             if deferred.contains(.actions) { item.actions = slots.actions }
             if deferred.contains(.detail) { item.detail = slots.detail }
             item.deferred = []
+            item.deferredShortcuts = []
             return item
+        }
+
+        /// Whether `pressed` is a shortcut of this item's actions that haven't come yet: the key waits for them, as
+        /// ↵ does, rather than going to the search field.
+        public func waitsForActions(_ pressed: KeyShortcut) -> Bool {
+            deferred.contains(.actions) && deferredShortcuts.contains(pressed)
         }
     }
 
@@ -150,6 +160,7 @@ public struct ListContent: Sendable, Equatable {
         var sections: [Section] = []
         var loose: [Item] = []
         var emptyNode: UINode?
+        let shortcutSets = Self.shortcutSets(view)
         func flushLoose() {
             if let first = loose.first { sections.append(Section(id: -first.id, items: loose, grid: grid)) }
             loose = []
@@ -158,14 +169,16 @@ public struct ListContent: Sendable, Equatable {
             switch child.type {
             case "\(kind).Section":
                 flushLoose()
-                let items = child.children.filter { $0.type == "\(kind).Item" }.map { Self.item($0, now: now) }
+                let items = child.children.filter { $0.type == "\(kind).Item" }.map {
+                    Self.item($0, now: now, shortcutSets: shortcutSets)
+                }
                 sections.append(
                     Section(
                         id: child.id, title: child.string("title"), subtitle: child.string("subtitle"), items: items,
                         grid: grid?.overridden(by: child))
                 )
             case "\(kind).Item":
-                loose.append(Self.item(child, now: now))
+                loose.append(Self.item(child, now: now, shortcutSets: shortcutSets))
             case "\(kind).EmptyView":
                 emptyNode = child
             default:
@@ -245,7 +258,7 @@ public struct ListContent: Sendable, Equatable {
         return items.first?.id
     }
 
-    static func item(_ node: UINode, now: Date) -> Item {
+    static func item(_ node: UINode, now: Date, shortcutSets: [[KeyShortcut]] = []) -> Item {
         let title = textWithTooltip(node.props["title"])
         let subtitle = textWithTooltip(node.props["subtitle"])
         var icon = node.props["icon"].flatMap(present)
@@ -286,19 +299,40 @@ public struct ListContent: Sendable, Equatable {
             detail: node.node("detail"),
             content: GridItemContent(node.props["content"]),
             quickLook: QuickLookItem.read(node.props["quickLook"]),
-            deferred: deferred(node)
+            deferred: deferred(node),
+            deferredShortcuts: deferredShortcuts(node, in: shortcutSets)
         )
     }
 
-    /// Which of the item's slots hold `{ "$deferred": true }` (see `ItemSlots`).
+    /// Which of the item's slots hold `{ "$deferred": true, … }` (see `ItemSlots`).
     static func deferred(_ node: UINode) -> Item.Deferred {
         var deferred: Item.Deferred = []
-        if node.props["actions"] == deferredMarker { deferred.insert(.actions) }
-        if node.props["detail"] == deferredMarker { deferred.insert(.detail) }
+        if isDeferred(node.props["actions"]) { deferred.insert(.actions) }
+        if isDeferred(node.props["detail"]) { deferred.insert(.detail) }
         return deferred
     }
 
-    static let deferredMarker = JSONValue.object(["$deferred": .bool(true)])
+    private static func isDeferred(_ value: JSONValue?) -> Bool {
+        guard case .object(let marker) = value else { return false }
+        return marker["$deferred"] == .bool(true)
+    }
+
+    /// The shortcut sets a render names (`$shortcutSets` on the view): the shortcuts each distinct held-back action
+    /// panel uses. A held-back `actions` names its set by index (`"shortcuts": 0`).
+    static func shortcutSets(_ view: UINode) -> [[KeyShortcut]] {
+        guard case .array(let sets) = view.props["$shortcutSets"] else { return [] }
+        return sets.map { set in
+            guard case .array(let shortcuts) = set else { return [] }
+            return shortcuts.compactMap { KeyShortcut(json: $0) }
+        }
+    }
+
+    static func deferredShortcuts(_ node: UINode, in sets: [[KeyShortcut]]) -> [KeyShortcut] {
+        guard case .object(let marker) = node.props["actions"], marker["$deferred"] == .bool(true),
+            case .number(let index) = marker["shortcuts"], let index = Int(exactly: index), sets.indices.contains(index)
+        else { return [] }
+        return sets[index]
+    }
 
     static func accessory(_ json: JSONValue, now: Date) -> Accessory? {
         guard case .object(let object) = json else { return nil }

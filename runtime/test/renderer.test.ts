@@ -113,9 +113,51 @@ test("the items a render carries in full match what a full render sends", async 
     const deferred = mounted.root.snapshot().view!.children;
     assert.deepEqual(deferred[0], full[0]);
     assert.deepEqual(deferred[2], full[2]);
-    assert.deepEqual(deferred[1]!.props.actions, { $deferred: true });
+    assert.deepEqual(deferred[1]!.props.actions, { $deferred: true, shortcuts: 0 });
     assert.deepEqual({ ...deferred[1]!.props, actions: full[1]!.props.actions, detail: full[1]!.props.detail }, full[1]!.props);
     assert.deepEqual(mounted.root.slots([ids[1]!]), [{ id: ids[1], slots: { actions: full[1]!.props.actions, detail: full[1]!.props.detail } }]);
+});
+
+test("a deferred panel names the shortcuts it uses, each set once per render", async () => {
+    const cmd = (key: string) => ({ modifiers: ["cmd"], key });
+    const common = { macOS: { modifiers: ["cmd"], key: "backspace" }, Windows: { modifiers: ["ctrl"], key: "backspace" } };
+    const Target = () => h(List, { actions: h(ActionPanel, null, h(Action, { title: "Elsewhere", shortcut: cmd("x"), onAction: () => {} })) });
+    const usual = (n: number) =>
+        h(
+            ActionPanel,
+            null,
+            h(Action, { title: `Open ${n}`, onAction: () => {} }),
+            h(ActionPanel.Section, null, h(Action, { title: "Delete", shortcut: common, onAction: () => {} })),
+            h(ActionPanel.Submenu, { title: "More" }, h(Action, { title: "Copy", shortcut: cmd("c"), onAction: () => {} })),
+            // A pushed view's own actions aren't this panel's.
+            h(Action.Push, { title: "Push", target: h(Target) }),
+        );
+    const mounted = await mount(
+        h(
+            List,
+            null,
+            h(List.Item, { key: 1, title: "first", actions: usual(1) }),
+            h(List.Item, { key: 2, title: "two", actions: usual(2) }),
+            h(List.Item, { key: 3, title: "three", actions: usual(3) }),
+            h(List.Item, {
+                key: 4,
+                title: "four",
+                actions: h(ActionPanel, null, h(Action, { title: "Pin", shortcut: cmd("p"), onAction: () => {} })),
+            }),
+            h(List.Item, { key: 5, title: "five", actions: h(ActionPanel, null, h(Action, { title: "Plain", onAction: () => {} })) }),
+        ),
+    );
+    const view = mounted.first.view!;
+    const [, two, three, four, five] = view.children;
+    assert.deepEqual(view.props.$shortcutSets, [[common, cmd("c")], [cmd("p")]]);
+    assert.deepEqual(two!.props.actions, { $deferred: true, shortcuts: 0 }, "rows with the same shortcuts share a set");
+    assert.deepEqual(three!.props.actions, { $deferred: true, shortcuts: 0 });
+    assert.deepEqual(four!.props.actions, { $deferred: true, shortcuts: 1 });
+    assert.deepEqual(five!.props.actions, { $deferred: true }, "a panel with no shortcuts names no set");
+
+    // With every item carried in full, there's nothing to name.
+    mounted.root.slots(view.children.map((child) => child.id));
+    assert.equal("$shortcutSets" in mounted.root.snapshot().view!.props, false);
 });
 
 test("a Grid's items defer their actions too", async () => {

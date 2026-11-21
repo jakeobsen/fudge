@@ -8,7 +8,7 @@
 import type { ReactNode } from "react";
 import { ConcurrentRoot } from "react-reconciler/constants.js";
 import { createContainer, reconciler, type HostInstance } from "./host.ts";
-import { firstVisible, serializeSlots, type JsonValue, type UINode } from "./serialize.ts";
+import { deferral, firstVisible, serializeSlots, SHORTCUT_SETS, type JsonValue, type UINode } from "./serialize.ts";
 
 export const VIEW = "$view";
 
@@ -78,9 +78,11 @@ export function createRoot(options: RootOptions): Root {
         const views = container.children.filter(
             (node): node is HostInstance => node.kind === "instance" && node.type === VIEW && !node.hidden,
         );
-        const deferral = { wanted, firstSeen: false };
-        if (views.length === 0) return { view: firstVisible(container.children, deferral), depth: 1 };
-        return { view: firstVisible(views[views.length - 1]!.children, deferral), depth: views.length };
+        const deferring = deferral(wanted);
+        const top = views.length === 0 ? container.children : views[views.length - 1]!.children;
+        const view = firstVisible(top, deferring);
+        if (view && deferring.shortcutSets.length > 0) view.props[SHORTCUT_SETS] = deferring.shortcutSets;
+        return { view, depth: Math.max(views.length, 1) };
     }
 
     return {

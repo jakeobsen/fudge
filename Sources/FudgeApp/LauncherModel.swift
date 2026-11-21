@@ -664,9 +664,11 @@ final class LauncherModel {
     }
 
     /// What a key pressed before the selected item's actions came does once they come: ↵, ⌘↵ and ⌘K wait for them
-    /// rather than doing nothing. Other shortcuts don't wait: they'd hold back the search field's ⌘A or ⌘V.
+    /// rather than doing nothing, and so does a shortcut of those actions, which the host names with the item
+    /// (`Item.waitsForActions`). Other keys don't wait: they'd hold back the search field's ⌘A or ⌘V.
     private enum WaitingKey {
         case primary, secondary, actionPanel
+        case shortcut(KeyShortcut)
     }
 
     @ObservationIgnored private var waitingKey: (session: String, node: Int, key: WaitingKey)?
@@ -693,6 +695,8 @@ final class LauncherModel {
         case .primary: if let primaryAction { run(primaryAction) }
         case .secondary: if let secondaryAction { run(secondaryAction) }
         case .actionPanel: if actionPanel == nil { toggleActionPanel() }
+        case .shortcut(let pressed):
+            if let entry = ActionPanelReader.action(for: pressed, in: currentActions) { run(entry) }
         }
     }
 
@@ -1515,6 +1519,8 @@ final class LauncherModel {
             return true
         }
         guard !pressed.modifiers.isEmpty else { return false }
+        // A shortcut of the selected item's actions works before they've come: it waits for them, as ↵ does.
+        if selectedListItem?.waitsForActions(pressed) == true, waitForActions(.shortcut(pressed)) { return true }
         if let entry = ActionPanelReader.action(for: pressed, in: currentActions) {
             run(entry)
             return true
