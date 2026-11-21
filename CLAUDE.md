@@ -622,13 +622,17 @@ Extensions run in a separate Node.js process, the extension host.
     A top-level `use()` with no `<Suspense>` boundary just holds the first render until the promise settles.
   - **The fetch rewrite** (`src/api/oauth-fetch.ts`).
     `OAuthService` fetches its token and refresh URLs itself, so the worker wraps `fetch`: a `Request`, or anything else read as a string, as `fetch` reads it.
-    A request goes to the relay, as `<server>/<provider>/token` or `/refresh-token` with the same method, headers and body, only when it's a `POST` to one of the seven providers' default token or refresh URLs (by scheme, host and path) with `grant_type` `authorization_code` or `refresh_token`.
-    Google, Jira and Zoom refresh at their token URL, so there the grant picks the endpoint, and since those are the providers' own URLs, they go to the relay only when this extension has a relay sign-in for that provider, pending or stored (`SignInCalls.hasRelaySignIn`); an extension's own flow, or a service account's grant, goes where it was going.
+    A request goes to the relay, as `<server>/<provider>/token` or `/refresh-token` with the same method, headers and body, only when it's a `POST` to one of the table's token or refresh URLs (by scheme, host and path) with `grant_type` `authorization_code` or `refresh_token`.
+    Google, Atlassian and Zoom refresh at their own token URL, so there the grant picks the endpoint, and since those are the providers' own URLs, they go to the relay only when this extension has a relay sign-in for that provider, pending or stored (`SignInCalls.hasRelaySignIn`); an extension's own flow, or a service account's grant, goes where it was going.
     **Nothing is ever sent to Raycast's proxy hosts** (`*.oauth.raycast.com`, with or without a trailing dot): what isn't rewritten there is refused, with sign-in on or off.
     A rewritten request goes to the relay through Node's `http`/`https` (`sendToRelay`), never undici, as the `Request` `fetch` would send (its method, headers and serialized body, its `signal`), and comes back as the `Response` `fetch` would give, streamed and decoded.
     Its connection always verifies (`relayTLSOptions`: `rejectUnauthorized: true` and TLS 1.2 at least), whatever the worker's `NODE_TLS_REJECT_UNAUTHORIZED` says, since it carries the code and verifier or the refresh token.
     A redirect from the relay is an error, never followed, since a 307 or 308 would send that body on.
     Every other request keeps `fetch`'s own redirects, as in Raycast (D-65), so a third party's redirect to `*.oauth.raycast.com` isn't intercepted.
+    The table holds the seven providers `OAuthService` has built in, at their default URLs, and Raycast's proxies for Jira and Zoom (`jira.oauth.raycast.com`, `zoom.oauth.raycast.com`), which the store's Jira and Zoom extensions set (FUD-137).
+    Those go to the relay's `atlassian` and `zoom` providers, beside Atlassian's and Zoom's own URLs, so two entries can share a relay provider (`OAuthProvider.id`), and an entry is known by its authorize URL.
+    One Atlassian app covers Jira and Confluence, so both Atlassian entries are named **Atlassian (Jira, Confluence)**.
+    A sign-in stored with `relayProvider: "jira"`, the relay's Atlassian provider before fudge-oauth v0.3.0, counts as Atlassian's (`OAuthProviders.currentRelayProvider`).
     The table is core's (`OAuthProviders`), handed to the host as JSON in `FUDGE_OAUTH_PROVIDERS`; `runtime/test/fixtures/oauth-providers.json` is the same table, pinned by a Swift test, for the runtime's tests.
     Only for a request that may go to the relay does the worker ask the app (`oauth.server`, with the provider): the server in use, so a change while a command runs is honoured, and whether the extension has a relay sign-in there.
   - **Below `fetch`** (`src/api/oauth-http.ts`, SPEC-075).

@@ -36,10 +36,17 @@
     },
     {
         "authorizeURL": "https://auth.atlassian.com/authorize",
-        "id": "jira",
-        "name": "Jira",
+        "id": "atlassian",
+        "name": "Atlassian (Jira, Confluence)",
         "refreshURL": "https://auth.atlassian.com/oauth/token",
         "tokenURL": "https://auth.atlassian.com/oauth/token"
+    },
+    {
+        "authorizeURL": "https://jira.oauth.raycast.com/authorize",
+        "id": "atlassian",
+        "name": "Atlassian (Jira, Confluence)",
+        "refreshURL": "https://jira.oauth.raycast.com/refresh-token",
+        "tokenURL": "https://jira.oauth.raycast.com/token"
     },
     {
         "authorizeURL": "https://zoom.us/oauth/authorize",
@@ -47,5 +54,12 @@
         "name": "Zoom",
         "refreshURL": "https://zoom.us/oauth/token",
         "tokenURL": "https://zoom.us/oauth/token"
+    },
+    {
+        "authorizeURL": "https://zoom.oauth.raycast.com/authorize",
+        "id": "zoom",
+        "name": "Zoom",
+        "refreshURL": "https://zoom.oauth.raycast.com/refresh-token",
+        "tokenURL": "https://zoom.oauth.raycast.com/token"
     }
 ]
