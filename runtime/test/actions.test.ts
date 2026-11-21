@@ -3,6 +3,7 @@ import { afterEach, beforeEach, test } from "node:test";
 import { createElement as h } from "react";
 import { Action, ActionPanel, Detail, Grid, Icon, Keyboard, List } from "../src/api/index.ts";
 import { connect, settle, type RpcRequest } from "../src/bridge.ts";
+import { revive } from "../src/protocol.ts";
 import type { UINode } from "../src/renderer/serialize.ts";
 import { mount } from "./support/mount.ts";
 
@@ -110,6 +111,44 @@ test("an action fudge can't perform still shows, and says so when picked", async
     const toast = calls.find((call) => call.method === "toast.show")!.params as { title: string; style: string };
     assert.equal(toast.title, "Action.CreateQuicklink isn't available in Fudge yet");
     assert.equal(toast.style, "FAILURE");
+});
+
+test("Action.PickDate renders an Action the app draws a picker for, with Raycast's defaults", async () => {
+    const min = new Date("2026-11-21T00:00:00.000Z");
+    const max = new Date("2026-12-21T00:00:00.000Z");
+    const shortcut = { modifiers: ["cmd"], key: "d" };
+    const { entries } = await panelWith(
+        h(Action.PickDate, { title: "Pick Due Date…", shortcut, onChange: () => {} }),
+        h(Action.PickDate, { title: "Pick Day…", icon: Icon.Clock, type: Action.PickDate.Type.Date, min, max, onChange: () => {} }),
+    );
+    assert.deepEqual(
+        entries.map((entry) => [entry.type, entry.props.title, entry.props.icon, entry.props.pickDate]),
+        [
+            ["Action", "Pick Due Date…", Icon.Calendar, { type: "date_time" }],
+            ["Action", "Pick Day…", Icon.Clock, { type: "date", min: { $date: min.toISOString() }, max: { $date: max.toISOString() } }],
+        ],
+    );
+    assert.deepEqual(entries[0]!.props.shortcut, shortcut);
+    assert.deepEqual(entries[0]!.props.onChange, { $fn: ["onChange"] });
+    assert.equal(entries[0]!.props.onAction, undefined, "running it opens the picker; nothing runs in the command");
+});
+
+test("Action.PickDate's onChange gets the Date picked, or null when cleared", async () => {
+    const changes: unknown[] = [];
+    const { mounted, entries } = await panelWith(h(Action.PickDate, { title: "Pick", onChange: (date: unknown) => changes.push(date) }));
+    // As the worker hands them over: revived from the app's { "$date": iso }.
+    await mounted.root.dispatch(entries[0]!.id, ["onChange"], revive([{ $date: "2026-11-21T09:30:00.000Z" }]) as unknown[]);
+    await mounted.root.dispatch(entries[0]!.id, ["onChange"], [null]);
+    assert.equal(changes.length, 2);
+    assert.ok(changes[0] instanceof Date);
+    assert.equal((changes[0] as Date).toISOString(), "2026-11-21T09:30:00.000Z");
+    assert.equal(changes[1], null);
+    assert.deepEqual(calls, [], "picking calls nothing in the app");
+});
+
+test("Action.PickDate.Type has Raycast's values", () => {
+    assert.deepEqual({ ...Action.PickDate.Type }, { Date: "date", DateTime: "date_time" });
+    assert.ok(Object.isFrozen(Action.PickDate.Type));
 });
 
 test("Action.Paste pastes into the app the user is in, then calls onPaste", async () => {

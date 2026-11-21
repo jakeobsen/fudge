@@ -77,6 +77,9 @@ public struct ActionEntry: Sendable, Equatable, Identifiable {
     public var target: ActionTarget
     /// A submenu whose `onOpen` the app calls when it opens.
     public var hasOnOpen = false
+    /// Set for an `Action.PickDate`: running it opens a date picker in the action panel overlay instead of calling
+    /// `onAction`, and the pick goes to the node's `onChange`.
+    public var pickDate: DatePickerOptions? = nil
 
     public var isSubmenu: Bool { submenu != nil }
 }
@@ -232,7 +235,8 @@ public enum ActionPanelReader {
                 destructive: node.string("style") == "destructive",
                 submenu: nil,
                 isLoading: false,
-                target: node.string(builtInProp) == "toggleQuickLook" ? .toggleQuickLook : .node(node.id)
+                target: node.string(builtInProp) == "toggleQuickLook" ? .toggleQuickLook : .node(node.id),
+                pickDate: pickDate(node)
             )
         case "ActionPanel.Submenu":
             return ActionEntry(
@@ -249,6 +253,35 @@ public enum ActionPanelReader {
         default:
             return nil
         }
+    }
+
+    /// An `Action.PickDate`'s picker: its `pickDate` prop (`type`, and `min`/`max` as `$date`s), with an `onChange`
+    /// to call. Without one, it's an ordinary action.
+    static func pickDate(_ node: UINode) -> DatePickerOptions? {
+        guard case .object(let props) = node.props["pickDate"], node.hasCallback("onChange") else { return nil }
+        return DatePickerOptions(props: props)
+    }
+
+    /// The entry with node id `id`, searching submenus too.
+    public static func entry(id: Int, in sections: [ActionSection]) -> ActionEntry? {
+        for entry in flat(sections) {
+            if entry.id == id { return entry }
+            if let submenu = entry.submenu, let found = Self.entry(id: id, in: submenu) { return found }
+        }
+        return nil
+    }
+
+    /// The first action titled `title` that `matches`, searching submenus too.
+    public static func entry(
+        titled title: String, in sections: [ActionSection], where matches: (ActionEntry) -> Bool = { _ in true }
+    ) -> ActionEntry? {
+        for entry in flat(sections) {
+            if entry.title == title, !entry.isSubmenu, matches(entry) { return entry }
+            if let submenu = entry.submenu, let found = Self.entry(titled: title, in: submenu, where: matches) {
+                return found
+            }
+        }
+        return nil
     }
 
     /// Every entry in order, sections flattened, submenus not opened.
