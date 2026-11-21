@@ -9,14 +9,17 @@ import Testing
 // MARK: - The provider table
 
 @Test func everyBuiltInProvidersDefaultURLsMapAndNothingElseDoes() {
-    #expect(OAuthProviders.all.map(\.id) == ["github", "linear", "slack", "asana", "google", "jira", "zoom"])
+    #expect(
+        OAuthProviders.all.map(\.id) == [
+            "github", "linear", "slack", "asana", "google", "atlassian", "atlassian", "zoom", "zoom",
+        ])
     for provider in OAuthProviders.all {
         #expect(OAuthProviders.provider(authorizing: provider.authorizeURL) == provider, "\(provider.id)")
     }
     // @raycast/utils 2.3.3's defaults.
     #expect(OAuthProviders.provider(authorizing: "https://github.oauth.raycast.com/authorize")?.id == "github")
     #expect(OAuthProviders.provider(authorizing: "https://accounts.google.com/o/oauth2/v2/auth")?.id == "google")
-    #expect(OAuthProviders.provider(authorizing: "https://auth.atlassian.com/authorize")?.id == "jira")
+    #expect(OAuthProviders.provider(authorizing: "https://auth.atlassian.com/authorize")?.id == "atlassian")
     #expect(OAuthProviders.provider(authorizing: "https://zoom.us/oauth/authorize")?.id == "zoom")
     for other in [
         "https://github.com/login/oauth/authorize", "https://github.oauth.raycast.com/authorize/",
@@ -27,13 +30,58 @@ import Testing
     }
     #expect(
         OAuthProviders.raycastHosts.sorted() == [
-            "asana.oauth.raycast.com", "github.oauth.raycast.com", "linear.oauth.raycast.com",
-            "slack.oauth.raycast.com",
+            "asana.oauth.raycast.com", "github.oauth.raycast.com", "jira.oauth.raycast.com",
+            "linear.oauth.raycast.com", "slack.oauth.raycast.com", "zoom.oauth.raycast.com",
         ])
     let google = OAuthProviders.all.first { $0.id == "google" }!
     #expect(google.refreshURL == google.tokenURL, "Google refreshes at its token URL")
     let github = OAuthProviders.all.first { $0.id == "github" }!
     #expect(github.refreshURL == "https://github.oauth.raycast.com/refresh-token")
+}
+
+/// The store's Jira and Zoom extensions sign in through Raycast's own proxies (FUD-137). Those exact URLs go to the
+/// relay's Atlassian and Zoom providers, beside the providers' own URLs, which `OAuthService` uses by default.
+@Test func raycastsJiraAndZoomProxiesGoToTheRelay() throws {
+    let jira = try #require(OAuthProviders.provider(authorizing: "https://jira.oauth.raycast.com/authorize"))
+    #expect(jira.id == "atlassian" && jira.name == "Atlassian (Jira, Confluence)")
+    #expect(jira.tokenURL == "https://jira.oauth.raycast.com/token")
+    #expect(jira.refreshURL == "https://jira.oauth.raycast.com/refresh-token")
+    let zoom = try #require(OAuthProviders.provider(authorizing: "https://zoom.oauth.raycast.com/authorize"))
+    #expect(zoom.id == "zoom")
+    #expect(zoom.refreshURL == "https://zoom.oauth.raycast.com/refresh-token")
+    // Both Atlassian entries reach the relay's one provider.
+    let server = SignInServer.custom(URL(string: "https://relay.example")!)
+    let atlassian = try #require(OAuthProviders.provider(authorizing: "https://auth.atlassian.com/authorize"))
+    #expect(server.endpoint(jira, "authorize") == "https://relay.example/atlassian/authorize")
+    #expect(server.endpoint(atlassian, "authorize") == "https://relay.example/atlassian/authorize")
+    // Only those exact URLs: no lookalike host, scheme, path or query.
+    for lookalike in [
+        "https://jira.oauth.raycast.com.evil.test/authorize", "http://jira.oauth.raycast.com/authorize",
+        "https://jira.oauth.raycast.com/authorize/x", "https://zoom.oauth.raycast.com.evil.test/authorize",
+        "http://zoom.oauth.raycast.com/authorize", "https://zoom.oauth.raycast.com/authorize?x=1",
+    ] {
+        #expect(OAuthProviders.provider(authorizing: lookalike) == nil, "\(lookalike)")
+    }
+    // Each URL belongs to one entry, so a request is never sent for the wrong one.
+    let urls = OAuthProviders.all.flatMap { provider in
+        [provider.authorizeURL, provider.tokenURL]
+            + (provider.refreshURL == provider.tokenURL ? [] : [provider.refreshURL])
+    }
+    #expect(Set(urls).count == urls.count)
+}
+
+/// A sign-in the relay's Atlassian provider made while it was still called "jira" counts as Atlassian's.
+@Test func aSignInMarkedWithTheOldJiraNameCountsAsAtlassians() throws {
+    let secrets = MemorySecretStore()
+    let store = OAuthTokenStore(secrets: secrets)
+    var old = StoredTokenSet(accessToken: "a", updatedAt: "2026-11-21T12:00:00Z")
+    old.relayProvider = "jira"
+    try store.save(old, extension: "jira", provider: "jira")
+    let calls = SignInCalls(store: store, extensionName: "jira", pending: [])
+    #expect(try calls.hasRelaySignIn(provider: "atlassian"))
+    #expect(try !calls.hasRelaySignIn(provider: "zoom"))
+    #expect(OAuthProviders.currentRelayProvider("jira") == "atlassian")
+    #expect(OAuthProviders.currentRelayProvider("zoom") == "zoom")
 }
 
 /// The runtime's tests load the same table from this file, so the two can't drift apart.
