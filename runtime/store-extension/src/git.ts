@@ -320,7 +320,10 @@ export class StoreRepository {
 
     /**
      * Takes these exact patterns out of the checkout again, keeping every other, so a later refresh doesn't fetch
-     * their files' changes. Their files leave the working tree; what's downloaded stays until a refresh prunes it.
+     * their files' changes. Their files leave the working tree, but what was downloaded stays in `.git` as long as the
+     * copy's commit reaches it: a refresh keeps every object its new commit reaches (`#keepOnlyReachable`), so only a
+     * file that changed or went upstream is pruned. Nothing prunes the rest: `gc` can't run in this clone, and a
+     * repack that left out blobs would take the checked-out manifests with them, which the list reads.
      */
     async drop(patterns: string[]): Promise<void> {
         const current = (await this.#exec(["sparse-checkout", "list"])).split("\n").filter(Boolean);

@@ -687,6 +687,8 @@ Extensions run in a separate Node.js process, the extension host.
   `npm run typecheck` checks it with its own `tsconfig.json`, and `runtime/test/store.test.ts` tests its modules, with a fake git runner and a local bare repository (no network).
   - `git.ts` keeps a shallow, blobless, sparse clone of github.com/raycast/extensions in its support folder's `repo/`, with only `/extensions/*/package.json` checked out.
     A README or an extension's source comes on demand through `sparse-checkout add`; the detail's scan adds only a folder's source files (`scanPatterns`: `src/**/*.ts`, `.tsx`, `.js`, `.jsx`) and takes those patterns out again afterwards (`drop`, through `sparse-checkout set --no-cone --stdin` with every other pattern), so a later refresh doesn't fetch their changes.
+    What was downloaded stays in `.git` while the copy's commit reaches it (a refresh prunes only what its new commit doesn't), so a checked folder's source is downloaded once per version.
+    Nothing else prunes it, since a repack that left out blobs would also drop the checked-out manifests.
     `sourceFiles` lists a folder's `src/` from the trees alone, which a blobless clone has in full, so it downloads nothing.
     The copy is refreshed when it's a day old or on ⌘R: the default branch's name (checked by `isValidBranch`) is fetched as `refs/heads/<branch>` into its remote-tracking ref, the branch moves there, every other ref and the reflogs go, and only what the refs reach is packed again, into one pack marked as the remote's, before `git prune`.
     So the copy stays one commit deep and `.git/shallow` names only that commit.
