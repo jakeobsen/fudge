@@ -15,6 +15,7 @@ import { emojiData, readAnnotations, readEmojiTest, serialize } from "../scripts
 import {
     allEmoji,
     drawable,
+    emojiVersions,
     forget,
     macOSVersion,
     newestEmojiVersion,
@@ -140,6 +141,25 @@ test("each macOS release draws the Emoji version Apple's notes give it", () => {
     assert.ok(names(15.1).has("head shaking horizontally"));
     assert.ok(!names(15.1).has("face with bags under eyes"), "Emoji 16.0 needs macOS 15.4");
     assert.ok(names(16.0).has("face with bags under eyes"));
+});
+
+test("no skin tone is newer than its base on any Mac: a tone shown is always drawable", () => {
+    // A base the Mac draws shows its tones too, so each tone must come in no later than its base's row of the
+    // version table, or a future Unicode update could show boxes (the review of #103).
+    const lines = readEmojiTest(readFileSync(path.join(import.meta.dirname, "../vendor/unicode/emoji-test.txt"), "utf8"));
+    const modifiers = new Set([0x1f3fb, 0x1f3fc, 0x1f3fd, 0x1f3fe, 0x1f3ff]);
+    const key = (codepoints: number[]) => codepoints.filter((cp) => cp !== 0xfe0f && !modifiers.has(cp)).join(" ");
+    const bases = new Map(lines.filter((line) => !line.codepoints.some((cp) => modifiers.has(cp))).map((line) => [key(line.codepoints), line]));
+    let tones = 0;
+    for (const line of lines.filter((each) => each.codepoints.some((cp) => modifiers.has(cp)))) {
+        const base = bases.get(key(line.codepoints));
+        if (!base) continue;
+        tones += 1;
+        for (const { emoji: drawn } of emojiVersions) {
+            assert.ok(base.version > drawn || line.version <= drawn, `${line.name} (E${line.version}) on a Mac drawing E${drawn}`);
+        }
+    }
+    assert.ok(tones > 1000);
 });
 
 // Skin tones and Recently Used.
