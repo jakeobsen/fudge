@@ -20,6 +20,25 @@ import {
     status,
     type StoreEntry,
 } from "../store-extension/src/catalog.ts";
+import {
+    checkFolder,
+    compatibilityFile,
+    compatibilityLine,
+    compatibilityText,
+    CompatibilityChecks,
+    fromReport,
+    isNotCompatible,
+    maxCachedResults,
+    maxScanBytes,
+    maxScanFiles,
+    readCompatibility,
+    rememberCompatibility,
+    scannerIdentity,
+    scanPatterns,
+    writeCompatibility,
+    type Compatibility,
+    type ScanReport,
+} from "../store-extension/src/compatibility.ts";
 import { maxReadmeBytes, readRegularFile } from "../store-extension/src/files.ts";
 import {
     gitAvailable,
@@ -48,7 +67,6 @@ import {
 import {
     buildArguments,
     bundledNames,
-    compatibilityLine,
     install,
     oneAtATime,
     readInstalled,
@@ -523,6 +541,13 @@ test("everything in the detail goes through the filter, the manifest's text incl
     assert.match(detailMarkdown(entry, "c0ffee", undefined), /Loading the README/);
 });
 
+test("the detail's Compatibility line comes first among the facts", () => {
+    const entry = parseManifest("alpha", manifest("alpha"))!;
+    const markdown = detailMarkdown(entry, "c0ffee", "", "Not compatible: Raycast AI. Missing: `Clipboard.read`");
+    assert.match(markdown, /\n\n\*\*Compatibility:\*\* Not compatible: Raycast AI\. Missing: `Clipboard\.read`  \n\*\*Author:\*\* someone/);
+    assert.doesNotMatch(detailMarkdown(entry, "c0ffee", ""), /Compatibility/, "no line without a state");
+});
+
 test("the detail names the repository folder when it differs from the name, and links to the folder", () => {
     const aws = parseManifest("amazon-aws", manifest("aws", { title: "Amazon AWS" }))!;
     const detail = detailMarkdown(aws, "abc123", "");
@@ -744,6 +769,8 @@ async function storeContext(
         scan?: { code?: number; stdout?: string };
         /** More folders in the repository: each with its manifest's name and its tree id. */
         folders?: { dir: string; name: string; tree: string }[];
+        /** The files under each folder's `src/`, as `ls-tree -r` lists them, by folder. */
+        sources?: Record<string, string[]>;
     } = {},
 ) {
     const root = await temporary();
@@ -755,8 +782,17 @@ async function storeContext(
     for (const folder of options.folders ?? []) {
         await writeJSON(path.join(repoPath, "extensions", folder.dir, "package.json"), manifest(folder.name));
     }
+    // The sparse-checkout patterns, as `add`, `list` and `set --stdin` see them.
+    const sparse = ["/extensions/*/package.json"];
     const git = fakeRun((_program, args) => {
         if (args[0] === "rev-parse") return { stdout: "c0ffee1234\n" };
+        if (args[0] === "ls-tree" && args.includes("-r")) {
+            const prefix = args.at(-1)!;
+            const dir = /^extensions\/([^/]+)\/src\/$/.exec(prefix)![1]!;
+            return { stdout: (options.sources?.[dir] ?? []).map((file) => `${prefix}${file}\0`).join("") };
+        }
+        if (args[0] === "sparse-checkout" && args[1] === "add") sparse.push(...args.slice(2));
+        if (args[0] === "sparse-checkout" && args[1] === "list") return { stdout: `${sparse.join("\n")}\n` };
         if (args[0] === "ls-tree") {
             const lines = [`040000 tree ${options.tree ?? "aaa1"}\textensions/alpha`];
             for (const folder of options.folders ?? []) lines.push(`040000 tree ${folder.tree}\textensions/${folder.dir}`);
@@ -786,7 +822,7 @@ async function storeContext(
         run: cli.run,
         now: () => new Date("2026-11-20T12:00:00.000Z"),
     };
-    return { context, git, cli, asked, trashed, extensionsDir, supportPath, repoPath };
+    return { context, git, cli, asked, trashed, extensionsDir, supportPath, repoPath, sparse };
 }
 const alphaEntry = parseManifest("alpha", manifest("alpha"))!;
 
@@ -932,71 +968,365 @@ test("uninstall trashes only what the store installed, and forgets it", async ()
     assert.deepEqual(await readInstalled(supportPath), {});
 });
 
+/** The install confirmation's line for a scan report. */
+const line = (report: ScanReport | undefined) => compatibilityLine(report && fromReport(report));
+
 test("the confirmation says what the scan found: up to five APIs, and how many more", async () => {
     const gaps = (...apis: string[]) => ({ supported: false, gaps: apis.map((api) => ({ api })), unreadable: [] });
-    assert.equal(compatibilityLine(supportedScan), "Fudge supports everything this extension uses.");
+    assert.equal(line(supportedScan), "Fudge supports everything this extension uses.");
     assert.equal(
-        compatibilityLine(gaps("MenuBarExtra", "MenuBarExtra.Item", "MenuBarExtra")),
+        line(gaps("MenuBarExtra", "MenuBarExtra.Item", "MenuBarExtra")),
         "This extension uses things Fudge doesn't have yet: MenuBarExtra, MenuBarExtra.Item. Some of its commands may not work.",
     );
     assert.equal(
-        compatibilityLine(gaps("A", "B", "C", "D", "E", "F", "G")),
+        line(gaps("A", "B", "C", "D", "E", "F", "G")),
         "This extension uses things Fudge doesn't have yet: A, B, C, D, E, and 2 more. Some of its commands may not work.",
     );
     assert.equal(
-        compatibilityLine(gaps("A", "B", "C", "D", "E")),
+        line(gaps("A", "B", "C", "D", "E")),
         "This extension uses things Fudge doesn't have yet: A, B, C, D, E. Some of its commands may not work.",
         "exactly five: all named",
     );
     assert.equal(
-        compatibilityLine(gaps("A", "B", "C", "D", "E", "F")),
+        line(gaps("A", "B", "C", "D", "E", "F")),
         "This extension uses things Fudge doesn't have yet: A, B, C, D, E, and 1 more. Some of its commands may not work.",
         "six: five and one more",
     );
     assert.equal(
-        compatibilityLine({ supported: false, gaps: [], unreadable: ["src/a.ts"] }),
+        line({ supported: false, gaps: [], unreadable: ["src/a.ts"] }),
         "Fudge couldn't read all of this extension's source, so some of it may not work.",
     );
-    assert.equal(compatibilityLine(undefined), "Fudge couldn't check what this extension uses.");
+    assert.equal(line(undefined), "Fudge couldn't check what this extension uses.");
+    assert.equal(compatibilityLine({ notChecked: true }), "Fudge couldn't check what this extension uses.");
 });
 
-test("APIs Fudge leaves out on purpose are named apart, never as something it doesn't have yet", () => {
+test("Raycast AI and the Browser Extension make an extension not compatible; OAuth doesn't (FUD-118)", () => {
     const report = (...gaps: { api: string; byDesign?: string }[]) => ({ supported: false, gaps, unreadable: [] });
+    const ai = { api: "AI.ask", byDesign: "AI" };
+    const browser = { api: "BrowserExtension.getTabs", byDesign: "Browser Extension" };
+    const oauth = { api: "OAuth.PKCEClient", byDesign: "OAuth" };
     assert.equal(
-        compatibilityLine(report({ api: "AI.ask", byDesign: "AI" }, { api: "AI.Model", byDesign: "AI" })),
-        "This extension uses AI, which Fudge leaves out. Some of its commands may not work.",
+        line(report(ai, { api: "AI.Model", byDesign: "AI" })),
+        "Not compatible with Fudge: this extension uses Raycast AI, which Fudge doesn't support. Commands that use it won't work.",
     );
     assert.equal(
-        compatibilityLine(
-            report({ api: "WindowManagement.getActiveWindow" }, { api: "AI.ask", byDesign: "AI" }, { api: "OAuth.PKCEClient", byDesign: "OAuth" }),
-        ),
-        "This extension uses things Fudge doesn't have yet: WindowManagement.getActiveWindow. It also uses AI and OAuth, which Fudge leaves out. Some of its commands may not work.",
+        line(report(browser)),
+        "Not compatible with Fudge: this extension uses the Raycast Browser Extension, which Fudge doesn't support. Commands that use it won't work.",
     );
     assert.equal(
-        compatibilityLine(
-            report(
-                { api: "AI.ask", byDesign: "AI" },
-                { api: "BrowserExtension.getContent", byDesign: "Browser Extension" },
-                { api: "OAuth.PKCEClient", byDesign: "OAuth" },
-            ),
-        ),
-        "This extension uses AI, Browser Extension and OAuth, which Fudge leaves out. Some of its commands may not work.",
+        line(report(browser, ai)),
+        "Not compatible with Fudge: this extension uses Raycast AI and the Raycast Browser Extension, which Fudge doesn't support. Commands that use them won't work.",
+        "both, AI first whatever the scan's order",
     );
-    const sixAndAI = report(...["A", "B", "C", "D", "E", "F"].map((api) => ({ api })), { api: "AI.ask", byDesign: "AI" });
-    assert.match(compatibilityLine(sixAndAI), /A, B, C, D, E, and 1 more\. It also uses AI/, "by-design APIs don't count toward the five");
+    assert.equal(
+        line(report(ai, { api: "WindowManagement.getActiveWindow" })),
+        "Not compatible with Fudge: this extension uses Raycast AI, which Fudge doesn't support. Commands that use it won't work. It also uses things Fudge doesn't have yet: WindowManagement.getActiveWindow. Some of its commands may not work.",
+    );
+    assert.equal(
+        line(report(oauth)),
+        "This extension signs in with OAuth, which works if the sign-in server chosen in Settings → Sign-in supports its provider.",
+        "OAuth is never called not compatible",
+    );
+    assert.equal(
+        line(report({ api: "Clipboard.read" }, oauth, ai)),
+        "Not compatible with Fudge: this extension uses Raycast AI, which Fudge doesn't support. Commands that use it won't work. It also uses things Fudge doesn't have yet: Clipboard.read. Some of its commands may not work. It signs in with OAuth, which works if the sign-in server chosen in Settings → Sign-in supports its provider.",
+    );
+    const sixAndAI = report(...["A", "B", "C", "D", "E", "F"].map((api) => ({ api })), ai);
+    assert.match(line(sixAndAI), /A, B, C, D, E, and 1 more\./, "categories don't count toward the five");
+    assert.match(line(report({ api: "Telepathy.read", byDesign: "Telepathy" })), /doesn't have yet: Telepathy\.read\./, "an unknown category reads as its APIs");
+});
+
+test("the detail's Compatibility line: checking, then compatible, not compatible, missing or signing in", () => {
+    const result = (report: ScanReport) => compatibilityText(fromReport(report));
+    const report = (...gaps: { api: string; byDesign?: string }[]) => ({ supported: false, gaps, unreadable: [] });
+    assert.equal(compatibilityText("checking"), "Checking…");
+    assert.equal(compatibilityText("failed"), "Couldn't check");
+    assert.equal(compatibilityText({ notChecked: true }), "Not checked: installing checks it");
+    assert.equal(result(supportedScan), "Compatible");
+    assert.equal(result(report({ api: "AI.ask", byDesign: "AI" })), "Not compatible: Raycast AI");
+    assert.equal(
+        result(report({ api: "BrowserExtension.getTabs", byDesign: "Browser Extension" }, { api: "AI.ask", byDesign: "AI" })),
+        "Not compatible: Raycast AI and Raycast Browser Extension",
+    );
+    assert.equal(
+        result(report(...["A", "B", "C", "D", "E", "F_G"].map((api) => ({ api })))),
+        "Missing: `A`, `B`, `C`, `D`, `E`, and 1 more",
+        "API names are code spans, so markdown never reads an underscore",
+    );
+    assert.equal(result(report({ api: "OAuth", byDesign: "OAuth" })), "Signs in with OAuth (Settings → Sign-in)");
+    assert.equal(
+        result(report({ api: "AI.ask", byDesign: "AI" }, { api: "Clipboard.read" })),
+        "Not compatible: Raycast AI. Missing: `Clipboard.read`",
+    );
+    assert.equal(result({ supported: false, gaps: [], unreadable: ["src/big.ts"] }), "Partly checked: some of its source couldn't be read");
+});
+
+test("the list's Not compatible tag comes only from a cached result that says so", () => {
+    assert.deepEqual(accessoryTexts(gamma, "installed", true), [
+        { text: "someone" },
+        { text: "1 command" },
+        { tag: "Not compatible" },
+        { tag: "Installed" },
+    ]);
+    assert.equal(isNotCompatible(undefined), false, "nothing cached: no tag, and the list never scans");
+    assert.equal(isNotCompatible({ notChecked: true }), false);
+    assert.equal(isNotCompatible(fromReport({ supported: false, gaps: [{ api: "AI.ask", byDesign: "AI" }], unreadable: [] })), true);
+    assert.equal(isNotCompatible(fromReport({ supported: false, gaps: [{ api: "OAuth", byDesign: "OAuth" }], unreadable: [] })), false);
+    assert.equal(isNotCompatible(fromReport({ supported: false, gaps: [{ api: "Clipboard.read" }], unreadable: [] })), false);
 });
 
 test("install's confirmation carries the scan's gaps, and a failed scan doesn't stop the install", async () => {
     const report = { extension: "alpha", supported: false, gaps: [{ api: "AI.ask", kind: "missing", byDesign: "AI" }], unreadable: [] };
     const withGaps = await storeContext({ scan: { stdout: JSON.stringify(report) } });
     assert.equal(await install(alphaEntry, withGaps.context), true);
-    assert.match(withGaps.asked[0]!.message, /\n\nThis extension uses AI, which Fudge leaves out\. Some of its commands may not work\.$/);
+    assert.match(
+        withGaps.asked[0]!.message,
+        /\n\nNot compatible with Fudge: this extension uses Raycast AI, which Fudge doesn't support\. Commands that use it won't work\.$/,
+    );
 
     for (const scan of [{ code: 1, stdout: "" }, { stdout: "not json" }, { stdout: "{}" }]) {
         const failed = await storeContext({ scan });
         assert.equal(await install(alphaEntry, failed.context), true, JSON.stringify(scan));
         assert.match(failed.asked[0]!.message, /\n\nFudge couldn't check what this extension uses\.$/);
     }
+});
+
+// MARK: - Compatibility: the cache, the detail's scan, and install
+
+const treeOf = (n: number) => n.toString(16).padStart(40, "0");
+const aiOnly: Compatibility = { notSupported: ["AI"], missing: [], signsIn: false, unreadable: false };
+
+test("results are cached by tree id, for the scanner that wrote them only", async () => {
+    const support = await temporary();
+    assert.deepEqual(await readCompatibility(support, "s1"), new Map(), "no file yet");
+    await rememberCompatibility(support, "s1", treeOf(1), aiOnly);
+    await rememberCompatibility(support, "s1", treeOf(2), { notChecked: true });
+    assert.deepEqual(
+        await readCompatibility(support, "s1"),
+        new Map<string, Compatibility>([
+            [treeOf(1), aiOnly],
+            [treeOf(2), { notChecked: true }],
+        ]),
+    );
+    assert.deepEqual(await readCompatibility(support, "s2"), new Map(), "another Fudge's scanner: nothing is used");
+
+    // Another build of the tool is another scanner.
+    const tool = path.join(support, "fudge");
+    await writeFile(tool, "one");
+    const before = await scannerIdentity(tool);
+    await writeFile(tool, "build two");
+    assert.notEqual(await scannerIdentity(tool), before);
+    assert.equal(await scannerIdentity(path.join(support, "missing")), "unknown");
+});
+
+test("the cache lets in only valid entries, and keeps the newest", async () => {
+    const support = await temporary();
+    await writeJSON(compatibilityFile(support), {
+        scanner: "s",
+        trees: {
+            [treeOf(1)]: aiOnly,
+            aaa1: aiOnly,
+            [treeOf(2)]: { ...aiOnly, missing: ["Clipboard.read", "a b"] },
+            [treeOf(3)]: { ...aiOnly, notSupported: ["Telepathy"] },
+            [treeOf(4)]: { notSupported: [], missing: [] },
+            [treeOf(5)]: "Compatible",
+            [treeOf(6)]: { notSupported: [], missing: ["Clipboard.read"], signsIn: true, unreadable: false },
+        },
+    });
+    assert.deepEqual(
+        [...(await readCompatibility(support, "s")).keys()],
+        [treeOf(1), treeOf(6)],
+        "a short tree id, an API name with a space, an unknown category, missing fields and a string are dropped",
+    );
+    await writeFile(compatibilityFile(support), "{ not json");
+    assert.deepEqual(await readCompatibility(support, "s"), new Map());
+
+    const many = new Map<string, Compatibility>();
+    for (let n = 0; n < maxCachedResults + 5; n++) many.set(treeOf(n), { notChecked: true });
+    await writeCompatibility(support, "s", many);
+    const kept = await readCompatibility(support, "s");
+    assert.equal(kept.size, maxCachedResults);
+    assert.equal(kept.has(treeOf(4)), false, "the oldest go");
+    assert.equal(kept.has(treeOf(maxCachedResults + 4)), true);
+    await rememberCompatibility(support, "s", treeOf(5), aiOnly);
+    assert.equal([...(await readCompatibility(support, "s")).keys()].at(-1), treeOf(5), "remembering makes it the newest");
+});
+
+test("a detail scan fetches only the folder's source files, scans them, and takes the patterns out again", async () => {
+    const report = { extension: "alpha", supported: false, gaps: [{ api: "AI.ask", kind: "missing", byDesign: "AI" }], unreadable: [] };
+    const { context, git, cli, repoPath } = await storeContext({
+        sources: { alpha: ["index.ts", "lib/util.tsx", "data.json", "logo.png"] },
+        scan: { stdout: JSON.stringify(report) },
+    });
+    assert.deepEqual(await checkFolder("alpha", context, () => false), aiOnly);
+    assert.deepEqual(
+        git.calls.map((call) => call.args),
+        [
+            ["ls-tree", "-r", "-z", "--name-only", "HEAD", "--", "extensions/alpha/src/"],
+            ["sparse-checkout", "add", ...scanPatterns("alpha")],
+            ["sparse-checkout", "list"],
+            ["sparse-checkout", "set", "--no-cone", "--stdin"],
+        ],
+    );
+    assert.deepEqual(scanPatterns("alpha"), [
+        "/extensions/alpha/src/**/*.ts",
+        "/extensions/alpha/src/**/*.tsx",
+        "/extensions/alpha/src/**/*.js",
+        "/extensions/alpha/src/**/*.jsx",
+    ]);
+    assert.equal(git.calls[3]!.input, "/extensions/*/package.json\n", "only the scan's own patterns go");
+    assert.deepEqual(cli.calls.map((call) => call.args), [["scan", path.join(repoPath, "extensions/alpha"), "--json"]]);
+});
+
+test("past the caps a row isn't checked: too many source files fetches nothing, too many bytes scans nothing", async () => {
+    const many = Array.from({ length: maxScanFiles + 1 }, (_, n) => `file${n}.ts`);
+    const counted = await storeContext({ sources: { alpha: [...many, "a.png", "b.json"] } });
+    assert.deepEqual(await checkFolder("alpha", counted.context, () => false), { notChecked: true });
+    assert.deepEqual(counted.git.calls.map((call) => call.args[0]), ["ls-tree"], "nothing fetched");
+    assert.deepEqual(counted.cli.calls, []);
+    const atCap = await storeContext({ sources: { alpha: [...many.slice(1), "a.png"] } });
+    await checkFolder("alpha", atCap.context, () => false);
+    assert.equal(atCap.cli.calls.length, 1, "exactly the cap, and other files, are fine");
+
+    const big = await storeContext({ sources: { alpha: ["huge.js"] } });
+    await mkdir(path.join(big.repoPath, "extensions/alpha/src"), { recursive: true });
+    await writeFile(path.join(big.repoPath, "extensions/alpha/src/huge.js"), Buffer.alloc(maxScanBytes + 1));
+    assert.deepEqual(await checkFolder("alpha", big.context, () => false), { notChecked: true });
+    assert.deepEqual(big.cli.calls, [], "not scanned");
+    assert.deepEqual(big.git.calls.at(-1)!.args, ["sparse-checkout", "set", "--no-cone", "--stdin"], "its patterns are taken out");
+});
+
+test("a detail scan that fails throws, and still takes its patterns out; one cancelled before its fetch fetches nothing", async () => {
+    const failing = await storeContext({ sources: { alpha: ["index.ts"] }, scan: { code: 1 } });
+    await assert.rejects(checkFolder("alpha", failing.context, () => false), /fudge scan failed/);
+    assert.deepEqual(failing.git.calls.at(-1)!.args, ["sparse-checkout", "set", "--no-cone", "--stdin"]);
+
+    const cancelled = await storeContext({ sources: { alpha: ["index.ts"] } });
+    assert.equal(await checkFolder("alpha", cancelled.context, () => true), undefined);
+    assert.deepEqual(cancelled.git.calls.map((call) => call.args[0]), ["ls-tree"]);
+    assert.deepEqual(cancelled.cli.calls, []);
+});
+
+/** Lets started work (the git queue, the fake runs, the file reads) go as far as it can. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+/** Timers that only move when told to. */
+function manualTimers() {
+    let now = 0;
+    let next = 1;
+    const waiting = new Map<number, { at: number; run: () => void }>();
+    return {
+        timers: {
+            set: (run: () => void, ms: number) => {
+                waiting.set(next, { at: now + ms, run });
+                return next++;
+            },
+            clear: (handle: unknown) => void waiting.delete(handle as number),
+        },
+        advance(ms: number) {
+            now += ms;
+            for (const [handle, timer] of [...waiting]) {
+                if (timer.at > now) continue;
+                waiting.delete(handle);
+                timer.run();
+            }
+        },
+    };
+}
+
+test("moving through 20 rows quickly fetches nothing; the row the selection rests on is checked once", async () => {
+    const report = { extension: "row7", supported: true, gaps: [], unreadable: [] };
+    const { context, git, cli } = await storeContext({ sources: { row7: ["index.ts"] }, scan: { stdout: JSON.stringify(report) } });
+    const clock = manualTimers();
+    const results = new Map<string, Compatibility>();
+    let settled: (value: unknown) => void = () => undefined;
+    const done = new Promise((resolve) => (settled = resolve));
+    const checks = new CompatibilityChecks({
+        timers: clock.timers,
+        cached: (tree) => results.get(tree),
+        check: (dir, _tree, cancelled) => oneAtATime(() => checkFolder(dir, context, cancelled)),
+        changed: (dir, tree, result) => {
+            if (result !== "failed") results.set(tree, result);
+            settled([dir, result]);
+        },
+    });
+    for (let row = 0; row < 20; row++) {
+        checks.select(`row${row}`, treeOf(row));
+        clock.advance(100);
+        await settle();
+    }
+    assert.equal(git.calls.length, 0, "nothing fetched while moving");
+    assert.equal(cli.calls.length, 0);
+    checks.select(`row7`, treeOf(7));
+    clock.advance(499);
+    await settle();
+    assert.equal(git.calls.length, 0, "not before half a second of rest");
+    checks.select(`row7`, treeOf(7));
+    clock.advance(1);
+    assert.deepEqual(await done, ["row7", { notSupported: [], missing: [], signsIn: false, unreadable: false }]);
+    assert.equal(cli.calls.length, 1);
+    assert.equal(git.calls.filter((call) => call.args[1] === "add").length, 1);
+
+    const before = git.calls.length;
+    checks.select(undefined, undefined);
+    checks.select(`row7`, treeOf(7));
+    clock.advance(5000);
+    await settle();
+    assert.equal(git.calls.length, before, "a cached row never fetches");
+    assert.equal(cli.calls.length, 1);
+});
+
+test("moving on cancels a check before its fetch, and a failed check says so", async () => {
+    const { context, git } = await storeContext({ sources: { alpha: ["index.ts"] } });
+    const clock = manualTimers();
+    const changes: unknown[] = [];
+    const checks = new CompatibilityChecks({
+        timers: clock.timers,
+        cached: () => undefined,
+        check: (dir, _tree, cancelled) => checkFolder(dir, context, cancelled),
+        changed: (dir, _tree, result) => changes.push([dir, result]),
+    });
+    checks.select("alpha", treeOf(1));
+    clock.advance(500);
+    checks.select("beta", treeOf(2)); // while alpha's listing is still being read
+    await settle();
+    assert.deepEqual(git.calls.map((call) => call.args[0]), ["ls-tree"], "alpha's source isn't fetched");
+    assert.equal(changes.length, 0);
+    checks.stop();
+
+    const failing = await storeContext({ sources: { alpha: ["index.ts"] }, scan: { code: 1 } });
+    const failed = new CompatibilityChecks({
+        timers: clock.timers,
+        cached: () => undefined,
+        check: (dir, _tree, cancelled) => checkFolder(dir, failing.context, cancelled),
+        changed: (dir, _tree, result) => changes.push([dir, result]),
+    });
+    failed.select("alpha", treeOf(1));
+    clock.advance(500);
+    await settle();
+    assert.deepEqual(changes, [["alpha", "failed"]]);
+});
+
+test("install uses this version's cached result instead of scanning, and caches its own scan", async () => {
+    const tree = treeOf(42);
+    const cached = await storeContext({ tree });
+    await rememberCompatibility(cached.supportPath, await scannerIdentity(cached.context.cli), tree, aiOnly);
+    assert.equal(await install(alphaEntry, cached.context), true);
+    assert.deepEqual(cached.cli.calls.map((call) => call.args[0]), ["build"], "no scan");
+    assert.match(cached.asked[0]!.message, /Not compatible with Fudge: this extension uses Raycast AI/);
+
+    const notChecked = await storeContext({ tree });
+    await rememberCompatibility(notChecked.supportPath, await scannerIdentity(notChecked.context.cli), tree, { notChecked: true });
+    assert.equal(await install(alphaEntry, notChecked.context), true);
+    assert.deepEqual(notChecked.cli.calls.map((call) => call.args[0]), ["scan", "build"], "too big to check while browsing: installing scans");
+
+    const fresh = await storeContext({ tree });
+    assert.equal(await install(alphaEntry, fresh.context), true);
+    assert.deepEqual(
+        (await readCompatibility(fresh.supportPath, await scannerIdentity(fresh.context.cli))).get(tree),
+        { notSupported: [], missing: [], signsIn: false, unreadable: false },
+        "the list and the detail get the install's scan",
+    );
 });
 
 test("installed.json drops invalid names, folders and records; an entry without a folder came from its name's", async () => {
@@ -1076,6 +1406,61 @@ test("clone, list, fetch a README on demand, and see an update after a refresh",
     assert.equal(status(parseManifest("alpha", manifest("alpha"))!, installed, after), "update");
     assert.equal(await repo.commit(), (await sh(source, "rev-parse", "HEAD")).trim());
     assert.equal(await repo.defaultBranch(), "main");
+});
+
+test("a detail scan's patterns fetch the source files alone, from the trees' listing, and go again after", async () => {
+    const root = await temporary();
+    const source = path.join(root, "source");
+    const bare = path.join(root, "bare.git");
+    await mkdir(path.join(source, "extensions/alpha/src/lib"), { recursive: true });
+    await mkdir(path.join(source, "extensions/alpha/assets"), { recursive: true });
+    await sh(source, "init", "--quiet", "-b", "main");
+    await writeJSON(path.join(source, "extensions/alpha/package.json"), manifest("alpha"));
+    await writeFile(path.join(source, "extensions/alpha/src/index.ts"), "export {};\n");
+    await writeFile(path.join(source, "extensions/alpha/src/lib/util.tsx"), "export const x = 1;\n");
+    await writeFile(path.join(source, "extensions/alpha/src/data.json"), '{"big": "data"}\n');
+    await writeFile(path.join(source, "extensions/alpha/assets/icon.png"), "not really a png\n");
+    await writeFile(path.join(source, "extensions/alpha/README.md"), "# Alpha\n");
+    await sh(source, "add", "-A");
+    await sh(source, "commit", "--quiet", "-m", "one");
+    await sh(root, "clone", "--quiet", "--bare", source, bare);
+    await sh(bare, "config", "uploadpack.allowFilter", "true");
+    await sh(bare, "config", "uploadpack.allowAnySHA1InWant", "true");
+
+    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}` });
+    await repo.clone();
+    /** The paths under extensions/alpha whose contents aren't downloaded, asked without downloading them. */
+    const missing = async () => {
+        const objects = await sh(repo.path, "rev-list", "--objects", "--missing=print", "HEAD", "--", "extensions/alpha");
+        const names = new Map(
+            (await sh(repo.path, "ls-tree", "-r", "HEAD", "extensions/alpha")).split("\n").filter(Boolean).map((line) => {
+                const [meta, name] = line.split("\t");
+                return [meta!.split(" ")[2]!, name!.replace("extensions/alpha/", "")];
+            }),
+        );
+        return objects.split("\n").filter((line) => line.startsWith("?")).map((line) => names.get(line.slice(1))).sort();
+    };
+    const everything = ["README.md", "assets/icon.png", "src/data.json", "src/index.ts", "src/lib/util.tsx"];
+    assert.deepEqual(await missing(), everything);
+    assert.deepEqual((await repo.sourceFiles("alpha")).sort(), ["data.json", "index.ts", "lib/util.tsx"]);
+    assert.deepEqual(await missing(), everything, "listing the source downloads nothing");
+
+    await repo.add(...scanPatterns("alpha"));
+    assert.deepEqual(await missing(), ["README.md", "assets/icon.png", "src/data.json"], "only the source files came");
+    assert.equal(await readFile(path.join(repo.path, "extensions/alpha/src/lib/util.tsx"), "utf8"), "export const x = 1;\n");
+    await assert.rejects(readFile(path.join(repo.path, "extensions/alpha/assets/icon.png")));
+
+    await repo.add("/extensions/alpha/README.md");
+    await repo.drop(scanPatterns("alpha"));
+    assert.deepEqual(
+        (await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean),
+        ["/extensions/*/package.json", "/extensions/alpha/README.md"],
+        "every other pattern stays",
+    );
+    await assert.rejects(readFile(path.join(repo.path, "extensions/alpha/src/index.ts")), "the source left the working tree");
+    assert.match(await readFile(path.join(repo.path, "extensions/alpha/README.md"), "utf8"), /^# Alpha/);
+    await repo.drop(scanPatterns("alpha"));
+    assert.equal((await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean).length, 2, "dropping again changes nothing");
 });
 
 test("a default branch name is used only when it's a plain branch name", async () => {

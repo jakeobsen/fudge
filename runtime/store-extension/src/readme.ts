@@ -89,10 +89,16 @@ export function rendererPass(markdown: string): string {
 const modeNames: Record<string, string> = { view: "view", "no-view": "no-view", "menu-bar": "menu bar" };
 
 /**
- * The detail pane: the manifest's facts, each command with its mode, then the README once it's fetched. Everything
- * in it, the manifest's own text included, goes through `filterImages`.
+ * The detail pane: the manifest's facts, with the Compatibility line first when there is one (`compatibilityText`),
+ * each command with its mode, then the README once it's fetched. Everything in it, the manifest's own text included,
+ * goes through `filterImages`.
  */
-export function detailMarkdown(entry: StoreEntry, commit: string, readme: string | undefined): string {
+export function detailMarkdown(
+    entry: StoreEntry,
+    commit: string,
+    readme: string | undefined,
+    compatibility?: string,
+): string {
     const commands = entry.commands
         .map((command) => {
             const mode = command.mode !== undefined && Object.hasOwn(modeNames, command.mode) ? modeNames[command.mode] : "";
@@ -101,6 +107,7 @@ export function detailMarkdown(entry: StoreEntry, commit: string, readme: string
         })
         .join("\n");
     const facts = [
+        compatibility && `**Compatibility:** ${compatibility}`,
         entry.author && `**Author:** ${entry.author}`,
         entry.categories.length > 0 && `**Categories:** ${entry.categories.join(", ")}`,
         entry.license && `**License:** ${entry.license}`,

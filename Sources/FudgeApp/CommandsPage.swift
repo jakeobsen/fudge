@@ -271,8 +271,18 @@ struct Keycaps: View {
     let spec: HotKeySpec
 
     var body: some View {
+        KeycapLabels(keys: spec.modifierSymbols + [KeyLayout.label(for: spec)])
+    }
+}
+
+/// Keys as keycaps, each in its own rounded box: a hotkey's (`Keycaps`), or a menu item's shortcut as Search Menu
+/// Items shows it.
+struct KeycapLabels: View {
+    let keys: [String]
+
+    var body: some View {
         HStack(spacing: 3) {
-            ForEach(Array((spec.modifierSymbols + [KeyLayout.label(for: spec)]).enumerated()), id: \.offset) { _, key in
+            ForEach(Array(keys.enumerated()), id: \.offset) { _, key in
                 Text(key)
                     .font(.system(size: 11, weight: .medium))
                     .padding(.horizontal, 5)
