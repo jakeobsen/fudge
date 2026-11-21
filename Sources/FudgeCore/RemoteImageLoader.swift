@@ -38,9 +38,55 @@ public struct BodyLimit: Sendable {
     }
 }
 
-/// Loads the https images extensions ask for, through `RemoteImageCache`: a fresh entry as is, a stale one at once
-/// while it's revalidated in the background, anything else from the network. Requests for one URL are coalesced,
-/// and at most `maxConcurrent` run at once.
+/// Why an image couldn't be loaded (SPEC-059). `RemoteImageRetry` loads a retryable failure again later; the others
+/// are final for the run.
+public enum RemoteImageFailure: Error, Equatable, Sendable {
+    /// `RemoteImageURL` refused the URL, or the redirect it ended at.
+    case refused
+    /// An HTTP status other than 2xx (or a 304 to a conditional request), with a 429's or 503's `Retry-After` in
+    /// seconds.
+    case http(Int, retryAfter: TimeInterval?)
+    /// The body isn't an image.
+    case notAnImage
+    /// Over `RemoteImageLoader.maxBytes`, or too large to decode.
+    case tooBig
+    /// No complete response: no connection, a timeout, the connection lost while reading.
+    case network
+
+    /// A network error, HTTP 408, 429 or 5xx.
+    public var isRetryable: Bool {
+        switch self {
+        case .network: true
+        case .http(let status, _): status == 408 || status == 429 || (500..<600).contains(status)
+        case .refused, .notAnImage, .tooBig: false
+        }
+    }
+
+    /// A `Retry-After` header's wait from `now`: whole seconds, or an HTTP date. Nil when it's neither.
+    public static func retryAfter(_ value: String?, now: Date) -> TimeInterval? {
+        guard let value = value?.trimmingCharacters(in: .whitespaces), !value.isEmpty else { return nil }
+        if let seconds = Int(value) { return seconds >= 0 ? TimeInterval(seconds) : nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "GMT")
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        guard let date = formatter.date(from: value) else { return nil }
+        return max(0, date.timeIntervalSince(now))
+    }
+}
+
+/// What loading an image gave.
+public enum RemoteImageLoad: Equatable, Sendable {
+    /// The body, and when it was fetched: just now from the network, or earlier when it came from the cache.
+    case loaded(Data, fetchedAt: Date)
+    /// A refresh the server answered 304: the image already shown stays, and the cache's entry is fresh again.
+    case unchanged(fetchedAt: Date)
+    case failed(RemoteImageFailure)
+}
+
+/// Loads the https images extensions ask for, through `RemoteImageCache`: a cached body as it is, fresh or stale,
+/// unless the caller is refreshing a stale one, which is revalidated; anything else from the network. Requests for
+/// one URL are coalesced, and at most `maxConcurrent` run at once. When to load again is `RemoteImageRetry`'s call.
 public actor RemoteImageLoader {
     public static let maxBytes = 10_000_000
     public static let timeout: TimeInterval = 15
@@ -55,8 +101,7 @@ public actor RemoteImageLoader {
     private let fetcher: any RemoteImageFetching
     private let now: @Sendable () -> Date
     private let log: @Sendable (String) -> Void
-    private var inFlight: [String: Task<Data?, Never>] = [:]
-    private var revalidated: Set<String> = []
+    private var inFlight: [String: Task<RemoteImageLoad, Never>] = [:]
     private var logged: Set<String> = []
     private var active = 0
     private var waiting: [CheckedContinuation<Void, Never>] = []
@@ -73,21 +118,26 @@ public actor RemoteImageLoader {
         self.log = log
     }
 
-    /// The image body for `url`, or nil when it's refused, can't be loaded or isn't an image.
-    public func load(_ url: URL) async -> Data? {
+    /// The image body for `url`, or why there's none. A cached body comes as it is, fresh or stale. With
+    /// `refreshing` (the caller shows this image already), a stale one is revalidated instead, and a 304 says
+    /// `.unchanged`.
+    public func load(_ url: URL, refreshing: Bool = false) async -> RemoteImageLoad {
         if let refusal = RemoteImageURL.check(url) {
             note(url, "isn't loaded (\(refusal))")
-            return nil
+            return .failed(.refused)
         }
         let key = RemoteImageCache.key(for: url)
-        if let cached = cache.read(url, now: now()) {
-            if !RemoteImageCache.isFresh(cached.entry, now: now()), !revalidated.contains(key) {
-                revalidated.insert(key)
-                _ = start(url, key: key, revalidating: cached.entry)
-            }
-            return cached.body
+        let cached = cache.read(url, now: now())
+        if let cached, !refreshing || RemoteImageCache.isFresh(cached.entry, now: now()) {
+            return .loaded(cached.body, fetchedAt: cached.entry.fetchedAt)
         }
-        return await (inFlight[key] ?? start(url, key: key, revalidating: nil)).value
+        let result = await (inFlight[key] ?? start(url, key: key, revalidating: cached?.entry)).value
+        // A first load that joined a revalidation wants the body, which the 304 kept in the cache.
+        if case .unchanged = result, !refreshing {
+            guard let kept = cache.read(url, now: now()) else { return .failed(.network) }
+            return .loaded(kept.body, fetchedAt: kept.entry.fetchedAt)
+        }
+        return result
     }
 
     /// Waits for every request in flight, background revalidations included.
@@ -97,13 +147,15 @@ public actor RemoteImageLoader {
         }
     }
 
-    private func start(_ url: URL, key: String, revalidating entry: RemoteImageCache.Entry?) -> Task<Data?, Never> {
+    private func start(_ url: URL, key: String, revalidating entry: RemoteImageCache.Entry?) -> Task<
+        RemoteImageLoad, Never
+    > {
         if let task = inFlight[key] { return task }
         // The task can't start before this returns (it needs the actor), so it's in `inFlight` before it ends.
         let task = Task {
-            let body = await self.fetch(url, revalidating: entry)
+            let result = await self.fetch(url, revalidating: entry)
             self.finished(key)
-            return body
+            return result
         }
         inFlight[key] = task
         return task
@@ -126,27 +178,30 @@ public actor RemoteImageLoader {
         return request
     }
 
-    private func fetch(_ url: URL, revalidating entry: RemoteImageCache.Entry?) async -> Data? {
+    private func fetch(_ url: URL, revalidating entry: RemoteImageCache.Entry?) async -> RemoteImageLoad {
         await acquire()
         defer { release() }
         do {
             let response = try await fetcher.fetch(Self.request(for: url, revalidating: entry))
             if let refusal = RemoteImageURL.check(response.url) {
                 note(url, "was redirected somewhere it isn't loaded from (\(refusal))")
-                return nil
+                return .failed(.refused)
             }
             if response.status == 304, var entry {
                 entry.fetchedAt = now()
                 try? cache.update(url, entry: entry)
-                return cache.read(url, now: now())?.body
+                return .unchanged(fetchedAt: entry.fetchedAt)
             }
             guard (200..<300).contains(response.status) else {
                 note(url, "failed with HTTP \(response.status)")
-                return nil
+                let retryAfter =
+                    response.status == 429 || response.status == 503
+                    ? RemoteImageFailure.retryAfter(response.headers["retry-after"], now: now()) : nil
+                return .failed(.http(response.status, retryAfter: retryAfter))
             }
             if let length = response.headers["content-length"].flatMap(Int.init), length > Self.maxBytes {
                 note(url, "is over \(Self.maxBytes / 1_000_000) MB")
-                return nil
+                return .failed(.tooBig)
             }
             var body = BodyLimit(limit: Self.maxBytes)
             for try await chunk in response.body { try body.append(chunk) }
@@ -154,17 +209,20 @@ public actor RemoteImageLoader {
             let fresh = RemoteImageCache.Entry(
                 fetchedAt: now(), etag: response.headers["etag"], lastModified: response.headers["last-modified"])
             try? cache.store(url, body: body.data, entry: fresh, now: now())
-            return body.data
+            return .loaded(body.data, fetchedAt: fresh.fetchedAt)
         } catch is BodyLimit.TooLarge {
             note(url, "is over \(Self.maxBytes / 1_000_000) MB")
+            return .failed(.tooBig)
         } catch RemoteImageDecoder.Problem.tooLarge {
             note(url, "is too large to decode")
+            return .failed(.tooBig)
         } catch RemoteImageDecoder.Problem.notAnImage {
             note(url, "isn't an image")
+            return .failed(.notAnImage)
         } catch {
             note(url, "failed: \(error.localizedDescription)")
+            return .failed(.network)
         }
-        return nil
     }
 
     /// Logs a problem once per URL, without its query, which can carry tokens.

@@ -102,7 +102,7 @@ private struct Rig {
         pasteboard = FakePasteboard(clipboard, log: log)
         paste = Paste(
             gate: AccessibilityGate(access: access), keys: keys, pasteboard: pasteboard, ownPid: me,
-            restoreDelay: restoreDelay)
+            turns: PasteboardTurns(), restoreDelay: restoreDelay)
     }
 
     func run(

@@ -131,14 +131,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let quickLook = QuickLookPreview()
         quickLook.launcherLevel = panel.level
+        quickLook.launcherCollectionBehavior = panel.collectionBehavior
         quickLook.closedByUser = { [weak self] in self?.model.quickLookClosedByUser() }
         quickLook.forwardKey = { [weak self] event in self?.previewKey(event) ?? false }
         model.quickLookChanged = { [weak self] item in
             guard let self, let quickLook = self.quickLook else { return }
-            // Remember the app the user is in, for when a click on the preview makes Fudge the active app.
-            if item != nil, quickLook.item == nil { self.appBeforeQuickLook = Self.otherFrontmostApp() }
+            // Remember the app the user is in, for when a click on the preview makes Fudge the active app. Never
+            // with nil: the preview may reopen while Fudge is frontmost, after such a click.
+            if item != nil, quickLook.item == nil, let app = Self.otherFrontmostApp() { self.appBeforeQuickLook = app }
             quickLook.show(item)
         }
+        model.quickLookOnScreen = { [weak self] in self?.quickLook?.isOnScreen ?? false }
         self.quickLook = quickLook
 
         // Snapshots never download; the app checks the rates now and every hour.
@@ -345,8 +348,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.closeQuickLook()
         panel.orderOut(nil)
         model.panelReset.panelHidden()
-        // A FilePicker's open panel made fudge the active app. Give the keyboard back to the app that had it, unless
-        // the user has moved on to another one.
+        // A FilePicker's open panel, or a click on the Quick Look preview, made Fudge the active app. Give the
+        // keyboard back to the app that had it, unless the user has moved on to another one.
+        appBeforeQuickLook = nil
         if let app = appToRestore {
             appToRestore = nil
             if NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier {
@@ -355,7 +359,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The app the user was in when the Quick Look preview opened.
+    /// The app the user was in when the Quick Look preview opened. Forgotten when the panel hides, so a later
+    /// session never restores it.
     private var appBeforeQuickLook: NSRunningApplication?
 
     /// The frontmost app, unless it's Fudge.
@@ -368,37 +373,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// The user clicked the Quick Look preview, which took the keyboard (and may have made Fudge the active app):
     /// the launcher takes it back, so ↑↓, Esc and ⌘Y keep working, and `hidePanel` later gives the keyboard back to
-    /// the app the user was in, as after a FilePicker's open panel.
+    /// the app the user was in, as after a FilePicker's open panel. That app is set whether or not
+    /// `frontmostApplication` names Fudge yet, since it can lag behind the click; `hidePanel` only activates it if
+    /// Fudge is frontmost by then.
     private func takeKeyBackFromQuickLook() {
-        if NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier,
-            appToRestore == nil
-        {
-            appToRestore = appBeforeQuickLook
-        }
+        if appToRestore == nil { appToRestore = appBeforeQuickLook }
         DispatchQueue.main.async { [weak self] in
             guard let self, self.panel.isVisible else { return }
             self.panel.makeKey()
         }
     }
 
-    /// A key the Quick Look preview got: ↑↓ move the selection, Esc does what it does in the launcher, and the
-    /// launcher's shortcuts (⌘Y, ⌘K, …) work as there.
+    /// A key the Quick Look preview got because the user clicked it: it does what it does in the launcher. The
+    /// launcher's shortcuts (⌘Y, ⌘K, …) and a date picker's keys go through `handleKey` first, as the key monitor
+    /// sends them; then the arrows move what the launcher's arrows would (`LauncherModel.previewArrow`: the action
+    /// panel, the dropdown's panel, or the List or Grid, ←→ included), and Esc does what it does there.
     private func previewKey(_ event: NSEvent) -> Bool {
         guard panel.isVisible else { return false }
-        switch event.keyCode {
-        case 126:
-            model.moveSelection(by: -1)
-            return true
-        case 125:
-            model.moveSelection(by: 1)
-            return true
-        case 53:
+        // The launcher's field keeps its editor while the preview is key.
+        let editor = panel.firstResponder as? NSTextView
+        // While an input method is composing, its keys are its own, as the key monitor leaves them.
+        guard editor?.hasMarkedText() != true, let pressed = Self.shortcut(for: event) else { return false }
+        if model.handleKey(pressed) { return true }
+        let moves: [UInt16: GridNavigation.Move] = [123: .left, 124: .right, 125: .down, 126: .up]
+        if let move = moves[event.keyCode] {
+            let range = editor?.selectedRange()
+            return model.previewArrow(
+                move, modifiers: pressed.modifiers,
+                textLength: editor?.string.utf16.count ?? model.searchText.utf16.count,
+                selection: range.map { ($0.location, $0.length) })
+        }
+        if event.keyCode == 53 {
             model.escape()
             return true
-        default:
-            guard let pressed = Self.shortcut(for: event) else { return false }
-            return model.handleKey(pressed)
         }
+        return false
     }
 
     // MARK: - Quick Look control
@@ -406,16 +415,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // The preview panel looks for its controller along the responder chain, which ends with the app delegate, so
     // this works whether or not Fudge is active and whichever window is key.
 
+    // AppKit calls these on the main thread.
+
     override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool {
-        quickLook?.acceptsControl == true
+        MainActor.assumeIsolated { quickLook?.acceptsControl == true }
     }
 
     override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
-        quickLook?.begin(panel)
+        MainActor.assumeIsolated { quickLook?.begin(panel) }
     }
 
     override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
-        quickLook?.end(panel)
+        MainActor.assumeIsolated { quickLook?.end(panel) }
     }
 
     /// A FilePicker's open panel, as a sheet on the launcher, so the launcher doesn't hide (`onResign` ignores

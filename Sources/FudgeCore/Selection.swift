@@ -199,15 +199,16 @@ public final class SelectedText {
     private let pollInterval: Duration
     /// Shared with `Paste`: macOS's Accessibility prompt shows at most once per run, and fudge's own offer too.
     private let gate: AccessibilityGate
-    /// The fallback in progress. Fallbacks run one at a time: one taking its snapshot while another's copy is on the
-    /// pasteboard would restore the copied text instead of the user's clipboard.
-    private var fallback: Task<Void, Never>?
+    /// Shared with `Paste`. Fallbacks take turns with each other and with pastes: one taking its snapshot while
+    /// another's copy, or a paste's content, is on the pasteboard would restore that instead of the user's clipboard.
+    private let turns: PasteboardTurns
 
     public init(
         accessibility: any AccessibilityAccess,
         keys: any CopyKeyPoster,
         pasteboard: any PasteboardAccess,
         ownPid: Int32,
+        turns: PasteboardTurns,
         gate: AccessibilityGate? = nil,
         copyTimeout: Duration = .milliseconds(500),
         pollInterval: Duration = .milliseconds(10)
@@ -217,6 +218,7 @@ public final class SelectedText {
         self.keys = keys
         self.pasteboard = pasteboard
         self.ownPid = ownPid
+        self.turns = turns
         self.copyTimeout = copyTimeout
         self.pollInterval = pollInterval
     }
@@ -225,16 +227,15 @@ public final class SelectedText {
         guard let frontmost, frontmost.pid != ownPid else { throw SelectionError.noSelectedText }
         guard gate.isTrusted(origin: origin) else { throw SelectionError.accessibilityNeeded }
         if let text = await accessibility.selectedText(pid: frontmost.pid), !text.isEmpty { return text }
-        let previous = fallback
-        let copying = Task {
-            await previous?.value
+        return try await turns.run {
+            // A paste's restore may still be to come: until it has run, the pasteboard holds Fudge's pasted content,
+            // not the user's clipboard.
+            await turns.restoreSettled()
             return try await copy(from: frontmost.pid)
         }
-        fallback = Task { _ = try? await copying.value }
-        return try await copying.value
     }
 
-    /// The ⌘C fallback. Never posts ⌘V or ⌘X.
+    /// The ⌘C fallback, in its turn. Never posts ⌘V or ⌘X.
     private func copy(from pid: Int32) async throws -> String {
         let restore = Self.restoration(of: pasteboard.contents())
         let changeCount = pasteboard.changeCount
