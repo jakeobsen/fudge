@@ -544,12 +544,18 @@ public struct PreparedSignIn: Equatable, Sendable {
 /// Which loopback listener each sign-in uses: every session's latest prepared request, and the one the "Sign in to …"
 /// prompt shows. The prompt takes its request when it's shown, so a request the session prepares meanwhile never
 /// takes its place: Esc, the command going away and the end of the sign-in all reach the listener being waited on.
+///
+/// It also says which relay sign-ins are pending (`pending(of:)`, for `SignInCalls`): prepared, shown, or signed in
+/// with the token exchange still to come. One that ends without a code (Esc, an error, the timeout, a request that's
+/// replaced or expires) is pending no more.
 public struct SignInRequests<Listener: AnyObject> {
     public typealias Request = (request: PreparedSignIn, listener: Listener)
 
     private var prepared: [String: Request] = [:]
     /// The request the prompt shows, with its session.
     public private(set) var shown: (session: String, request: Request)?
+    /// The providers each session signed in to, whose tokens the extension exchanges and stores next.
+    private var signedIn: [String: Set<String>] = [:]
 
     public init() {}
 
@@ -572,11 +578,22 @@ public struct SignInRequests<Listener: AnyObject> {
     /// The listener the prompt waits on, which Esc cancels.
     public var waitedOn: Listener? { shown?.request.listener }
 
-    /// The sign-in using `listener` is over. True when it was the prompt's, which is then gone.
-    public mutating func finish(_ listener: Listener) -> Bool {
-        guard shown?.request.listener === listener else { return false }
-        shown = nil
+    /// The sign-in using `listener` is over, with a code (`signedIn`) or without one. True when it was the prompt's,
+    /// which is then gone.
+    public mutating func finish(_ listener: Listener, signedIn code: Bool) -> Bool {
+        guard let shown, shown.request.listener === listener else { return false }
+        if code { signedIn[shown.session, default: []].insert(shown.request.request.provider.id) }
+        self.shown = nil
         return true
+    }
+
+    /// The providers `session` has a relay sign-in pending for: its prepared request's, the prompt's when it's
+    /// `session`'s, and those it signed in to.
+    public func pending(of session: String) -> Set<String> {
+        var providers = signedIn[session] ?? []
+        if let request = prepared[session] { providers.insert(request.request.provider.id) }
+        if let shown, shown.session == session { providers.insert(shown.request.request.provider.id) }
+        return providers
     }
 
     /// A request unused after its time: true, and dropped, when `listener` is still `session`'s prepared one.
@@ -589,6 +606,7 @@ public struct SignInRequests<Listener: AnyObject> {
     /// `session` is going away: its unused request is dropped, to close, and the prompt's listener, when the prompt
     /// is its, is returned to cancel. The prompt stays until its sign-in finishes.
     public mutating func end(_ session: String) -> (unused: Listener?, waitedOn: Listener?) {
+        signedIn[session] = nil
         let unused = prepared.removeValue(forKey: session)?.listener
         return (unused, shown?.session == session ? shown?.request.listener : nil)
     }

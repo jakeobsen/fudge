@@ -75,6 +75,9 @@ final class OAuthLoopback: @unchecked Sendable {
         case callback(OAuthCallback)
         case timedOut
         case cancelled
+
+        /// The browser came back with a code.
+        var isCode: Bool { if case .callback(.code) = self { true } else { false } }
     }
 
     let path = "/oauth/callback/\(OAuthCallback.randomToken())"
