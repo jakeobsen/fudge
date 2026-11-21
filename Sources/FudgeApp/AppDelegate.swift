@@ -26,6 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var openItem: NSMenuItem?
     private let hud = HUDWindow()
     private var keyMonitor: Any?
+    /// The standard About panel, once About Fudge has opened it, so Esc, ⌘W and ⌘Q close it (`AboutFudge.closesPanel`).
+    private weak var aboutPanel: NSWindow?
     /// The app that was frontmost when a FilePicker's open panel activated fudge; it gets the keyboard back when the
     /// launcher hides.
     private var appToRestore: NSRunningApplication?
@@ -279,7 +281,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let pressed = Self.shortcut(for: event) else { return event }
             let window = event.window
             let handled = MainActor.assumeIsolated {
-                guard let self, window === self.panel else { return false }
+                guard let self else { return false }
+                if let about = self.aboutPanel, window === about {
+                    guard AboutFudge.closesPanel(pressed) else { return false }
+                    about.close()
+                    return true
+                }
+                guard window === self.panel else { return false }
                 // While an input method is composing (Japanese, Chinese, …), its keys are its own: ↑↓ pick a
                 // candidate, Esc cancels and ↵ confirms.
                 if (self.panel.firstResponder as? NSTextView)?.hasMarkedText() == true { return false }
@@ -430,6 +438,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         check.target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Fudge \(FudgeVersion.current)", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "About Fudge", action: #selector(showAbout), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Quit Fudge", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.menu = menu
         statusItem = item
@@ -449,6 +458,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Check Now, on the General page and in the menu bar item.
     private func checkForUpdatesNow() {
         Task { await updates.checkNow(now: Date()) }
+    }
+
+    /// About Fudge (SPEC-113 §3): the standard About panel with the version Fudge shows, the build number, the
+    /// copyright (`NSHumanReadableCopyright`) and `AboutFudge.credits`, linking the license and third-party notices in
+    /// the app. It's the user's own click, so Fudge comes forward first, as Settings does. Snapshot runs have no menu.
+    @objc private func showAbout() {
+        NSApp.activateFromUserAction(origin: .userInitiated)
+        let resources = Bundle.main.resourceURL
+        func file(_ name: String) -> URL? {
+            guard let url = resources?.appendingPathComponent(name),
+                FileManager.default.fileExists(atPath: url.path)
+            else { return nil }
+            return url
+        }
+        let markdown = AboutFudge.credits(
+            describe: FudgeVersion.describe, license: file("LICENSE.txt"), notices: file("Third-Party Notices.txt"))
+        let parsed =
+            (try? AttributedString(
+                markdown: markdown, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(markdown)
+        let credits = NSMutableAttributedString(parsed)
+        let centered = NSMutableParagraphStyle()
+        centered.alignment = .center
+        credits.addAttributes(
+            [
+                .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize), .foregroundColor: NSColor.labelColor,
+                .paragraphStyle: centered,
+            ], range: NSRange(location: 0, length: credits.length))
+        var options: [NSApplication.AboutPanelOptionKey: Any] = [
+            .applicationVersion: FudgeVersion.current, .credits: credits,
+        ]
+        if let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String {
+            options[.version] = build
+        }
+        let before = Set(NSApp.windows.map(ObjectIdentifier.init))
+        NSApp.orderFrontStandardAboutPanel(options: options)
+        if aboutPanel == nil { aboutPanel = NSApp.windows.first { !before.contains(ObjectIdentifier($0)) } }
+        aboutPanel?.makeKeyAndOrderFront(nil)
     }
 
     /// The menu's Check for Updates…: Settings opens on the General page, where the result shows, and it checks.

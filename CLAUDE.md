@@ -16,7 +16,10 @@ Extensions run in a separate Node.js process, the extension host.
     The item's glyph is `MenuBarIcon`, a fudge cube drawn in code as a template image.
     Its autosave name is `fudge` (`AppDelegate.statusItemName`), because macOS keeps whether a status item is shown in the app's preferences under that name, and an unnamed item's `Item-0` was once saved as hidden.
     It's shown at every launch, and its `behavior` is `[]`, so ⌘-dragging can't remove it.
-    Its menu ends with the running version (`FudgeVersion.current`, the `Info.plist`'s `CFBundleShortVersionString`), and has Check for Updates… and, at the top while a newer release is known, `Fudge <version> Is Available…` (see the update check).
+    Its menu ends with the running version (`FudgeVersion.current`, Fudge's form of the `Info.plist`'s `FudgeGitDescribe`), About Fudge and Quit Fudge, and has Check for Updates… and, at the top while a newer release is known, `Fudge <version> Is Available…` (see the update check).
+    **About Fudge** (SPEC-113 §3) brings Fudge forward, then opens the standard About panel with the version shown, the build number (`CFBundleVersion`), `NSHumanReadableCopyright` (`AboutFudge.copyright`) and `AboutFudge.credits` (core): the license notice and links to the source (at the tag for a release build), `LICENSE.txt` and `Third-Party Notices.txt` in the app.
+    The GPL family calls these the Appropriate Legal Notices (v3 §0, §5(d)), so they stay in the panel.
+    Esc, ⌘W and ⌘Q close it (`AboutFudge.closesPanel`), since an accessory app has no File menu; snapshot runs have no menu, so they never open it.
     - **Global hotkeys** go through Carbon (`CarbonHotKeys` in `HotKey.swift`), which needs no Accessibility permission: one event handler, one id per registration.
       `HotKeyRegistry` (core) decides what's registered: the launcher's hotkey (`hotkey` in `settings.json`, default ⌥Space, read and written through `FudgeSettings.launcherHotkey`) and each installed command's (`commands` in `settings.json`, by `<extension>/<command>`), registering only what changed.
       A refused change of the launcher's hotkey registers the old one again (`setLauncher`); one refused at launch stays wanted, marked `launcherRefused`, and is tried again on every `resume`.
@@ -315,7 +318,8 @@ Extensions run in a separate Node.js process, the extension host.
       **GitHub's answer** (`UpdateCheck.parseLatest`): `tag_name`, and `draft` and `prerelease`, which must be JSON booleans; a draft, a pre-release or a pre-release tag counts as no release, as does GitHub's 404 when there's none yet.
       The tag must be `v` and a semantic version, and the release page is built from it (`Release.pageURL`), never from `html_url`.
       The app's `GitHubReleaseFetcher` sends one GET of `releases/latest` with `User-Agent: Fudge/<version>` (`UpdateCheck.userAgent`), `Accept: application/vnd.github+json` and `Accept-Language: en` (else URLSession adds the Mac's languages), on an ephemeral `URLSession` (no cookies, credentials or cache; 15 s), and reads at most 1 MB (`UpdateCheck.readBody`; `parseLatest` refuses more too).
-      A newer release shows as General's `Fudge <version> is available` with Download…, the menu's `Fudge <version> Is Available…`, and, once per version, the HUD; Download… and the menu item open the release page.
+      General's update row names the running version (`UpdateStatus.headline(version:)`): `Fudge 0.3.0 is up to date`, `Fudge 0.3.0: not checked for updates yet` or `Fudge 0.3.0: couldn't check for updates`.
+      A newer release shows as General's `Fudge <version> is available` with Download…, `You have Fudge <running version>` under it, the menu's `Fudge <version> Is Available…`, and, once per version, the HUD; Download… and the menu item open the release page.
       A failure shows on General only.
       Nothing is downloaded or installed.
       Snapshot runs and tests never ask GitHub: tests use fake fetchers, and a snapshot run uses `SnapshotReleaseFetcher`, keeps the state in memory and counts as untagged, so `--update-available <version>` shows that version as found.

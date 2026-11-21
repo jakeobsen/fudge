@@ -32,6 +32,8 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026 Morten Jakobsen.</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Fudge asks Finder, System Events and the login window to carry out commands such as Empty Trash, and Finder for its selection when an extension needs it.</string>
 	<key>NSCalendarsFullAccessUsageDescription</key>

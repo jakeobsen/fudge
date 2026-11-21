@@ -385,17 +385,19 @@ public struct UpdateStatus: Sendable, Equatable {
         self.failure = failure
     }
 
-    /// The line beside Check Now.
-    public var headline: String {
+    /// The line beside Check Now, naming the running version (`FudgeVersion.current`), or the newer one.
+    public func headline(version: String) -> String {
         if checking { return "Checking for updates…" }
         if let available { return UpdateCheck.availableText(available) }
-        if failure != nil { return "Couldn't check for updates" }
-        return lastCheck == nil ? "Not checked yet" : "Fudge is up to date"
+        if failure != nil { return "Fudge \(version): couldn't check for updates" }
+        return lastCheck == nil ? "Fudge \(version): not checked for updates yet" : "Fudge \(version) is up to date"
     }
 
-    /// The small lines under it: why the last check failed, and when it ran.
-    public func details(locale: Locale = .current, timeZone: TimeZone = .current) -> [String] {
+    /// The small lines under it: the running version while a newer one is shown, why the last check failed, and when
+    /// it ran.
+    public func details(version: String? = nil, locale: Locale = .current, timeZone: TimeZone = .current) -> [String] {
         var lines: [String] = []
+        if available != nil, let version { lines.append("You have Fudge \(version)") }
         if !checking, let failure {
             lines.append(available == nil ? failure : "Couldn't check for updates: \(failure)")
         }

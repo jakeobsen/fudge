@@ -163,7 +163,7 @@ struct UpdateStatusRow: View {
 
     var body: some View {
         let status = model.updateStatus
-        let details = status.details()
+        let details = status.details(version: FudgeVersion.current)
         LabeledContent {
             HStack(spacing: 8) {
                 if let release = status.available {
@@ -173,7 +173,7 @@ struct UpdateStatusRow: View {
                     .disabled(status.checking)
             }
         } label: {
-            Text(status.headline)
+            Text(status.headline(version: FudgeVersion.current))
             if !details.isEmpty { Text(details.joined(separator: "\n")) }
         }
     }
