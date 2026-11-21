@@ -56,9 +56,14 @@ enum Tool {
         try await OffThePool.run { try runHere(tool, arguments, environment: environment) }
     }
 
-    private static func runHere(_ tool: URL, _ arguments: [String], environment: [String: String]) throws -> (
-        Int32, String, String
-    ) {
+    /// `run`'s work, on the calling thread. At `deadline` a tool still running gets SIGTERM, and `grace` later SIGKILL
+    /// (`kill`), each only while it's still running (`isRunning`): a tool that has exited, its pipe held open by a
+    /// leftover child, has been reaped, so its pid may be another process's by then.
+    static func runHere(
+        _ tool: URL, _ arguments: [String], environment: [String: String], deadline: Duration = noHang,
+        grace: Duration = .seconds(5), isRunning: (Process) -> Bool = { $0.isRunning },
+        kill: (pid_t, Int32) -> Void = { _ = Darwin.kill($0, $1) }
+    ) throws -> (Int32, String, String) {
         let process = Process()
         process.executableURL = tool
         process.arguments = arguments
@@ -69,10 +74,10 @@ enum Tool {
         process.standardError = errors
         let read = PipeReader(output, errors)
         try process.run()
-        if !read.ended(within: noHang) {
-            process.terminate()
-            if !read.ended(within: .seconds(5)) { kill(process.processIdentifier, SIGKILL) }
-            _ = read.ended(within: .seconds(5))
+        if !read.ended(within: deadline) {
+            if isRunning(process) { process.terminate() }
+            if !read.ended(within: grace), isRunning(process) { kill(process.processIdentifier, SIGKILL) }
+            _ = read.ended(within: grace)
         }
         process.waitUntilExit()
         let (out, err) = read.text
@@ -172,6 +177,51 @@ private final class PipeReader: @unchecked Sendable {
     var text: (String, String) {
         lock.withLock { (String(decoding: out, as: UTF8.self), String(decoding: err, as: UTF8.self)) }
     }
+}
+
+/// The signals `Tool.runHere` decided to send, by pid; none is sent.
+private final class Signals: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sent: [Int32] = []
+    func record(_ signal: Int32) { lock.withLock { sent.append(signal) } }
+    var all: [Int32] { lock.withLock { sent } }
+}
+
+/// `Tool.runHere`'s ending of a tool whose pipe a leftover child holds open: `/bin/sh` starts that child, which ignores
+/// SIGTERM (`terminate` signals a tool's subtasks too), writes its pid to `pids`, then runs `then`. Whether the tool is still running is `running`'s answer, so the decision is tested
+/// apart from how fast the shell starts. Returns the tool's status and the signals `runHere` decided to send.
+private func endingATool(then: String, running: Bool) async throws -> (Int32, [Int32]) {
+    let folder = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let pids = folder.appendingPathComponent("pids")
+    defer {
+        let written = (try? String(contentsOf: pids, encoding: .utf8)) ?? ""
+        if let child = pid_t(written.trimmingCharacters(in: .whitespacesAndNewlines)), !Tool.isGone(child) {
+            kill(child, SIGKILL)
+        }
+    }
+    let signals = Signals()
+    let script = "(trap '' TERM; exec /bin/sleep 600) & echo $! > '\(pids.path)'; \(then)"
+    let ran = try await OffThePool.run(within: Tool.noHang) {
+        try Tool.runHere(
+            URL(fileURLWithPath: "/bin/sh"), ["-c", script], environment: [:], deadline: .milliseconds(200),
+            grace: .milliseconds(200), isRunning: { _ in running }, kill: { _, signal in signals.record(signal) })
+    }
+    let (status, _, _) = try #require(ran, "runHere returned")
+    return (status, signals.all)
+}
+
+@Test func aToolThatHasExitedIsntKilledWhileItsChildHoldsThePipe() async throws {
+    let (status, signals) = try await endingATool(then: "exit 3", running: false)
+    #expect(status == 3, "it ended on its own")
+    #expect(signals.isEmpty, "it had exited, so its pid wasn't killed: it may be another process's by then")
+}
+
+@Test func aToolStillRunningAfterTheGraceIsKilled() async throws {
+    // SIGTERM ends the tool, but not the child, which keeps the pipe open, so `runHere` reaches the kill.
+    let (status, signals) = try await endingATool(then: "exec /bin/sleep 600", running: true)
+    #expect(status == SIGTERM)
+    #expect(signals == [SIGKILL], "a tool still running gets SIGKILL")
 }
 
 @Test func terminatingFudgeScanEndsNodeAndEverythingItStarted() async throws {
