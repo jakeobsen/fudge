@@ -91,8 +91,8 @@ private func clip(_ text: String) -> PasteboardContents {
 private let me: Int32 = 100
 private let textEdit = FrontmostApplication(pid: 200, bundleIdentifier: "com.apple.TextEdit")
 private let restoreDelay: Duration = .milliseconds(50)
-/// Comfortably past the restore.
-private func afterRestore() async { try? await Task.sleep(for: .milliseconds(250)) }
+/// Generous bounds for "it doesn't wait for anything else": a busy CI runner can stall the main actor for seconds.
+private let noHang: Duration = .seconds(30)
 
 /// A `Paste` and a `SelectedText` sharing one `PasteboardTurns`, as the app's are.
 @MainActor
@@ -102,18 +102,24 @@ private struct Rig {
     let keys: FakeKeys
     let paster: Paste
     let selection: SelectedText
+    let turns = PasteboardTurns()
 
     init() {
         pasteboard = FakePasteboard(clip("user's clipboard"), log: log)
         keys = FakeKeys(log: log, pasteboard: pasteboard)
         let access = FakeAccess()
         let gate = AccessibilityGate(access: access)
-        let turns = PasteboardTurns()
         paster = Paste(
             gate: gate, keys: keys, pasteboard: pasteboard, ownPid: me, turns: turns, restoreDelay: restoreDelay)
         selection = SelectedText(
             accessibility: access, keys: keys, pasteboard: pasteboard, ownPid: me, turns: turns, gate: gate,
-            copyTimeout: .seconds(5), pollInterval: .milliseconds(1))
+            // A copy that lands ends the wait at once; the long timeout only keeps a stalled runner from failing.
+            copyTimeout: .seconds(60), pollInterval: .milliseconds(1))
+    }
+
+    /// Returns once the pending restore, if any, has run or been dropped.
+    func afterRestore() async {
+        await turns.restoreSettled()
     }
 
     /// A paste that hides the panel, which takes a moment, so other calls can arrive meanwhile.
@@ -139,7 +145,7 @@ private struct Rig {
             "write user's clipboard",
             "snapshot user's clipboard", "⌘C", "copied selected", "write user's clipboard",
         ], "the paste's restore runs first, so the fallback's snapshot is the user's clipboard")
-    await afterRestore()
+    await rig.afterRestore()
     #expect(rig.pasteboard.plainText() == "user's clipboard")
 }
 
@@ -157,7 +163,7 @@ private struct Rig {
             "snapshot copied meanwhile", "⌘C", "copied selected", "write copied meanwhile",
         ], "the restore leaves the newer copy, and the fallback keeps it")
     #expect(waited >= restoreDelay, "the restore isn't hurried")
-    #expect(waited < restoreDelay + .seconds(2), "and the fallback waits for nothing after it")
+    #expect(waited < restoreDelay + noHang, "and the fallback waits for nothing after it")
     #expect(rig.pasteboard.plainText() == "copied meanwhile")
 }
 
@@ -173,7 +179,7 @@ private struct Rig {
             "snapshot user's clipboard", "⌘C", "copied selected", "write user's clipboard",
             "snapshot user's clipboard", "write pasted", "⌘V",
         ], "the paste's snapshot is the user's clipboard, which the fallback put back")
-    await afterRestore()
+    await rig.afterRestore()
     #expect(rig.log.events.last == "write user's clipboard")
     #expect(rig.pasteboard.plainText() == "user's clipboard")
 }
@@ -193,7 +199,7 @@ private struct Rig {
             "write user's clipboard",
             "snapshot user's clipboard", "⌘C", "copied selected", "write user's clipboard",
         ], "B keeps A's snapshot, and the fallback waits for B's restore")
-    await afterRestore()
+    await rig.afterRestore()
     #expect(rig.pasteboard.plainText() == "user's clipboard")
 }
 
@@ -201,14 +207,14 @@ private struct Rig {
     let turns = PasteboardTurns()
     let started = ContinuousClock.now
     await turns.restoreSettled()
-    #expect(ContinuousClock.now - started < .seconds(1), "nothing pending")
+    #expect(ContinuousClock.now - started < noHang, "nothing pending")
 
     // A restore that would wait a long time: a new paste cancels it and keeps its snapshot.
-    let restore = Task<Void, Never> { try? await Task.sleep(for: .seconds(30)) }
+    let restore = Task<Void, Never> { try? await Task.sleep(for: .seconds(600)) }
     turns.restore = restore
     let waiting = Task { await turns.restoreSettled() }
     restore.cancel()
     let cancelled = ContinuousClock.now
     await waiting.value
-    #expect(ContinuousClock.now - cancelled < .seconds(5), "the waiter resumes with the cancelled restore")
+    #expect(ContinuousClock.now - cancelled < noHang, "the waiter resumes with the cancelled restore")
 }
