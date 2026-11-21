@@ -9,6 +9,8 @@ public enum SelectionError: Error, Equatable, Sendable, CustomStringConvertible 
     case accessibilityNeeded
     case finderNotFrontmost
     case finderAutomationDenied
+    /// A background call found Automation of Finder undecided, and didn't ask.
+    case finderAutomationNotAsked
     case finderTimedOut
     /// An Apple Event error other than a denial or a timeout, with its OSStatus.
     case finderFailed(Int)
@@ -18,12 +20,14 @@ public enum SelectionError: Error, Equatable, Sendable, CustomStringConvertible 
         case .noSelectedText:
             "Unable to get selected text from frontmost application"
         case .accessibilityNeeded:
-            "fudge needs Accessibility permission to read the selected text. "
-                + "Allow fudge in System Settings → Privacy & Security → Accessibility."
+            "Fudge needs Accessibility permission to read the selected text. "
+                + "Allow Fudge in System Settings → Privacy & Security → Accessibility."
         case .finderNotFrontmost:
             "Finder isn't the frontmost application"
         case .finderAutomationDenied:
-            "fudge needs permission to control Finder. Allow it in System Settings → Privacy & Security → Automation."
+            "Fudge needs permission to control Finder. Allow it in System Settings → Privacy & Security → Automation."
+        case .finderAutomationNotAsked:
+            "Fudge isn't allowed to control Finder yet: it asks when you open this command from Fudge."
         case .finderTimedOut:
             "Finder didn't answer in time"
         case .finderFailed(let status):
@@ -66,24 +70,28 @@ public enum AccessibilityCheck: Equatable, Sendable {
 /// The first refusal in a run asks for macOS's prompt. macOS shows it only when fudge isn't in the Accessibility list
 /// yet: an entry that's off, or one left by an older build's signature, gets no prompt. So a second refusal means the
 /// prompt didn't help, and the gate tells the app to offer the Accessibility pane itself, once per run (FUD-47).
-/// Refusals after that just refuse.
+/// Refusals after that just refuse. All of that is for calls the user started (SPEC-045): a background call only
+/// checks, with no prompt and no offer, and leaves both for the next user-initiated refusal.
 @MainActor
 public final class AccessibilityGate {
     private let access: any AccessibilityAccess
-    private let offerSettings: @MainActor () -> Void
+    private let offerSettings: @MainActor (CallOrigin) -> Void
     private var prompted = false
     private var offered = false
 
-    /// `offerSettings` is called by `isTrusted()` when `check()` says to offer the Accessibility pane. It mustn't
-    /// block: the refused call is answered right after it returns.
-    public init(access: any AccessibilityAccess, offerSettings: @escaping @MainActor () -> Void = {}) {
+    /// `offerSettings` is called by `isTrusted(origin:)` when `check(origin:)` says to offer the Accessibility pane,
+    /// with the call's origin. It mustn't block: the refused call is answered right after it returns.
+    public init(access: any AccessibilityAccess, offerSettings: @escaping @MainActor (CallOrigin) -> Void = { _ in }) {
         self.access = access
         self.offerSettings = offerSettings
     }
 
-    /// Whether fudge may use the Accessibility API and post key events, and on a refusal, whether it's time to offer
-    /// the Accessibility pane. Only the first refusal asks for macOS's prompt.
-    public func check() -> AccessibilityCheck {
+    /// Whether Fudge may use the Accessibility API and post key events, and on a refusal, whether it's time to offer
+    /// the Accessibility pane. Only the first user-initiated refusal asks for macOS's prompt.
+    public func check(origin: CallOrigin) -> AccessibilityCheck {
+        guard origin.mayComeForward else {
+            return access.isTrusted(prompt: false) ? .trusted : .refused(offerSettings: false)
+        }
         if access.isTrusted(prompt: !prompted) { return .trusted }
         guard prompted else {
             prompted = true
@@ -94,14 +102,14 @@ public final class AccessibilityGate {
         return .refused(offerSettings: true)
     }
 
-    /// `check()` for the callers, which only need a yes or no. When it's time to offer the Accessibility pane, this
-    /// tells the app.
-    public func isTrusted() -> Bool {
-        switch check() {
+    /// `check(origin:)` for the callers, which only need a yes or no. When it's time to offer the Accessibility pane,
+    /// this tells the app.
+    public func isTrusted(origin: CallOrigin) -> Bool {
+        switch check(origin: origin) {
         case .trusted:
             return true
         case .refused(let offer):
-            if offer { offerSettings() }
+            if offer { offerSettings(origin) }
             return false
         }
     }
@@ -110,11 +118,11 @@ public final class AccessibilityGate {
 /// fudge's own alert for when macOS's Accessibility prompt didn't help (FUD-47). The app shows it; the words and the
 /// pane's address live here so a test pins them.
 public enum AccessibilitySettingsAlert {
-    public static let title = "Allow fudge to use Accessibility"
+    public static let title = "Allow Fudge to use Accessibility"
     public static let text =
-        "fudge needs Accessibility permission to read the selected text and to paste. Turn fudge on in System "
-        + "Settings → Privacy & Security → Accessibility. If fudge is already in the list, select it, remove it with "
-        + "−, and add it again with +. An older build of fudge can leave an entry that no longer matches."
+        "Fudge needs Accessibility permission to read the selected text and to paste. Turn Fudge on in System "
+        + "Settings → Privacy & Security → Accessibility. If Fudge is already in the list, select it, remove it with "
+        + "−, and add it again with +. An older build of Fudge can leave an entry that no longer matches."
     /// The default button (↵), which opens `paneURL`.
     public static let openButton = "Open Accessibility Settings"
     /// The other button (Esc).
@@ -213,9 +221,9 @@ public final class SelectedText {
         self.pollInterval = pollInterval
     }
 
-    public func read(from frontmost: FrontmostApplication?) async throws -> String {
+    public func read(from frontmost: FrontmostApplication?, origin: CallOrigin) async throws -> String {
         guard let frontmost, frontmost.pid != ownPid else { throw SelectionError.noSelectedText }
-        guard gate.isTrusted() else { throw SelectionError.accessibilityNeeded }
+        guard gate.isTrusted(origin: origin) else { throw SelectionError.accessibilityNeeded }
         if let text = await accessibility.selectedText(pid: frontmost.pid), !text.isEmpty { return text }
         let previous = fallback
         let copying = Task {
@@ -293,9 +301,10 @@ enum CommandKey {
 /// Permission to send Apple Events to an application (Automation in System Settings).
 @MainActor
 public protocol AutomationPermission: AnyObject {
-    /// `AEDeterminePermissionToAutomateTarget` for `bundleIdentifier`, asking the user if needed. Returns its
-    /// OSStatus. It doesn't time out: the user may be reading the consent dialog.
-    func determine(bundleIdentifier: String) async -> Int32
+    /// `AEDeterminePermissionToAutomateTarget` for `bundleIdentifier`. Returns its OSStatus. With
+    /// `askUserIfNeeded`, macOS asks the user if they haven't decided yet, and it doesn't time out: the user may be
+    /// reading the consent dialog. Without it, an undecided permission is `errAEEventWouldRequireUserConsent`.
+    func determine(bundleIdentifier: String, askUserIfNeeded: Bool) async -> Int32
 }
 
 /// An Apple Event that failed, with its OSStatus.
@@ -320,18 +329,23 @@ public enum FinderSelection {
     public static let timeout: Duration = .seconds(5)
     /// `errAEEventNotPermitted`: the user denied fudge Automation of Finder.
     static let notPermitted = -1743
+    /// `errAEEventWouldRequireUserConsent`: the user hasn't decided yet, and the call didn't ask.
+    static let needsConsent = -1744
     /// `errAETimeout`.
     static let timedOut = -1712
 
-    /// The POSIX paths of the items selected in Finder, in Finder's order.
+    /// The POSIX paths of the items selected in Finder, in Finder's order. Only a user-initiated call may ask for
+    /// macOS's "control Finder" consent (SPEC-045); a background one is refused until the user has decided.
     @MainActor
     public static func read(
         from frontmost: FrontmostApplication?,
         permission: any AutomationPermission,
-        source: any FinderSelectionSource
+        source: any FinderSelectionSource,
+        origin: CallOrigin
     ) async throws -> [String] {
         guard frontmost?.bundleIdentifier == bundleIdentifier else { throw SelectionError.finderNotFrontmost }
-        let status = Int(await permission.determine(bundleIdentifier: bundleIdentifier))
+        let status = Int(
+            await permission.determine(bundleIdentifier: bundleIdentifier, askUserIfNeeded: origin.mayComeForward))
         guard status == 0 else { throw error(for: status) }
         do {
             return paths(try await source.selection(timeout: timeout))
@@ -351,6 +365,7 @@ public enum FinderSelection {
     static func error(for status: Int) -> SelectionError {
         switch status {
         case notPermitted: .finderAutomationDenied
+        case needsConsent: .finderAutomationNotAsked
         case timedOut: .finderTimedOut
         default: .finderFailed(status)
         }

@@ -3,7 +3,7 @@
 export class NotAvailableError extends Error {
     readonly api: string;
     constructor(api: string) {
-        super(`${api} isn't available in fudge yet`);
+        super(`${api} isn't available in Fudge yet`);
         this.name = "NotAvailableError";
         this.api = api;
     }
@@ -64,9 +64,9 @@ export function isNotAvailable(value: unknown): boolean {
 // Markers the compatibility scan (scripts/compat/) reads to count a component as missing. They're
 // non-enumerable symbol properties, so nothing an extension or React does with a component sees them.
 
-/** On a component that renders but fails when used: an action fudge can't perform yet (`Action.Paste`). */
+/** On a component that renders but fails when used: an action Fudge can't perform yet (`Action.CreateQuicklink`). */
 export const UNAVAILABLE = Symbol.for("fudge.unavailable");
-/** On a component the extension host renders but the app can't draw yet (`Grid`). */
+/** On a component the extension host renders but the app can't draw yet (`Form.LinkAccessory`). */
 export const NOT_DRAWN = Symbol.for("fudge.notDrawn");
 
 /** Sets `marker` on `component`, naming the API it stands for. */

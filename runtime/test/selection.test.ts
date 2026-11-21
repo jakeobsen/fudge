@@ -29,7 +29,7 @@ test("getSelectedText resolves with the app's text", async () => {
 test("getSelectedText rejects with the app's message", async () => {
     for (const message of [
         "Unable to get selected text from frontmost application",
-        "fudge needs Accessibility permission to read the selected text. Allow fudge in System Settings → Privacy & Security → Accessibility.",
+        "Fudge needs Accessibility permission to read the selected text. Allow Fudge in System Settings → Privacy & Security → Accessibility.",
     ]) {
         answer(() => ({ error: message }));
         await assert.rejects(getSelectedText(), (error: Error) => error instanceof Error && error.message === message);
@@ -51,7 +51,7 @@ test("getSelectedFinderItems resolves with the paths in Finder's order", async (
 test("getSelectedFinderItems rejects with the app's message", async () => {
     for (const message of [
         "Finder isn't the frontmost application",
-        "fudge needs permission to control Finder. Allow it in System Settings → Privacy & Security → Automation.",
+        "Fudge needs permission to control Finder. Allow it in System Settings → Privacy & Security → Automation.",
         "Finder didn't answer in time",
     ]) {
         answer(() => ({ error: message }));

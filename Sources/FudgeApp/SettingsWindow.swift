@@ -8,7 +8,8 @@ import SwiftUI
 @Observable
 final class SettingsModel {
     private(set) var extensions: [InstalledExtension] = []
-    var selected: String?
+    /// The page shown. Change it with `select(_:)`, which ends a hotkey recording on the page being left.
+    private(set) var selected: String?
     /// The General and Commands pages' entries in the sidebar; extension names can't start with ":".
     static let generalPage = ":general"
     static let commandsPage = ":commands"
@@ -17,10 +18,13 @@ final class SettingsModel {
     private(set) var allExtensions: [InstalledExtension] = []
     /// `settings.json`, as the Commands page edits it.
     private(set) var fudgeSettings = FudgeSettings()
-    /// The command whose hotkey is being recorded.
-    private(set) var recording: String?
+    /// Which hotkey is being recorded (a command id, or `launcherRecording`).
+    private(set) var recorder = HotKeyRecorder()
+    var recording: String? { recorder.recording }
     /// A short message under a command's hotkey: why a recording was refused.
     private(set) var hotkeyMessages: [String: String] = [:]
+    /// A short note under a hotkey that was saved: the command that isn't installed it was taken from.
+    private(set) var hotkeyNotes: [String: String] = [:]
     /// A short message under a command's alias: why it was refused.
     private(set) var aliasMessages: [String: String] = [:]
     /// Set while `settings.json` isn't a JSON object, so changes can't be saved; the General and Commands pages say so.
@@ -29,9 +33,11 @@ final class SettingsModel {
     var launcherHotkey = HotKeySpec.default
     /// The system refused the launcher's hotkey: another app has it, so it doesn't work.
     var launcherHotkeyInUse = false
-    /// Registers a new launcher hotkey; false when the system refuses it, and the old one then stays registered.
-    /// Set by the app delegate.
-    @ObservationIgnored var registerLauncherHotkey: (HotKeySpec) -> Bool = { _ in true }
+    /// Changes the launcher's hotkey: registers it, then runs the save, putting everything back if the save fails
+    /// (`HotKeyRegistry.changeLauncher`). Set by the app delegate.
+    @ObservationIgnored var changeLauncherHotkey: (HotKeySpec, () -> Bool) -> HotKeyRegistry.LauncherChange = {
+        _, save in save() ? .changed : .notSaved
+    }
     /// Suspend and resume fudge's global hotkeys around a recording, so pressing one records it.
     @ObservationIgnored var suspendHotkeys: () -> Void = {}
     @ObservationIgnored var resumeHotkeys: () -> Void = {}
@@ -65,8 +71,28 @@ final class SettingsModel {
         if selected != Self.generalPage, selected != Self.commandsPage, selected != Self.permissionsPage,
             !extensions.contains(where: { $0.manifest.name == selected })
         {
-            selected = Self.generalPage
+            select(Self.generalPage)
         }
+    }
+
+    /// Shows `page`. Leaving a page ends a hotkey recording on it, with no change, and Fudge's hotkeys resume.
+    func select(_ page: String?) {
+        if recorder.pageChanged(from: selected, to: page) { resumeHotkeys() }
+        selected = page
+    }
+
+    /// Show Onboarding Again: a recording here ends first, since onboarding has its own hotkey step.
+    func showOnboardingAgain() {
+        cancelRecording()
+        showOnboarding()
+    }
+
+    /// The ids of every installed command, menu-bar ones included. Only their hotkeys block a key.
+    private var installedCommandIDs: Set<String> {
+        Set(
+            allExtensions.flatMap { item in
+                item.manifest.commands.map { FudgeSettings.commandID(extension: item.manifest.name, command: $0.name) }
+            })
     }
 
     // MARK: - General
@@ -177,7 +203,7 @@ final class SettingsModel {
         cancelRecording()
         // Check against the file as it is now, so a command hotkey added by hand meanwhile counts.
         fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
-        switch key.launcherEdit(commands: fudgeSettings.commandHotkeys) {
+        switch key.launcherEdit(commands: fudgeSettings.commandHotkeys, installed: installedCommandIDs) {
         case .keep:
             return
         case .refused(let conflict):
@@ -189,18 +215,27 @@ final class SettingsModel {
 
     private func setLauncherHotkey(_ spec: HotKeySpec) {
         hotkeyMessages[Self.launcherRecording] = nil
+        hotkeyNotes[Self.launcherRecording] = nil
         // A settings.json that isn't a JSON object is refused before anything is registered (the banner says why).
         guard FudgeSettings.isWritable(paths.settingsFile) else {
             settingsProblem = unreadableMessage
             return
         }
-        let old = launcherHotkey
-        guard registerLauncherHotkey(spec) else {
-            hotkeyMessages[Self.launcherRecording] = "This shortcut is in use by another app"
-            return
+        let displaced = HotKeyConflict.displaced(
+            by: spec, commands: fudgeSettings.commandHotkeys, installed: installedCommandIDs)
+        // Registered, then saved; if the save fails, the registration goes back to what it was (the banner says why),
+        // so the next launch never brings a different hotkey back unannounced.
+        let result = changeLauncherHotkey(spec) {
+            self.change { settings in
+                settings.launcherHotkey = spec
+                for id in displaced { settings.commands[id]?.hotkey = nil }
+            }
         }
-        // What's registered must match the file, or the next launch would bring the old one back unannounced.
-        if !change({ $0.launcherHotkey = spec }) { _ = registerLauncherHotkey(old) }
+        switch result {
+        case .changed: hotkeyNotes[Self.launcherRecording] = note(displaced)
+        case .inUse: hotkeyMessages[Self.launcherRecording] = "This shortcut is in use by another app"
+        case .notSaved: break
+        }
     }
 
     // MARK: - Extension Store
@@ -212,6 +247,8 @@ final class SettingsModel {
     @ObservationIgnored var confirm: (LauncherModel.AlertRequest) async -> Bool = { _ in false }
     /// Tells the launcher the store was turned on or off; set by the app delegate.
     @ObservationIgnored var extensionStoreChanged: () -> Void = {}
+    /// Unloads a running store, so its git stops before its copy is deleted; set by the app delegate.
+    @ObservationIgnored var stopExtensionStore: () async -> Void = {}
 
     /// The switch on the store's Settings page: on only after the consent sheet's Turn On, which records the date;
     /// off after its own sheet, which deletes the store's downloaded repository but keeps its record of what it
@@ -223,6 +260,7 @@ final class SettingsModel {
             guard await confirm(sheet) else { return }
             guard change({ $0.setExtensionStore(on, now: Date()) }) else { return }
             if !on {
+                await stopExtensionStore()
                 do {
                     try ExtensionStore.deleteRepository(paths)
                 } catch {
@@ -268,40 +306,60 @@ final class SettingsModel {
     }
 
     func startRecording(_ commandID: String) {
-        if recording == nil { suspendHotkeys() }
-        recording = commandID
+        if recorder.start(commandID) { suspendHotkeys() }
         hotkeyMessages[commandID] = nil
+        hotkeyNotes[commandID] = nil
     }
 
-    /// Ends a recording without changing anything (Esc, or the window closing).
+    /// Ends a recording without changing anything (Esc, the window closing, or leaving the page).
     func cancelRecording() {
-        guard recording != nil else { return }
-        recording = nil
-        resumeHotkeys()
+        if recorder.end() { resumeHotkeys() }
     }
 
     /// The keys pressed while recording `commandID`. A conflict, or a shortcut the system refuses, keeps the old
     /// hotkey and says why.
     func record(_ spec: HotKeySpec, for commandID: String) {
         cancelRecording()
+        let installed = installedCommandIDs
         if let conflict = HotKeyConflict.check(
-            spec, for: commandID, launcher: launcherHotkey, commands: fudgeSettings.commandHotkeys)
+            spec, for: commandID, launcher: launcherHotkey, commands: fudgeSettings.commandHotkeys,
+            installed: installed)
         {
             hotkeyMessages[commandID] = message(for: conflict)
             return
         }
-        let old = fudgeSettings.commands[commandID]?.hotkey
-        guard setHotkey(spec.text, for: commandID) else { return }
+        // A command that isn't installed gives its saved hotkey up; its alias and Enabled state stay.
+        let displaced = HotKeyConflict.displaced(
+            by: spec, except: commandID, commands: fudgeSettings.commandHotkeys, installed: installed)
+        let old = ([commandID] + displaced).map { ($0, fudgeSettings.commands[$0]?.hotkey) }
+        let saved = change { settings in
+            settings.commands[commandID, default: .init()].hotkey = spec.text
+            for id in displaced { settings.commands[id]?.hotkey = nil }
+        }
+        guard saved else { return }
         if applyHotkeys().contains(commandID) {
-            setHotkey(old, for: commandID)
+            change { settings in
+                for (id, hotkey) in old { settings.commands[id, default: .init()].hotkey = hotkey }
+            }
             _ = applyHotkeys()
             hotkeyMessages[commandID] = "This shortcut is in use by another app"
+            return
         }
+        hotkeyNotes[commandID] = note(displaced)
+    }
+
+    /// "Removed from <command>, which isn't installed", for the hotkeys a new one took over; nil for none.
+    private func note(_ displaced: [String]) -> String? {
+        guard !displaced.isEmpty else { return nil }
+        let names = displaced.formatted(.list(type: .and))
+        return displaced.count == 1
+            ? "Removed from \(names), which isn't installed" : "Removed from \(names), which aren't installed"
     }
 
     func clearHotkey(_ commandID: String) {
         cancelRecording()
         hotkeyMessages[commandID] = nil
+        hotkeyNotes[commandID] = nil
         setHotkey(nil, for: commandID)
         _ = applyHotkeys()
     }
@@ -333,7 +391,7 @@ final class SettingsModel {
 
     private var unreadableMessage: String {
         let path = (paths.settingsFile.path as NSString).abbreviatingWithTildeInPath
-        return "\(path) isn't valid JSON, so fudge won't change it. Fix or remove it, then try again."
+        return "\(path) isn't valid JSON, so Fudge won't change it. Fix or remove it, then try again."
     }
 
     // MARK: - Aliases and enabled
@@ -389,8 +447,8 @@ final class SettingsModel {
     private func message(for conflict: HotKeyConflict) -> String {
         switch conflict {
         case .needsModifier: "Use ⌘, ⌥ or ⌃, or an F-key"
-        case .launcher: "That's fudge's own shortcut"
-        case .command(let other): "Already used by \(title(ofCommand: other))"
+        case .launcher: "That's Fudge's own shortcut"
+        case .command(let other): "Used by \(CommandNames.name(of: other, in: allExtensions) ?? other)"
         }
     }
 
@@ -477,12 +535,13 @@ final class SettingsWindowController {
     /// comes here. **Only for entries the user starts** (⌘,, Settings…, Configure Extension, a command's
     /// `openExtensionPreferences`, an unset required preference): it takes focus from the app in front, so no
     /// background path may reach it; `CommandLocator.checkMode` keeps background launches from opening Settings.
-    func show(extension name: String? = nil) {
+    func show(extension name: String? = nil, origin: CallOrigin) {
+        guard origin.mayComeForward else { return }
         prepare(extension: name)
         guard let window else { return }
         window.collectionBehavior.insert(.moveToActiveSpace)
         if window.isMiniaturized { window.deminiaturize(nil) }
-        NSApp.activateFromUserAction()
+        NSApp.activateFromUserAction(origin: origin)
         window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
     }
@@ -508,8 +567,8 @@ final class SettingsWindowController {
     private func prepare(extension name: String?) {
         model.reload()
         model.refreshLoginItem()
-        // "fudge Settings" and Settings… open on the General page; Configure Extension on the extension's own.
-        model.selected = name ?? SettingsModel.generalPage
+        // "Fudge Settings" and Settings… open on the General page; Configure Extension on the extension's own.
+        model.select(name ?? SettingsModel.generalPage)
         if let window, window.contentView == nil {
             window.contentView = NSHostingView(rootView: SettingsView(model: model))
         }
@@ -520,7 +579,7 @@ final class SettingsWindowController {
                 backing: .buffered,
                 defer: false
             )
-            window.title = "fudge Settings"
+            window.title = "Fudge Settings"
             window.isReleasedWhenClosed = false
             window.isRecording = { [model] in model.recording != nil }
             window.contentView = NSHostingView(rootView: SettingsView(model: model))
@@ -590,7 +649,7 @@ struct SettingsView: View {
         // until the sidebar collapsed, and with no toggle (it jumped across the title bar) nothing brought it back.
         // There's no split view, so no divider and no collapsed state to restore.
         HStack(spacing: 0) {
-            List(selection: $model.selected) {
+            List(selection: Binding(get: { model.selected }, set: { model.select($0) })) {
                 Label("General", systemImage: "gearshape").tag(SettingsModel.generalPage)
                 Label("Permissions", systemImage: "hand.raised").tag(SettingsModel.permissionsPage)
                 Label("Commands", systemImage: "command").tag(SettingsModel.commandsPage)

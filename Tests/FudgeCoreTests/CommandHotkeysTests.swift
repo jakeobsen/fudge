@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 
 @testable import FudgeCore
@@ -200,4 +201,113 @@ private let cmdShiftK = HotKeySpec.parse("cmd+shift+k")!
     // ⌫ can't take ⌥Space from a command that has it.
     #expect(
         HotKeyRecording.clear.launcherEdit(commands: ["a/b": launcher]) == .refused(.command("a/b")))
+}
+
+// MARK: - SPEC-047 (FUD-60)
+
+@Test func aLauncherChangeThatCantBeSavedPutsBackWhatWasThere() {
+    // Refused at launch: Raycast holds ⌥Space, so it's wanted but not registered.
+    let fake = FakeRegistrar()
+    fake.refuse = ["option+space"]
+    let registry = HotKeyRegistry(registrar: fake)
+    registry.setLauncher(launcher)
+    #expect(registry.launcherRefused && fake.registered.isEmpty)
+
+    #expect(registry.changeLauncher(to: cmdShiftK, save: { false }) == .notSaved)
+    #expect(registry.launcher == launcher && registry.launcherRefused, "still wanted, still refused")
+    #expect(fake.registered.isEmpty, "⌘⇧K isn't left registered behind a file that says ⌥Space")
+
+    // Registered before: the old one is registered again.
+    let other = FakeRegistrar()
+    let working = HotKeyRegistry(registrar: other)
+    working.setLauncher(launcher)
+    #expect(working.changeLauncher(to: cmdShiftK, save: { false }) == .notSaved)
+    #expect(working.launcher == launcher && !working.launcherRefused)
+    #expect(other.registered == [HotKeyRegistry.launcherID: launcher])
+
+    // Saved: the new one stays. Refused by the system: the old one stays and nothing is saved.
+    var saves = 0
+    #expect(
+        working.changeLauncher(
+            to: cmdShiftK,
+            save: {
+                saves += 1
+                return true
+            }) == .changed)
+    #expect(working.launcher == cmdShiftK && saves == 1)
+    other.refuse = ["option+s"]
+    #expect(
+        working.changeLauncher(
+            to: optionS,
+            save: {
+                saves += 1
+                return true
+            }) == .inUse)
+    #expect(working.launcher == cmdShiftK && saves == 1, "a refused hotkey is never saved")
+    #expect(other.registered == [HotKeyRegistry.launcherID: cmdShiftK])
+}
+
+@Test func leavingThePageEndsARecordingAndResumesHotkeys() {
+    var recorder = HotKeyRecorder()
+    let first = recorder.start("vscode/search")
+    #expect(first, "the first recording suspends hotkeys")
+    let second = recorder.start(":launcher")
+    #expect(!second && recorder.recording == ":launcher", "another hotkey on the page doesn't suspend twice")
+    let samePage = recorder.pageChanged(from: ":general", to: ":general")
+    #expect(!samePage && recorder.recording == ":launcher", "the same page keeps it")
+    let otherPage = recorder.pageChanged(from: ":general", to: ":commands")
+    #expect(otherPage && recorder.recording == nil, "another page ends it and resumes")
+    let again = recorder.pageChanged(from: ":commands", to: ":general")
+    let ended = recorder.end()
+    #expect(!again && !ended, "nothing to resume")
+    _ = recorder.start("vscode/search")
+    let escape = recorder.end()
+    #expect(escape && recorder.recording == nil)
+}
+
+@Test func anUninstalledCommandsHotkeyGivesWay() {
+    let commands = ["gone/old": optionS, "vscode/search": optionV]
+    let installed: Set<String> = ["vscode/search", "scratch/folders"]
+    #expect(
+        HotKeyConflict.check(
+            optionS, for: "scratch/folders", launcher: launcher, commands: commands, installed: installed)
+            == nil, "gone/old isn't installed")
+    #expect(
+        HotKeyConflict.displaced(by: optionS, except: "scratch/folders", commands: commands, installed: installed)
+            == ["gone/old"])
+    #expect(
+        HotKeyConflict.check(
+            optionV, for: "scratch/folders", launcher: launcher, commands: commands, installed: installed)
+            == .command("vscode/search"), "an installed command still blocks")
+    #expect(HotKeyConflict.displaced(by: optionV, commands: commands, installed: installed).isEmpty)
+    // The launcher's hotkey too.
+    #expect(HotKeyRecording.record(optionS).launcherEdit(commands: commands, installed: installed) == .set(optionS))
+    #expect(
+        HotKeyRecording.record(optionV).launcherEdit(commands: commands, installed: installed)
+            == .refused(.command("vscode/search")))
+    // Without `installed`, every saved hotkey counts, as before.
+    #expect(
+        HotKeyConflict.check(optionS, for: "scratch/folders", launcher: launcher, commands: commands)
+            == .command("gone/old"))
+}
+
+private func installed(_ json: String) throws -> InstalledExtension {
+    InstalledExtension(
+        manifest: try JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8)),
+        directory: URL(fileURLWithPath: "/nonexistent"))
+}
+
+@Test func conflictsNameTheCommandByTitle() throws {
+    let vscode = try installed(
+        #"{"name":"vscode","title":"VS Code Project Manager","commands":[{"name":"search","title":"Search Projects","mode":"view"}]}"#
+    )
+    let jetbrains = try installed(
+        #"{"name":"jetbrains","title":"JetBrains Toolbox","commands":[{"name":"search","title":"Search Projects","mode":"view"},{"name":"open","title":"Open Recent","mode":"view"}]}"#
+    )
+    #expect(CommandNames.name(of: "jetbrains/open", in: [vscode, jetbrains]) == "Open Recent")
+    #expect(
+        CommandNames.name(of: "vscode/search", in: [vscode, jetbrains]) == "Search Projects (VS Code Project Manager)",
+        "two installed commands share the title")
+    #expect(CommandNames.name(of: "vscode/search", in: [vscode]) == "Search Projects")
+    #expect(CommandNames.name(of: "gone/old", in: [vscode]) == nil)
 }

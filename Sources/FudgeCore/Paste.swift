@@ -11,7 +11,7 @@ public enum PasteError: Error, Equatable, Sendable, CustomStringConvertible {
     public var description: String {
         switch self {
         case .accessibilityNeeded:
-            "fudge needs Accessibility permission to paste. The content was copied instead; allow fudge in System "
+            "Fudge needs Accessibility permission to paste. The content was copied instead; allow Fudge in System "
                 + "Settings → Privacy & Security → Accessibility."
         case .noTarget:
             "There is no app to paste into"
@@ -88,12 +88,14 @@ public final class Paste {
     public func paste(
         _ content: PasteboardContents,
         closeMainWindow: Bool,
+        origin: CallOrigin,
         hideWindow: () async -> Void,
         frontmost: () -> FrontmostApplication?
     ) async throws {
         await takeTurn()
         defer { endTurn() }
-        try await pasteNow(content, closeMainWindow: closeMainWindow, hideWindow: hideWindow, frontmost: frontmost)
+        try await pasteNow(
+            content, closeMainWindow: closeMainWindow, origin: origin, hideWindow: hideWindow, frontmost: frontmost)
     }
 
     private func takeTurn() async {
@@ -116,6 +118,7 @@ public final class Paste {
     private func pasteNow(
         _ content: PasteboardContents,
         closeMainWindow: Bool,
+        origin: CallOrigin,
         hideWindow: () async -> Void,
         frontmost: () -> FrontmostApplication?
     ) async throws {
@@ -130,7 +133,7 @@ public final class Paste {
         let written = pasteboard.changeCount
 
         // Without permission the content stays on the pasteboard, so the user can paste it themselves.
-        guard gate.isTrusted() else { throw PasteError.accessibilityNeeded }
+        guard gate.isTrusted(origin: origin) else { throw PasteError.accessibilityNeeded }
         if closeMainWindow { await hideWindow() }
         guard let target = frontmost(), target.pid != ownPid else {
             restore(snapshot, ifStill: written)

@@ -1,0 +1,5 @@
+{
+  "name": "scan-gaps",
+  "title": "Scan Gaps",
+  "commands": [{ "name": "index", "title": "Gaps", "mode": "no-view" }]
+}

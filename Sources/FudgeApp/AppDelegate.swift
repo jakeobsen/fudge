@@ -16,7 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsModel: SettingsModel!
     private var settingsWindow: SettingsWindowController!
     private var onboardingWindow: OnboardingWindowController!
-    /// The menu bar item's "Open fudge (⌥Space)".
+    /// The menu bar item's "Open Fudge (⌥Space)".
     private var openItem: NSMenuItem?
     private let hud = HUDWindow()
     private var keyMonitor: Any?
@@ -53,13 +53,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.showOnboarding = { [weak self] in self?.onboardingWindow.showAgain() }
         model.hide = { [weak self] in self?.hidePanel() }
         model.show = { [weak self] in self?.showPanel() }
-        model.openSettings = { [weak self] name in self?.settingsWindow.show(extension: name) }
+        model.openSettings = { [weak self] name, origin in self?.settingsWindow.show(extension: name, origin: origin) }
         model.reloadAll = { [weak self] in self?.reloadExtensions() }
         settingsModel.clearSearchHistory = { [weak self] in self?.model.clearHistory() }
         settingsModel.imported = { [weak self] in self?.afterImport() }
         model.showHUD = { [weak self] title in self?.hud.show(title) }
         model.isVisible = { [weak self] in self?.panel.isVisible ?? false }
-        model.confirm = { [weak self] request in await self?.confirm(request) ?? false }
+        model.confirm = { [weak self] request, origin in await self?.confirm(request, origin: origin) ?? false }
         model.openPanel = { [weak self] options in await self?.chooseFiles(options) }
         // The calculator's exchange rates: the cached ones now, downloads only while the setting is on.
         exchangeRates = ExchangeRateUpdater(
@@ -77,6 +77,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.resetAfterChanged = { [weak self] setting in self?.model.panelReset.setting = setting }
         // The store stays installed either way; the launcher reads settings.json again.
         settingsModel.extensionStoreChanged = { [weak self] in self?.model.applySettings() }
+        settingsModel.stopExtensionStore = { [weak self] in
+            await self?.model.unloadSessions(ofExtension: ExtensionStore.extensionName)
+        }
         settingsModel.currencyRatesChanged = { [weak self] on in
             guard let self else { return }
             Task { await self.exchangeRates.setEnabled(on, now: Date()) }
@@ -141,11 +144,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         launcherHotkeyChanged()
         model.menuBar.start()
         applyCommandHotkeys()
-        settingsModel.registerLauncherHotkey = { [weak self] spec in
-            guard let self else { return false }
-            let registered = self.registry.setLauncher(spec)
+        settingsModel.changeLauncherHotkey = { [weak self] spec, save in
+            guard let self else { return .notSaved }
+            let result = self.registry.changeLauncher(to: spec, save: save)
             self.launcherHotkeyChanged()
-            return registered
+            return result
         }
         settingsModel.suspendHotkeys = { [weak self] in self?.registry.suspend() }
         settingsModel.resumeHotkeys = { [weak self] in
@@ -196,13 +199,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow.reloadIfShown()
     }
 
-    /// Shows the launcher's hotkey as it's registered: on the General page, and in the menu bar item's "Open fudge"
+    /// Shows the launcher's hotkey as it's registered: on the General page, and in the menu bar item's "Open Fudge"
     /// title, which leaves it out while another app has it.
     private func launcherHotkeyChanged() {
         let spec = registry.launcher ?? .default
         settingsModel.launcherHotkey = spec
         settingsModel.launcherHotkeyInUse = registry.launcherRefused
-        openItem?.title = registry.launcherRefused ? "Open fudge" : "Open fudge (\(spec))"
+        openItem?.title = registry.launcherRefused ? "Open Fudge" : "Open Fudge (\(spec))"
     }
 
     private func installStatusItem() {
@@ -216,7 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.image = MenuBarIcon.image
 
         let menu = NSMenu()
-        let open = menu.addItem(withTitle: "Open fudge", action: #selector(openFromMenu), keyEquivalent: "")
+        let open = menu.addItem(withTitle: "Open Fudge", action: #selector(openFromMenu), keyEquivalent: "")
         open.target = self
         openItem = open
         let reload = menu.addItem(
@@ -225,8 +228,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settings = menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "fudge \(FudgeVersion.current)", action: nil, keyEquivalent: "")
-        menu.addItem(withTitle: "Quit fudge", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: "Fudge \(FudgeVersion.current)", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "Quit Fudge", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.menu = menu
         statusItem = item
     }
@@ -246,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
         // The first item is the application menu, by convention.
-        menu.addItem(withTitle: "fudge", action: nil, keyEquivalent: "").submenu = NSMenu(title: "fudge")
+        menu.addItem(withTitle: "Fudge", action: nil, keyEquivalent: "").submenu = NSMenu(title: "Fudge")
         menu.addItem(withTitle: "Edit", action: nil, keyEquivalent: "").submenu = edit
         return menu
     }
@@ -264,7 +267,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The menu bar item's "Open fudge", which shows the panel as the launcher's hotkey does.
+    /// The menu bar item's "Open Fudge", which shows the panel as the launcher's hotkey does.
     @objc private func openFromMenu() {
         if !panel.isVisible { model.resetIfDue() }
         showPanel()
@@ -277,7 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.presented()
     }
 
-    /// The screen "Show fudge on" picks (`PanelScreen`).
+    /// The screen "Show Fudge on" picks (`PanelScreen`).
     private func chosenScreen() -> NSScreen? {
         let screens = NSScreen.screens
         let setting = model.settings.showOnScreen
@@ -359,8 +362,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyCode: event.keyCode, characters: unmodified ?? event.charactersIgnoringModifiers, modifiers: modifiers)
     }
 
-    /// confirmAlert: a sheet on the panel when it's open, otherwise a standalone alert.
-    private func confirm(_ request: LauncherModel.AlertRequest) async -> Bool {
+    /// confirmAlert: a sheet on the panel when it's open, otherwise a standalone alert brought to the front. Only a
+    /// user-initiated call gets one (SPEC-045); the model answers background calls without asking.
+    private func confirm(_ request: LauncherModel.AlertRequest, origin: CallOrigin) async -> Bool {
+        if let answer = origin.unaskedAnswer { return answer }
         let alert = NSAlert()
         alert.messageText = request.title
         alert.informativeText = request.message ?? ""
@@ -376,7 +381,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        NSApp.activate()
+        // The plain `activate()` can be declined since macOS 14, which would leave the alert behind the app in front.
+        NSApp.activateFromUserAction(origin: origin)
         return alert.runModal() == .alertFirstButtonReturn
     }
 
@@ -397,7 +403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showSettings() {
-        settingsWindow.show()
+        settingsWindow.show(origin: .userInitiated)
     }
 }
 

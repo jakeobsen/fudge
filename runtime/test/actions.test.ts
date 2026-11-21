@@ -108,7 +108,7 @@ test("an action fudge can't perform still shows, and says so when picked", async
     assert.equal(entries[0]!.props.title, "Create Quicklink");
     await mounted.root.dispatch(entries[0]!.id, ["onAction"], []);
     const toast = calls.find((call) => call.method === "toast.show")!.params as { title: string; style: string };
-    assert.equal(toast.title, "Action.CreateQuicklink isn't available in fudge yet");
+    assert.equal(toast.title, "Action.CreateQuicklink isn't available in Fudge yet");
     assert.equal(toast.style, "FAILURE");
 });
 
@@ -140,7 +140,7 @@ test("Action.Paste keeps Raycast's default title until it knows the app, and sho
     const pasted: unknown[] = [];
     connect((request) => {
         calls.push(request);
-        const error = request.method === "clipboard.paste" ? "fudge needs Accessibility permission to paste." : undefined;
+        const error = request.method === "clipboard.paste" ? "Fudge needs Accessibility permission to paste." : undefined;
         setImmediate(() => (request.method === "applications.frontmost" ? undefined : settle(request.id, null, error)));
     });
     const { mounted, entries } = await panelWith(h(Action.Paste, { content: "x", onPaste: () => pasted.push("x") }));
@@ -148,7 +148,7 @@ test("Action.Paste keeps Raycast's default title until it knows the app, and sho
     await mounted.root.dispatch(entries[0]!.id, ["onAction"], []);
     await flush();
     const toast = calls.find((call) => call.method === "toast.show")!.params as { title: string; style: string };
-    assert.equal(toast.title, "fudge needs Accessibility permission to paste.");
+    assert.equal(toast.title, "Fudge needs Accessibility permission to paste.");
     assert.equal(toast.style, "FAILURE");
     assert.deepEqual(pasted, [], "onPaste only after a paste");
 });

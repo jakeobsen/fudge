@@ -16,7 +16,7 @@ export function connect(send: ((request: RpcRequest) => void) | null): void {
 }
 
 export function callApp<T = unknown>(method: string, params?: unknown): Promise<T> {
-    if (!transport) return Promise.reject(new Error(`${method}: not connected to the fudge app`));
+    if (!transport) return Promise.reject(new Error(`${method}: not connected to the Fudge app`));
     const id = nextId++;
     const send = transport;
     return new Promise<T>((resolve, reject) => {

@@ -13,7 +13,7 @@ final class BackupController {
         case working(String)
         case exported(Backup.Summary, leftOut: [String], skipped: Int, file: String)
         case importPassword(URL, error: String?)
-        case importSummary(URL, Backup.Contents)
+        case importSummary(URL, Backup.Contents, changed: [Backup.Changed])
         case imported(Backup.ImportResult)
         case failed(String)
 
@@ -95,15 +95,22 @@ final class BackupController {
         }
     }
 
-    /// Decrypts and checks the backup, writing nothing, then shows what's in it.
+    /// Decrypts and checks the backup, writing nothing, then shows what's in it and which of its extensions changed
+    /// since it was made.
     func open(_ file: URL, password: String?) {
         sheet = .working("Opening the backup…")
         Task {
             let paths = paths
-            let result = await Task.detached { Result { try Backup.open(file, password: password, paths: paths) } }
-                .value
+            let result = await Task.detached {
+                Result {
+                    let contents = try Backup.open(file, password: password, paths: paths)
+                    let installed = InstalledExtension.all(in: paths.extensionsDirectory)
+                    return (contents, Backup.changedExtensions(contents, installed: installed, paths: paths))
+                }
+            }
+            .value
             switch result {
-            case .success(let contents): sheet = .importSummary(file, contents)
+            case .success(let (contents, changed)): sheet = .importSummary(file, contents, changed: changed)
             case .failure(BackupError.wrongPassword):
                 sheet = .importPassword(file, error: BackupError.wrongPassword.description)
             case .failure(let error): sheet = .failed(Self.message(error))
@@ -197,15 +204,15 @@ struct BackupSheet: View {
                 if skipped > 0 {
                     Text(
                         "\(skipped) \(skipped == 1 ? "item that isn't a regular file" : "items that aren't regular files") "
-                            + "in fudge's folder (links, or files outside it) \(skipped == 1 ? "was" : "were") skipped."
+                            + "in Fudge's folder (links, or files outside it) \(skipped == 1 ? "was" : "were") skipped."
                     )
                     .foregroundStyle(.secondary)
                 }
                 buttons { Button("Done") { controller.sheet = nil }.keyboardShortcut(.defaultAction) }
             case .importPassword(let file, let error):
                 ImportPasswordStep(controller: controller, file: file, error: error)
-            case .importSummary(_, let contents):
-                ImportSummaryStep(controller: controller, contents: contents)
+            case .importSummary(_, let contents, let changed):
+                ImportSummaryStep(controller: controller, contents: contents, changed: changed)
             case .imported(let result):
                 ImportedStep(controller: controller, result: result)
             case .failed(let message):
@@ -241,7 +248,7 @@ private struct ExportPasswordStep: View {
         Text("Export a backup").font(.headline)
         Text(
             "The backup holds your extensions' passwords and tokens, so it's protected with a password. You need it "
-                + "to import the backup, and fudge can't recover it.")
+                + "to import the backup, and Fudge can't recover it.")
         SecureField("Password (at least \(BackupArchive.minimumPasswordLength) characters)", text: $password)
         SecureField("Repeat the password", text: $repeated)
         if mismatch {
@@ -292,13 +299,23 @@ private struct ImportPasswordStep: View {
 struct ImportSummaryStep: View {
     let controller: BackupController
     let contents: Backup.Contents
+    let changed: [Backup.Changed]
 
     var body: some View {
         Text("Import this backup?").font(.headline)
         Text(
-            "Made on \(contents.manifest.created.formatted(date: .long, time: .shortened)) by fudge "
+            "Made on \(contents.manifest.created.formatted(date: .long, time: .shortened)) by Fudge "
                 + "\(contents.manifest.fudgeVersion).")
         Text("\(contents.summary.text).")
+        if !changed.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Changed since this backup:")
+                ForEach(changed, id: \.name) { change in
+                    (Text(change.title).bold() + Text(" — ") + Text(change.text).foregroundStyle(.secondary))
+                        .lineLimit(2)
+                }
+            }
+        }
         if contents.hadExtensionStore {
             Text(
                 "This backup had the Extension Store on. To use it here, enable it under Commands, then turn it on "

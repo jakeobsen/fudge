@@ -53,10 +53,10 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         RootItem(id: "app:\(url.path)", title: title, kind: .application(url))
     }
 
-    /// "fudge Settings": opens the Settings window.
+    /// "Fudge Settings": opens the Settings window.
     public static let settings = RootItem(
         id: "fudge:settings",
-        title: "fudge Settings",
+        title: "Fudge Settings",
         keywords: ["settings", "preferences", "config", "fudge"],
         kind: .settings
     )
@@ -69,16 +69,16 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         kind: .reloadExtensions
     )
 
-    /// "Quit fudge": asks first, since fudge's hotkeys stop working until it's opened again.
+    /// "Quit Fudge": asks first, since Fudge's hotkeys stop working until it's opened again.
     public static let quit = RootItem(
         id: "fudge:quit",
-        title: "Quit fudge",
+        title: "Quit Fudge",
         keywords: ["quit", "exit", "fudge"],
         kind: .quit
     )
 
     /// Whether opening the item counts in `LaunchHistory`. Quitting doesn't, so an empty search never puts
-    /// "Quit fudge" at the top.
+    /// "Quit Fudge" at the top.
     public var recordsLaunch: Bool {
         kind != .quit
     }

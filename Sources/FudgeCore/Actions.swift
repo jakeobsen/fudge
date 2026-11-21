@@ -165,7 +165,7 @@ public enum RootActions {
             case .reloadExtensions:
                 [("Reload Extensions", enter, .open)]
             case .quit:
-                [("Quit fudge", enter, .open)]
+                [("Quit Fudge", enter, .open)]
             }
         return section(entries)
     }
@@ -277,7 +277,7 @@ public enum ActionPanelReader {
 }
 
 /// fudge's own windows (Settings, and onboarding) close on ⌘Q as on ⌘W, and fudge keeps running: quitting fudge is
-/// "Quit fudge" in the menu bar item and root search (D-58). While a hotkey is being recorded the recorder takes
+/// "Quit Fudge" in the menu bar item and root search (D-58). While a hotkey is being recorded the recorder takes
 /// every key, ⌘Q included, so it's recorded rather than closing the window.
 public enum WindowShortcut {
     public static func closesWindow(_ pressed: KeyShortcut, recording: Bool) -> Bool {

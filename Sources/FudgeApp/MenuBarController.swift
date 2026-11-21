@@ -88,6 +88,13 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// Whether `session` is one of the menu bar's.
     func owns(_ session: String) -> Bool { sessions[session] != nil }
 
+    /// Where a session's calls come from (`MenuBarLifecycle.origin`): user-initiated while its menu is open or one of
+    /// the user's picks is running, else as the instance was launched.
+    func origin(of session: String) -> CallOrigin {
+        guard let id = sessions[session], let item = active[id] else { return .background }
+        return item.lifecycle.origin(of: session)
+    }
+
     /// Takes in the installed extensions and the settings: at launch, on Reload Extensions and after each change in
     /// Settings. Commands that are no longer installed are deactivated; the others pick up their new manifest. A
     /// disabled command leaves the menu bar and stops refreshing, but stays active (`MenuBarStore.shown`), so turning

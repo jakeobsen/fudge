@@ -86,7 +86,7 @@ private func item(_ title: String, subtitle: String? = nil, keywords: [String] =
             !RootSearch.rank(items, query: query, history: LaunchHistory(), now: now).contains(.settings),
             "not shown for \(query)")
     }
-    #expect(RootItem.settings.title == "fudge Settings")
+    #expect(RootItem.settings.title == "Fudge Settings")
     #expect(RootItem.settings.kind == .settings)
 }
 
@@ -95,7 +95,7 @@ private func item(_ title: String, subtitle: String? = nil, keywords: [String] =
     #expect(Set(RootSearch.builtInItems.map(\.id)).count == 3)
     #expect(RootItem.reloadExtensions.title == "Reload Extensions")
     #expect(RootItem.reloadExtensions.kind == .reloadExtensions)
-    #expect(RootItem.quit.title == "Quit fudge")
+    #expect(RootItem.quit.title == "Quit Fudge")
     #expect(RootItem.quit.kind == .quit)
 }
 
@@ -107,7 +107,7 @@ private func item(_ title: String, subtitle: String? = nil, keywords: [String] =
     for query in ["reload", "Reload Ext", "refresh", "extensions"] {
         #expect(first(query) == .reloadExtensions, "found by \(query)")
     }
-    for query in ["quit", "Quit fudge", "exit"] {
+    for query in ["quit", "Quit Fudge", "exit"] {
         #expect(first(query) == .quit, "found by \(query)")
     }
     let fudge = RootSearch.rank(items, query: "fudge", history: LaunchHistory(), now: now)

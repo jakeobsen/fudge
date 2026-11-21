@@ -125,7 +125,8 @@ final class LauncherModel {
     @ObservationIgnored var show: () -> Void = {}
     /// Opens the Settings window on an extension's preferences, or on its default page for nil; set by the app
     /// delegate.
-    @ObservationIgnored var openSettings: (String?) -> Void = { _ in }
+    /// Opens Settings for a call from `origin`; only a user-initiated one opens it (SPEC-045).
+    @ObservationIgnored var openSettings: (String?, CallOrigin) -> Void = { _, _ in }
     /// Shows a FilePicker's open panel and returns the chosen paths, or nil when cancelled; set by the app delegate.
     @ObservationIgnored var openPanel: (FilePickerOptions) async -> [String]? = { _ in nil }
     /// Downloads the exchange rates again at once (↵ on the "Couldn't download exchange rates" card).
@@ -137,7 +138,8 @@ final class LauncherModel {
     /// Whether the launcher panel is on screen; set by the app delegate.
     @ObservationIgnored var isVisible: () -> Bool = { false }
     /// Asks the user to confirm (title, message, primary, dismiss, destructive); set by the app delegate.
-    @ObservationIgnored var confirm: (AlertRequest) async -> Bool = { _ in false }
+    /// Asks the user, for a call from `origin`; a background call gets `CallOrigin.unaskedAnswer` without an alert.
+    @ObservationIgnored var confirm: (AlertRequest, CallOrigin) async -> Bool = { _, _ in false }
 
     struct AlertRequest {
         var title: String
@@ -165,14 +167,40 @@ final class LauncherModel {
     @ObservationIgnored private var background: [String: String] = [:]
     /// No-view commands that `launchCommand` started in the background, by session. They leave the panel alone.
     @ObservationIgnored private var quietSessions: [String: QuietSession] = [:]
+    /// HUDs for background calls that were refused without asking, each shown once per run.
+    @ObservationIgnored private var backgroundNotices = OncePerRun()
 
     struct QuietSession {
         var title: String
         /// A failure was already shown, so the crash that follows it isn't shown again.
         var failed = false
+        /// Its `launchCommand` calls refused without asking (`permissionNeeded`). The HUD already said so once per
+        /// pair, so the command failing with one of these, uncaught, is only logged.
+        var unasked: Set<String> = []
     }
     /// The extension each session belongs to.
     @ObservationIgnored private var sessionExtensions: [String: String] = [:]
+
+    /// Unloads every running session of `extensionName`'s commands and waits until each has exited (the host stops a
+    /// worker 1 s after `unload` at the latest), or 2 s. Turning the Extension Store off calls it before deleting the
+    /// copy the store's git works in; the store ends its git when it's unloaded. A view of it on screen goes back to
+    /// root search.
+    func unloadSessions(ofExtension extensionName: String) async {
+        let sessions = sessionExtensions.filter { $0.value == extensionName }.map(\.key)
+        guard !sessions.isEmpty else { return }
+        for session in sessions {
+            if case .command(let command) = screen, command.session == session {
+                leaveCommand()
+                refreshResults()
+            } else {
+                send(.unload(session: session))
+            }
+        }
+        let deadline = ContinuousClock.now + .seconds(2)
+        while sessions.contains(where: { sessionExtensions[$0] != nil }), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
     /// The command each session runs, by name.
     @ObservationIgnored private var sessionCommands: [String: String] = [:]
     /// The subtitles commands set for themselves (`updateCommandMetadata`).
@@ -195,7 +223,7 @@ final class LauncherModel {
         menuBar.host = MenuBarController.Host(
             launch: { [weak self] installed, command, userInitiated in
                 self?.launchMenuBarCommand(installed, command: command, userInitiated: userInitiated)
-                    ?? .failure(MenuBarController.LaunchFailed(message: "fudge is quitting"))
+                    ?? .failure(MenuBarController.LaunchFailed(message: "Fudge is quitting"))
             },
             send: { [weak self] message in self?.send(message) },
             showHUD: { [weak self] title in self?.showHUD(title) },
@@ -406,7 +434,8 @@ final class LauncherModel {
         guard let calculator else { return }
         let text = withQuestion ? calculator.questionAndAnswer : calculator.copyText
         Task {
-            _ = try? await SystemCalls.handle("clipboard.copy", .object(["text": .string(text)]))
+            _ = try? await SystemCalls.handle(
+                "clipboard.copy", .object(["text": .string(text)]), origin: .userInitiated)
         }
         hide()
         showHUD("Copied to Clipboard")
@@ -1257,7 +1286,7 @@ final class LauncherModel {
     /// Opens the Settings window, on an extension's preferences or on its default page, and hides the panel.
     private func showSettings(extension name: String?) {
         hide()
-        openSettings(name)
+        openSettings(name, .userInitiated)
     }
 
     /// ⌘, opens Settings on its default page; ⌘⇧, on the extension of the command that's selected in root search
@@ -1634,7 +1663,7 @@ final class LauncherModel {
         case .quit:
             recordLaunch(item)
             Task {
-                if await confirm(Self.quitRequest) { NSApp.terminate(nil) }
+                if await confirm(Self.quitRequest, .userInitiated) { NSApp.terminate(nil) }
             }
         case .command(let extensionName, let commandName, _, _):
             guard let installed = extensions[extensionName],
@@ -1647,7 +1676,9 @@ final class LauncherModel {
             }
             let prepared = prepareLaunch(of: installed, command: command, userInitiated: true)
             guard prepared.preferences.missing.isEmpty else {
-                showNeedsSettings(item.title, extension: extensionName, missing: prepared.preferences.missing)
+                showNeedsSettings(
+                    item.title, extension: extensionName, missing: prepared.preferences.missing,
+                    origin: .userInitiated)
                 return
             }
             let entered = argumentsItem == item.id ? arguments : ArgumentInput(arguments: item.arguments)
@@ -1675,9 +1706,9 @@ final class LauncherModel {
         if item.recordsLaunch { recordLaunch(item.id) }
     }
 
-    /// "Quit fudge" asks first: its hotkeys stop working until fudge is opened again.
+    /// "Quit Fudge" asks first: its hotkeys stop working until Fudge is opened again.
     private static let quitRequest = AlertRequest(
-        title: "Quit fudge?",
+        title: "Quit Fudge?",
         message: "Its hotkeys stop working until you open it again.",
         primary: "Quit",
         dismiss: "Cancel",
@@ -1707,7 +1738,10 @@ final class LauncherModel {
     }
 
     /// A required preference isn't set: say so, and open Settings on the extension instead of running the command.
-    private func showNeedsSettings(_ title: String, extension name: String, missing: [ExtensionManifest.Preference]) {
+    /// Settings comes forward only for a user-initiated `origin`.
+    private func showNeedsSettings(
+        _ title: String, extension name: String, missing: [ExtensionManifest.Preference], origin: CallOrigin
+    ) {
         let names = missing.map { $0.title ?? $0.name }.joined(separator: ", ")
         screen = .failure(
             Failure(
@@ -1715,7 +1749,7 @@ final class LauncherModel {
                 message: "Set \(names) in the Settings window, then run the command again."
             )
         )
-        openSettings(name)
+        openSettings(name, origin)
     }
 
     /// Starts a prepared command in the extension host: the one way commands launch, from root search and from
@@ -1785,7 +1819,8 @@ final class LauncherModel {
     ) -> Result<String, MenuBarController.LaunchFailed> {
         let prepared = prepareLaunch(of: installed, command: command, userInitiated: false)
         guard prepared.preferences.missing.isEmpty else {
-            if userInitiated { openSettings(installed.manifest.name) }
+            let origin = CallOrigin.launched(userInitiated: userInitiated)
+            if origin.mayComeForward { openSettings(installed.manifest.name, origin) }
             let names = prepared.preferences.missing.map { $0.title ?? $0.name }.joined(separator: ", ")
             return .failure(.init(message: "set \(names) in the Settings window first"))
         }
@@ -1827,16 +1862,22 @@ final class LauncherModel {
     /// (`CommandLocator`), asks the user the first time an extension opens another extension's commands, then
     /// launches it the way root search does. The call is answered once the launch has started, before the command
     /// on screen is unloaded, so code after `await launchCommand(…)` still runs. Throws why it can't launch.
-    private func launchCommand(_ params: JSONValue, from session: String, call id: Int) async throws {
+    /// `origin` is the caller's, read when the call came in: a background caller's request runs as Background
+    /// (`LaunchRequest.asCalled(from:)`), so it never shows the panel or Settings.
+    private func launchCommand(
+        _ params: JSONValue, from session: String, call id: Int, origin: CallOrigin
+    ) async throws {
         guard let callerName = sessionExtensions[session], let caller = extensions[callerName] else {
             throw LaunchCommandError.invalid("the calling command isn't running")
         }
-        let request = try LaunchRequest(params: params)
+        let request = try LaunchRequest(params: params).asCalled(from: origin)
         let target = try CommandLocator.locate(
             request, caller: callerName, in: Array(extensions.values), settings: settings)
         let targetID = FudgeSettings.commandID(extension: target.installed.manifest.name, command: target.command.name)
         try CommandLocator.checkMode(target.command, type: request.type, isActiveInMenuBar: menuBar.isActive(targetID))
-        if target.isOtherExtension { try await checkPermission(of: caller, toOpen: target) }
+        if target.isOtherExtension {
+            try await checkPermission(of: caller, toOpen: target, origin: origin, from: session)
+        }
 
         let userInitiated = request.type == .userInitiated
         let answer = { self.send(.rpcResult(session: session, id: id, result: .null, error: nil)) }
@@ -1855,7 +1896,7 @@ final class LauncherModel {
             if onScreen != nil { leaveCommand() }
             showNeedsSettings(
                 target.command.title, extension: target.installed.manifest.name,
-                missing: prepared.preferences.missing)
+                missing: prepared.preferences.missing, origin: origin)
             return
         }
         if target.command.mode == "menu-bar" {
@@ -1886,16 +1927,48 @@ final class LauncherModel {
         }
     }
 
-    /// The first time an extension opens another extension's command, the user decides, once for that pair.
-    private func checkPermission(of caller: InstalledExtension, toOpen target: LaunchTarget) async throws {
+    /// Where a session's calls come from (SPEC-045): a menu-bar session as its lifecycle says; the command the user
+    /// opened (the view on screen, or a no-view command showing "Running …") as user-initiated; anything else,
+    /// such as a background `launchCommand`'s session or one that's been replaced, as background.
+    private func origin(of session: String) -> CallOrigin {
+        if menuBar.owns(session) { return menuBar.origin(of: session) }
+        if command?.session == session || background[session] != nil { return .userInitiated }
+        return .background
+    }
+
+    /// `openExtensionPreferences()` from a command the user isn't using: Settings won't come to the front for it.
+    static let backgroundSettingsError =
+        "Fudge opens Settings only for a command you're using: open the command from Fudge first."
+
+    /// The first time an extension opens another extension's command, the user decides, once for that pair. Only
+    /// a call from a session the user is using may ask (`LaunchPermissions.step`); a background one is refused
+    /// without saving anything, so the question comes when the user next opens the caller, and a HUD says so once
+    /// per pair per run.
+    private func checkPermission(
+        of caller: InstalledExtension, toOpen target: LaunchTarget, origin: CallOrigin, from session: String
+    ) async throws {
         let file = paths.launchPermissionsFile
         var permissions = LaunchPermissions.load(from: file)
         let callerName = caller.manifest.name
         let targetName = target.installed.manifest.name
         let allowed: Bool
-        if let answer = permissions.answer(caller: callerName, target: targetName) {
-            allowed = answer
-        } else {
+        switch LaunchPermissions.step(
+            answer: permissions.answer(caller: callerName, target: targetName), origin: origin)
+        {
+        case .allowed:
+            allowed = true
+        case .refused:
+            allowed = false
+        case .refusedUnasked:
+            if backgroundNotices.first("launch:\(callerName)/\(targetName)") {
+                showHUD(
+                    LaunchPermissions.unaskedNotice(
+                        callerTitle: caller.manifest.title, targetTitle: target.installed.manifest.title))
+            }
+            let refusal = LaunchCommandError.permissionNeeded(extensionTitle: target.installed.manifest.title)
+            quietSessions[session]?.unasked.insert(refusal.description)
+            throw refusal
+        case .ask:
             allowed = await confirm(
                 AlertRequest(
                     title:
@@ -1904,7 +1977,7 @@ final class LauncherModel {
                     primary: "Allow",
                     dismiss: "Don't Allow",
                     destructive: false
-                ))
+                ), origin)
             // Read again: another call may have stored an answer while this one waited.
             permissions = LaunchPermissions.load(from: file)
             permissions.record(allowed, caller: callerName, target: targetName)
@@ -1953,7 +2026,7 @@ final class LauncherModel {
         guard let node = Runtime.locateNode() else {
             throw HostUnavailable(
                 description:
-                    "fudge needs Node.js 22.18 or later. Install it with `brew install node`, or set FUDGE_NODE."
+                    "Fudge needs Node.js 22.18 or later. Install it with `brew install node`, or set FUDGE_NODE."
             )
         }
         guard let script = Runtime.locateHostScript() else {
@@ -2068,7 +2141,8 @@ final class LauncherModel {
         case .error(let session, let message, let stack, let fatal):
             if var quiet = quietSessions[session] {
                 // A background launch: the panel stays as it is, and the failure shows in the HUD, once.
-                if !quiet.failed { showHUD("\(quiet.title) failed — \(message)") }
+                let alreadySaid = quiet.unasked.contains { message.contains($0) }
+                if !quiet.failed, !alreadySaid { showHUD("\(quiet.title) failed — \(message)") }
                 quiet.failed = true
                 quietSessions[session] = quiet
             } else if case .command(var command) = screen, command.session == session {
@@ -2110,7 +2184,13 @@ final class LauncherModel {
         case .rpc(let session, let id, let method, let params):
             switch method {
             case "preferences.openExtension", "preferences.openCommand":
-                if let extensionName = sessionExtensions[session] { openSettings(extensionName) }
+                // Settings comes to the front, so only for a command the user is using (SPEC-045).
+                let origin = origin(of: session)
+                guard origin.mayComeForward else {
+                    send(.rpcResult(session: session, id: id, result: nil, error: Self.backgroundSettingsError))
+                    break
+                }
+                if let extensionName = sessionExtensions[session] { openSettings(extensionName, origin) }
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
             case "form.storeValues":
                 storeFormValues(params, session: session)
@@ -2119,14 +2199,16 @@ final class LauncherModel {
                 windowCall(method, params, session: session)
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
             case "alert.confirm":
+                let origin = origin(of: session)
                 Task {
-                    let confirmed = await confirm(Self.alertRequest(params))
+                    let confirmed = await confirm(Self.alertRequest(params), origin)
                     send(.rpcResult(session: session, id: id, result: .bool(confirmed), error: nil))
                 }
             case "clipboard.paste":
+                let origin = origin(of: session)
                 Task {
                     do {
-                        try await SystemCalls.paste(params, hideWindow: { await self.hideForPaste() })
+                        try await SystemCalls.paste(params, origin: origin, hideWindow: { await self.hideForPaste() })
                         send(.rpcResult(session: session, id: id, result: .null, error: nil))
                     } catch {
                         send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
@@ -2140,17 +2222,20 @@ final class LauncherModel {
                     send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
                 }
             case "command.launch":
+                // Read now: by the time the Task runs, an `eventSettled` may have made a real pick look background.
+                let origin = origin(of: session)
                 Task {
                     do {
-                        try await launchCommand(params, from: session, call: id)
+                        try await launchCommand(params, from: session, call: id, origin: origin)
                     } catch {
                         send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
                     }
                 }
             default:
+                let origin = origin(of: session)
                 Task {
                     do {
-                        let result = try await SystemCalls.handle(method, params)
+                        let result = try await SystemCalls.handle(method, params, origin: origin)
                         send(.rpcResult(session: session, id: id, result: result, error: nil))
                     } catch {
                         send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
