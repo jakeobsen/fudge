@@ -14,6 +14,24 @@ import Foundation
 public struct QuicklinkTemplate: Sendable, Equatable {
     public enum Dynamic: String, Sendable, Equatable, CaseIterable {
         case clipboard, uuid, date, time, datetime
+        /// The day of the week ("Monday"), and where the caret goes: snippets only (`SnippetTemplate`).
+        case day, cursor
+    }
+
+    /// What's being read: a quicklink's link, or a snippet's text (`SnippetTemplate`), which share one parser.
+    enum Mode: Sendable {
+        case link, snippet
+
+        /// The thing the problem messages name.
+        var thing: String { self == .link ? "a quicklink" : "a snippet" }
+        var whole: String { self == .link ? "the link" : "the snippet" }
+
+        /// Raycast's dynamic names this mode refuses: a bare word with one of these names is a problem, never an
+        /// argument.
+        var unsupported: Set<String> {
+            self == .link
+                ? ["selection", "day", "cursor", "browser-tab", "snippet"] : ["selection", "browser-tab", "snippet"]
+        }
     }
 
     public enum Modifier: String, Sendable, Equatable, CaseIterable {
@@ -49,10 +67,6 @@ public struct QuicklinkTemplate: Sendable, Equatable {
 
     public static let argumentLimit = 3
 
-    /// Raycast's dynamic placeholders Fudge doesn't fill in. A bare word with one of these names is a problem, never
-    /// an argument.
-    static let unsupportedDynamic: Set<String> = ["selection", "day", "cursor", "browser-tab", "snippet"]
-
     public let link: String
     public let segments: [Segment]
     /// The arguments, each once, in the order they first appear.
@@ -61,8 +75,12 @@ public struct QuicklinkTemplate: Sendable, Equatable {
     public let problem: String?
 
     public init(_ link: String) {
+        self.init(link, mode: .link)
+    }
+
+    init(_ link: String, mode: Mode) {
         self.link = link
-        var parser = Parser()
+        var parser = Parser(mode: mode)
         parser.parse(link)
         segments = parser.segments
         arguments = parser.arguments
@@ -167,7 +185,8 @@ public struct QuicklinkTemplate: Sendable, Equatable {
         return result
     }
 
-    private func raw(_ value: Value, values: [String: String], context: Context) -> String {
+    /// A placeholder's value before its modifiers, shared with `SnippetTemplate`.
+    func raw(_ value: Value, values: [String: String], context: Context) -> String {
         switch value {
         case .argument(let name):
             if let entered = values[name], !entered.isEmpty { return entered }
@@ -176,6 +195,12 @@ public struct QuicklinkTemplate: Sendable, Equatable {
             return context.clipboard ?? ""
         case .dynamic(.uuid):
             return context.makeUUID()
+        case .dynamic(.cursor):
+            return ""
+        case .dynamic(.day):
+            return context.now.formatted(
+                Date.FormatStyle(locale: context.locale, calendar: context.calendar, timeZone: context.timeZone)
+                    .weekday(.wide))
         case .dynamic(let dynamic):
             var calendar = context.calendar
             calendar.locale = context.locale
@@ -205,8 +230,9 @@ public struct QuicklinkTemplate: Sendable, Equatable {
         text.addingPercentEncoding(withAllowedCharacters: unreserved) ?? text
     }
 
-    /// Reads a link, one character at a time.
+    /// Reads a link or a snippet's text, one character at a time.
     private struct Parser {
+        let mode: Mode
         var segments: [Segment] = []
         var arguments: [Argument] = []
         var problem: String?
@@ -216,7 +242,7 @@ public struct QuicklinkTemplate: Sendable, Equatable {
             var rest = Substring(link)
             while let character = rest.first {
                 if character == "}" {
-                    fail("A “}” in the link has no “{” before it.")
+                    fail("A “}” in \(mode.whole) has no “{” before it.")
                     return
                 }
                 guard character == "{" else {
@@ -226,12 +252,12 @@ public struct QuicklinkTemplate: Sendable, Equatable {
                 }
                 let inside = rest.dropFirst()
                 guard let close = inside.firstIndex(of: "}") else {
-                    fail("A “{” in the link has no “}” after it.")
+                    fail("A “{” in \(mode.whole) has no “}” after it.")
                     return
                 }
                 let body = inside[..<close]
                 if body.contains("{") {
-                    fail("A “{” in the link has no “}” after it.")
+                    fail("A “{” in \(mode.whole) has no “}” after it.")
                     return
                 }
                 if !text.isEmpty { segments.append(.text(text)) }
@@ -261,7 +287,7 @@ public struct QuicklinkTemplate: Sendable, Equatable {
                 modifiers.append(modifier)
             }
             guard let match = head.wholeMatch(of: /([A-Za-z0-9_\-]+)((?:\s+[A-Za-z]+="[^"]*")*)\s*/) else {
-                fail("Fudge doesn't support “\(written)” in a quicklink.")
+                fail("Fudge doesn't support “\(written)” in \(mode.thing).")
                 return nil
             }
             let word = String(match.1)
@@ -269,9 +295,9 @@ public struct QuicklinkTemplate: Sendable, Equatable {
             for attribute in String(match.2).matches(of: /([A-Za-z]+)="([^"]*)"/) {
                 attributes[String(attribute.1)] = String(attribute.2)
             }
-            if word == "argument" {
+            if word == "argument", mode == .link {
                 guard Set(attributes.keys).isSubset(of: ["name", "default", "options"]) else {
-                    fail("Fudge doesn't support “\(written)” in a quicklink.")
+                    fail("Fudge doesn't support “\(written)” in \(mode.thing).")
                     return nil
                 }
                 let name = attributes["name"].map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
@@ -286,12 +312,17 @@ public struct QuicklinkTemplate: Sendable, Equatable {
                                 options: options))),
                     modifiers: modifiers)
             }
-            guard attributes.isEmpty, !Self.unsupportedName(word) else {
-                fail("Fudge doesn't support “\(written)” in a quicklink.")
+            guard attributes.isEmpty, !mode.unsupported.contains(word.lowercased()) else {
+                fail("Fudge doesn't support “\(written)” in \(mode.thing).")
                 return nil
             }
             if let dynamic = Dynamic(rawValue: word.lowercased()) {
                 return Placeholder(value: .dynamic(dynamic), modifiers: modifiers)
+            }
+            // A snippet has no fields: any other word is a problem.
+            guard mode == .link else {
+                fail("Fudge doesn't support “\(written)” in \(mode.thing).")
+                return nil
             }
             // Raycast's older form: a bare word is an argument with that name.
             return Placeholder(
@@ -311,10 +342,6 @@ public struct QuicklinkTemplate: Sendable, Equatable {
                 }
             }
             return parts
-        }
-
-        static func unsupportedName(_ word: String) -> Bool {
-            QuicklinkTemplate.unsupportedDynamic.contains(word.lowercased())
         }
 
         /// Adds an argument, or merges it into the one with the same name: the first default and options win.

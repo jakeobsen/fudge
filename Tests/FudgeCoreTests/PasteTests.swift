@@ -37,6 +37,10 @@ private final class FakePasteKeys: PasteKeyPoster {
         posted.append(pid)
         log.events.append("post")
     }
+
+    func postLeftArrow(_ count: Int, to pid: Int32) {
+        log.events.append("← ×\(count) to \(pid)")
+    }
 }
 
 @MainActor
@@ -111,11 +115,12 @@ private struct Rig {
     }
 
     func run(
-        _ text: String, closeMainWindow: Bool = true, frontmost: FrontmostApplication? = textEdit
+        _ text: String, closeMainWindow: Bool = true, leftArrows: Int = 0,
+        frontmost: FrontmostApplication? = textEdit
     ) async throws {
         try await paste.paste(
             PasteboardContents.forPaste(text: text, html: nil, file: nil), closeMainWindow: closeMainWindow,
-            origin: .userInitiated,
+            origin: .userInitiated, leftArrows: leftArrows,
             hideWindow: {
                 log.events.append("hide")
                 // The panel is really gone a moment later; ⌘V must wait for that.
@@ -135,6 +140,18 @@ private struct Rig {
     await rig.afterRestore()
     #expect(rig.log.events.last == "write user's clipboard")
     #expect(rig.pasteboard.plainText() == "user's clipboard")
+}
+
+@Test @MainActor func aSnippetsCursorIsPlacedWithLeftArrowsAfterThePaste() async throws {
+    let rig = Rig()
+    try await rig.run("Dear , thanks", leftArrows: 8)
+    #expect(rig.log.events == ["snapshot", "write Dear , thanks", "trust", "hide", "hidden", "post", "← ×8 to 200"])
+    #expect(rig.turns.isOwn(rig.pasteboard.changeCount), "Fudge's own write, which clipboard history skips")
+    await rig.afterRestore()
+    #expect(rig.turns.isOwn(rig.pasteboard.changeCount), "and so is the restore")
+    let none = Rig()
+    await #expect(throws: PasteError.noTarget) { try await none.run("x", leftArrows: 3, frontmost: nil) }
+    #expect(!none.log.events.contains { $0.hasPrefix("←") }, "with no app to paste into, no ← either")
 }
 
 @Test @MainActor func aPasteAndItsRestoreAreMarkedAsFudgesOwnForClipboardHistory() async throws {

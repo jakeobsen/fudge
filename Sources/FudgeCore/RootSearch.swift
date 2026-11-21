@@ -15,6 +15,10 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         case quicklink(Quicklink)
         /// Opens the Create Quicklink form.
         case createQuicklink
+        /// Opens Search Snippets (`SnippetList`).
+        case searchSnippets
+        /// Opens the Create Snippet form.
+        case createSnippet
         /// Runs one of Fudge's own commands (`BuiltInCommandGroup`).
         case builtInCommand(group: String, command: String)
     }
@@ -91,6 +95,22 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         title: "Create Quicklink",
         keywords: ["quicklink", "link", "bookmark", "new", "fudge"],
         kind: .createQuicklink
+    )
+
+    /// "Search Snippets": lists the saved snippets, to paste or copy one (SPEC-078 §3).
+    public static let searchSnippets = RootItem(
+        id: "fudge:search-snippets",
+        title: "Search Snippets",
+        keywords: ["snippet", "snippets", "text", "paste", "fudge"],
+        kind: .searchSnippets
+    )
+
+    /// "Create Snippet": opens Fudge's form for a new snippet.
+    public static let createSnippet = RootItem(
+        id: "fudge:create-snippet",
+        title: "Create Snippet",
+        keywords: ["snippet", "text", "new", "fudge"],
+        kind: .createSnippet
     )
 
     /// Whether opening the item counts in `LaunchHistory`. Quitting doesn't, so an empty search never puts
@@ -186,7 +206,9 @@ public enum RootRow: Sendable, Equatable, Identifiable {
 
 public enum RootSearch {
     /// fudge's own items, searched alongside applications and commands.
-    public static let builtInItems: [RootItem] = [.settings, .createQuicklink, .reloadExtensions, .quit]
+    public static let builtInItems: [RootItem] = [
+        .settings, .createQuicklink, .searchSnippets, .createSnippet, .reloadExtensions, .quit,
+    ]
 
     /// Applies `settings` to command items, an extension's or one of Fudge's own: disabled commands (or commands of
     /// disabled extensions or groups) are left out, and each command gets its alias.

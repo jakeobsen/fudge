@@ -93,6 +93,8 @@ public enum ActionTarget: Sendable, Equatable {
     case toggleQuickLook
     /// `Action.CreateQuicklink`, which the app performs itself: its Create Quicklink form, filled in (SPEC-052 B3).
     case createQuicklink(QuicklinkRequest)
+    /// `Action.CreateSnippet`, which the app performs itself: its Create Snippet form, filled in (SPEC-078 §3).
+    case createSnippet(SnippetRequest)
 }
 
 /// fudge's own actions on a root search item.
@@ -190,6 +192,10 @@ public enum RootActions {
                 [("Quit Fudge", enter, .open)]
             case .createQuicklink:
                 [("Create Quicklink", enter, .open)]
+            case .searchSnippets:
+                [("Search Snippets", enter, .open)]
+            case .createSnippet:
+                [("Create Snippet", enter, .open)]
             case .builtInCommand:
                 [("Open Command", enter, .open)]
             case .quicklink(let quicklink):
@@ -284,12 +290,16 @@ public enum ActionPanelReader {
     }
 
     /// What running an `Action` node does: a built-in action the app performs itself, else the node's `onAction`. A
-    /// `createQuicklink` without a `quicklink` it can read runs nothing of the app's.
+    /// `createQuicklink` without a `quicklink` it can read, or a `createSnippet` without a `snippet`, runs nothing of
+    /// the app's.
     static func target(of node: UINode) -> ActionTarget {
         switch node.string(builtInProp) {
         case "toggleQuickLook": return .toggleQuickLook
         case "createQuicklink":
             return QuicklinkRequest(json: node.props["quicklink"]).map(ActionTarget.createQuicklink) ?? .node(node.id)
+        case "createSnippet":
+            return node.props["snippet"].flatMap(SnippetRequest.init(json:)).map(ActionTarget.createSnippet)
+                ?? .node(node.id)
         default: return .node(node.id)
         }
     }
