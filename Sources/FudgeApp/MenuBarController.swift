@@ -326,8 +326,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             if let match = item.content?.item(matching: pick.path, title: pick.title) {
                 sendAction(item, session: session, node: match.node, event: pick.event)
             } else {
-                host.log(
-                    session, "info", "dropped a pick of \"\(pick.title)\" (\(pick.path)): it's not in the new menu")
+                host.log(session, "info", "dropped a pick of the item at \(pick.path): it's not in the new menu")
             }
         }
     }
@@ -339,9 +338,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func dropPicks(_ item: Active, session: String?) {
-        let titles = item.picks.map { "\"\($0.title)\"" }.joined(separator: ", ")
+        // By position only: a menu item's title can be the extension's data, such as clipboard contents.
+        let paths = item.picks.map(\.path.description).joined(separator: ", ")
         item.picks.removeAll()
-        host.log(session ?? item.id, "info", "dropped picks of \(titles): no instance is still to render them")
+        host.log(
+            session ?? item.id, "info", "dropped picks of the items at \(paths): no instance is still to render them")
     }
 
     private func sendAction(_ item: Active, session: String, node: Int, event: String) {
@@ -361,7 +362,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         } else if item.lifecycle.awaitsFirstRender {
             item.picks.append((target.item.path, target.item.title, type))
         } else {
-            host.log(item.id, "info", "dropped a pick of \"\(target.item.title)\": the command isn't running")
+            host.log(item.id, "info", "dropped a pick of the item at \(target.item.path): the command isn't running")
         }
     }
 

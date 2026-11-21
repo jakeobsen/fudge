@@ -265,6 +265,8 @@ final class LauncherModel {
     }
     /// The extension each session belongs to.
     @ObservationIgnored private var sessionExtensions: [String: String] = [:]
+    /// The installed extensions at the last read, for `Fudge.log`'s install lines; nil before the first.
+    @ObservationIgnored private var installStamps: [String: InstallStamp]?
 
     /// Unloads every running session of `extensionName`'s commands and waits until each has exited (the host stops a
     /// worker 1 s after `unload` at the latest), or 2 s. Turning the Extension Store off calls it before deleting the
@@ -327,7 +329,7 @@ final class LauncherModel {
         do {
             try history.save(to: paths.historyFile)
         } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't clear the search history: \(error)\n".utf8))
+            FudgeLog.error("couldn't clear the search history: \(error)")
         }
         refreshResults()
     }
@@ -358,6 +360,13 @@ final class LauncherModel {
     private func readInstalledExtensions() {
         // The bundled Extension Store is listed with them; its Enabled is off by default (`FudgeSettings`).
         installedExtensions = InstalledExtension.all(paths: paths, resources: Bundle.main.resourceURL)
+        // Installs, updates and removals since the last read go into `Fudge.log` (SPEC-124); the first read is the
+        // starting point.
+        let stamps = InstallStamp.of(installedExtensions, bundled: Bundle.main.resourceURL)
+        if let installStamps {
+            for line in InstallStamp.changes(from: installStamps, to: stamps) { FudgeLog.info(line) }
+        }
+        installStamps = stamps
         extensions = Dictionary(
             installedExtensions.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
         loadCommandMetadata(installedExtensions)
@@ -366,8 +375,14 @@ final class LauncherModel {
     /// Rebuilds root search and the menu bar from `settings.json`: commands that are disabled leave them, and the rest
     /// get their aliases and hotkeys. Settings calls it after each change.
     func applySettings(keepingSelection: Bool = false) {
+        let logLevel = settings.logLevel
         settings = FudgeSettings.load(from: paths.settingsFile)
         settings.offByDefault = InstalledExtension.offByDefault(installedExtensions)
+        if settings.logLevel != logLevel {
+            // At once, for running commands too (SPEC-124).
+            FudgeLog.setLevel(settings.logLevel)
+            if let host { try? host.send(.logLevel(settings.logLevel)) }
+        }
         panelReset.setting = settings.resetAfter
         let commands = installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
         windowLayouts = WindowLayoutStore.load(from: paths.windowLayoutsFile)
@@ -2508,8 +2523,7 @@ final class LauncherModel {
         do {
             try pruned.save(to: paths.settingsFile)
         } catch {
-            FileHandle.standardError.write(
-                Data("fudge: couldn't remove a deleted quicklink's settings: \(error)\n".utf8))
+            FudgeLog.error("couldn't remove a deleted quicklink's settings: \(error)")
         }
     }
 
@@ -3684,6 +3698,8 @@ final class LauncherModel {
         do {
             host = try ensureHost()
         } catch {
+            FudgeLog.error(
+                "couldn't launch \(extensionName)/\(command.name): the extension host didn't start: \(error)")
             if !quiet { screen = .failure(Failure(title: "Can't run extensions", message: String(describing: error))) }
             return String(describing: error)
         }
@@ -3711,6 +3727,7 @@ final class LauncherModel {
                     environment: prepared.environment)
             )
         } catch {
+            FudgeLog.error("couldn't launch \(extensionName)/\(command.name): \(error)")
             hostSessions.ended(session)
             sessionExtensions[session] = nil
             sessionCommands[session] = nil
@@ -3963,8 +3980,14 @@ final class LauncherModel {
                 cli: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil, paths: paths,
                 proxy: Self.systemProxy()
             ).merging([OAuthProviders.environmentKey: OAuthProviders.environmentValue]) { _, new in new }
-                .merging(trust.environment) { _, new in new })
+                .merging(trust.environment) { _, new in new },
+            log: { session, level, message, source in
+                FudgeLog.command(
+                    level, message, session: session, extensionName: source?.extensionName, command: source?.command)
+            })
         self.host = host
+        // Before any launch, so every command starts at the setting (SPEC-124).
+        try? host.send(.logLevel(settings.logLevel))
         let startedWithFlag = trust.arguments.contains(NodeTrust.systemCAFlag)
         let started = ContinuousClock.now
         Task { [weak self] in
@@ -4035,6 +4058,13 @@ final class LauncherModel {
     private func hostStopped(_ stopped: ExtensionHost) {
         guard host === stopped else { return }
         host = nil
+        // Each command running in it, by name, so its extension's failure is in the log too (SPEC-124).
+        let running = Set(sessionExtensions.keys).subtracting(Self.builtInSessions).compactMap { session in
+            sessionExtensions[session].map { "\($0)/\(sessionCommands[session] ?? "?")" }
+        }
+        FudgeLog.error(
+            "the extension host stopped"
+                + (running.isEmpty ? "" : ", ending \(running.sorted().joined(separator: ", "))"))
         hostSessions.endAll()
         background.removeAll()
         quietSessions.removeAll()
@@ -4091,9 +4121,11 @@ final class LauncherModel {
             case .render, .eventSettled:
                 menuBar.handle(message)
                 return
-            case .error(_, let text, let stack, _, _):
+            case .error(_, let text, let stack, let fatal, _):
                 menuBar.handle(message)
-                log(session, "error", stack ?? text)
+                FudgeLog.commandError(
+                    text, stack: stack, fatal: fatal, session: session, extensionName: sessionExtensions[session],
+                    command: sessionCommands[session])
                 return
             case .exit:
                 sessionExtensions[session] = nil
@@ -4188,7 +4220,9 @@ final class LauncherModel {
                     signIn.map { Failure($0, extensionName: sessionExtensions[session] ?? "") }
                         ?? Failure(title: "\(title) failed", message: message, details: stack, commandTitle: title))
             }
-            log(session, "error", stack ?? message)
+            FudgeLog.commandError(
+                message, stack: stack, fatal: fatal, session: session, extensionName: sessionExtensions[session],
+                command: sessionCommands[session])
 
         case .exit(let session, let reason):
             endSignIn(of: session)
@@ -4263,6 +4297,21 @@ final class LauncherModel {
             case "form.storeValues":
                 storeFormValues(params, session: session)
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
+            case "fudge.log":
+                // The Extension Store's failures, for `Fudge.log` (SPEC-124); no other extension writes there.
+                guard sessionExtensions[session] == ExtensionStore.extensionName,
+                    case .object(let values) = params, case .string(let message) = values["message"]
+                else {
+                    send(
+                        .rpcResult(
+                            session: session, id: id, result: nil,
+                            error: "Only the Extension Store writes to Fudge's log"))
+                    break
+                }
+                let level: LogLevel =
+                    if case .string(let name) = values["level"] { LogLevel(rawValue: name) ?? .error } else { .error }
+                FudgeLog.write(level, "Extension Store: \(message)")
+                send(.rpcResult(session: session, id: id, result: .null, error: nil))
             case "files.search":
                 // Search Files (SPEC-069): its own preferences say where, read now so a change applies at once.
                 let caller = sessionExtensions[session]
@@ -4311,11 +4360,21 @@ final class LauncherModel {
                         let result = try await signInCall(method, params, session: session, origin: origin)
                         send(.rpcResult(session: session, id: id, result: result, error: nil))
                     } catch let refusal as SignInRefusal {
+                        // The step and why, never a URL, token, code or response (SPEC-124). One stopped on purpose
+                        // (sign-in off, cancelled, timed out, refused) is a warning.
+                        FudgeLog.write(
+                            refusal.notice == nil ? .error : .warning,
+                            "sign-in: \(method) for \(sessionExtensions[session] ?? "an extension"): \(refusal)")
                         send(
                             .rpcResult(
                                 session: session, id: id, result: nil, error: refusal.message,
                                 notice: refusal.notice?.rawValue))
                     } catch {
+                        // Only the error's kind: its description could hold the call's params, such as a token.
+                        let failure = error as NSError
+                        FudgeLog.error(
+                            "sign-in: \(method) for \(sessionExtensions[session] ?? "an extension") failed: "
+                                + "\(failure.domain) \(failure.code)")
                         send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
                     }
                 }
@@ -4341,11 +4400,14 @@ final class LauncherModel {
                 }
             }
 
-        case .log(let session, let level, let message):
-            log(session, level, message)
+        case .log(let session, let level, let message, let source):
+            // Only from a host started without a log handler; the app's goes straight to the files.
+            FudgeLog.command(
+                LogLevel(rawValue: level) ?? .error, message, session: session,
+                extensionName: source?.extensionName, command: source?.command)
 
         case .protocolError(let message):
-            log("host", "error", message)
+            FudgeLog.error("the extension host refused a message: \(message)")
 
         case .pong, .eventSettled, .unknown:
             break
@@ -4469,8 +4531,9 @@ final class LauncherModel {
         )
     }
 
+    /// Fudge's own line about a command (the menu bar's), for `Fudge.log`.
     private func log(_ session: String, _ level: String, _ message: String) {
-        FileHandle.standardError.write(Data("[\(session)] \(level): \(message)\n".utf8))
+        FudgeLog.write(LogLevel(rawValue: level) ?? .error, "[\(session)] \(message)")
     }
 
     // MARK: - Sign-in (SPEC-056)

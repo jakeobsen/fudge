@@ -13,6 +13,19 @@ import type { UINode } from "./renderer/serialize.ts";
 
 export type CommandMode = "view" | "no-view" | "menu-bar";
 
+/** How much goes into the log files (SPEC-124): each level and every level above it. */
+export type LogLevel = "error" | "warning" | "info" | "debug";
+export const logLevels: readonly LogLevel[] = ["error", "warning", "info", "debug"];
+
+/** Whether a line at `level` is recorded while the setting is `setting`. */
+export function logs(level: LogLevel, setting: LogLevel): boolean {
+    return logLevels.indexOf(level) <= logLevels.indexOf(setting);
+}
+
+export function isLogLevel(value: unknown): value is LogLevel {
+    return typeof value === "string" && (logLevels as readonly string[]).includes(value);
+}
+
 export type LaunchProps = {
     arguments?: Record<string, string>;
     launchContext?: Record<string, unknown>;
@@ -23,6 +36,8 @@ export type LaunchProps = {
 /** App → host. */
 export type AppMessage =
     | { type: "ping"; id: number }
+    /** The Log level setting, for every command running now and every one launched after (SPEC-124). */
+    | { type: "logLevel"; level: LogLevel }
     | {
           type: "launch";
           session: string;
@@ -52,7 +67,7 @@ export type WorkerMessage =
     | RpcRequest
     /** `notice`: the error was a refusal on purpose (`notice.ts`), shown as a notice, not a failure. */
     | { type: "error"; message: string; stack?: string; fatal: boolean; notice?: string }
-    | { type: "log"; level: "info" | "error"; message: string }
+    | { type: "log"; level: LogLevel; message: string }
     /** Answers every `event`, once its handler has returned, or settled when it returned a promise. */
     | { type: "eventSettled" }
     | { type: "exit"; reason: "finished" | "unloaded" | "crashed" };
@@ -64,13 +79,19 @@ export type HostToWorker =
     | { type: "pop" }
     | { type: "unload" }
     | { type: "rpcResult"; id: number; result?: unknown; error?: string; notice?: string }
-    | { type: "toastAction"; toast: number; action: "primary" | "secondary" };
+    | { type: "toastAction"; toast: number; action: "primary" | "secondary" }
+    | { type: "logLevel"; level: LogLevel };
 
 /** Host → app. */
 export type HostMessage =
     | { type: "pong"; id: number }
     | { type: "protocolError"; message: string; id?: number }
-    | (WorkerMessage & { session: string });
+    /**
+     * A line for the command's log file. The host adds the extension's and the command's names from the launch, so
+     * the app can write it without looking the session up (SPEC-124).
+     */
+    | { type: "log"; session: string; level: LogLevel; message: string; extension?: string; command?: string }
+    | (Exclude<WorkerMessage, { type: "log" }> & { session: string });
 
 export type Parsed = { ok: true; message: AppMessage } | { ok: false; error: HostMessage };
 
@@ -94,6 +115,9 @@ export function parseAppMessage(line: string): Parsed {
         case "ping":
             if (id === undefined) return protocolError("`ping` needs a numeric `id`");
             return { ok: true, message: { type: "ping", id } };
+        case "logLevel":
+            if (!isLogLevel(value.level)) return protocolError("`logLevel` needs a `level` of `error`, `warning`, `info` or `debug`");
+            return { ok: true, message: { type: "logLevel", level: value.level } };
         case "launch": {
             const problem = needsSession();
             if (problem) return problem;

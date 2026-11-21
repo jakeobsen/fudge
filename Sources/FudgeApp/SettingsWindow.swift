@@ -297,7 +297,7 @@ final class SettingsModel {
         do {
             try permissions.save(to: paths.launchPermissionsFile)
         } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't save launch permissions: \(error)\n".utf8))
+            FudgeLog.error("couldn't save launch permissions: \(error)")
         }
         loadLaunchPermissions()
     }
@@ -376,7 +376,7 @@ final class SettingsModel {
                 change { QuicklinkCommands.prune(&$0, in: store) }
             }
         } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't delete the quicklink: \(error)\n".utf8))
+            FudgeLog.error("couldn't delete the quicklink: \(error)")
         }
         loadQuicklinks()
         quicklinksChanged()
@@ -497,7 +497,7 @@ final class SettingsModel {
         do {
             try store.save(to: file)
         } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't delete the snippet: \(error)\n".utf8))
+            FudgeLog.error("couldn't delete the snippet: \(error)")
         }
         loadSnippets()
         snippetsChanged()
@@ -568,7 +568,7 @@ final class SettingsModel {
 
     private func deleteWindowCommand(_ command: String, from store: WindowLayoutStore) {
         if case .failed(let message) = saveWindowLayouts(store) {
-            FileHandle.standardError.write(Data("fudge: couldn't delete it: \(message)\n".utf8))
+            FudgeLog.error("couldn't delete it: \(message)")
             return
         }
         let id = FudgeSettings.commandID(extension: BuiltInCommandGroup.windowManagement.name, command: command)
@@ -660,7 +660,7 @@ final class SettingsModel {
                 do {
                     try ExtensionStore.deleteRepository(paths)
                 } catch {
-                    FileHandle.standardError.write(Data("fudge: couldn't delete the store's list: \(error)\n".utf8))
+                    FudgeLog.error("couldn't delete the store's list: \(error)")
                 }
             }
             reload()
@@ -830,6 +830,29 @@ final class SettingsModel {
     func setEscapeBehavior(_ behavior: EscapeBehavior) {
         guard behavior != escapeBehavior, change({ $0.escapeBehavior = behavior }) else { return }
         _ = applyHotkeys()
+    }
+
+    // MARK: - Logs (SPEC-124)
+
+    /// How much goes into the log files (`logLevel`).
+    var logLevel: LogLevel { fudgeSettings.logLevel }
+
+    /// Takes effect at once, for running commands too: `applyHotkeys` applies `settings.json` to the launcher, which
+    /// tells `FudgeLog` and the extension host.
+    func setLogLevel(_ level: LogLevel) {
+        guard level != logLevel, change({ $0.logLevel = level }) else { return }
+        _ = applyHotkeys()
+    }
+
+    /// Opens the logs folder in Finder, creating it first when nothing has been logged yet.
+    func showLogs() {
+        let folder = FudgePaths.logsDirectory()
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        } catch {
+            FudgeLog.error("couldn't create \(folder.path): \(error)")
+        }
+        NSWorkspace.shared.open(folder)
     }
 
     // MARK: - Pop to Root Search
@@ -1063,7 +1086,7 @@ final class SettingsModel {
         do {
             try store.save(values, for: extensionName)
         } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't save preferences: \(error)\n".utf8))
+            FudgeLog.error("couldn't save preferences: \(error)")
         }
     }
 

@@ -146,10 +146,12 @@ public enum AppMessage: Sendable, Equatable, Encodable {
     case rpcResult(session: String, id: Int, result: JSONValue?, error: String?, notice: String? = nil)
     /// The user picked a toast's primary or secondary action.
     case toastAction(session: String, toast: Int, action: String)
+    /// The Log level, for every running command and every one launched after (SPEC-124).
+    case logLevel(LogLevel)
 
     enum Keys: String, CodingKey {
         case type, id, session, entry, mode, launchProps, preferences, environment, node, path, args, result, error
-        case toast, action, nodes, notice
+        case toast, action, nodes, notice, level
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -194,7 +196,23 @@ public enum AppMessage: Sendable, Equatable, Encodable {
             try container.encode(session, forKey: .session)
             try container.encode(toast, forKey: .toast)
             try container.encode(action, forKey: .action)
+        case .logLevel(let level):
+            try container.encode("logLevel", forKey: .type)
+            try container.encode(level.rawValue, forKey: .level)
         }
+    }
+}
+
+/// The names the host adds to a command's log line, from its launch's environment (SPEC-124).
+public struct LogSource: Sendable, Equatable {
+    public let extensionName: String?
+    public let command: String?
+
+    /// Nil when the line names neither.
+    public init?(extensionName: String?, command: String?) {
+        if extensionName == nil, command == nil { return nil }
+        self.extensionName = extensionName
+        self.command = command
     }
 }
 
@@ -209,7 +227,8 @@ public enum HostMessage: Sendable, Equatable, Decodable {
     /// `notice`: the error is a refusal on purpose (the `rpcResult` notice it came from), shown as a notice with no
     /// trace (`SignInNotice`), and `message` is the refusal's own.
     case error(session: String, message: String, stack: String?, fatal: Bool, notice: String? = nil)
-    case log(session: String, level: String, message: String)
+    /// A line for the command's log file, with the extension's and the command's names the host adds (SPEC-124).
+    case log(session: String, level: String, message: String, source: LogSource? = nil)
     /// The worker's answer to an `event`, once its handler has returned or its promise has settled.
     case eventSettled(session: String)
     case exit(session: String, reason: String)
@@ -218,6 +237,8 @@ public enum HostMessage: Sendable, Equatable, Decodable {
 
     enum Keys: String, CodingKey {
         case type, id, session, view, depth, method, params, message, stack, fatal, level, reason, items, notice
+        case extensionName = "extension"
+        case command
     }
 
     public init(from decoder: Decoder) throws {
@@ -258,7 +279,10 @@ public enum HostMessage: Sendable, Equatable, Decodable {
             self = .log(
                 session: try container.decode(String.self, forKey: .session),
                 level: try container.decode(String.self, forKey: .level),
-                message: try container.decode(String.self, forKey: .message)
+                message: try container.decode(String.self, forKey: .message),
+                source: LogSource(
+                    extensionName: try container.decodeIfPresent(String.self, forKey: .extensionName),
+                    command: try container.decodeIfPresent(String.self, forKey: .command))
             )
         case "eventSettled":
             self = .eventSettled(session: try container.decode(String.self, forKey: .session))
@@ -276,7 +300,8 @@ public enum HostMessage: Sendable, Equatable, Decodable {
     public var session: String? {
         switch self {
         case .render(let session, _, _), .slots(let session, _), .rpc(let session, _, _, _),
-            .error(let session, _, _, _, _), .log(let session, _, _), .eventSettled(let session), .exit(let session, _):
+            .error(let session, _, _, _, _), .log(let session, _, _, _), .eventSettled(let session),
+            .exit(let session, _):
             session
         case .pong, .protocolError, .unknown:
             nil
@@ -337,10 +362,12 @@ extension HostMessage {
             else { return nil }
             self = .error(session: session, message: message, stack: stack, fatal: fatal, notice: notice)
         case "log":
-            guard let session = string("session"), let level = string("level"), let message = string("message") else {
-                return nil
-            }
-            self = .log(session: session, level: level, message: message)
+            guard let session = string("session"), let level = string("level"), let message = string("message"),
+                let extensionName = optionalString("extension"), let command = optionalString("command")
+            else { return nil }
+            self = .log(
+                session: session, level: level, message: message,
+                source: LogSource(extensionName: extensionName, command: command))
         case "eventSettled":
             guard let session = string("session") else { return nil }
             self = .eventSettled(session: session)
@@ -384,7 +411,7 @@ extension AppMessage {
     /// The session the message is for, if any.
     public var session: String? {
         switch self {
-        case .ping:
+        case .ping, .logLevel:
             nil
         case .launch(let session, _, _, _, _, _), .event(let session, _, _, _), .slots(let session, _),
             .pop(let session), .unload(let session), .rpcResult(let session, _, _, _, _),

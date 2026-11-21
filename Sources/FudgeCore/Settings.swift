@@ -56,6 +56,8 @@ public struct FudgeSettings: Sendable, Equatable {
     public var showOnScreen: ShowOnScreen = .default
     /// What Esc does in the panel (`escapeBehavior`).
     public var escapeBehavior: EscapeBehavior = .default
+    /// How much goes into the log files (`logLevel`, SPEC-124): Errors by default.
+    public var logLevel: LogLevel = .default
     /// How often Fudge checks for a new release (`updateCheck`); nil until the user chooses, and nothing is checked
     /// until then. An unknown value reads as unset.
     public var updateCheck: UpdateCheckSetting?
@@ -250,6 +252,7 @@ public struct FudgeSettings: Sendable, Equatable {
         settings.resetAfter = PanelResetSetting(settingsValue: object["resetAfterSeconds"])
         settings.showOnScreen = ShowOnScreen(settingsValue: object["showOnScreen"])
         settings.escapeBehavior = EscapeBehavior(settingsValue: object["escapeBehavior"])
+        settings.logLevel = LogLevel(settingsValue: object["logLevel"])
         settings.updateCheck = UpdateCheckSetting(settingsValue: object["updateCheck"])
         settings.hyperkey = object["hyperkey"] as? Bool ?? false
         settings.hyperkeyQuickPress = object["hyperkeyQuickPress"] as? Bool ?? false
@@ -290,6 +293,7 @@ public struct FudgeSettings: Sendable, Equatable {
         object["resetAfterSeconds"] = resetAfter.settingsValue
         object["showOnScreen"] = showOnScreen.settingsValue
         object["escapeBehavior"] = escapeBehavior.settingsValue
+        object["logLevel"] = logLevel.settingsValue
         object["updateCheck"] = updateCheck?.rawValue
         object["hyperkey"] = hyperkey ? true : nil
         object["hyperkeyQuickPress"] = hyperkeyQuickPress ? true : nil

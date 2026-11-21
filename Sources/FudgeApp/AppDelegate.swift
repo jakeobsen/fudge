@@ -53,6 +53,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationSignal: DispatchSourceSignal?
 
     func applicationWillTerminate(_ notification: Notification) {
+        // The last log lines reach their files.
+        FudgeLog.flush()
         // Clipboard History's decrypted image copies don't outlive the run.
         model?.clipboardHistory.clearPreviews()
         // Nor does Hyperkey's Caps Lock mapping.
@@ -60,6 +62,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Fudge's own lines and every extension's go to their files from here on (SPEC-124); a snapshot run's go to
+        // its own support folder.
+        FudgeLog.start(
+            writer: LogWriter(
+                folder: FudgePaths.logsDirectory(),
+                header: "Fudge \(FudgeVersion.current) (\(FudgeVersion.describe))"),
+            level: FudgeSettings.load(from: paths.settingsFile).logLevel)
         NSApp.mainMenu = Self.mainMenu()
         // Before the extensions first load (in the model's `init`) and before the watcher starts, so it never sees
         // the move. Snapshot runs change nothing.
@@ -351,7 +360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let spec = FudgeSettings.load(from: paths.settingsFile).launcherHotkey
         if !registry.setLauncher(spec) {
-            FileHandle.standardError.write(Data("fudge: couldn't register the shortcut \(spec)\n".utf8))
+            FudgeLog.error("couldn't register the shortcut \(spec)")
         }
         installStatusItem()
         launcherHotkeyChanged()
@@ -379,7 +388,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try watcher.start()
         } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't watch \(watcher.directory.path): \(error)\n".utf8))
+            FudgeLog.error("couldn't watch \(watcher.directory.path): \(error)")
         }
         extensionsWatcher = watcher
 

@@ -2,16 +2,25 @@ import Foundation
 
 /// The running extension host: a Node process speaking the line protocol in HostProtocol.swift.
 ///
-/// Send with `send(_:)`; everything the host says arrives on `messages`.
-/// The host's stderr (its own diagnostics) is passed through to ours.
+/// Send with `send(_:)`; everything the host says arrives on `messages`, except commands' log lines when `log` is
+/// given: those go to it on the thread that reads the host, never through the main actor, so a command printing in a
+/// loop can't hold the launcher up (SPEC-124).
+/// The host's stderr (its own diagnostics) goes to ours, and to `Fudge.log` as errors.
 public final class ExtensionHost: Sendable {
+    /// Takes a command's log line: its session, level, message, and the names the host added.
+    public typealias LogHandler =
+        @Sendable (_ session: String, _ level: LogLevel, _ message: String, LogSource?) -> Void
+
     public let messages: AsyncStream<HostMessage>
     private let process: Process
     private let input: FileHandle
     private let writeLock = NSLock()
 
     /// `nodeArguments` go before the script, such as `--use-system-ca` (`NodeTrust`).
-    public init(node: URL, script: URL, nodeArguments: [String] = [], environment: [String: String] = [:]) throws {
+    public init(
+        node: URL, script: URL, nodeArguments: [String] = [], environment: [String: String] = [:],
+        log: LogHandler? = nil
+    ) throws {
         let process = Process()
         process.executableURL = node
         process.arguments = nodeArguments + [script.path]
@@ -20,7 +29,8 @@ public final class ExtensionHost: Sendable {
         let stdout = Pipe()
         process.standardInput = stdin
         process.standardOutput = stdout
-        process.standardError = FileHandle.standardError
+        let stderr = Pipe()
+        process.standardError = stderr
 
         let (messages, continuation) = AsyncStream.makeStream(of: HostMessage.self)
         let lines = LineSplitter()
@@ -32,7 +42,23 @@ public final class ExtensionHost: Sendable {
                 return
             }
             for line in lines.append(data) {
-                if let message = try? HostMessage(line: line) { continuation.yield(message) }
+                guard let message = try? HostMessage(line: line) else { continue }
+                if let log, case .log(let session, let level, let text, let source) = message {
+                    log(session, LogLevel(rawValue: level) ?? .error, text, source)
+                } else {
+                    continuation.yield(message)
+                }
+            }
+        }
+        let errorLines = LineSplitter()
+        stderr.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                return
+            }
+            for line in errorLines.append(data) {
+                FudgeLog.error("extension host: \(String(decoding: line, as: UTF8.self))")
             }
         }
         process.terminationHandler = { _ in continuation.finish() }

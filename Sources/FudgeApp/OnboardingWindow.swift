@@ -59,7 +59,7 @@ final class OnboardingModel {
         do {
             try onboarding.save(to: file)
         } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't save \(file.path): \(error)\n".utf8))
+            FudgeLog.error("couldn't save \(file.path): \(error)")
         }
     }
 }

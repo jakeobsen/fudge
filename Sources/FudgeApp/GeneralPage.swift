@@ -79,6 +79,19 @@ struct GeneralPage: View {
                     Text("Root search ranks what you open often first.")
                 }
             }
+            Section("Logs") {
+                SettingsPopupRow(
+                    "Log level",
+                    selection: Binding(get: { model.logLevel }, set: { model.setLogLevel($0) }),
+                    options: LogLevel.allCases.map { ($0, $0.title) },
+                    help: "What Fudge and your extensions write to their log files, one file each."
+                )
+                LabeledContent {
+                    Button("Show Logs") { model.showLogs() }
+                } label: {
+                    Text("Opens the folder with the log files in Finder.")
+                }
+            }
             BackupSection(model: model)
         }
         .formStyle(.grouped)

@@ -20,6 +20,18 @@ public struct FudgePaths: Sendable, Equatable {
         return FudgePaths(supportDirectory: applicationSupport.appendingPathComponent("fudge", isDirectory: true))
     }
 
+    /// Where the log files go (SPEC-124): `~/Library/Logs/Fudge`, or `$FUDGE_SUPPORT_DIR/Logs` when that is set, so
+    /// a throwaway run (tests, snapshot runs) never writes into the user's logs.
+    public static func logsDirectory(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        if let override = environment["FUDGE_SUPPORT_DIR"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true).appendingPathComponent("Logs", isDirectory: true)
+        }
+        let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+        return library.appendingPathComponent("Logs/Fudge", isDirectory: true)
+    }
+
     /// fudge's own settings.
     /// The certificates the Mac trusts, for a Node without `--use-system-ca` (`NodeTrust`).
     public var trustRootsFile: URL {

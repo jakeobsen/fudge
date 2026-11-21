@@ -85,8 +85,17 @@ export async function clearClipboardHistory(): Promise<void> {
     await callApp("clipboardHistory.clear", {});
 }
 
+/**
+ * Writes a line into `Fudge.log` (SPEC-124), for what the Extension Store does on Fudge's behalf: a failed install,
+ * update or uninstall with the build's output, and a list that couldn't be downloaded. Only the store may call it.
+ */
+export async function logToFudge(level: "error" | "warning" | "info", message: string): Promise<void> {
+    await callApp("fudge.log", { level, message });
+}
+
 export function createFudgeAppModule() {
     return Object.freeze({
+        logToFudge,
         searchFiles,
         listClipboardHistory,
         clipboardImage,

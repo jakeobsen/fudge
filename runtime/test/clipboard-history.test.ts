@@ -16,6 +16,7 @@ import {
     createFudgeAppModule,
     deleteClipboardEntry,
     listClipboardHistory,
+    logToFudge,
     pasteClipboardEntry,
     pinClipboardEntry,
     searchFiles,
@@ -169,6 +170,7 @@ test("the fudge:app module is frozen and holds every call", () => {
     const module = createFudgeAppModule();
     assert.ok(Object.isFrozen(module));
     assert.deepEqual(module, {
+        logToFudge,
         searchFiles,
         listClipboardHistory,
         clipboardImage,
