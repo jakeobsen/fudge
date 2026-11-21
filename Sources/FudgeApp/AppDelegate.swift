@@ -157,6 +157,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else if snapshot.settings {
                 snapshot.take(of: settingsWindow)
             } else {
+                // A `confirmAlert` (an extension's, or one an action asks for) is never begun as a sheet here: it's
+                // laid out off-screen and saved as the snapshot instead (`SnapshotSheet.laidOut`), answered Cancel.
+                model.confirm = { request, _ in
+                    snapshot.save(alert: Self.alert(for: request))
+                    return false
+                }
                 snapshot.take(of: panel, model: model)
             }
             return
@@ -603,12 +609,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// user-initiated call gets one (SPEC-045); the model answers background calls without asking.
     private func confirm(_ request: LauncherModel.AlertRequest, origin: CallOrigin) async -> Bool {
         if let answer = origin.unaskedAnswer { return answer }
-        let alert = NSAlert()
-        alert.messageText = request.title
-        alert.informativeText = request.message ?? ""
-        let primary = alert.addButton(withTitle: request.primary)
-        primary.hasDestructiveAction = request.destructive
-        alert.addButton(withTitle: request.dismiss)
+        let alert = Self.alert(for: request)
         if panel.isVisible {
             return await withCheckedContinuation { continuation in
                 alert.beginSheetModal(for: panel) { [weak self] response in
@@ -621,6 +622,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The plain `activate()` can be declined since macOS 14, which would leave the alert behind the app in front.
         NSApp.activateFromUserAction(origin: origin)
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// The alert a `confirmAlert` shows.
+    static func alert(for request: LauncherModel.AlertRequest) -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = request.title
+        alert.informativeText = request.message ?? ""
+        let primary = alert.addButton(withTitle: request.primary)
+        primary.hasDestructiveAction = request.destructive
+        alert.addButton(withTitle: request.dismiss)
+        return alert
     }
 
     /// An import replaced `settings.json`, the history and extensions' data: read everything again, and register
@@ -786,6 +798,16 @@ struct Snapshot {
     /// Whether `arguments` ask for a snapshot. `main.swift` decides the activation policy with it, before launch.
     static func isRequested(_ arguments: [String]) -> Bool {
         arguments.contains("--snapshot")
+    }
+
+    /// Saves a `confirmAlert` the run reached, laid out but never shown, in place of the panel, and quits. It's
+    /// saved a second later, as the Settings window's consent sheets are, once its icon has been drawn.
+    func save(alert: NSAlert) {
+        let sheet = SnapshotSheet.laidOut(alert)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            guard let view = sheet.contentView else { exit(1) }
+            save(view)
+        }
     }
 
     private func save(_ view: NSView) -> Never {

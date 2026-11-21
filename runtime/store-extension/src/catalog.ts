@@ -188,11 +188,12 @@ export function searchKeywords(entry: StoreEntry): string[] {
 
 export type AccessoryText = { text: string } | { tag: string };
 
-/** The author, the number of commands, and Installed or Update available. */
-export function accessoryTexts(entry: StoreEntry, state: Status): AccessoryText[] {
+/** The author, the number of commands, Not compatible when a cached scan says so, and Installed or Update available. */
+export function accessoryTexts(entry: StoreEntry, state: Status, notCompatible = false): AccessoryText[] {
     const accessories: AccessoryText[] = [];
     if (entry.author) accessories.push({ text: entry.author });
     accessories.push({ text: entry.commands.length === 1 ? "1 command" : `${entry.commands.length} commands` });
+    if (notCompatible) accessories.push({ tag: "Not compatible" });
     if (state === "installed") accessories.push({ tag: "Installed" });
     if (state === "update") accessories.push({ tag: "Update available" });
     return accessories;
