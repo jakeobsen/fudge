@@ -33,6 +33,8 @@ private final class FakeWindows: WindowSystem {
         switch change {
         case .fullScreen:
             applied.append("\(window) full screen")
+        case .exitFullScreen:
+            applied.append("\(window) out of full screen")
         case .frame(let position, let size):
             let at = position.map { "at \(Int($0.x)),\(Int($0.y))" }
             let sized = size.map { "size \(Int($0.width))x\(Int($0.height))" }

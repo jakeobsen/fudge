@@ -2076,7 +2076,7 @@ final class LauncherModel {
     func openFromHotkey(_ commandID: String) {
         guard let item = items.first(where: { $0.id == "command:\(commandID)" }) else { return }
         if case .builtInCommand(let group, let command) = item.kind {
-            runBuiltIn(item, group: group, command: command)
+            runBuiltIn(item, group: group, command: command, fromHotkey: true)
             return
         }
         guard case .command(let extensionName, let commandName, let mode, _) = item.kind else { return }
@@ -2198,7 +2198,7 @@ final class LauncherModel {
             recordLaunch(item)
             showQuicklinkForm(QuicklinkDraft())
         case .builtInCommand(let group, let command):
-            runBuiltIn(item, group: group, command: command)
+            runBuiltIn(item, group: group, command: command, fromHotkey: false)
         case .command(let extensionName, let commandName, _, _):
             guard let installed = extensions[extensionName],
                 let command = installed.manifest.commands.first(where: { $0.name == commandName })
@@ -2238,8 +2238,17 @@ final class LauncherModel {
     /// Records a root item's launch, unless it's one that never counts (`RootItem.recordsLaunch`: Quit).
     /// Runs one of Fudge's own commands (`BuiltInCommandGroup`), from root search or its hotkey, which goes no other
     /// way: each group's commands decide whether the panel shows.
-    private func runBuiltIn(_ item: RootItem, group: String, command: String) {
+    private func runBuiltIn(_ item: RootItem, group: String, command: String, fromHotkey: Bool) {
         recordLaunch(item)
+        if group == BuiltInCommandGroup.windowManagement.name, let command = WindowCommand(rawValue: command) {
+            // The window to move is the frontmost app's, which the panel never takes from it. A window command never
+            // shows the panel, and from root search (or with the panel up) the panel goes first.
+            if !fromHotkey { searchText = "" }
+            if isVisible() { hide() }
+            Task {
+                if let message = await SystemCalls.windowCommand(command) { showHUD(message) }
+            }
+        }
     }
 
     private func recordLaunch(_ item: RootItem) {

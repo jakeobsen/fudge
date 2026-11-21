@@ -35,7 +35,7 @@ public struct BuiltInCommandGroup: Sendable, Equatable, Identifiable {
     }
 
     /// Fudge's groups, which the Commands page lists above the extensions.
-    public static let all: [BuiltInCommandGroup] = []
+    public static let all: [BuiltInCommandGroup] = [.windowManagement]
 
     /// Whether `name` can name a group: `:` and a valid extension name, so it's never an extension's name.
     public static func isValidName(_ name: String) -> Bool {
