@@ -140,11 +140,27 @@ try {
         root.render(createElement(NavigationRoot, { root: view, handle: navigation }));
     } else {
         await (command as (props: LaunchProps) => unknown)(launchProps);
+        await flushOutput();
         post({ type: "exit", reason: "finished" });
     }
 } catch (error) {
     report(error, true);
+    await flushOutput();
     post({ type: "exit", reason: "crashed" });
+}
+
+/**
+ * Waits until the host has read everything the command wrote to stdout and stderr. They reach the host on their own
+ * channel, so without this a no-view command's last `console.log` could arrive after its `exit`, when the host has
+ * already stopped the worker. A write's callback runs once the host has taken the data; capped at a second.
+ */
+async function flushOutput(): Promise<void> {
+    const flushed = (stream: NodeJS.WriteStream) => new Promise<void>((resolve) => stream.write("", () => resolve()));
+    await Promise.race([
+        Promise.all([flushed(process.stdout), flushed(process.stderr)]),
+        // Not unref'd: if the host never reads a stream, the worker still reports its exit after a second.
+        new Promise((resolve) => setTimeout(resolve, 1000)),
+    ]);
 }
 
 function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
