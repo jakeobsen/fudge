@@ -111,14 +111,19 @@ extension WindowManager {
 }
 
 extension BuiltInCommandGroup {
-    /// Window Management: one command per `WindowCommand`, named by its raw value.
+    /// Window Management: one command per `WindowCommand`, named by its raw value, then Switch Windows
+    /// (`SwitchWindowsList`).
     public static let windowManagement = BuiltInCommandGroup(
         name: ":window-management", title: "Window Management",
         commands: WindowCommand.allCases.map { command in
             let (title, keywords, symbol) = command.presentation
             return BuiltInCommand(
                 name: command.rawValue, title: title, keywords: keywords + ["window"], symbol: symbol)
-        })
+        } + [
+            BuiltInCommand(
+                name: SwitchWindowsList.commandName, title: SwitchWindowsList.title,
+                keywords: ["switcher", "focus", "windows", "window"], symbol: "macwindow.on.rectangle")
+        ])
 }
 
 extension WindowCommand {
