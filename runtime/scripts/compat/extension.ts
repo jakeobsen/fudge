@@ -9,7 +9,8 @@ import { gaps, isExtensionSource, toJavaScript, uses, type Gap, type Transform }
 
 /**
  * APIs left out of fudge on purpose, by category. AI and the Browser Extension depend on Raycast's servers. OAuth
- * (`OAuth.PKCEClient` and the @raycast/utils exports built on it) is left out by the architect's decision D-50.
+ * (`OAuth.PKCEClient` and the @raycast/utils exports built on it) signs in only to `@raycast/utils`' seven built-in
+ * providers, through a sign-in server (decisions D-50 and D-63), which a scan can't tell from an extension's own.
  */
 export const byDesign: Record<string, { api: RegExp; utils?: string[] }> = {
     AI: { api: /^AI(\.|$)/ },

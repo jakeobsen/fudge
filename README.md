@@ -97,7 +97,7 @@ An extension running in the background, such as a menu bar refresh, never interr
 
 - **Export…** asks for a password (at least 8 characters), then where to save `fudge-backup-<date>.fudgebackup`. The file holds Fudge's settings (hotkeys, aliases, which commands are on), your quicklinks, the answers about extensions opening other extensions, root search's ranking, every extension's preferences and data, and the list of installed extensions. It's always encrypted with your password, because extensions keep passwords and tokens in there; Fudge can't recover a forgotten one. The file opens only in Fudge, not with Apple's `aea` tool. Extension data over 100 MB in total leaves out the biggest extensions' data, and the export says which.
 - **Import…** (also **Restore from a Backup…** on the Welcome screen Fudge shows the first time) asks for the file and its password, shows what's in it, and replaces your settings and the data of the extensions in the backup; other extensions keep theirs. The summary also lists the backup's extensions that changed since it was made (a new version, an update from the Extension Store, or installed another way); they're imported all the same. It then lists the extensions in the backup that aren't installed here, so you can reinstall them. It installs nothing itself.
-- **The extensions themselves aren't in a backup**, only the list, and neither are caches, the exchange rates or the Extension Store's switch (turn it on again yourself).
+- **The extensions themselves aren't in a backup**, only the list, and neither are caches, the exchange rates, your sign-ins, the sign-in server or the Extension Store's switch (set these again yourself).
 - Before importing, Fudge saves what it's about to replace in `backups/` in its support folder (`~/Library/Application Support/fudge/backups`), readable by you only. It keeps the last 3. You can import one of those with **Import…**; it needs no password.
 
 ### Quicklinks
@@ -131,6 +131,12 @@ In the **Extension Store** command, search the extensions, or pick a category in
 - ⌘D shows an extension's details and README. ⌘R updates the list, which otherwise happens when you open the store and the list is a day old.
 - The store needs Git. If it's missing, install Apple's Command Line Tools: run `xcode-select --install` in Terminal.
 - It never touches extensions you installed with `fudge build` yourself.
+
+### Signing in
+
+Some extensions sign in to a service, such as GitHub or Linear. Pick a sign-in server under **Settings… → Sign-in**: **Fudge's sign-in server**, or **Your own server…**. A company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth). When an extension needs to sign in, Fudge shows **Sign in to** the service, and ↵ continues in your browser. Sign-ins are kept in your Keychain, and the Sign-in page lists them, each with **Sign Out**. Changing the server signs you out of everything.
+
+An extension that takes a token in its settings (⌘⇧,) works without signing in.
 
 ### Menu bar commands
 
