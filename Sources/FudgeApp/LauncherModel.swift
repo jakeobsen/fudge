@@ -2475,7 +2475,7 @@ final class LauncherModel {
                 showFailureToast("Can't delete \(quicklink.name)", message: String(describing: error))
                 return
             }
-            pruneQuicklinkSettings(keeping: store.quicklinks)
+            pruneQuicklinkSettings(in: store)
             applySettings()
             commandHotkeysChanged()
         }
@@ -2483,9 +2483,9 @@ final class LauncherModel {
 
     /// Takes a deleted quicklink's alias, hotkey and Enabled out of `settings.json` (`QuicklinkCommands.prune`).
     /// A `settings.json` Fudge can't read stays as it is: the leftovers do no harm, since no quicklink has that id.
-    private func pruneQuicklinkSettings(keeping quicklinks: [Quicklink]) {
+    private func pruneQuicklinkSettings(in store: QuicklinkStore) {
         var pruned = FudgeSettings.load(from: paths.settingsFile)
-        guard QuicklinkCommands.prune(&pruned, keeping: quicklinks) else { return }
+        guard QuicklinkCommands.prune(&pruned, in: store) else { return }
         do {
             try pruned.save(to: paths.settingsFile)
         } catch {
@@ -2835,6 +2835,8 @@ final class LauncherModel {
     @ObservationIgnored private var menuCache = MenuItemsCache<MenuItemsListing>()
     /// Counts reads, so only the latest one is drawn.
     @ObservationIgnored private var menuReads = 0
+    /// Stops the read running for the list on screen when the list goes, so the next read of that app needn't wait.
+    @ObservationIgnored private var menuReadCancel = MenuReadCancel()
     /// The panel hid with Search Menu Items on screen: the menus are read again when it shows.
     @ObservationIgnored private var menuItemsStale = false
     /// A row's item is being found to run: another ↵ meanwhile (a key repeat) runs nothing, so it's pressed once.
@@ -2906,8 +2908,11 @@ final class LauncherModel {
             drawMenuItems(MenuItemsList.loading())
         }
         let source = menuItemsAccess.source
+        menuReadCancel.cancel()
+        let cancel = MenuReadCancel()
+        menuReadCancel = cancel
         Task {
-            let result = await Self.offMain { source.read(target, deadline: .milliseconds(1500)) }
+            let result = await Self.offMain { source.read(target, deadline: .milliseconds(1500), cancel: cancel) }
             guard read == menuReads, menuItemsOnScreen else { return }
             switch result {
             case .listing(let listing):
@@ -2954,6 +2959,7 @@ final class LauncherModel {
     private func menuItemsHidden() {
         guard menuItemsOnScreen else { return }
         menuItemsGeneration.dismissed()
+        menuReadCancel.cancel()
         menuItemsStale = true
         menuReads += 1
         menuTarget = nil
@@ -2965,6 +2971,7 @@ final class LauncherModel {
     private func menuItemsLeft() {
         guard !menuItemsOnScreen, menuListing != nil || menuTarget != nil || menuItemsStale else { return }
         menuItemsGeneration.dismissed()
+        menuReadCancel.cancel()
         menuReads += 1
         menuTarget = nil
         menuListing = nil
@@ -3011,6 +3018,8 @@ final class LauncherModel {
                     showHUD(MenuItemsList.gone)
                 case .pressed(.failed):
                     showHUD("\(target.name) didn't run that menu item.")
+                case .disabled:
+                    showFailureToast(MenuItemsList.turnedOff)
                 case .gone:
                     showFailureToast(MenuItemsList.gone)
                     if menuListing === listing { readMenuItems() }
@@ -3978,6 +3987,13 @@ final class LauncherModel {
         }
     }
 
+    /// Closes every panel over the command on screen, without telling the command anything: it has ended.
+    private func closePanelsOfEndedCommand() {
+        actionPanel = nil
+        dropdownPanel = nil
+        datePanel = nil
+    }
+
     private func hostStopped(_ stopped: ExtensionHost) {
         guard host === stopped else { return }
         host = nil
@@ -3985,6 +4001,13 @@ final class LauncherModel {
         background.removeAll()
         quietSessions.removeAll()
         menuBar.hostStopped()
+        if case .command(let command) = screen,
+            EndedCommand.closesPanels(
+                screenSession: command.session, isBuiltIn: Self.builtInSessions.contains(command.session),
+                event: .hostStopped)
+        {
+            closePanelsOfEndedCommand()
+        }
         if case .command(var command) = screen, command.failure == nil,
             !Self.builtInSessions.contains(command.session)
         {
@@ -4151,8 +4174,14 @@ final class LauncherModel {
                     )
                 }
             } else if case .command(var command) = screen, command.session == session, reason != "unloaded" {
-                // Its ⌘K panel or date picker goes with it, so nothing in them can be picked for a command that ended.
-                actionPanel = nil
+                // Its panels go with it (⌘K, a dropdown's, a form's calendar), so nothing in them can be picked for a
+                // command that ended (`EndedCommand`).
+                if EndedCommand.closesPanels(
+                    screenSession: command.session, isBuiltIn: Self.builtInSessions.contains(command.session),
+                    event: .exited(session: session, reason: reason))
+                {
+                    closePanelsOfEndedCommand()
+                }
                 if command.failure == nil {
                     command.failure = Failure(
                         title: "\(command.title) stopped", message: "The command exited (\(reason)).")

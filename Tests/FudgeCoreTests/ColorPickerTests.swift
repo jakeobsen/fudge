@@ -25,15 +25,13 @@ private func bytes(_ color: PickedColor) -> [Int] {
 }
 
 @Test func eachFormatWritesAlphaWhenTheColorHasSome() {
-    var half = blue
-    half.alpha = 0.5
+    let half = PickedColor(red: blue.red, green: blue.green, blue: blue.blue, alpha: 0.5)
     #expect(ColorFormat.hex.string(for: half) == "#3A7BD580")
     #expect(ColorFormat.rgb.string(for: half) == "rgba(58, 123, 213, 0.502)")
     #expect(ColorFormat.hsl.string(for: half) == "hsla(215, 65%, 53%, 0.502)")
     #expect(ColorFormat.swiftUI.string(for: half) == "Color(red: 0.227, green: 0.482, blue: 0.835, opacity: 0.502)")
     #expect(ColorFormat.uiColor.string(for: half) == "UIColor(red: 0.227, green: 0.482, blue: 0.835, alpha: 0.502)")
-    var clear = blue
-    clear.alpha = 0
+    let clear = PickedColor(red: blue.red, green: blue.green, blue: blue.blue, alpha: 0)
     #expect(ColorFormat.hex.string(for: clear) == "#3A7BD500")
     #expect(ColorFormat.rgb.string(for: clear) == "rgba(58, 123, 213, 0)")
 }
@@ -206,6 +204,27 @@ private func temporaryFile() throws -> URL {
     #expect(RecentColorStore.limit == 32)
     #expect(store.colors.first?.id == "c39")
     #expect(store.colors.last?.id == "c8", "the oldest eight went")
+}
+
+@Test func theCapCountsOnlyValidColorsAndKeepsTheOthers() throws {
+    let file = try temporaryFile()
+    var entries = (0..<32).map { index in
+        #"{"id":"c\#(index)","red":\#(Double(index) / 255),"green":0,"blue":0}"#
+    }
+    // Hand-edited entries that aren't colors, among the 32 valid ones.
+    entries.insert(#"{"id":"bad-1","red":"x"}"#, at: 3)
+    entries.append(#"{"note":"mine"}"#)
+    try #"{"colors":[\#(entries.joined(separator: ","))]}"#.write(to: file, atomically: true, encoding: .utf8)
+    var store = RecentColorStore.load(from: file)
+    #expect(store.colors.count == 32)
+    store.add(PickedColor(red: 1, green: 1, blue: 1), id: "new", now: now)
+    try store.save(to: file)
+    let read = RecentColorStore.load(from: file)
+    #expect(read.colors.count == RecentColorStore.limit, "32 valid colors, not 32 entries")
+    #expect(read.colors.first?.id == "new")
+    #expect(read.colors.last?.id == "c30", "only the oldest valid color went")
+    let json = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]
+    #expect((json?["colors"] as? [Any])?.count == 34, "both invalid entries are kept")
 }
 
 @Test func colorsAreRemovedOneAtATimeOrCleared() {
