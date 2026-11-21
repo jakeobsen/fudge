@@ -77,8 +77,9 @@ struct CommandsPage: View {
         case asset(String?, InstalledExtension)
     }
 
-    /// Fudge's own groups first, then the quicklinks (`SettingsModel.commandGroups`), then the extensions, as far as
-    /// they match the search. A group or extension that matches keeps all its commands.
+    /// Fudge's own groups first (with the saved window positions and layouts), then the quicklinks
+    /// (`SettingsModel.commandGroups`), then the extensions, as far as they match the search. A group or extension
+    /// that matches keeps all its commands.
     private var rows: [GroupRow] {
         // The quicklinks' group shows once there's a quicklink.
         let groups = model.commandGroups.filter { !$0.commands.isEmpty }.map { group in

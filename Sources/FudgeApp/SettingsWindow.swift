@@ -16,6 +16,7 @@ final class SettingsModel {
     static let permissionsPage = ":permissions"
     static let quicklinksPage = ":quicklinks"
     static let snippetsPage = ":snippets"
+    static let windowManagementPage = ":window-management"
     static let signInPage = ":sign-in"
     /// Every installed extension, for the Commands page.
     private(set) var allExtensions: [InstalledExtension] = []
@@ -73,9 +74,11 @@ final class SettingsModel {
         loadLaunchPermissions()
         loadQuicklinks()
         loadSnippets()
+        loadWindowLayouts()
         loadSignIns()
         if selected != Self.generalPage, selected != Self.commandsPage, selected != Self.permissionsPage,
             selected != Self.quicklinksPage, selected != Self.snippetsPage, selected != Self.signInPage,
+            selected != Self.windowManagementPage,
             !extensions.contains(where: { $0.manifest.name == selected })
         {
             select(Self.generalPage)
@@ -88,6 +91,7 @@ final class SettingsModel {
         selected = page
         if page == Self.quicklinksPage || page == Self.commandsPage { loadQuicklinks() }
         if page == Self.snippetsPage { loadSnippets() }
+        if page == Self.windowManagementPage || page == Self.commandsPage { loadWindowLayouts() }
     }
 
     /// Show Onboarding Again: a recording here ends first, since onboarding has its own hotkey step.
@@ -102,16 +106,16 @@ final class SettingsModel {
         Set(
             allExtensions.flatMap { item in
                 item.manifest.commands.map { FudgeSettings.commandID(extension: item.manifest.name, command: $0.name) }
-            } + BuiltInCommandGroup.commandIDs() + QuicklinkCommands.commandIDs(quicklinks))
+            } + BuiltInCommandGroup.commandIDs(in: builtInGroups) + QuicklinkCommands.commandIDs(quicklinks))
     }
 
     /// What the Commands page's search starts with: a snapshot run's `--search`, else nothing.
     @ObservationIgnored var commandsSearch: String?
 
-    /// Fudge's own command groups, then the quicklinks as a group of their own (`QuicklinkCommands.group`), as the
-    /// Commands page lists them and conflicts name them.
+    /// Fudge's own command groups (`builtInGroups`), then the quicklinks as a group of their own
+    /// (`QuicklinkCommands.group`), as the Commands page lists them and conflicts name them.
     var commandGroups: [BuiltInCommandGroup] {
-        BuiltInCommandGroup.all + [QuicklinkCommands.group(quicklinks)]
+        builtInGroups + [QuicklinkCommands.group(quicklinks)]
     }
 
     // MARK: - General
@@ -361,6 +365,90 @@ final class SettingsModel {
         }
         loadSnippets()
         snippetsChanged()
+    }
+
+    // MARK: - Window Management
+
+    /// The custom positions and saved layouts (SPEC-094), for the Window Management and Commands pages. Read again
+    /// whenever either page is shown or the window becomes key, so a layout saved in the launcher shows.
+    private(set) var windowLayouts = WindowLayoutStore()
+    /// `window-layouts.json` holds something Fudge can't read, so the page can't change it.
+    private(set) var windowLayoutsUnreadable = false
+    /// In a snapshot run, the position sheet the Window Management page shows in place, never as a sheet
+    /// (`--edit-position`).
+    var snapshotPositionDraft: PositionDraft?
+
+    var windowPositions: [CustomWindowPosition] { WindowLayoutStore.byName(windowLayouts.positions, \.name) }
+    var savedLayouts: [SavedWindowLayout] { WindowLayoutStore.byName(windowLayouts.layouts, \.name) }
+
+    /// Fudge's command groups with the user's own window commands, as the Commands page lists them.
+    var builtInGroups: [BuiltInCommandGroup] { BuiltInCommandGroup.all(with: windowLayouts) }
+
+    func loadWindowLayouts() {
+        let file = paths.windowLayoutsFile
+        windowLayouts = WindowLayoutStore.load(from: file)
+        windowLayoutsUnreadable = !WindowLayoutStore.isWritable(file)
+    }
+
+    enum WindowLayoutSave: Equatable {
+        case saved
+        case positionProblems(PositionDraft.Problems)
+        case nameProblem(String)
+        case failed(String)
+    }
+
+    /// Saves the sheet's position, after reading the file again: as a new one, or in place of the one edited.
+    func savePosition(_ draft: PositionDraft) -> WindowLayoutSave {
+        var store = WindowLayoutStore.load(from: paths.windowLayoutsFile)
+        let problems = draft.problems(among: store.positions)
+        guard problems.isEmpty else { return .positionProblems(problems) }
+        draft.save(into: &store)
+        return saveWindowLayouts(store)
+    }
+
+    /// Renames a layout, after reading the file again.
+    func renameLayout(_ draft: LayoutDraft) -> WindowLayoutSave {
+        var store = WindowLayoutStore.load(from: paths.windowLayoutsFile)
+        if let problem = draft.problem(among: store.layouts) { return .nameProblem(problem) }
+        draft.save(into: &store)
+        return saveWindowLayouts(store)
+    }
+
+    /// Deletes a position, with its alias, hotkey and Enabled in `settings.json`, since no command has its id again.
+    func deletePosition(id: String) {
+        var store = WindowLayoutStore.load(from: paths.windowLayoutsFile)
+        guard let position = store.position(id: id) else { return }
+        store.removePosition(id: id)
+        deleteWindowCommand(position.commandName, from: store)
+    }
+
+    /// Deletes a layout, with its command's settings, as `deletePosition` does.
+    func deleteLayout(id: String) {
+        var store = WindowLayoutStore.load(from: paths.windowLayoutsFile)
+        guard let layout = store.layout(id: id) else { return }
+        store.removeLayout(id: id)
+        deleteWindowCommand(layout.commandName, from: store)
+    }
+
+    private func deleteWindowCommand(_ command: String, from store: WindowLayoutStore) {
+        if case .failed(let message) = saveWindowLayouts(store) {
+            FileHandle.standardError.write(Data("fudge: couldn't delete it: \(message)\n".utf8))
+            return
+        }
+        let id = FudgeSettings.commandID(extension: BuiltInCommandGroup.windowManagement.name, command: command)
+        if fudgeSettings.commands[id] != nil, change({ $0.commands[id] = nil }) { _ = applyHotkeys() }
+    }
+
+    /// Writes the file; then root search reads it again and the hotkeys follow (`applyHotkeys`).
+    private func saveWindowLayouts(_ store: WindowLayoutStore) -> WindowLayoutSave {
+        defer { loadWindowLayouts() }
+        do {
+            try store.save(to: paths.windowLayoutsFile)
+        } catch {
+            return .failed(String(describing: error))
+        }
+        _ = applyHotkeys()
+        return .saved
     }
 
     // MARK: - The launcher's hotkey
@@ -969,6 +1057,7 @@ final class SettingsWindowController {
                     model.refreshLoginItem()
                     model.loadQuicklinks()
                     model.loadSnippets()
+                    model.loadWindowLayouts()
                 }
             }
         }
@@ -1026,6 +1115,7 @@ struct SettingsView: View {
                 Label("Commands", systemImage: "command").tag(SettingsModel.commandsPage)
                 Label("Quicklinks", systemImage: "link").tag(SettingsModel.quicklinksPage)
                 Label("Snippets", systemImage: "doc.text").tag(SettingsModel.snippetsPage)
+                Label("Window Management", systemImage: "macwindow").tag(SettingsModel.windowManagementPage)
                 Label("Sign-in", systemImage: "person.badge.key").tag(SettingsModel.signInPage)
                 Section("Extensions") {
                     ForEach(model.extensions, id: \.manifest.name) { installed in
@@ -1049,6 +1139,8 @@ struct SettingsView: View {
                     QuicklinksPage(model: model)
                 } else if model.selected == SettingsModel.snippetsPage {
                     SnippetsPage(model: model)
+                } else if model.selected == SettingsModel.windowManagementPage {
+                    WindowManagementPage(model: model)
                 } else if model.selected == SettingsModel.signInPage {
                     SignInPage(model: model)
                 } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {

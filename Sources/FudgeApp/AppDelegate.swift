@@ -52,8 +52,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let files = snapshot.foundFiles.map { FixedFileQuery.load($0, home: FileSearchOptions.home()) } ?? []
             model.fileSearch = FileSearch { FixedFileQuery(files) }
             model.templateClipboard = { nil }
+            // Nor the window list or the Accessibility API: Switch Windows gets `--windows`' made-up windows.
+            model.windowSwitching = FixedWindowSwitching(file: snapshot.windows)
             // Nor do the System commands do anything: no lock, sleep, restart, Apple Event, eject, hide or quit.
             model.systemActions = InertSystemActions()
+            // Nor the windows: Save Layout… gets `--layout-windows`' made-up ones, and nothing is moved.
+            model.windowLayoutActions = .inert(windows: snapshot.layoutWindows)
             // Nor the clipboard or the Keychain: Clipboard History gets `--clipboard-entries`' made-up entries.
             if let file = snapshot.clipboardEntries {
                 model.clipboardHistory = ClipboardHistoryService(
@@ -63,6 +67,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         panel = LauncherPanel(content: LauncherView(model: model))
         settingsModel = SettingsModel(paths: paths)
+        if let editing = Snapshot(arguments: CommandLine.arguments)?.editPosition {
+            settingsModel.snapshotPositionDraft =
+                settingsModel.windowPositions.first { $0.name == editing }.map(PositionDraft.init(editing:))
+                ?? PositionDraft()
+        }
         settingsModel.launcherHotkey = FudgeSettings.load(from: paths.settingsFile).launcherHotkey
         // Snapshots and tests never register fudge as a login item; only the real app talks to the system.
         settingsModel.loginItem =
@@ -118,6 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.quicklinksChanged = { [weak self] in _ = self?.applyCommandHotkeys() }
         model.commandHotkeysChanged = { [weak self] in self?.registerCommandHotkeys() }
         settingsModel.snippetsChanged = { [weak self] in self?.model.reloadSnippetList() }
+        model.windowLayoutsChanged = { [weak self] in self?.settingsModel.loadWindowLayouts() }
         settingsModel.clipboardHistoryChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.deleteClipboardHistory = { [weak self] in self?.model.clipboardHistory.deleteAll() }
         settingsModel.stopExtensionStore = { [weak self] in
@@ -170,6 +180,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         SystemCalls.accessibilitySettingsOffer = AccessibilitySettingsOffer(
             panel: panel, restoreKeyboard: { [weak self] in self?.model.restoreKeyboard() })
+        // Switch Windows reads the system's windows; it notes which apps become active from now on.
+        model.windowSwitching = SystemWindowSwitching(accessibility: { SystemCalls.mayReadWindows() })
 
         let quickLook = QuickLookPreview()
         quickLook.launcherLevel = panel.level
@@ -662,7 +674,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// `--search <text>` types into its search field, `--dropdown <value>` picks a value in its search bar dropdown,
 /// `--actions` presses ⌘K, `--pick-date <title>` runs the Action.PickDate titled so (after ⌘K with `--actions`, else
 /// straight), and `--open-dropdown` presses ⌘P, or in a Form opens its first Dropdown (`--open-tags`: its first
-/// TagPicker; `--open-date`: its first DatePicker's calendar).
+/// TagPicker; `--open-date`: its first DatePicker's calendar). `--windows <file>` gives Switch Windows made-up
+/// windows.
 /// `--snapshot <file.png> --settings [<extension>]` renders the Settings window instead, with a fake login item
 /// whose status `--login-item <status>` sets (`enabled`, `requiresApproval`, `notRegistered`, `notFound`), and a fake
 /// Accessibility answer that `--accessibility allowed|missing` sets (`missing` by default). `--settings :permissions`
@@ -711,6 +724,15 @@ struct Snapshot {
     let clipboardEntries: URL?
     /// `--update-available <version>` (`0.9.0` or `v0.9.0`): an update check found that release.
     let updateAvailable: Release?
+    /// `--windows <file>`: Switch Windows' made-up windows (`FixedWindowSystem`). Snapshots never read the window
+    /// list or the Accessibility API, so without it Switch Windows shows that it needs Accessibility.
+    let windows: URL?
+    /// `--layout-windows <file>`: the windows Save Layout… reads, a JSON array of `window-layouts.json`'s window
+    /// entries. Snapshots never read or move real windows, so without it there are none.
+    let layoutWindows: [SavedWindow]
+    /// `--edit-position [<name>]`: the Window Management page shows its position sheet in place, editing that
+    /// position, or a new one.
+    let editPosition: String?
 
     init?(arguments: [String]) {
         guard let index = arguments.firstIndex(of: "--snapshot"), index + 1 < arguments.count else { return nil }
@@ -750,6 +772,16 @@ struct Snapshot {
         foundFiles = value("--found-files").map { URL(fileURLWithPath: $0) }
         clipboardEntries = value("--clipboard-entries").map { URL(fileURLWithPath: $0) }
         updateAvailable = value("--update-available").flatMap { Release(tag: $0.hasPrefix("v") ? $0 : "v" + $0) }
+        windows = value("--windows").map { URL(fileURLWithPath: $0) }
+        layoutWindows =
+            value("--layout-windows").flatMap { try? Data(contentsOf: URL(fileURLWithPath: $0)) }
+            .flatMap { try? JSONDecoder().decode(JSONValue.self, from: $0) }.map(SavedWindow.list(from:)) ?? []
+        if let index = arguments.firstIndex(of: "--edit-position") {
+            let next = index + 1
+            editPosition = next < arguments.count && !arguments[next].hasPrefix("--") ? arguments[next] : ""
+        } else {
+            editPosition = nil
+        }
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1

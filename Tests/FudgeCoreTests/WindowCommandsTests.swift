@@ -185,11 +185,11 @@ private func run(_ command: WindowCommand, on desk: Desk, _ frames: inout Window
 
 // MARK: - The group
 
-@Test func windowManagementHasOneCommandPerWindowCommand() {
+@Test func windowManagementHasOneCommandPerWindowCommandThenSwitchWindows() {
     let group = BuiltInCommandGroup.windowManagement
     #expect(BuiltInCommandGroup.all.contains(group))
     #expect(BuiltInCommandGroup.isValidName(group.name) && !ExtensionManifest.isValidName(group.name))
-    #expect(group.commands.map(\.name) == WindowCommand.allCases.map(\.rawValue))
+    #expect(group.commands.map(\.name) == WindowCommand.allCases.map(\.rawValue) + ["switch-windows"])
     #expect(group.commandID(group.commands[0]) == ":window-management/left-half")
     #expect(group.commands.allSatisfy { $0.keywords.contains("window") })
     for command in group.commands {
