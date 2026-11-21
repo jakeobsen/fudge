@@ -1074,7 +1074,8 @@ Extensions run in a separate Node.js process, the extension host.
 - **The release workflow** (`.github/workflows/release.yml`) is the only place a release is built, and it runs on a pushed `v*` tag.
   Tags are pushed only with the maintainer's explicit permission, never by an agent.
   Two jobs:
-  - **`build`**, with a read-only token: the tag must be `v` and a semantic version (checked through an env var, never `${{ }}` in a script), then `make test`, `scripts/release.sh --version <tag> --ad-hoc-without-secrets` and a `.sha256`, uploaded as an artifact.
+  - **`build`**, with a read-only token: the tag must be `v` and a semantic version (checked through an env var, never `${{ }}` in a script), then `make test`, `scripts/release.sh --tag <tag> --ad-hoc-without-secrets` and a `.sha256`, uploaded as an artifact.
+    `--tag` hands the tag to `make app` and `make dmg-image` as `RELEASE_TAG`, never as `VERSION`, so `make release-check` refuses a tag that isn't on the commit.
   - **`publish`** runs only for a pushed tag, and has the only write token, and runs none of the repo's code: it checks the tag again, downloads the artifact and runs `gh release create` with GitHub's generated notes and one line on opening the app, which depends on how `build` signed it (its `signing` output).
     A tag with a pre-release suffix (`v1.2.0-rc.1`) is a pre-release.
   - **Run by hand** (Actions → Release → Run workflow, `workflow_dispatch`), it's the dry run: no tag check, the version `git describe` gives the commit, signed, notarized and stapled, and the disk image as an artifact.
@@ -1094,6 +1095,7 @@ Extensions run in a separate Node.js process, the extension host.
   Without any of the five, a tag still makes a release, ad hoc, and its notes say so (a fork has none); the dry run fails instead, as does any run with only some of them.
 - **`make release`** does the same on the maintainer's Mac, for a release built without CI, after `secret env apple`, which sets the same five variables.
   It refuses a tree with changes, never pushes or tags, and writes no secret to disk but the temporary keychain.
+  `make release RELEASE_TAG=<tag>` builds that tag's release (`--tag`), and without it the version is `git describe`'s (`--version`).
 - **Dev builds** still sign with the Apple Development identity (or "fudge local signing", or ad hoc; see `make app`), so only a release has the Developer ID, and switching between the two asks for permissions again.
 - **`make dmg`** builds the app, then `build/Fudge-<version>.dmg` (the version without its `v`) with `make dmg-image`, which packs the app as it is: the app and a link to `/Applications`, UDZO, volume name Fudge, made with `hdiutil` from a staging folder that's removed afterwards.
 - **Linting the workflows:** actionlint isn't in CI; run it by hand after changing one: `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml`.

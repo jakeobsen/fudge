@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds Fudge's release disk image, signed with the Developer ID identity, notarized and stapled (FUD-44).
 #
-#   scripts/release.sh [--version <tag>] [--ad-hoc-without-secrets]
+#   scripts/release.sh [--tag <tag> | --version <version>] [--ad-hoc-without-secrets]
 #
 # The release workflow runs it on a tag (and by hand, as a dry run), and `make release` on the maintainer's Mac,
 # after `secret env apple`. It reads five variables, the workflow's secrets of the same names:
@@ -23,15 +23,19 @@
 #
 # Without any of the five, --ad-hoc-without-secrets (the tag workflow, so a fork can still build) makes the ad hoc
 # image instead and says so; otherwise that's a failure, as some of them without the others always is.
-# The version is --version, else what `git describe` says, as `make app` takes it. A tree with changes is refused,
-# since the version names a commit. It never pushes or tags.
+# --tag names the tag a release is built from (the tag workflow's): it's the version, and the build passes it to make
+# as RELEASE_TAG, so `make release-check` refuses it unless it's a tag on this commit. Otherwise the version is
+# --version, else what `git describe` says, as `make app` takes it. A tree with changes is refused, since the
+# version names a commit. It never pushes or tags.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 secrets=(APPLE_CERTIFICATE_BASE64 APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID)
 app=build/Fudge.app
 version=
+tag=
 ad_hoc_without_secrets=no
+usage='usage: scripts/release.sh [--tag <tag> | --version <version>] [--ad-hoc-without-secrets]'
 
 fail() {
 	printf 'release: %s\n' "$1" >&2
@@ -40,6 +44,11 @@ fail() {
 
 while [ $# -gt 0 ]; do
 	case $1 in
+	--tag)
+		[ $# -ge 2 ] && [ -n "$2" ] || fail '--tag needs a tag'
+		tag=$2
+		shift 2
+		;;
 	--version)
 		[ $# -ge 2 ] && [ -n "$2" ] || fail '--version needs a version'
 		version=$2
@@ -50,11 +59,15 @@ while [ $# -gt 0 ]; do
 		shift
 		;;
 	*)
-		printf 'usage: scripts/release.sh [--version <tag>] [--ad-hoc-without-secrets]\n' >&2
+		printf '%s\n' "$usage" >&2
 		exit 2
 		;;
 	esac
 done
+if [ -n "$tag" ] && [ -n "$version" ]; then
+	printf '%s\n' "$usage" >&2
+	exit 2
+fi
 
 present=()
 missing=()
@@ -72,7 +85,15 @@ else
 fi
 
 [ -z "$(git status --porcelain)" ] || fail 'the tree has changes; a release is built from a commit as it is'
-version=${version:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}
+# What make is told: a tag as RELEASE_TAG, which the Makefile takes as the version once it has checked the tag is
+# on this commit; anything else as VERSION.
+if [ -n "$tag" ]; then
+	version=$tag
+	version_args=(RELEASE_TAG="$tag")
+else
+	version=${version:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}
+	version_args=(VERSION="$version")
+fi
 dmg=build/Fudge-${version#v}.dmg
 
 # Each value of the five, and the identity's name once it's known, as *** in what's shown.
@@ -101,10 +122,10 @@ say_outcome() {
 	printf '→ built %s: %s\n' "$dmg" "$1"
 }
 
-"${without_secrets[@]}" make --no-print-directory app CONFIG=release SIGN_IDENTITY=- VERSION="$version"
+"${without_secrets[@]}" make --no-print-directory app CONFIG=release SIGN_IDENTITY=- "${version_args[@]}"
 
 if [ $signing = ad-hoc ]; then
-	"${without_secrets[@]}" make --no-print-directory dmg-image VERSION="$version"
+	"${without_secrets[@]}" make --no-print-directory dmg-image "${version_args[@]}"
 	[ -z "${GITHUB_ACTIONS:-}" ] ||
 		printf '::warning::No signing secrets, so this build is signed ad hoc and not notarized\n'
 	say_outcome 'signed ad hoc and not notarized, since none of the signing variables is set'
@@ -225,7 +246,7 @@ ditto -c -k --keepParent "$app" "$work/Fudge.zip"
 notarize "$work/Fudge.zip"
 staple "$app"
 
-"${without_secrets[@]}" make --no-print-directory dmg-image VERSION="$version"
+"${without_secrets[@]}" make --no-print-directory dmg-image "${version_args[@]}"
 if ! out=$(codesign --force --timestamp --sign "$identity" "$dmg" 2>&1); then
 	redact <<<"$out" >&2
 	fail "couldn't sign $dmg"

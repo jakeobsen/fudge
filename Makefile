@@ -206,9 +206,10 @@ dmg-image:
 	@printf '→ built %s\n' '$(DMG)'
 
 # A release's disk image signed with the Developer ID identity, notarized and stapled, with the variables
-# `secret env apple` sets (scripts/release.sh). It refuses a tree with changes, and never pushes or tags.
+# `secret env apple` sets (scripts/release.sh). It refuses a tree with changes, and never pushes or tags. With
+# RELEASE_TAG, it's that tag's release, which must be on this commit.
 release:
-	@scripts/release.sh --version '$(VERSION)'
+	@scripts/release.sh $(if $(RELEASE_TAG),--tag '$(RELEASE_TAG)',--version '$(VERSION)')
 
 run: app
 	@# Quit the user's fudge and wait for exactly those processes: open hands off to a Fudge that's still quitting

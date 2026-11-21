@@ -49,7 +49,8 @@ jobs:
 
       # The signing secrets reach this step only, and the script builds with none of them in its environment. Without
       # them a tag still makes a release, signed ad hoc and saying so (a fork has none); a run by hand, which is there
-      # to try them, fails instead. A run by hand takes the version `git describe` gives the commit, as `make app` does.
+      # to try them, fails instead. A tag's build names it (--tag), and the Makefile checks it's on this commit; a run
+      # by hand takes the version `git describe` gives the commit, as `make app` does.
       - name: Build, sign and notarize the disk image
         id: release
         env:
@@ -60,7 +61,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           if [ "$GITHUB_EVENT_NAME" = push ]; then
-            scripts/release.sh --version "$TAG" --ad-hoc-without-secrets
+            scripts/release.sh --tag "$TAG" --ad-hoc-without-secrets
           else
             scripts/release.sh
           fi
