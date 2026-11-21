@@ -451,6 +451,23 @@ private func titles(_ listing: SwitcherListing<Int>) -> [String] {
     #expect(FixedWindowSystem(json: Data("not json".utf8)).apps().isEmpty)
 }
 
+@Test func manyMadeUpWindowsStayOnTheirScreensAndNoneIsTakenForFudge() throws {
+    // SPEC-102 §2: 40 windows of 4 apps across two screens, in a run whose own pid is one the made-up apps would get.
+    let entries = (0..<40).map { index in
+        #"{ "app": "App \#(index % 4)", "title": "Window \#(index)", "screen": "\#(index % 2 == 0 ? "Left" : "Right")" }"#
+    }
+    let json = Data(("[" + entries.joined(separator: ",") + "]").utf8)
+    let ownPid: Int32 = 1001
+    let system = FixedWindowSystem(json: json, ownPid: ownPid)
+    #expect(system.apps().count == 4 && !system.apps().contains { $0.pid == ownPid })
+    let listing = WindowSwitcher(system: system, ownPid: ownPid, inFlight: WindowReadsInFlight()).listing()
+    #expect(listing.rows.count == 40, "no made-up app is left out as Fudge's own")
+    for (row, title) in zip(listing.rows, listing.rows.map(\.title)) {
+        let index = try #require(Int(title.dropFirst("Window ".count)))
+        #expect(row.accessory == (index % 2 == 0 ? "Left" : "Right"), "\(title) keeps its screen's name")
+    }
+}
+
 @Test func recentAppsKeepTheLatestFirst() {
     var recent = RecentApps()
     recent.activated(1)

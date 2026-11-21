@@ -460,15 +460,19 @@ public struct FixedWindowSystem: WindowSwitchSystem {
     private let screenList: [NamedScreen]
     private let frontmost: Int32?
 
-    public init(json: Data) {
+    /// `ownPid` is the run's own: no made-up app gets it, or Switch Windows would leave that app out as Fudge's.
+    public init(json: Data, ownPid: Int32 = ProcessInfo.processInfo.processIdentifier) {
         let entries = (try? JSONDecoder().decode([Entry].self, from: json)) ?? []
+        var nextPid: Int32 = 1000
         var apps: [SwitcherApp] = []
         var silent = Set<Int32>()
         var pids: [String: Int32] = [:]
         var screens: [NamedScreen] = []
         for entry in entries {
             if pids[entry.app] == nil {
-                let pid = Int32(1000 + apps.count)
+                if nextPid == ownPid { nextPid += 1 }
+                let pid = nextPid
+                nextPid += 1
                 pids[entry.app] = pid
                 apps.append(SwitcherApp(pid: pid, name: entry.app, path: entry.path))
             }
@@ -487,8 +491,9 @@ public struct FixedWindowSystem: WindowSwitchSystem {
         for (index, entry) in entries.enumerated() where entry.answers != false {
             guard let pid = pids[entry.app] else { continue }
             let screen = screens.first { $0.name == entry.screen } ?? screens[0]
-            let frame = CGRect(
-                x: screen.bounds.minX + CGFloat(40 * index), y: CGFloat(40 * index), width: 800, height: 600)
+            // Ten steps down and across, then back to the corner: every window stays on its screen, with its name.
+            let step = CGFloat(40 * (index % 10))
+            let frame = CGRect(x: screen.bounds.minX + step, y: screen.bounds.minY + step, width: 800, height: 600)
             let minimized = entry.minimized == true
             let focused = !minimized && frontmost == nil
             if focused { frontmost = pid }
@@ -506,8 +511,10 @@ public struct FixedWindowSystem: WindowSwitchSystem {
     }
 
     /// The windows in `file`; none when it can't be read.
-    public static func load(from file: URL) -> FixedWindowSystem {
-        FixedWindowSystem(json: (try? Data(contentsOf: file)) ?? Data())
+    public static func load(from file: URL, ownPid: Int32 = ProcessInfo.processInfo.processIdentifier)
+        -> FixedWindowSystem
+    {
+        FixedWindowSystem(json: (try? Data(contentsOf: file)) ?? Data(), ownPid: ownPid)
     }
 
     public func apps() -> [SwitcherApp] { appList }
