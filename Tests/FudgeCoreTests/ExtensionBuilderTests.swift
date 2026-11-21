@@ -19,6 +19,12 @@ enum Fixtures {
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }()
 
+    /// The Node.js Fudge bundles, which `make test` downloads, checks and hands the tests (`FUDGE_TEST_NODE`). Only
+    /// the tests read that variable: the app and the tool find Node.js beside themselves (`Runtime.locateNode`).
+    static let node: URL? = ProcessInfo.processInfo.environment["FUDGE_TEST_NODE"]
+        .map(URL.init(fileURLWithPath:))
+        .flatMap { FileManager.default.isExecutableFile(atPath: $0.path) ? $0 : nil }
+
     static func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("fudge-tests-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -145,4 +151,19 @@ struct ExtensionBuilderTests {
     #expect(ExtensionBuilder.temporaryDirectory(environment: [:]) == usual)
     #expect(ExtensionBuilder.temporaryDirectory(environment: ["TMPDIR": ""]) == usual)
     #expect(ExtensionBuilder.temporaryDirectory(environment: ["TMPDIR": "relative/tmp"]) == usual)
+}
+
+@Test func dependenciesWithoutFudgesNodeAreAClearError() throws {
+    // npm is Fudge's own, beside the tool; with none there, an extension with dependencies can't build.
+    let source = try Fixtures.greeterCopy()
+    defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+    let manifest = source.appendingPathComponent("package.json")
+    var object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: manifest)) as? [String: Any])
+    object["dependencies"] = ["left-pad": "1.3.0"]
+    try JSONSerialization.data(withJSONObject: object).write(to: manifest)
+    let extensions = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: extensions) }
+    let builder = ExtensionBuilder(esbuild: URL(fileURLWithPath: "/missing"), node: nil)
+    #expect(throws: BuildError.noNode) { try builder.build(source: source, into: extensions) }
+    #expect("\(BuildError.noNode)".contains("use the fudge inside Fudge.app"))
 }
