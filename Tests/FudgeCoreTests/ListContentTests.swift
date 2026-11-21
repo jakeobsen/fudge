@@ -131,17 +131,21 @@ private let folders = #"""
 /// apart by it, and with the first item's id the re-ranked rows kept the old section's drawing: the highlight stayed
 /// on the item selected before while the detail showed the new selection's.
 @Test func aLooseSectionKeepsItsIdWhenItsItemsReRank() throws {
-    func ranked(_ ids: [Int]) throws -> ListContent {
+    func ranked(_ ids: [Int], kind: String = "List") throws -> ListContent {
         let items = ids.map {
-            #"{"id":\#($0),"type":"List.Item","props":{"id":"f\#($0)","title":"f\#($0)"},"children":[]}"#
+            #"{"id":\#($0),"type":"\#(kind).Item","props":{"id":"f\#($0)","title":"f\#($0)"},"children":[]}"#
         }
-        let json = #"{"id":1,"type":"List","props":{"filtering":false},"children":[\#(items.joined(separator: ","))]}"#
+        let json =
+            #"{"id":1,"type":"\#(kind)","props":{"filtering":false},"children":[\#(items.joined(separator: ","))]}"#
         return ListContent(try node(json), searchText: "")
     }
-    let before = try ranked([26, 50, 73, 96, 119])
-    let after = try ranked([96, 50, 73, 26, 119])
-    #expect(before.sections.map(\.id) == after.sections.map(\.id))
-    #expect(after.items.map(\.id) == [96, 50, 73, 26, 119])
+    // A Grid's cells are grouped the same way, and `GridScreen` tells sections apart by the same id.
+    for kind in ["List", "Grid"] {
+        let before = try ranked([26, 50, 73, 96, 119], kind: kind)
+        let after = try ranked([96, 50, 73, 26, 119], kind: kind)
+        #expect(before.sections.map(\.id) == after.sections.map(\.id), "\(kind)")
+        #expect(after.items.map(\.id) == [96, 50, 73, 26, 119], "\(kind)")
+    }
 }
 
 @Test func reselectsAfterAnUpdate() throws {
