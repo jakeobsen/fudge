@@ -174,6 +174,12 @@ enum SystemCalls {
         return nil
     }
 
+    /// Switch Windows' Accessibility check, as for a call the user started: macOS's prompt at the first refusal in a
+    /// run, and Fudge's offer at the next, shared with Paste and the window commands.
+    static func mayReadWindows() -> Bool {
+        gate.isTrusted(origin: .userInitiated)
+    }
+
     /// The frames Restore goes back to, touched only on `windowCommandQueue`.
     private final class WindowFramesBox: @unchecked Sendable {
         var frames = WindowFrames()

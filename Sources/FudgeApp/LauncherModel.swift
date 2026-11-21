@@ -92,6 +92,7 @@ final class LauncherModel {
             followQuickLook()
             builtInFormLeft()
             dropHeldKeyIfLeft()
+            switchWindowsLeft()
         }
     }
     private(set) var results: [RootItem] = []
@@ -532,6 +533,7 @@ final class LauncherModel {
     /// saying nothing, so it never runs or times out out of sight.
     func panelHidden() {
         hold(nil)
+        switchWindowsHidden()
     }
 
     /// The panel was just shown.
@@ -542,6 +544,8 @@ final class LauncherModel {
         {
             arguments.focus = nil
         }
+        // Switch Windows reads the windows again each time it's shown.
+        if windowListStale, switchWindowsOnScreen { readWindows(selectFirst: true) }
         restoreKeyboard()
     }
 
@@ -1648,8 +1652,10 @@ final class LauncherModel {
         }
     }
 
-    /// The sessions of Fudge's own views, its forms and Search Snippets, which never reach the host.
-    static let builtInSessions: Set<String> = [QuicklinkForm.session, SnippetForm.session, SnippetList.session]
+    /// The sessions of Fudge's own views, its forms, Search Snippets and Switch Windows, which never reach the host.
+    static let builtInSessions: Set<String> = [
+        QuicklinkForm.session, SnippetForm.session, SnippetList.session, SwitchWindowsList.session,
+    ]
 
     @ObservationIgnored private var builtInForm: BuiltInFormState?
     @ObservationIgnored private var quicklinkApplicationList: [QuicklinkApplication]?
@@ -2092,6 +2098,172 @@ final class LauncherModel {
         return false
     }
 
+    // MARK: - Switch Windows
+
+    /// What Switch Windows reads and does: the system's windows, or a snapshot run's made-up ones (`--windows`). The
+    /// app delegate sets it.
+    @ObservationIgnored var windowSwitching: any WindowSwitching = NoWindowSwitching()
+    /// The read on screen, whose rows its actions name by place (`SwitchWindowsList.target`). It's dropped when the
+    /// list goes or the panel hides, so window titles are kept only while they're shown.
+    @ObservationIgnored private var windowListing: WindowListing?
+    /// Counts reads, so only the latest one is drawn.
+    @ObservationIgnored private var windowReads = 0
+    @ObservationIgnored private var readingWindows = false
+    /// The panel hid with Switch Windows on screen: the windows are read again when it shows.
+    @ObservationIgnored private var windowListStale = false
+
+    private var switchWindowsOnScreen: Bool {
+        if case .command(let command) = screen { return command.session == SwitchWindowsList.session }
+        return false
+    }
+
+    /// Switch Windows from root search, or from its hotkey, which works as a view command's does: it opens it over
+    /// whatever the panel shows (after Pop to Root Search's reset, when that's due), or hides the panel when it's on
+    /// screen already.
+    private func openSwitchWindows(_ item: RootItem, fromHotkey: Bool) {
+        guard fromHotkey else {
+            recordLaunch(item)
+            showSwitchWindows()
+            return
+        }
+        resettingFirst {
+            if isVisible(), switchWindowsOnScreen {
+                hide()
+                return
+            }
+            recordLaunch(item)
+            if case .command = screen { leaveCommand() }
+            showSwitchWindows()
+            show()
+        }
+    }
+
+    /// Shows Switch Windows (FUD-120): the list loading, then the windows once they're read.
+    private func showSwitchWindows() {
+        actionPanel = nil
+        dropdownPanel = nil
+        datePanel = nil
+        var command = CommandScreen(session: SwitchWindowsList.session, title: SwitchWindowsList.title)
+        command.view = SwitchWindowsList.loading()
+        refreshList(&command, selectFirst: true)
+        screen = .command(command)
+        readWindows(selectFirst: true)
+    }
+
+    /// Reads the windows, off the main thread, and draws them, keeping the search text. `selectFirst` selects the
+    /// first row, for a new look at the list; otherwise the selection stays in its place (after Close Window or Quit
+    /// App). Without Accessibility permission, the list says so instead, and the check asks for macOS's prompt or
+    /// shows Fudge's offer as it does for Paste (`AccessibilityGate`).
+    private func readWindows(selectFirst: Bool) {
+        windowListStale = false
+        windowReads += 1
+        let read = windowReads
+        guard windowSwitching.mayRead() else {
+            readingWindows = false
+            windowListing = nil
+            drawWindows(SwitchWindowsList.accessibilityNeeded(), selectFirst: true)
+            return
+        }
+        readingWindows = true
+        Task {
+            let listing = await windowSwitching.read()
+            guard read == windowReads else { return }
+            readingWindows = false
+            guard switchWindowsOnScreen else { return }
+            windowListing = listing
+            drawWindows(
+                SwitchWindowsList.view(rows: listing.rows, silentApps: listing.silentApps), selectFirst: selectFirst)
+        }
+    }
+
+    private func drawWindows(_ view: UINode, selectFirst: Bool) {
+        guard case .command(var command) = screen, command.session == SwitchWindowsList.session else { return }
+        command.view = view
+        refreshList(&command, selectFirst: selectFirst)
+        screen = .command(command)
+    }
+
+    /// The panel is hiding with Switch Windows on screen: its read goes, and the list shows as loading until the
+    /// windows are read again when the panel shows.
+    private func switchWindowsHidden() {
+        guard switchWindowsOnScreen else { return }
+        windowListStale = true
+        windowListing = nil
+        windowReads += 1
+        readingWindows = false
+        drawWindows(SwitchWindowsList.loading(), selectFirst: true)
+    }
+
+    /// The screen changed: once Switch Windows is gone, its read goes too, and one still running is dropped.
+    private func switchWindowsLeft() {
+        guard !switchWindowsOnScreen, windowListing != nil || readingWindows || windowListStale else { return }
+        windowListing = nil
+        windowReads += 1
+        readingWindows = false
+        windowListStale = false
+    }
+
+    /// One of its actions, as `send` hands it over. Nothing about the window is recorded: only the command's own
+    /// launch is in the launch history.
+    private func switchWindowsAction(node: Int) {
+        guard switchWindowsOnScreen,
+            let target = SwitchWindowsList.target(of: node, rows: windowListing?.rows.count ?? 0)
+        else { return }
+        if target == .openAccessibilitySettings {
+            hide()
+            NSWorkspace.shared.open(AccessibilitySettingsAlert.paneURL)
+            return
+        }
+        guard let listing = windowListing else { return }
+        switch target {
+        case .switchTo(let row):
+            // The panel goes first, then a turn for it to be gone, so the window's app takes the keyboard after it.
+            hide()
+            Task {
+                await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }
+                if let problem = await Self.offMain({ listing.switchTo(row: row) }) { showHUD(problem) }
+            }
+        case .close(let row):
+            Task {
+                if let problem = await Self.offMain({ listing.close(row: row) }) {
+                    showFailureToast("Can't close the window", message: problem)
+                    return
+                }
+                await readWindowsAgain(after: listing)
+            }
+        case .quit(let row):
+            let name = listing.rows[row].appName
+            let request = AlertRequest(
+                title: "Quit \(name)?", message: "It quits as if you chose Quit in its menu.", primary: "Quit",
+                dismiss: "Cancel", destructive: true)
+            Task {
+                guard await confirm(request, .userInitiated) else { return }
+                guard listing.quit(row: row) else {
+                    showFailureToast("Can't quit \(name)")
+                    return
+                }
+                await readWindowsAgain(after: listing)
+            }
+        case .openAccessibilitySettings:
+            break
+        }
+    }
+
+    /// After Close Window or Quit App: a moment for the app to do it, then the windows read again, the selection
+    /// staying in its place, unless the list has gone or been read again meanwhile.
+    private func readWindowsAgain(after listing: WindowListing) async {
+        try? await Task.sleep(for: .milliseconds(400))
+        guard switchWindowsOnScreen, windowListing === listing else { return }
+        readWindows(selectFirst: false)
+    }
+
+    /// Runs `work`, which waits on other apps, off the main thread.
+    nonisolated private static func offMain<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { continuation.resume(returning: work()) }
+        }
+    }
+
     // MARK: - Quick Look
 
     /// The view on screen, as Quick Look tells views apart: the command's session and how deep it is.
@@ -2495,6 +2667,10 @@ final class LauncherModel {
     /// Runs one of Fudge's own commands (`BuiltInCommandGroup`), from root search or its hotkey, which goes no other
     /// way: each group's commands decide whether the panel shows.
     private func runBuiltIn(_ item: RootItem, group: String, command: String, fromHotkey: Bool) {
+        if group == BuiltInCommandGroup.windowManagement.name, command == SwitchWindowsList.commandName {
+            openSwitchWindows(item, fromHotkey: fromHotkey)
+            return
+        }
         recordLaunch(item)
         if group == BuiltInCommandGroup.windowManagement.name, let command = WindowCommand(rawValue: command) {
             // The window to move is the frontmost app's, which the panel never takes from it. A window command never
@@ -2875,6 +3051,8 @@ final class LauncherModel {
                 builtInFormEvent(node: node, path: path)
             } else if session == SnippetList.session, path == ["onAction"] {
                 snippetListAction(node: node)
+            } else if session == SwitchWindowsList.session, path == ["onAction"] {
+                switchWindowsAction(node: node)
             }
             return
         }
