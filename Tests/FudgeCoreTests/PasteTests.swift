@@ -94,6 +94,7 @@ private struct Rig {
     let access: FakeAccess
     let keys: FakePasteKeys
     let pasteboard: FakePasteboard
+    let turns = PasteboardTurns()
     let paste: Paste
 
     init(clipboard: PasteboardContents = clip("user's clipboard")) {
@@ -102,7 +103,7 @@ private struct Rig {
         pasteboard = FakePasteboard(clipboard, log: log)
         paste = Paste(
             gate: AccessibilityGate(access: access), keys: keys, pasteboard: pasteboard, ownPid: me,
-            turns: PasteboardTurns(), restoreDelay: restoreDelay)
+            turns: turns, restoreDelay: restoreDelay)
     }
 
     func run(
@@ -130,6 +131,19 @@ private struct Rig {
     await afterRestore()
     #expect(rig.log.events.last == "write user's clipboard")
     #expect(rig.pasteboard.plainText() == "user's clipboard")
+}
+
+@Test @MainActor func aPasteAndItsRestoreAreMarkedAsFudgesOwnForClipboardHistory() async throws {
+    let rig = Rig()
+    let before = rig.pasteboard.changeCount
+    #expect(!rig.turns.isOwn(before), "the user's copy")
+    try await rig.run("pasted")
+    #expect(rig.turns.isOwn(rig.pasteboard.changeCount), "the paste's write")
+    #expect(rig.turns.isBusy, "its restore is still to come")
+    await afterRestore()
+    #expect(rig.pasteboard.plainText() == "user's clipboard")
+    #expect(rig.turns.isOwn(rig.pasteboard.changeCount), "the restore's write")
+    #expect(!rig.turns.isBusy)
 }
 
 @Test @MainActor func keepsThePanelWhenAskedTo() async throws {

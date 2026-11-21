@@ -244,7 +244,10 @@ public final class SelectedText {
         // pasteboard, it's left alone: writing it back would only add a clipboard-history entry, drop types over the
         // limit, and restart a password manager's clear timer for nothing.
         defer {
-            if pasteboard.changeCount != changeCount { pasteboard.replace(with: restore) }
+            if pasteboard.changeCount != changeCount {
+                pasteboard.replace(with: restore)
+                turns.markOwn(pasteboard.changeCount)
+            }
         }
 
         keys.postCopy(to: pid)
@@ -252,6 +255,8 @@ public final class SelectedText {
         while true {
             // An app clears the pasteboard before it writes, so wait for the text itself.
             if pasteboard.changeCount != changeCount, let text = pasteboard.plainText(), !text.isEmpty {
+                // The app's copy was Fudge's doing, not the user's: clipboard history leaves it out.
+                turns.markOwn(pasteboard.changeCount)
                 return text
             }
             if ContinuousClock.now >= deadline || Task.isCancelled { throw SelectionError.noSelectedText }

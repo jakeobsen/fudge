@@ -23,6 +23,26 @@ public struct FudgeSettings: Sendable, Equatable {
     public var signInServer: String?
     /// When the user confirmed the sign-in server's consent sheet (`signInServerConsentAt`, ISO 8601).
     public var signInServerConsentAt: String?
+    /// Clipboard history's switch (`clipboardHistory`); it counts only with the consent date beside it.
+    public var clipboardHistory = false
+    /// When the user confirmed clipboard history's consent sheet (`clipboardHistoryConsentAt`, ISO 8601).
+    public var clipboardHistoryConsentAt: String?
+    /// **Keep For** (`clipboardHistoryKeepDays`): one of `ClipboardHistory.keepForChoices`; anything else reads as the
+    /// default.
+    public var clipboardHistoryKeepDays = ClipboardHistory.defaultKeepFor
+    /// **Ignore Apps** (`clipboardHistoryIgnoredApps`): bundle ids whose copies aren't kept.
+    public var clipboardHistoryIgnoredApps: [String] = []
+
+    /// Whether clipboard history is on: switched on through the consent sheet, which records the date.
+    public var isClipboardHistoryOn: Bool {
+        clipboardHistory && clipboardHistoryConsentAt.flatMap(ISO8601DateFormatter().date(from:)) != nil
+    }
+
+    /// Clipboard history's switch: on records the consent date, off removes both keys.
+    public mutating func setClipboardHistory(_ on: Bool, now: Date) {
+        clipboardHistory = on
+        clipboardHistoryConsentAt = on ? ISO8601DateFormatter().string(from: now) : nil
+    }
 
     /// Whether the Extension Store is on: switched on through the consent sheet, which records the date.
     public var isExtensionStoreOn: Bool {
@@ -158,6 +178,13 @@ public struct FudgeSettings: Sendable, Equatable {
         settings.extensionStoreConsentAt = object["extensionStoreConsentAt"] as? String
         settings.signInServer = object["signInServer"] as? String
         settings.signInServerConsentAt = object["signInServerConsentAt"] as? String
+        settings.clipboardHistory = object["clipboardHistory"] as? Bool ?? false
+        settings.clipboardHistoryConsentAt = object["clipboardHistoryConsentAt"] as? String
+        if let days = object["clipboardHistoryKeepDays"] as? Int, ClipboardHistory.keepForChoices.contains(days) {
+            settings.clipboardHistoryKeepDays = days
+        }
+        settings.clipboardHistoryIgnoredApps = (object["clipboardHistoryIgnoredApps"] as? [Any] ?? [])
+            .compactMap { $0 as? String }
         settings.resetAfter = PanelResetSetting(settingsValue: object["resetAfterSeconds"])
         settings.showOnScreen = ShowOnScreen(settingsValue: object["showOnScreen"])
         settings.escapeBehavior = EscapeBehavior(settingsValue: object["escapeBehavior"])
@@ -184,6 +211,11 @@ public struct FudgeSettings: Sendable, Equatable {
         object["extensionStoreConsentAt"] = extensionStoreConsentAt
         object["signInServer"] = signInServer
         object["signInServerConsentAt"] = signInServerConsentAt
+        object["clipboardHistory"] = clipboardHistory ? true : nil
+        object["clipboardHistoryConsentAt"] = clipboardHistoryConsentAt
+        object["clipboardHistoryKeepDays"] =
+            clipboardHistoryKeepDays == ClipboardHistory.defaultKeepFor ? nil : clipboardHistoryKeepDays
+        object["clipboardHistoryIgnoredApps"] = clipboardHistoryIgnoredApps.isEmpty ? nil : clipboardHistoryIgnoredApps
         object["resetAfterSeconds"] = resetAfter.settingsValue
         object["showOnScreen"] = showOnScreen.settingsValue
         object["escapeBehavior"] = escapeBehavior.settingsValue
