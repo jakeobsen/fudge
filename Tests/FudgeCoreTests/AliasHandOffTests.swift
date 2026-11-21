@@ -181,3 +181,17 @@ private func type(
     #expect(input.focus == nil)
     #expect(type("dw ", into: &input, handOff: &handOff, items: [docs]) == .handOff(item: docs, rest: ""))
 }
+
+@Test func aHandOffWordRunsOncePerQueryToo() {
+    // Define Word's `define` goes through the same guard as an alias.
+    var define = quicklink("define-word", alias: "unused")
+    define.alias = nil
+    define.handOffWord = "define"
+    var input = ArgumentInput(arguments: define.arguments)
+    var handOff = AliasHandOff()
+    #expect(
+        type("define zzyzx", into: &input, handOff: &handOff, items: [define]) == .handOff(item: define, rest: "zzyzx"))
+    input.set("zzyzxs", at: 0)
+    #expect(type("define zzyzx", into: &input, handOff: &handOff, items: [define]) == .alreadyHandedOff)
+    #expect(input.value(at: 0) == "zzyzxs")
+}
