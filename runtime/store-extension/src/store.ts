@@ -3,10 +3,19 @@
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isValidFolder, isValidName, sameFolder, type Installed, type InstallRecord, type StoreEntry } from "./catalog.ts";
+import {
+    compatibilityLine,
+    fromReport,
+    readCompatibility,
+    rememberCompatibility,
+    scanExtension,
+    scannerIdentity,
+    type Compatibility,
+} from "./compatibility.ts";
 import { maxManifestBytes, readRegularFile } from "./files.ts";
 import { spawnProgram, type Run, type StoreRepository } from "./git.ts";
 import { sourceProblem } from "./sources.ts";
-import { buildTimeout, scanTimeout } from "./timeouts.ts";
+import { buildTimeout } from "./timeouts.ts";
 
 /** A step that refused or failed; its message is shown in a failure toast. */
 export class StoreError extends Error {}
@@ -25,54 +34,6 @@ export type StoreContext = {
     run?: Run;
     now?: () => Date;
 };
-
-/** What the install confirmation needs from `fudge scan <folder> --json`. `byDesign` names the category of an API
- * Fudge leaves out on purpose (AI, Browser Extension, OAuth). */
-export type ScanReport = { supported: boolean; gaps: { api: string; byDesign?: string }[]; unreadable: string[] };
-
-/** "AI", "AI and OAuth", "AI, Browser Extension and OAuth". */
-function listed(names: string[]): string {
-    return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-}
-
-/**
- * The install confirmation's line about what works: from the scan, or saying the scan couldn't run. APIs Fudge
- * leaves out on purpose are named apart, by category, so one never reads as something Fudge doesn't have yet.
- */
-export function compatibilityLine(report: ScanReport | undefined): string {
-    if (!report) return "Fudge couldn't check what this extension uses.";
-    if (report.supported) return "Fudge supports everything this extension uses.";
-    const designed = (gap: { byDesign?: unknown }) => typeof gap.byDesign === "string" && gap.byDesign !== "";
-    const missing = [...new Set(report.gaps.filter((gap) => !designed(gap)).map((gap) => gap.api))];
-    const leftOut = [...new Set(report.gaps.filter(designed).map((gap) => gap.byDesign!))];
-    const sentences: string[] = [];
-    if (missing.length > 0) {
-        const more = missing.length > 5 ? `, and ${missing.length - 5} more` : "";
-        sentences.push(`This extension uses things Fudge doesn't have yet: ${missing.slice(0, 5).join(", ")}${more}.`);
-    }
-    if (leftOut.length > 0) {
-        const subject = missing.length > 0 ? "It also uses" : "This extension uses";
-        sentences.push(`${subject} ${listed(leftOut)}, which Fudge leaves out.`);
-    }
-    if (sentences.length === 0) return "Fudge couldn't read all of this extension's source, so some of it may not work.";
-    return `${sentences.join(" ")} Some of its commands may not work.`;
-}
-
-/** Runs `$FUDGE_CLI scan <source> --json`. Undefined when it fails or says something unexpected. */
-export async function scanExtension(source: string, context: StoreContext): Promise<ScanReport | undefined> {
-    const run = context.run ?? spawnProgram;
-    try {
-        const result = await run(context.cli, ["scan", source, "--json"], { timeout: scanTimeout });
-        if (result.code !== 0) return undefined;
-        const report = JSON.parse(result.stdout) as Partial<ScanReport>;
-        if (typeof report.supported !== "boolean" || !Array.isArray(report.gaps) || !Array.isArray(report.unreadable)) {
-            return undefined;
-        }
-        return report as ScanReport;
-    } catch {
-        return undefined;
-    }
-}
 
 /** Where the store keeps what it installed. It survives turning the store off, unlike `repo/`. */
 export function installedFile(supportPath: string): string {
@@ -143,11 +104,32 @@ const exists = (target: string) =>
     );
 
 /**
- * Installs (or updates) `entry`: fetches its source from its folder, checks where its packages come from, scans what
- * it uses (`fudge scan`), asks, builds it with the CLI into `extensionsDir` (as `<extensionsDir>/<name>`), and records
- * it under its name with its folder. Resolves false when the user cancels; throws `StoreError` when a step refuses or
- * fails. An extension of that name that the store didn't install from this folder is never replaced: one installed
- * another way, one from another folder whose manifest has the same name, or one Fudge bundles.
+ * What this version of the folder uses: the cached result when this scanner has one (`compatibility.json`), else a
+ * scan of `source`, which is cached for the list and the detail. Undefined when the scan couldn't run.
+ */
+async function compatibilityOf(
+    source: string,
+    tree: string | undefined,
+    context: StoreContext,
+): Promise<Compatibility | undefined> {
+    const scanner = await scannerIdentity(context.cli);
+    const cached = tree ? (await readCompatibility(context.supportPath, scanner)).get(tree) : undefined;
+    if (cached && !cached.notChecked) return cached;
+    const report = await scanExtension(source, context);
+    if (!report) return undefined;
+    const result = fromReport(report);
+    // The cache only saves a later scan, so failing to write it doesn't stop the install.
+    if (tree) await rememberCompatibility(context.supportPath, scanner, tree, result).catch(() => undefined);
+    return result;
+}
+
+/**
+ * Installs (or updates) `entry`: fetches its source from its folder, checks where its packages come from, finds what
+ * it uses (`fudge scan`, or the cached result for this version), asks, builds it with the CLI into `extensionsDir` (as
+ * `<extensionsDir>/<name>`), and records it under its name with its folder. Resolves false when the user cancels;
+ * throws `StoreError` when a step refuses or fails. An extension of that name that the store didn't install from this
+ * folder is never replaced: one installed another way, one from another folder whose manifest has the same name, or one
+ * Fudge bundles.
  */
 export async function install(entry: StoreEntry, context: StoreContext): Promise<boolean> {
     const name = checkedName(entry.name);
@@ -168,7 +150,8 @@ export async function install(entry: StoreEntry, context: StoreContext): Promise
     const problem = await sourceProblem(source);
     if (problem) throw new StoreError(`${entry.title} can't be installed. ${problem}.`);
 
-    const compatibility = compatibilityLine(await scanExtension(source, context));
+    const tree = (await context.repo.trees()).get(dir);
+    const compatibility = compatibilityLine(await compatibilityOf(source, tree, context));
     const commit = await context.repo.commit();
     const confirmed = await context.confirm(
         `${record ? "Update" : "Install"} ${entry.title}?`,
@@ -182,7 +165,6 @@ export async function install(entry: StoreEntry, context: StoreContext): Promise
     if (result.code !== 0) {
         throw new StoreError((result.stderr.trim() || result.stdout.trim() || "fudge build failed").slice(-500));
     }
-    const tree = (await context.repo.trees()).get(dir);
     if (!tree) throw new StoreError(`Couldn't read ${name}'s version in the store's copy`);
     const recorded: InstallRecord = { tree, commit, installedAt: (context.now?.() ?? new Date()).toISOString(), dir };
     await writeInstalled(context.supportPath, { ...(await readInstalled(context.supportPath)), [name]: recorded });

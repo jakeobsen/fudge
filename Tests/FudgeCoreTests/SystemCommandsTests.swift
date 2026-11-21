@@ -142,52 +142,101 @@ private func volume(
 @MainActor
 @Test func emptyTrashCountsThroughFinderThenAsksWithTheCount() async {
     let system = FakeSystem()
-    system.trash = .success(3)
+    system.trash = .success(5)
     let (message, asked) = await run(.emptyTrash, on: system)
     #expect(message == nil)
     #expect(system.done == ["ask Finder", "count", "empty"])
-    #expect(asked == [.emptyTrash(items: 3)])
+    #expect(asked == [.emptyTrash(items: 5)])
     #expect(asked.first?.title == "Empty the Trash?")
-    #expect(asked.first?.message == "3 items will be deleted permanently.")
+    #expect(asked.first?.message == "5 items will be deleted permanently.")
     #expect(asked.first?.primary == "Empty Trash")
     #expect(SystemConfirmation.emptyTrash(items: 1).message == "1 item will be deleted permanently.")
 }
 
 @MainActor
-@Test func anEmptyTrashIsSaidWithoutAsking() async {
-    let system = FakeSystem()
-    system.trash = .success(0)
-    let (message, asked) = await run(.emptyTrash, on: system)
-    #expect(message == "The Trash is empty.")
-    #expect(asked.isEmpty)
-    #expect(!system.done.contains("empty"))
+@Test func emptyTrashAlwaysAsksEvenWhenTheCountIsZeroOrUnreadable() async {
+    let withoutNumber = "The items in the Trash will be deleted permanently."
+    // A count of 0, a reply that isn't a number, or Finder failing: the same question, without a number.
+    let failures: [Result<Int, AppleEventError>] = [
+        .success(0), .failure(AppleEventError(status: SystemAppleEvents.coercionFailed)),
+        .failure(AppleEventError(status: -600)), .failure(AppleEventError(status: -1712)),
+    ]
+    for count in failures {
+        let system = FakeSystem()
+        system.trash = count
+        let (message, asked) = await run(.emptyTrash, on: system)
+        #expect(message == nil, "\(count)")
+        #expect(asked.map(\.message) == [withoutNumber], "\(count)")
+        #expect(system.done == ["ask Finder", "count", "empty"], "\(count)")
+    }
+    #expect(SystemConfirmation.emptyTrash(items: nil).message == withoutNumber)
+    #expect(SystemConfirmation.emptyTrash(items: 0) == SystemConfirmation.emptyTrash(items: nil))
+
+    // Cancel empties nothing, with a number or without.
+    for count in [Result<Int, AppleEventError>.success(5), .success(0)] {
+        let system = FakeSystem()
+        system.trash = count
+        let (message, asked) = await run(.emptyTrash, on: system, answer: false)
+        #expect(message == nil && asked.count == 1)
+        #expect(!system.done.contains("empty"))
+    }
 }
 
 @MainActor
-@Test func aRefusedOrFailedTrashCountIsNeverZeroItems() async {
-    // Automation of Finder refused: say where to allow it; nothing counted, asked or emptied.
+@Test func aRefusedFinderSaysSoAndAsksNothing() async {
     let refused = FakeSystem()
     refused.permission[.finder] = -1743
-    let (refusal, askedRefused) = await run(.emptyTrash, on: refused)
+    let (refusal, asked) = await run(.emptyTrash, on: refused)
     #expect(
         refusal == "Fudge isn't allowed to control Finder. "
             + "Allow it in System Settings → Privacy & Security → Automation.")
     #expect(refused.done == ["ask Finder"])
-    #expect(askedRefused.isEmpty)
+    #expect(asked.isEmpty)
+}
 
-    // Refused when the count is sent (the answer changed since), or Finder failing: the error, never "empty".
-    let denied = FakeSystem()
-    denied.trash = .failure(AppleEventError(status: -1743))
-    #expect(await run(.emptyTrash, on: denied).message == SystemCommandMessage.automationDenied(.finder))
-    let failed = FakeSystem()
-    failed.trash = .failure(AppleEventError(status: -600))
-    let (failure, askedFailed) = await run(.emptyTrash, on: failed)
-    #expect(failure == "Couldn't count the Trash (error -600).")
-    #expect(askedFailed.isEmpty && !failed.done.contains("empty"))
-    let slow = FakeSystem()
-    slow.trash = .failure(AppleEventError(status: -1712))
-    #expect(await run(.emptyTrash, on: slow).message == "Finder didn't answer in time.")
-    for message in [refusal, failure] { #expect(message != SystemCommandMessage.trashIsEmpty) }
+@Test func theTrashCountIsAskedForAsAppleScriptDoes() throws {
+    let code = SystemAppleEvents.code
+    let finder = NSAppleEventDescriptor(bundleIdentifier: "com.apple.finder")
+    let event = SystemAppleEvents.countTrash(to: finder)
+    #expect(event.eventClass == code("core") && event.eventID == code("cnte"))
+    // `kocl`: the class to count, items.
+    #expect(event.paramDescriptor(forKeyword: code("kocl"))?.typeCodeValue == code("cobj"))
+    // `----`: the Trash itself, `property trsh of the application`, never `every item of trash`.
+    let direct = try #require(event.paramDescriptor(forKeyword: code("----")))
+    #expect(direct.descriptorType == code("obj "))
+    #expect(direct.forKeyword(code("want"))?.typeCodeValue == code("prop"))
+    #expect(direct.forKeyword(code("form"))?.enumCodeValue == code("prop"))
+    #expect(direct.forKeyword(code("seld"))?.typeCodeValue == code("trsh"))
+    #expect(direct.forKeyword(code("from"))?.descriptorType == code("null"))
+}
+
+@Test func aCountIsReadOnlyFromANumber() throws {
+    let code = SystemAppleEvents.code
+    func reply(_ value: NSAppleEventDescriptor?) -> NSAppleEventDescriptor {
+        let reply = NSAppleEventDescriptor.appleEvent(
+            withEventClass: code("aevt"), eventID: code("ansr"), targetDescriptor: nil,
+            returnID: AEReturnID(kAutoGenerateReturnID), transactionID: AETransactionID(kAnyTransactionID))
+        if let value { reply.setParam(value, forKeyword: code("----")) }
+        return reply
+    }
+    #expect(try SystemAppleEvents.count(in: reply(NSAppleEventDescriptor(int32: 7))) == 7)
+    #expect(try SystemAppleEvents.count(in: reply(NSAppleEventDescriptor(int32: 0))) == 0)
+    // A list (what counting `every item of trash` by `cobj` can give) or nothing at all throws: never 0.
+    let list = NSAppleEventDescriptor.list()
+    list.insert(NSAppleEventDescriptor(int32: 0), at: 1)
+    list.insert(NSAppleEventDescriptor(int32: 0), at: 2)
+    #expect(throws: AppleEventError(status: SystemAppleEvents.coercionFailed)) {
+        try SystemAppleEvents.count(in: reply(list))
+    }
+    #expect(throws: AppleEventError(status: SystemAppleEvents.coercionFailed)) {
+        try SystemAppleEvents.count(in: reply(nil))
+    }
+    #expect(throws: AppleEventError.self) { try SystemAppleEvents.count(in: reply(.init(string: "lots"))) }
+    // Dark mode's yes or no is read as strictly.
+    #expect(try SystemAppleEvents.boolean(in: reply(NSAppleEventDescriptor(boolean: true))))
+    #expect(try !SystemAppleEvents.boolean(in: reply(NSAppleEventDescriptor(boolean: false))))
+    #expect(throws: AppleEventError.self) { try SystemAppleEvents.boolean(in: reply(nil)) }
+    #expect(throws: AppleEventError.self) { try SystemAppleEvents.boolean(in: reply(list)) }
 }
 
 @Test func ejectAllDisksTakesEjectableRemovableAndNetworkVolumesOnly() {
@@ -325,4 +374,11 @@ private func volume(
     #expect(message == nil)
     #expect(asked == [.emptyTrash(items: InertSystemActions.trashCount)])
     #expect(await runner.run(.lockScreen) { _ in true } == SystemCommandMessage.lockNeedsAccessibility)
+    // `--trash-count` with no number: the confirmation without one.
+    let unreadable = SystemCommandRunner(actions: InertSystemActions(trashCount: nil), ownPid: me)
+    _ = await unreadable.run(.emptyTrash) {
+        asked.append($0)
+        return false
+    }
+    #expect(asked.last == .emptyTrash(items: nil))
 }

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as implementation from "../src/api/index.ts";
 import { createApiModule } from "../src/api/module.ts";
-import { mark, NOT_DRAWN, notAvailable, UNAVAILABLE } from "../src/api/stubs.ts";
+import { mark, NOT_DRAWN, notAvailable, NotAvailableError, UNAVAILABLE, unsupported } from "../src/api/stubs.ts";
 import { RAYCAST_UTILS_PATHS } from "../scripts/compat/raycast-utils.generated.ts";
 import { category } from "../scripts/compat/extension.ts";
 import { apiName, gaps, isExtensionSource, support, toJavaScript, uses } from "../scripts/compat/scan.ts";
@@ -86,7 +86,20 @@ test("an extension reading the deprecated preferences record has no gaps", async
     assert.deepEqual(gaps(found, api, declared, RAYCAST_UTILS_PATHS), { gaps: [], notRaycast: [] });
 });
 
-test("OAuth stays left out by design, though its client can be built (D-50)", () => {
+test("AI and the Browser Extension are counted apart by the same list the runtime's messages come from", () => {
+    for (const { category: name, api: pattern } of unsupported) {
+        const path = pattern.source.includes("Browser") ? "BrowserExtension.getTabs" : "AI.ask";
+        assert.equal(category({ api: path, kind: "missing" }), name, path);
+        assert.match(new NotAvailableError(path).message, /isn't supported in Fudge\.$/, path);
+    }
+    assert.deepEqual(
+        unsupported.map((group) => group.category),
+        ["AI", "Browser Extension"],
+    );
+    assert.equal(category({ api: "AIs", kind: "missing" }), undefined, "only the category itself and what's under it");
+});
+
+test("OAuth is counted apart, though its client can be built and signs in through a sign-in server", () => {
     for (const path of ["OAuth", "OAuth.PKCEClient", "OAuth.RedirectMethod.Web", "OAuth.RedirectMethod.AppURI"]) {
         assert.equal(support(api, path, declared), "missing", path);
         assert.equal(category({ api: apiName(path), kind: "missing" }), "OAuth", path);
