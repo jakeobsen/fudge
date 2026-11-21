@@ -91,6 +91,8 @@ public enum ActionTarget: Sendable, Equatable {
     case root(RootAction)
     /// `Action.ToggleQuickLook`, which the app performs itself on the selected item (SPEC-049).
     case toggleQuickLook
+    /// `Action.CreateQuicklink`, which the app performs itself: its Create Quicklink form, filled in (SPEC-052 B3).
+    case createQuicklink(QuicklinkRequest)
 }
 
 /// fudge's own actions on a root search item.
@@ -114,6 +116,8 @@ public enum RootAction: Sendable, Equatable {
     case retryExchangeRates
     /// Copies a quicklink's link as saved, placeholders included.
     case copyQuicklink(String)
+    /// Opens the Create Quicklink form on a quicklink, by id, to edit it.
+    case editQuicklink(String)
     /// Deletes a quicklink, by id, after asking.
     case deleteQuicklink(String)
 
@@ -133,6 +137,7 @@ public enum RootActions {
     public static let showInFinderShortcut = KeyShortcut(key: "f", modifiers: ["cmd", "shift"])
     public static let copyQuestionAndAnswerShortcut = KeyShortcut(key: "c", modifiers: ["cmd", "shift"])
     public static let copyLinkShortcut = KeyShortcut(key: "c", modifiers: ["cmd", "shift"])
+    public static let editQuicklinkShortcut = KeyShortcut(key: "e", modifiers: ["cmd"])
     public static let deleteQuicklinkShortcut = KeyShortcut(key: "x", modifiers: ["ctrl"])
     static let enter = KeyShortcut(key: "return", modifiers: [])
 
@@ -183,10 +188,13 @@ public enum RootActions {
                 [("Reload Extensions", enter, .open)]
             case .quit:
                 [("Quit Fudge", enter, .open)]
+            case .createQuicklink:
+                [("Create Quicklink", enter, .open)]
             case .quicklink(let quicklink):
                 [
                     ("Open Quicklink", enter, .open),
                     ("Copy Link", copyLinkShortcut, .copyQuicklink(quicklink.link)),
+                    ("Edit Quicklink…", editQuicklinkShortcut, .editQuicklink(quicklink.id)),
                     ("Delete Quicklink…", deleteQuicklinkShortcut, .deleteQuicklink(quicklink.id)),
                 ]
             }
@@ -253,7 +261,7 @@ public enum ActionPanelReader {
                 destructive: node.string("style") == "destructive",
                 submenu: nil,
                 isLoading: false,
-                target: node.string(builtInProp) == "toggleQuickLook" ? .toggleQuickLook : .node(node.id),
+                target: target(of: node),
                 pickDate: pickDate(node)
             )
         case "ActionPanel.Submenu":
@@ -270,6 +278,17 @@ public enum ActionPanelReader {
             )
         default:
             return nil
+        }
+    }
+
+    /// What running an `Action` node does: a built-in action the app performs itself, else the node's `onAction`. A
+    /// `createQuicklink` without a `quicklink` it can read runs nothing of the app's.
+    static func target(of node: UINode) -> ActionTarget {
+        switch node.string(builtInProp) {
+        case "toggleQuickLook": return .toggleQuickLook
+        case "createQuicklink":
+            return QuicklinkRequest(json: node.props["quicklink"]).map(ActionTarget.createQuicklink) ?? .node(node.id)
+        default: return .node(node.id)
         }
     }
 

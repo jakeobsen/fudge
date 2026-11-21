@@ -14,6 +14,7 @@ final class SettingsModel {
     static let generalPage = ":general"
     static let commandsPage = ":commands"
     static let permissionsPage = ":permissions"
+    static let quicklinksPage = ":quicklinks"
     static let signInPage = ":sign-in"
     /// Every installed extension, for the Commands page.
     private(set) var allExtensions: [InstalledExtension] = []
@@ -69,9 +70,11 @@ final class SettingsModel {
         fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
         settingsProblem = FudgeSettings.isWritable(paths.settingsFile) ? nil : unreadableMessage
         loadLaunchPermissions()
+        loadQuicklinks()
         loadSignIns()
         if selected != Self.generalPage, selected != Self.commandsPage, selected != Self.permissionsPage,
-            selected != Self.signInPage, !extensions.contains(where: { $0.manifest.name == selected })
+            selected != Self.quicklinksPage, selected != Self.signInPage,
+            !extensions.contains(where: { $0.manifest.name == selected })
         {
             select(Self.generalPage)
         }
@@ -81,6 +84,7 @@ final class SettingsModel {
     func select(_ page: String?) {
         if recorder.pageChanged(from: selected, to: page) { resumeHotkeys() }
         selected = page
+        if page == Self.quicklinksPage { loadQuicklinks() }
     }
 
     /// Show Onboarding Again: a recording here ends first, since onboarding has its own hotkey step.
@@ -191,6 +195,81 @@ final class SettingsModel {
             FileHandle.standardError.write(Data("fudge: couldn't save launch permissions: \(error)\n".utf8))
         }
         loadLaunchPermissions()
+    }
+
+    // MARK: - Quicklinks
+
+    /// The quicklinks, by name, as the Quicklinks page lists them. Read again whenever the page is shown or the
+    /// window becomes key, so changes made in the launcher show.
+    private(set) var quicklinks: [Quicklink] = []
+    /// `quicklinks.json` holds something Fudge can't read, so the page can't change it.
+    private(set) var quicklinksUnreadable = false
+    /// Root search reads the quicklinks again; set by the app delegate.
+    @ObservationIgnored var quicklinksChanged: () -> Void = {}
+    /// Open With's choices, with their bundle ids.
+    @ObservationIgnored private(set) lazy var quicklinkApplications: [QuicklinkApplication] =
+        applications
+        .compactMap { item in
+            guard case .application(let url) = item.kind, let bundleId = Bundle(url: url)?.bundleIdentifier else {
+                return nil
+            }
+            return QuicklinkApplication(name: item.title, bundleId: bundleId, path: url.path)
+        }
+        .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+
+    func loadQuicklinks() {
+        let file = paths.quicklinksFile
+        quicklinks = QuicklinkStore.load(from: file).quicklinks.sorted {
+            $0.name.localizedStandardCompare($1.name) == .orderedAscending
+        }
+        quicklinksUnreadable = !QuicklinkStore.isWritable(file)
+    }
+
+    /// The name Open With shows: the application's, or "Default".
+    func applicationName(of quicklink: Quicklink) -> String {
+        guard let bundleId = quicklink.application else { return "Default" }
+        if let app = quicklinkApplications.first(where: { $0.bundleId == bundleId }) { return app.name }
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
+            return (FileManager.default.displayName(atPath: url.path) as NSString).deletingPathExtension
+        }
+        return bundleId
+    }
+
+    enum QuicklinkSave: Equatable {
+        case saved
+        case problems(QuicklinkDraft.Problems)
+        case failed(String)
+    }
+
+    /// Saves the sheet's quicklink, after reading the file again: as a new one, or in place of the one edited.
+    func saveQuicklink(_ draft: QuicklinkDraft) -> QuicklinkSave {
+        let file = paths.quicklinksFile
+        var store = QuicklinkStore.load(from: file)
+        let problems = draft.problems(among: store.quicklinks)
+        guard problems.isEmpty else { return .problems(problems) }
+        draft.save(into: &store)
+        do {
+            try store.save(to: file)
+        } catch {
+            loadQuicklinks()
+            return .failed(String(describing: error))
+        }
+        loadQuicklinks()
+        quicklinksChanged()
+        return .saved
+    }
+
+    func deleteQuicklink(id: String) {
+        let file = paths.quicklinksFile
+        var store = QuicklinkStore.load(from: file)
+        store.remove(id: id)
+        do {
+            try store.save(to: file)
+        } catch {
+            FileHandle.standardError.write(Data("fudge: couldn't delete the quicklink: \(error)\n".utf8))
+        }
+        loadQuicklinks()
+        quicklinksChanged()
     }
 
     // MARK: - The launcher's hotkey
@@ -686,11 +765,15 @@ final class SettingsWindowController {
                     window?.dropContentWhenClosed()
                 }
             }
-            // Coming back from System Settings → Login Items shows what was changed there.
+            // Coming back from System Settings → Login Items shows what was changed there, and from the launcher a
+            // quicklink saved there.
             NotificationCenter.default.addObserver(
                 forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
             ) { _ in
-                MainActor.assumeIsolated { model.refreshLoginItem() }
+                MainActor.assumeIsolated {
+                    model.refreshLoginItem()
+                    model.loadQuicklinks()
+                }
             }
         }
     }
@@ -733,6 +816,7 @@ struct SettingsView: View {
                 Label("General", systemImage: "gearshape").tag(SettingsModel.generalPage)
                 Label("Permissions", systemImage: "hand.raised").tag(SettingsModel.permissionsPage)
                 Label("Commands", systemImage: "command").tag(SettingsModel.commandsPage)
+                Label("Quicklinks", systemImage: "link").tag(SettingsModel.quicklinksPage)
                 Label("Sign-in", systemImage: "person.badge.key").tag(SettingsModel.signInPage)
                 Section("Extensions") {
                     ForEach(model.extensions, id: \.manifest.name) { installed in
@@ -752,6 +836,8 @@ struct SettingsView: View {
                     PermissionsPage(model: model)
                 } else if model.selected == SettingsModel.commandsPage {
                     CommandsPage(model: model)
+                } else if model.selected == SettingsModel.quicklinksPage {
+                    QuicklinksPage(model: model)
                 } else if model.selected == SettingsModel.signInPage {
                     SignInPage(model: model)
                 } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {

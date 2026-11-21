@@ -103,6 +103,12 @@ public struct QuicklinkTemplate: Sendable, Equatable {
         }
     }
 
+    /// The link without its placeholders, for root search to match: typing "argument" shouldn't find every
+    /// quicklink with a field.
+    public var searchableText: String {
+        link.replacing(/\{[^{}]*\}/, with: " ").split(whereSeparator: \.isWhitespace).joined(separator: " ")
+    }
+
     /// Whether it uses `{clipboard}`, so opening it reads the clipboard only then.
     public var usesClipboard: Bool {
         segments.contains { segment in
@@ -118,16 +124,19 @@ public struct QuicklinkTemplate: Sendable, Equatable {
         public var now: Date
         public var locale: Locale
         public var timeZone: TimeZone
+        /// The Mac's calendar, which `{date}` and `{datetime}` are written in.
+        public var calendar: Calendar
         public var makeUUID: @Sendable () -> String
 
         public init(
             clipboard: String?, now: Date = Date(), locale: Locale = .current, timeZone: TimeZone = .current,
-            makeUUID: @escaping @Sendable () -> String = { UUID().uuidString }
+            calendar: Calendar = .current, makeUUID: @escaping @Sendable () -> String = { UUID().uuidString }
         ) {
             self.clipboard = clipboard
             self.now = now
             self.locale = locale
             self.timeZone = timeZone
+            self.calendar = calendar
             self.makeUUID = makeUUID
         }
     }
@@ -168,7 +177,7 @@ public struct QuicklinkTemplate: Sendable, Equatable {
         case .dynamic(.uuid):
             return context.makeUUID()
         case .dynamic(let dynamic):
-            var calendar = Calendar(identifier: .gregorian)
+            var calendar = context.calendar
             calendar.locale = context.locale
             calendar.timeZone = context.timeZone
             let date: Date.FormatStyle.DateStyle = dynamic == .time ? .omitted : .abbreviated
@@ -241,9 +250,7 @@ public struct QuicklinkTemplate: Sendable, Equatable {
         /// One placeholder's inside, between the braces.
         mutating func placeholder(_ body: String) -> Placeholder? {
             let written = "{\(body)}"
-            var parts = body.split(separator: "|", omittingEmptySubsequences: false).map {
-                $0.trimmingCharacters(in: .whitespaces)
-            }
+            var parts = Self.splitModifiers(body).map { $0.trimmingCharacters(in: .whitespaces) }
             let head = parts.removeFirst()
             var modifiers: [Modifier] = []
             for part in parts {
@@ -289,6 +296,21 @@ public struct QuicklinkTemplate: Sendable, Equatable {
             // Raycast's older form: a bare word is an argument with that name.
             return Placeholder(
                 value: .argument(add(Argument(name: word, defaultValue: nil, options: []))), modifiers: modifiers)
+        }
+
+        /// Splits a placeholder at each `|` outside quotes, so `default="a|b"` stays one attribute.
+        static func splitModifiers(_ body: String) -> [String] {
+            var parts = [""]
+            var quoted = false
+            for character in body {
+                if character == "\"" { quoted.toggle() }
+                if character == "|", !quoted {
+                    parts.append("")
+                } else {
+                    parts[parts.count - 1].append(character)
+                }
+            }
+            return parts
         }
 
         static func unsupportedName(_ word: String) -> Bool {
