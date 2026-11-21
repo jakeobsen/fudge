@@ -633,17 +633,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    /// The alert a `confirmAlert` shows.
-    static func alert(for request: LauncherModel.AlertRequest) -> NSAlert {
-        let alert = NSAlert()
-        alert.messageText = request.title
-        alert.informativeText = request.message ?? ""
-        let primary = alert.addButton(withTitle: request.primary)
-        primary.hasDestructiveAction = request.destructive
-        alert.addButton(withTitle: request.dismiss)
-        return alert
-    }
-
     /// An import replaced `settings.json`, the history and extensions' data: read everything again, and register
     /// the imported hotkeys.
     private func afterImport() {
@@ -807,16 +796,6 @@ struct Snapshot {
     /// Whether `arguments` ask for a snapshot. `main.swift` decides the activation policy with it, before launch.
     static func isRequested(_ arguments: [String]) -> Bool {
         arguments.contains("--snapshot")
-    }
-
-    /// Saves a `confirmAlert` the run reached, laid out but never shown, in place of the panel, and quits. It's
-    /// saved a second later, as the Settings window's consent sheets are, once its icon has been drawn.
-    func save(alert: NSAlert) {
-        let sheet = SnapshotSheet.laidOut(alert)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-            guard let view = sheet.contentView else { exit(1) }
-            save(view)
-        }
     }
 
     private func save(_ view: NSView) -> Never {
