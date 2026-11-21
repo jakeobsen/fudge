@@ -170,6 +170,8 @@ final class LauncherModel {
     @ObservationIgnored var confirm: (AlertRequest, CallOrigin) async -> Bool = { _, _ in false }
     /// The system's part of the System commands. `AppDelegate` gives snapshot runs inert ones, which do nothing.
     @ObservationIgnored var systemActions: any SystemActions = MacSystemActions()
+    /// My Schedule's calendars: EventKit's, or a snapshot run's made-up ones (`FixedCalendarSource`).
+    @ObservationIgnored var calendarSource: any CalendarSource = EventKitCalendarSource()
 
     /// "Sign in to <provider>" on screen, over whatever the command shows (SPEC-056).
     private(set) var signIn: SignInPrompt?
@@ -1691,9 +1693,11 @@ final class LauncherModel {
         }
     }
 
-    /// The sessions of Fudge's own views, its forms, Search Snippets and Switch Windows, which never reach the host.
+    /// The sessions of Fudge's own views, its forms, Search Snippets, Switch Windows and My Schedule, which never
+    /// reach the host.
     static let builtInSessions: Set<String> = [
         QuicklinkForm.session, SnippetForm.session, SnippetList.session, SwitchWindowsList.session,
+        ScheduleList.session,
     ]
 
     @ObservationIgnored private var builtInForm: BuiltInFormState?
@@ -1855,6 +1859,118 @@ final class LauncherModel {
         for case .exit(let session, let reason) in form.deferred { handle(.exit(session: session, reason: reason)) }
         if case .command(let command) = screen, command.session == covered { return }
         send(.unload(session: covered))
+    }
+
+    // MARK: - My Schedule
+
+    /// What My Schedule was last drawn from, which its actions' nodes are read in (`ScheduleList.target`). It's in
+    /// memory only: no event is logged or kept (SPEC-092).
+    @ObservationIgnored private var scheduleContent = ScheduleList.Content.asking
+    /// Whether My Schedule shows its detail pane (Show Details, ⌘D), for the run.
+    @ObservationIgnored private var scheduleShowsDetail = false
+
+    /// Shows My Schedule (SPEC-092), from root search or its hotkey. Its hotkey hides it again when it's on screen,
+    /// as a view command's does. Calendar access is asked for here, the first time, and nowhere else.
+    private func showSchedule(fromHotkey: Bool) {
+        if fromHotkey, isVisible(), case .command(let command) = screen, command.session == ScheduleList.session {
+            hide()
+            return
+        }
+        let build = {
+            if case .command = self.screen { self.leaveCommand() }
+            self.actionPanel = nil
+            self.dropdownPanel = nil
+            self.datePanel = nil
+            var command = CommandScreen(session: ScheduleList.session, title: ScheduleList.title)
+            self.renderSchedule(&command)
+            self.screen = .command(command)
+        }
+        if fromHotkey {
+            resettingFirst(build)
+            show()
+        } else {
+            build()
+        }
+        guard calendarSource.authorization == .notDetermined else { return }
+        let source = calendarSource
+        Task {
+            _ = await source.requestAccess()
+            reloadSchedule()
+        }
+    }
+
+    /// Reads the calendars and draws the list, keeping the search text and the selection where it can: the days
+    /// from today to Days Ahead, of the calendars not unticked on the Calendar page.
+    private func renderSchedule(_ command: inout CommandScreen) {
+        let now = Date()
+        let calendar = Calendar.current
+        let content: ScheduleList.Content
+        switch calendarSource.authorization {
+        case .fullAccess:
+            let chosen = FudgeSettings.load(from: paths.settingsFile)
+            let calendars = calendarSource.calendars()
+            let window = Schedule.window(now: now, daysAhead: chosen.calendarDaysAhead, calendar: calendar)
+            let events = calendarSource.events(
+                from: window.start, to: window.end,
+                calendars: Schedule.shownCalendars(calendars, hidden: chosen.calendarHidden))
+            content = .days(
+                Schedule.days(
+                    events, now: now, daysAhead: chosen.calendarDaysAhead, calendar: calendar, locale: .current),
+                calendars: calendars, daysAhead: chosen.calendarDaysAhead)
+        case .notDetermined:
+            content = .asking
+        default:
+            content = .refused
+        }
+        scheduleContent = content
+        command.view = ScheduleList.view(
+            content, showingDetail: scheduleShowsDetail, now: now, calendar: calendar, locale: .current)
+        refreshList(&command, selectFirst: false)
+    }
+
+    /// Draws My Schedule again, if it's on screen: after access is answered, the calendars change, or the Calendar
+    /// page changes what it shows.
+    func reloadSchedule() {
+        guard case .command(var command) = screen, command.session == ScheduleList.session else { return }
+        renderSchedule(&command)
+        screen = .command(command)
+    }
+
+    /// One of its actions, as `send` hands it over.
+    private func scheduleListAction(node: Int) {
+        guard case .command(let list) = screen, list.session == ScheduleList.session,
+            let target = ScheduleList.target(of: node, in: scheduleContent, calendar: .current, locale: .current)
+        else { return }
+        switch target {
+        case .join(let url), .openInCalendar(let url):
+            // The user's own pick; a meeting link is one `MeetingLinks` accepted.
+            if NSWorkspace.shared.open(url) {
+                hide()
+            } else {
+                showFailureToast("Can't open it", message: "No app on this Mac opens this link.")
+            }
+        case .copyLink(let url):
+            copyScheduleText(url.absoluteString, hud: "Copied Meeting Link")
+        case .copyDetails(let text):
+            copyScheduleText(text, hud: "Copied to Clipboard")
+        case .openPrivacySettings:
+            NSWorkspace.shared.open(ScheduleList.privacySettingsURL)
+            hide()
+        case .openSettings:
+            showSettings(extension: SettingsModel.calendarPage)
+        case .toggleDetail:
+            scheduleShowsDetail.toggle()
+            reloadSchedule()
+        }
+    }
+
+    private func copyScheduleText(_ text: String, hud: String) {
+        Task {
+            _ = try? await SystemCalls.handle(
+                "clipboard.copy", .object(["text": .string(text)]), origin: .userInitiated)
+        }
+        hide()
+        showHUD(hud)
     }
 
     // MARK: - Search Snippets
@@ -2754,6 +2870,8 @@ final class LauncherModel {
                 }
                 if let message { showHUD(message) }
             }
+        } else if group == BuiltInCommandGroup.calendar.name, command == ScheduleList.commandName {
+            showSchedule(fromHotkey: fromHotkey)
         }
     }
 
@@ -3158,6 +3276,8 @@ final class LauncherModel {
                 snippetListAction(node: node)
             } else if session == SwitchWindowsList.session, path == ["onAction"] {
                 switchWindowsAction(node: node)
+            } else if session == ScheduleList.session, path == ["onAction"] {
+                scheduleListAction(node: node)
             }
             return
         }

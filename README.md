@@ -205,6 +205,12 @@ Fudge can move and resize the window you're using: halves, quarters, thirds and 
 
 Fudge's System commands are **Lock Screen**, **Sleep**, **Restart**, **Shut Down**, **Log Out**, **Empty Trash**, **Eject All Disks**, **Toggle Dark Mode**, **Hide All Apps** and **Quit All Apps**. Restart, Shut Down, Log Out, Empty Trash and Quit All Apps ask first, and apps with unsaved work ask about it as they quit. Search for them, or give them hotkeys under **Settings… → Commands → System**. The first time, macOS asks you to let Fudge control Finder, System Events or the login window (**Privacy & Security → Automation**). Lock Screen needs Accessibility permission.
 
+### My Schedule
+
+**My Schedule** lists your events from today on, a section per day, from the calendars on your Mac. Each shows its time, its calendar's color, and "Now" or "in 12 min" when it's about to start; the detail has the place, the calendar, how many are invited and the notes. ↵ joins the meeting when the event has a Zoom, Google Meet, Microsoft Teams, Webex, FaceTime, Whereby, Around or Jitsi link, and otherwise opens the event in Calendar (⌘O). ⌘⇧C copies the meeting link, and Copy Details copies the event.
+
+The first time you open it, macOS asks to let Fudge see your calendars; you can change that under **Privacy & Security → Calendars**. **Settings → Calendar** picks which calendars it shows, and how many days ahead (1, 3, 7 or 14).
+
 ### Selected text and Finder items
 
 Extensions can read the text selected in the app you were in, and the items selected in Finder. The first time, macOS asks you to allow Fudge under **Privacy & Security → Accessibility** or **Automation**.

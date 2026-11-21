@@ -57,6 +57,11 @@ public struct FudgeSettings: Sendable, Equatable {
     /// How often Fudge checks for a new release (`updateCheck`); nil until the user chooses, and nothing is checked
     /// until then. An unknown value reads as unset.
     public var updateCheck: UpdateCheckSetting?
+    /// The calendars My Schedule leaves out (`calendarHidden`, by EventKit's calendar id), so a new one shows.
+    public var calendarHidden: [String] = []
+    /// My Schedule's **Days Ahead** (`calendarDaysAhead`): one of `Schedule.daysAheadChoices`; anything else reads
+    /// as the default.
+    public var calendarDaysAhead = Schedule.defaultDaysAhead
 
     public struct CommandSettings: Sendable, Equatable {
         /// In `HotKeySpec` text form.
@@ -199,6 +204,10 @@ public struct FudgeSettings: Sendable, Equatable {
         settings.showOnScreen = ShowOnScreen(settingsValue: object["showOnScreen"])
         settings.escapeBehavior = EscapeBehavior(settingsValue: object["escapeBehavior"])
         settings.updateCheck = UpdateCheckSetting(settingsValue: object["updateCheck"])
+        settings.calendarHidden = (object["calendarHidden"] as? [Any] ?? []).compactMap { $0 as? String }
+        if let days = object["calendarDaysAhead"] as? Int, Schedule.daysAheadChoices.contains(days) {
+            settings.calendarDaysAhead = days
+        }
         for case (let id, let entry as [String: Any]) in object["commands"] as? [String: Any] ?? [:] {
             settings.commands[id] = CommandSettings(
                 hotkey: entry["hotkey"] as? String, alias: entry["alias"] as? String, enabled: entry["enabled"] as? Bool
@@ -231,6 +240,8 @@ public struct FudgeSettings: Sendable, Equatable {
         object["showOnScreen"] = showOnScreen.settingsValue
         object["escapeBehavior"] = escapeBehavior.settingsValue
         object["updateCheck"] = updateCheck?.rawValue
+        object["calendarHidden"] = calendarHidden.isEmpty ? nil : calendarHidden
+        object["calendarDaysAhead"] = calendarDaysAhead == Schedule.defaultDaysAhead ? nil : calendarDaysAhead
 
         var commandObjects = object["commands"] as? [String: Any] ?? [:]
         let commandIDs = Set(commandObjects.keys).union(commands.keys)

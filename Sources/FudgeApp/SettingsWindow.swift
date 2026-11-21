@@ -17,6 +17,7 @@ final class SettingsModel {
     static let quicklinksPage = ":quicklinks"
     static let snippetsPage = ":snippets"
     static let signInPage = ":sign-in"
+    static let calendarPage = ":calendar"
     /// Every installed extension, for the Commands page.
     private(set) var allExtensions: [InstalledExtension] = []
     /// `settings.json`, as the Commands page edits it.
@@ -74,9 +75,10 @@ final class SettingsModel {
         loadQuicklinks()
         loadSnippets()
         loadSignIns()
+        loadCalendars()
         if selected != Self.generalPage, selected != Self.commandsPage, selected != Self.permissionsPage,
             selected != Self.quicklinksPage, selected != Self.snippetsPage, selected != Self.signInPage,
-            !extensions.contains(where: { $0.manifest.name == selected })
+            selected != Self.calendarPage, !extensions.contains(where: { $0.manifest.name == selected })
         {
             select(Self.generalPage)
         }
@@ -88,6 +90,7 @@ final class SettingsModel {
         selected = page
         if page == Self.quicklinksPage { loadQuicklinks() }
         if page == Self.snippetsPage { loadSnippets() }
+        if page == Self.calendarPage || page == Self.permissionsPage { loadCalendars() }
     }
 
     /// Show Onboarding Again: a recording here ends first, since onboarding has its own hotkey step.
@@ -294,6 +297,47 @@ final class SettingsModel {
         }
         loadQuicklinks()
         quicklinksChanged()
+    }
+
+    // MARK: - Calendar (SPEC-092)
+
+    /// The calendars, read only with access, which only My Schedule's own run asks for; set by the app delegate,
+    /// which shares the launcher's.
+    @ObservationIgnored var calendarSource: any CalendarSource = FixedCalendarSource(access: .notDetermined)
+    /// Tells the launcher to draw My Schedule again; set by the app delegate.
+    @ObservationIgnored var calendarChanged: () -> Void = {}
+    private(set) var calendarAccess = CalendarAuthorization.notDetermined
+    /// The Mac's calendars, by title, as the Calendar page lists them.
+    private(set) var calendars: [CalendarInfo] = []
+
+    /// Reads the access and the calendars again, without asking: when the page is shown or the window becomes key.
+    func loadCalendars() {
+        calendarAccess = calendarSource.authorization
+        calendars = calendarSource.calendars().sorted {
+            $0.title.localizedStandardCompare($1.title) == .orderedAscending
+        }
+    }
+
+    var calendarDaysAhead: Int { fudgeSettings.calendarDaysAhead }
+
+    func isCalendarShown(_ id: String) -> Bool {
+        !fudgeSettings.calendarHidden.contains(id)
+    }
+
+    /// Ticks or unticks a calendar; an unticked one is kept by id, so a calendar added later shows.
+    func setCalendarShown(_ shown: Bool, id: String) {
+        guard
+            change({ settings in
+                settings.calendarHidden.removeAll { $0 == id }
+                if !shown { settings.calendarHidden.append(id) }
+            })
+        else { return }
+        calendarChanged()
+    }
+
+    func setCalendarDaysAhead(_ days: Int) {
+        guard days != calendarDaysAhead, change({ $0.calendarDaysAhead = days }) else { return }
+        calendarChanged()
     }
 
     // MARK: - Snippets
@@ -1012,6 +1056,7 @@ struct SettingsView: View {
                 Label("Quicklinks", systemImage: "link").tag(SettingsModel.quicklinksPage)
                 Label("Snippets", systemImage: "doc.text").tag(SettingsModel.snippetsPage)
                 Label("Sign-in", systemImage: "person.badge.key").tag(SettingsModel.signInPage)
+                Label("Calendar", systemImage: "calendar").tag(SettingsModel.calendarPage)
                 Section("Extensions") {
                     ForEach(model.extensions, id: \.manifest.name) { installed in
                         Text(installed.manifest.title).tag(installed.manifest.name)
@@ -1036,6 +1081,8 @@ struct SettingsView: View {
                     SnippetsPage(model: model)
                 } else if model.selected == SettingsModel.signInPage {
                     SignInPage(model: model)
+                } else if model.selected == SettingsModel.calendarPage {
+                    CalendarPage(model: model)
                 } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {
                     ExtensionPreferencesForm(model: model, installed: installed)
                 } else {
