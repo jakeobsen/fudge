@@ -111,7 +111,7 @@ export function report(folder: string, result: Result): Report {
 }
 
 const kindWords: Record<Gap["kind"], string> = {
-    missing: "not in fudge",
+    missing: "not in Fudge",
     "render-but-fail": "shows, but fails when used",
     "not-drawn": "not drawn",
     "via @raycast/utils": "through @raycast/utils",

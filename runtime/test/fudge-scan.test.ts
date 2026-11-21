@@ -6,7 +6,7 @@ import path from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { binaryTransform } from "../scripts/compat/extension.ts";
+import { binaryTransform, describe, type Report } from "../scripts/compat/extension.ts";
 import { toJavaScript, uses } from "../scripts/compat/scan.ts";
 
 // `fudge scan <folder> --json`, run the way the fudge tool runs it: with esbuild's binary and Raycast's types given
@@ -44,6 +44,45 @@ test("fudge scan reports a supported extension and one with gaps", () => {
     const script = path.join(runtime, "scripts/compat/fudge-scan.ts");
     assert.deepEqual(scan(script, path.join(fixtures, "supported")), supported);
     assert.deepEqual(scan(script, path.join(fixtures, "gaps")), withGaps);
+});
+
+test("without --json, fudge scan lists the gaps for a person, saying Fudge", () => {
+    const script = path.join(runtime, "scripts/compat/fudge-scan.ts");
+    const run = (folder: string) =>
+        execFileSync(process.execPath, [script, folder], {
+            cwd: scratch,
+            env: { ...process.env, FUDGE_ESBUILD: esbuild, FUDGE_RAYCAST_TYPES: types },
+            encoding: "utf8",
+        }).trimEnd();
+    assert.equal(run(path.join(fixtures, "supported")), "scan-supported: Fudge supports everything it uses.");
+    assert.equal(
+        run(path.join(fixtures, "gaps")),
+        [
+            "scan-gaps uses things Fudge doesn't have yet:",
+            "  AI.ask (not in Fudge; AI, left out on purpose)",
+            "  WindowManagement.getActiveWindow (not in Fudge)",
+        ].join("\n"),
+    );
+    const other: Report = {
+        extension: "other",
+        supported: false,
+        gaps: [
+            { api: "Action.ToggleQuickLook", kind: "render-but-fail" },
+            { api: "Form.LinkAccessory", kind: "not-drawn" },
+            { api: "OAuth.PKCEClient", kind: "via @raycast/utils", via: ["OAuthService"], byDesign: "OAuth" },
+        ],
+        unreadable: ["src/broken.ts"],
+    };
+    assert.equal(
+        describe(other),
+        [
+            "other uses things Fudge doesn't have yet:",
+            "  Action.ToggleQuickLook (shows, but fails when used)",
+            "  Form.LinkAccessory (not drawn)",
+            "  OAuth.PKCEClient (through @raycast/utils: OAuthService; OAuth, left out on purpose)",
+            "Couldn't read: src/broken.ts",
+        ].join("\n"),
+    );
 });
 
 test("the bundled scanner gives the same reports, and writes nothing beside itself", async () => {
