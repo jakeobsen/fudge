@@ -16,7 +16,7 @@ Extensions run in a separate Node.js process, the extension host.
     The item's glyph is `MenuBarIcon`, a fudge cube drawn in code as a template image.
     Its autosave name is `fudge` (`AppDelegate.statusItemName`), because macOS keeps whether a status item is shown in the app's preferences under that name, and an unnamed item's `Item-0` was once saved as hidden.
     It's shown at every launch, and its `behavior` is `[]`, so ⌘-dragging can't remove it.
-    Its menu ends with the running version (`AppVersion.current`, what `Info.plist` holds), and has Check for Updates… and, at the top while a newer release is known, `Fudge <version> Is Available…` (see the update check).
+    Its menu ends with the running version (`FudgeVersion.current`, the `Info.plist`'s `CFBundleShortVersionString`), and has Check for Updates… and, at the top while a newer release is known, `Fudge <version> Is Available…` (see the update check).
     - **Global hotkeys** go through Carbon (`CarbonHotKeys` in `HotKey.swift`), which needs no Accessibility permission: one event handler, one id per registration.
       `HotKeyRegistry` (core) decides what's registered: the launcher's hotkey (`hotkey` in `settings.json`, default ⌥Space, read and written through `FudgeSettings.launcherHotkey`) and each installed command's (`commands` in `settings.json`, by `<extension>/<command>`), registering only what changed.
       A refused change of the launcher's hotkey registers the old one again (`setLauncher`); one refused at launch stays wanted, marked `launcherRefused`, and is tried again on every `resume`.
@@ -308,7 +308,8 @@ Extensions run in a separate Node.js process, the extension host.
       Check Now (General, and the menu's Check for Updates…, which opens General first) always runs; its failures don't count.
       One check runs at a time.
       `update-check.json` (`UpdateCheckState`) keeps the last check, the last success, the latest release's tag, the last failure, the failed scheduled checks and the version the HUD announced; it's read tolerantly and written atomically.
-      **The running version** (`RunningVersion`) is what the Makefile writes into `Info.plist`, `git describe --tags --always --dirty`: a trailing `-dirty`, then `-<n>-g<hex>`, then a leading `v` come off by their exact shapes, and the rest is a `SemanticVersion` (semver 2.0.0, compared by precedence, build metadata dropped).
+      **The running version** (`RunningVersion`) is what the Makefile writes into `Info.plist`'s `FudgeGitDescribe` (`FudgeVersion.describe`), `git describe --tags --always --dirty`: a trailing `-dirty`, then `-<n>-g<hex>`, then a leading `v` come off by their exact shapes, and the rest is a `SemanticVersion` (semver 2.0.0, compared by precedence, build metadata dropped).
+      It reads `FudgeVersion.display`'s form too (`0.2.0-dev+14.51ba5a2` is 0.2.0): a last pre-release identifier `dev` with build metadata is a build after that version.
       Anything else, such as a bare commit or `dev`, is untagged and older than any release.
       So a dev build after `v0.2.0` is told about `v0.2.1` but not `v0.2.0`, and `v1.2.0-rc.1-3-gabc1234` about `v1.2.0`.
       **GitHub's answer** (`UpdateCheck.parseLatest`): `tag_name`, and `draft` and `prerelease`, which must be JSON booleans; a draft, a pre-release or a pre-release tag counts as no release, as does GitHub's 404 when there's none yet.
@@ -879,7 +880,12 @@ Extensions run in a separate Node.js process, the extension host.
     The bundle gets the binary as `Contents/Helpers/node`, npm from the same distribution as `Contents/Resources/node/npm`, and its `LICENSE` (Node.js's, with what it bundles) as `Contents/Resources/node/LICENSE`.
     `fudge build` runs npm as `node npm-cli.js` (`BundledNode.npm`), with the helpers first on `PATH` so whatever npm starts gets the same Node.js.
     Only `Contents/Helpers/node` runs under the hardened runtime, with `App/Node.entitlements`: `allow-jit`, without which V8 can't start, and `disable-library-validation`, without which an extension's native addon (`.node`), signed by whoever built it, is refused ("different Team IDs").
-  - `App/Info.plist` gets the version from `git describe`
+  - `App/Info.plist` gets three versions from `git describe --tags --always --dirty` (`VERSION`, or the release workflow's `RELEASE_TAG`):
+    `CFBundleShortVersionString` is the version tag's major, minor and patch, as macOS expects (`runtime/scripts/bundle-version.ts`: `v0.3.0-14-ga539cdd` is `0.3.0`, and with no version tag `0.0.0`), `CFBundleVersion` is `git rev-list --count HEAD`, and `FudgeGitDescribe` is the describe itself.
+    Fudge shows its own form of the describe (`FudgeVersion.display`: `0.3.0`, `1.2.0-rc.1`, or after a tag `0.3.0-dev+14.a539cdd.dirty`), in the menu, General's update row, About, `fudge version` and its `User-Agent`s.
+    `FudgeVersion` (core) reads the keys in the app, and in the `fudge` tool from the app's `Info.plist` beside `Contents/Helpers` (through a symlink too), only when its bundle id is Fudge's; anywhere else it's `0.0.0-dev`.
+    **A release build stops rather than number itself wrong** (`make release-check`, before anything is built): with `CONFIG=release`, a shallow clone, which has no tags and would make the build number 1; with `RELEASE_TAG`, a tag that isn't on this commit.
+    The release workflow checks out the whole history and its tags, and passes `RELEASE_TAG` for a tag's build.
   - `App/AppIcon.icon` (an Icon Composer icon) is compiled by `actool` into `Assets.car` and an `AppIcon.icns` fallback.
     That needs Xcode 26 or later.
   - the bundled extensions (`BUNDLED_EXTENSIONS`, as `BundledExtensions.folders` lists them) are built with `fudge build` from `runtime/<folder>` into `Contents/Resources/<folder>`

@@ -149,13 +149,27 @@ public enum RunningVersion: Sendable, Equatable {
 
     /// Takes off, by their exact shapes, a trailing `-dirty`, then `git describe`'s `-<commits>-g<hex>`, then a
     /// leading `v`, and parses what's left as a semantic version. So `v0.2.0-14-g51ba5a2-dirty` is 0.2.0, and
-    /// `v1.2.0-rc.1-3-gabc1234` is 1.2.0-rc.1.
+    /// `v1.2.0-rc.1-3-gabc1234` is 1.2.0-rc.1. It also reads the app's short version for a build after a tag
+    /// (`0.2.0-dev+14.51ba5a2` is 0.2.0), in case that's all an `Info.plist` has.
     public init(_ text: String) {
         var rest = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if rest.hasSuffix("-dirty") { rest.removeLast("-dirty".count) }
         if let match = rest.wholeMatch(of: /(.+)-[0-9]+-g[0-9a-f]{4,64}/) { rest = String(match.1) }
         if rest.hasPrefix("v") { rest.removeFirst() }
-        self = SemanticVersion(rest).map(Self.tagged) ?? .untagged
+        guard let version = SemanticVersion(rest) else {
+            self = .untagged
+            return
+        }
+        // `make app`'s CFBundleShortVersionString for a build after a tag: `0.3.0-dev+14.a539cdd` is 0.3.0, and
+        // `1.2.0-rc.1.dev+3.abc1234` is 1.2.0-rc.1. Only with build metadata, so a tag named `v1.0.0-dev` stays one.
+        if rest.contains("+"), version.preRelease.last == "dev" {
+            self = .tagged(
+                SemanticVersion(
+                    major: version.major, minor: version.minor, patch: version.patch,
+                    preRelease: version.preRelease.dropLast()))
+            return
+        }
+        self = .tagged(version)
     }
 
     /// Whether `release` is newer than this build: its version beats the tag's. A build after `v0.2.0` isn't older

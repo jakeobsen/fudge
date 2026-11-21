@@ -191,7 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updates = UpdateChecker(
             fetcher: snapshotRun == nil ? GitHubReleaseFetcher() : SnapshotReleaseFetcher(),
             stateFile: snapshotRun == nil ? paths.updateCheckFile : nil,
-            running: snapshotRun == nil ? RunningVersion(AppVersion.current) : .untagged,
+            running: snapshotRun == nil ? RunningVersion(FudgeVersion.describe) : .untagged,
             setting: FudgeSettings.load(from: paths.settingsFile).updateCheck)
         if let release = snapshotRun?.updateAvailable { updates.show(release, checkedAt: Date()) }
         settingsModel.updateStatus = updates.status
@@ -429,7 +429,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             withTitle: "Check for Updates…", action: #selector(checkForUpdatesFromMenu), keyEquivalent: "")
         check.target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Fudge \(AppVersion.current)", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "Fudge \(FudgeVersion.current)", action: nil, keyEquivalent: "")
         menu.addItem(withTitle: "Quit Fudge", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.menu = menu
         statusItem = item

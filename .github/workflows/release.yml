@@ -28,9 +28,12 @@ jobs:
             exit 1
           fi
 
+      # The whole history, so the build number (`git rev-list --count HEAD`) counts every commit and a run by hand
+      # finds the tags `git describe` names.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -41,11 +44,12 @@ jobs:
       - name: Test
         run: make test
 
-      # A run by hand takes the version `git describe` gives the commit, as `make app` does.
+      # A tag's build names it, and the Makefile checks it's on this commit; a run by hand takes the version
+      # `git describe` gives the commit, as `make app` does.
       - name: Build the disk image
         run: |
           if [ "$GITHUB_EVENT_NAME" = push ]; then
-            make dmg CONFIG=release VERSION="$TAG"
+            make dmg CONFIG=release RELEASE_TAG="$TAG"
           else
             make dmg CONFIG=release
           fi

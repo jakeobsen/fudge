@@ -33,9 +33,7 @@ final class BackupController {
     /// `.fudgebackup`, declared in the app's Info.plist.
     static let fileType = UTType(filenameExtension: "fudgebackup", conformingTo: .data) ?? .data
 
-    private static var fudgeVersion: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? FudgeVersion.current
-    }
+    private static var fudgeVersion: String { FudgeVersion.current }
 
     private var installed: [InstalledExtension] { InstalledExtension.all(in: paths.extensionsDirectory) }
 

@@ -89,6 +89,14 @@ private func releaseJSON(
         // Info.plist's own value, and FudgeVersion.current outside a bundle.
         ("0.0.0", .tagged(version("0.0.0"))),
         ("0.0.0-dev", .tagged(version("0.0.0-dev"))),
+        // The short version `make app` writes for a build after a tag (scripts/bundle-version.ts).
+        ("0.2.0-dev+14.51ba5a2", .tagged(version("0.2.0"))),
+        ("0.2.0-dev+14.51ba5a2.dirty", .tagged(version("0.2.0"))),
+        ("0.2.0-dev+dirty", .tagged(version("0.2.0"))),
+        ("1.2.0-rc.1.dev+3.abc1234", .tagged(version("1.2.0-rc.1"))),
+        ("0.0.0-dev+8f8e040", .tagged(version("0.0.0"))),
+        // A tag that is itself named dev is a pre-release, as any other.
+        ("v1.0.0-dev", .tagged(version("1.0.0-dev"))),
         // No tag yet: a bare commit, or the Makefile's `dev` when git can't say.
         ("8f8e040", .untagged),
         ("8f8e040-dirty", .untagged),
@@ -126,8 +134,13 @@ private func releaseJSON(
     #expect(told("v1.2.0-rc.1-3-gabc1234", about: "v1.2.0"))
     #expect(told("v1.2.0-rc.1-3-gabc1234-dirty", about: "v1.2.0"))
     #expect(!told("v1.2.0-rc.1-3-gabc1234", about: "v1.1.9"))
+    // The short version of a build after v0.2.0 says the same as its describe.
+    #expect(!told("0.2.0-dev+14.51ba5a2", about: "v0.2.0"))
+    #expect(told("0.2.0-dev+14.51ba5a2", about: "v0.2.1"))
+    #expect(told("1.2.0-rc.1.dev+3.abc1234", about: "v1.2.0"))
+    #expect(!told("1.2.0-rc.1.dev+3.abc1234", about: "v1.2.0-rc.1"))
     // No tag: older than any release.
-    for running in ["8f8e040", "8f8e040-dirty", "dev"] {
+    for running in ["8f8e040", "8f8e040-dirty", "dev", "0.0.0-dev+8f8e040"] {
         #expect(told(running, about: "v0.0.1"), "\(running)")
         #expect(told(running, about: "v0.2.0"), "\(running)")
     }
