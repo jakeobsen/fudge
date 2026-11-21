@@ -14,6 +14,10 @@ private func firstLine(of descriptor: Int32) -> String {
 
 private func isGone(_ pid: pid_t) -> Bool { kill(pid, 0) == -1 && errno == ESRCH }
 
+/// A ceiling that only catches a hang. A CI runner can stall for seconds, so nothing here bounds real time tightly;
+/// the behaviour is checked by what happened (the signal that ended a child), and by lower bounds a stall can't break.
+private let noHang: Duration = .seconds(30)
+
 /// Waits for a child on a thread of its own, started at once: `waitpid` blocks, and on a busy machine Swift's shared
 /// pool of threads can take seconds to free one, which would make a timing check fail for nothing.
 private final class Waiter: @unchecked Sendable {
@@ -71,13 +75,12 @@ private final class Waiter: @unchecked Sendable {
     let waiter = Waiter(children, pid)
     children.endAll(grace: .seconds(1))
     #expect(waiter.result == 128 + SIGTERM, "SIGTERM was enough")
-    #expect(ContinuousClock.now - started < .seconds(2))
-    var gone = false
-    for _ in 0..<50 where !gone {
-        gone = isGone(grandchild)
-        if !gone { try await Task.sleep(for: .milliseconds(20)) }
+    #expect(ContinuousClock.now - started < noHang)
+    let ending = ContinuousClock.now
+    while !isGone(grandchild), ContinuousClock.now - ending < noHang {
+        try await Task.sleep(for: .milliseconds(20))
     }
-    #expect(gone, "the grandchild went with its group")
+    #expect(isGone(grandchild), "the grandchild went with its group")
     #expect(throws: ChildProcesses.SpawnError.self, "nothing starts once they're being ended") {
         try children.spawn(URL(fileURLWithPath: "/usr/bin/true"), [], environment: [:])
     }
@@ -97,7 +100,9 @@ private final class Waiter: @unchecked Sendable {
     let waiter = Waiter(children, pid)
     children.endAll(grace: .milliseconds(300))
     #expect(waiter.result == 128 + SIGKILL)
-    #expect(ContinuousClock.now - started < .seconds(2))
+    let waited = ContinuousClock.now - started
+    #expect(waited >= .milliseconds(300), "it was given the grace first")
+    #expect(waited < noHang)
 }
 
 @Test func shellRunsInItsOwnGroupAndStillReturnsItsOutput() throws {

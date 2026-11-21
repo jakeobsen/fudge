@@ -25,6 +25,10 @@ enum Tool {
 
     static func isGone(_ pid: pid_t) -> Bool { kill(pid, 0) == -1 && errno == ESRCH }
 
+    /// A ceiling that only catches a hang: each wait ends as soon as what it waits for has happened, so a CI runner
+    /// that stalls for seconds can't fail it.
+    static let noHang: Duration = .seconds(30)
+
     /// The node on `PATH`, which `make test` runs the runtime's tests with.
     static let node: URL? = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":")
         .map { URL(fileURLWithPath: String($0)).appendingPathComponent("node") }
@@ -60,7 +64,7 @@ enum Tool {
     }
 
     /// Runs `fudge` with `arguments` until the stand-in has started, then sends it SIGTERM: the tool must exit
-    /// with 143 and take the stand-in and its child with it, all within two seconds.
+    /// with 143 and take the stand-in and its child with it.
     static func expectTerminationEndsEverything(
         _ arguments: [String], environment: [String: String], pids: URL
     ) async throws {
@@ -73,7 +77,8 @@ enum Tool {
         process.standardError = FileHandle.nullDevice
         try process.run()
         var started: [pid_t] = []
-        for _ in 0..<250 where started.count < 2 {
+        let launched = ContinuousClock.now
+        while started.count < 2, ContinuousClock.now - launched < noHang {
             started = ((try? String(contentsOf: pids, encoding: .utf8)) ?? "")
                 .split(whereSeparator: \.isWhitespace).compactMap { pid_t($0) }
             if started.count < 2 { try await Task.sleep(for: .milliseconds(20)) }
@@ -84,11 +89,10 @@ enum Tool {
         process.terminate()
         process.waitUntilExit()
         #expect(process.terminationReason == .exit && process.terminationStatus == 128 + SIGTERM)
-        while !started.allSatisfy(isGone), ContinuousClock.now - clock < .seconds(2) {
+        while !started.allSatisfy(isGone), ContinuousClock.now - clock < noHang {
             try await Task.sleep(for: .milliseconds(20))
         }
         #expect(started.allSatisfy(isGone), "the stand-in and its child are gone")
-        #expect(ContinuousClock.now - clock < .seconds(2))
         for pid in started where !isGone(pid) { kill(pid, SIGKILL) }
     }
 }

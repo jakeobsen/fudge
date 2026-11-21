@@ -234,17 +234,27 @@ func allowsPublicHTTPSURLs(text: String) throws {
 
 @Test func atMostSixRequestsRunAtOnce() async throws {
     let image = png(width: 8, height: 8)
+    // Every fetch waits for the gate, so six really are in flight at once however slowly the runner starts them.
+    let gate = Gate()
     let fetcher = FakeImageFetcher { request in
-        try await Task.sleep(for: .milliseconds(50))
+        await gate.passed()
         return .ok(request.url!, image)
     }
     let (loader, _) = try makeLoader(fetcher)
-    await withTaskGroup(of: RemoteImageLoad.self) { group in
-        for index in 0..<10 {
-            group.addTask { await loader.load(URL(string: "https://example.com/\(index).png")!) }
+    let loads = Task {
+        await withTaskGroup(of: RemoteImageLoad.self) { group in
+            for index in 0..<10 {
+                group.addTask { await loader.load(URL(string: "https://example.com/\(index).png")!) }
+            }
+            return await group.reduce(into: []) { $0.append($1) }
         }
-        for await result in group { #expect(result == .loaded(image, fetchedAt: start)) }
     }
+    try await waitFor { fetcher.requests.count >= 6 }
+    // A seventh would start straight away if the limit didn't hold; this short wait can only miss one, never fail.
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(fetcher.requests.count == 6, "the other four wait for a slot")
+    gate.open()
+    #expect(await loads.value == Array(repeating: .loaded(image, fetchedAt: start), count: 10))
     #expect(fetcher.requests.count == 10)
     #expect(fetcher.mostAtOnce == 6)
 }
@@ -830,20 +840,52 @@ private actor SlotCounter {
     func leave() { now -= 1 }
 }
 
-@Test func theLimiterLetsOnlyItsLimitRunAtOnce() async {
+@Test func theLimiterLetsOnlyItsLimitRunAtOnce() async throws {
     let limiter = AsyncLimiter(limit: 2)
     let counter = SlotCounter()
-    await withTaskGroup(of: Void.self) { group in
-        for _ in 0..<8 {
-            group.addTask {
-                await limiter.acquire()
-                await counter.enter()
-                try? await Task.sleep(for: .milliseconds(20))
-                await counter.leave()
-                await limiter.release()
+    // Each holder waits for the gate, so two really hold a slot at once however slowly the runner starts them.
+    let gate = Gate()
+    let holders = Task {
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<8 {
+                group.addTask {
+                    await limiter.acquire()
+                    await counter.enter()
+                    await gate.passed()
+                    await counter.leave()
+                    await limiter.release()
+                }
             }
         }
     }
+    try await waitFor { await counter.now >= 2 }
+    // A third holder would enter straight away if the limit didn't hold; this short wait can only miss one.
+    try await Task.sleep(for: .milliseconds(50))
+    #expect(await counter.now == 2)
+    gate.open()
+    await holders.value
     #expect(await counter.most == 2)
     #expect(await counter.now == 0)
+}
+
+/// Shut until `open()`; `passed()` returns once it's open.
+private final class Gate: @unchecked Sendable {
+    // @unchecked: `isOpen` is behind `lock`.
+    private let lock = NSLock()
+    private var isOpen = false
+
+    func open() { lock.withLock { isOpen = true } }
+
+    func passed() async {
+        while !lock.withLock({ isOpen }) { try? await Task.sleep(for: .milliseconds(2)) }
+    }
+}
+
+/// Polls `condition` until it holds. The ceiling only catches a hang, so a stalled CI runner can't fail it.
+private func waitFor(_ condition: () async -> Bool) async throws {
+    let started = ContinuousClock.now
+    while await !condition() {
+        try #require(ContinuousClock.now - started < .seconds(30), "waited 30 s")
+        try await Task.sleep(for: .milliseconds(5))
+    }
 }
