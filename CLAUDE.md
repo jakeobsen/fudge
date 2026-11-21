@@ -115,6 +115,7 @@ Extensions run in a separate Node.js process, the extension host.
       Eject All Disks unmounts ejectable, removable and network volumes, never the one macOS started from (`MountedVolume.toEject`, which puts each disk's volumes together, by DiskArbitration's whole disk, read only), off the main thread, and the HUD names what it ejected and what it couldn't, with why.
       Ejecting a volume ejects its whole disk, so each volume is checked before its turn (`SystemActions.isMounted`, the mounted volumes read afresh): one that's gone went with its disk and counts as ejected.
       Whether an eject worked is read from the mounts afterwards, never from the call's error.
+      When the mounts can't be read, each volume is still ejected, and the HUD says it couldn't check, never that it ejected.
       Hide All Apps hides every regular app but Fudge; Quit All Apps asks every regular app but Fudge and Finder that has finished launching to quit, counting and reading the list the same way, again once confirmed (`RunningApp.toHide`, `toQuit`).
       `LauncherModel.runBuiltIn` hides the panel first, as for window commands, and a command that asks does it in an alert of its own.
       In a snapshot run, `confirm` lays the alert out off-screen (`SnapshotSheet.laidOut`) and answers no, and the run saves the alert instead of the panel (`--query "empty trash" --activate`; `--trash-count <n>` sets the made-up count, 12 by default, and anything but a number is a count Finder couldn't give).
