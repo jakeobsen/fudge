@@ -146,6 +146,9 @@ private struct Rig {
     let rig = Rig()
     try await rig.run("Dear , thanks", leftArrows: 8)
     #expect(rig.log.events == ["snapshot", "write Dear , thanks", "trust", "hide", "hidden", "post", "← ×8 to 200"])
+    #expect(rig.turns.isOwn(rig.pasteboard.changeCount), "Fudge's own write, which clipboard history skips")
+    await rig.afterRestore()
+    #expect(rig.turns.isOwn(rig.pasteboard.changeCount), "and so is the restore")
     let none = Rig()
     await #expect(throws: PasteError.noTarget) { try await none.run("x", leftArrows: 3, frontmost: nil) }
     #expect(!none.log.events.contains { $0.hasPrefix("←") }, "with no app to paste into, no ← either")
