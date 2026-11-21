@@ -90,7 +90,7 @@ final class LauncherModel {
     private(set) var screen: Screen = .root {
         didSet {
             followQuickLook()
-            quicklinkFormLeft()
+            builtInFormLeft()
             dropHeldKeyIfLeft()
         }
     }
@@ -229,8 +229,8 @@ final class LauncherModel {
         let sessions = sessionExtensions.filter { $0.value == extensionName }.map(\.key)
         guard !sessions.isEmpty else { return }
         for session in sessions {
-            // A view under the Create Quicklink form goes; the form then closes to root search.
-            if quicklinkForm?.returnTo?.session == session { quicklinkForm?.returnTo = nil }
+            // A view under Fudge's form goes; the form then closes to root search.
+            if builtInForm?.returnTo?.session == session { builtInForm?.returnTo = nil }
             if case .command(let command) = screen, command.session == session {
                 leaveCommand()
                 refreshResults()
@@ -1355,7 +1355,9 @@ final class LauncherModel {
             case .command: return
             }
         case .createQuicklink(let request):
-            guard case .command(let command) = screen, command.session != QuicklinkForm.session else { return }
+            guard case .command(let command) = screen, !Self.builtInFormSessions.contains(command.session) else {
+                return
+            }
             showQuicklinkForm(
                 QuicklinkDraft(request: request, commandTitle: command.title, applications: quicklinkApplications()),
                 over: command)
@@ -1564,23 +1566,77 @@ final class LauncherModel {
         }
     }
 
-    // MARK: - The Create Quicklink form
+    // MARK: - Fudge's own forms: Create Quicklink and Create Snippet
 
-    /// Fudge's own Create Quicklink form, while it's on screen (SPEC-052 B1–B3). It's drawn as a Form view whose
-    /// session is `QuicklinkForm.session`: `send` answers its events here, and nothing of it reaches the host.
-    struct QuicklinkFormState {
-        /// What it opened on: an empty draft, a saved quicklink to edit, or an extension's `Action.CreateQuicklink`.
-        var draft: QuicklinkDraft
-        var applications: [QuicklinkApplication]
-        /// Shown on the fields after a save was refused, each until its field is edited.
-        var problems = QuicklinkDraft.Problems()
+    /// Fudge's own form while it's on screen: Create Quicklink (SPEC-052 B1–B3) or Create Snippet (SPEC-078 §3). It's
+    /// drawn as a Form view whose session is the form's own (`QuicklinkForm.session`, `SnippetForm.session`): `send`
+    /// answers its events here, and nothing of it reaches the host.
+    struct BuiltInFormState {
+        enum Content {
+            /// What it opened on: an empty draft, a saved one to edit, or an extension's `Action.CreateQuicklink` or
+            /// `Action.CreateSnippet`, with the problems shown on its fields after a refused save, each until its
+            /// field is edited.
+            case quicklink(QuicklinkDraft, applications: [QuicklinkApplication], problems: QuicklinkDraft.Problems)
+            case snippet(SnippetDraft, problems: SnippetDraft.Problems)
+        }
+
+        var content: Content
         /// The extension's view it was opened over, which it goes back to.
         var returnTo: CommandScreen?
         /// That view's renders, errors and exit while the form covered it, handled once it's shown again.
         var deferred: [HostMessage] = []
+
+        var session: String {
+            if case .quicklink = content { QuicklinkForm.session } else { SnippetForm.session }
+        }
+
+        var title: String {
+            switch content {
+            case .quicklink(let draft, _, _): QuicklinkForm.title(for: draft)
+            case .snippet(let draft, _): SnippetForm.title(for: draft)
+            }
+        }
+
+        var view: UINode {
+            switch content {
+            case .quicklink(let draft, let applications, let problems):
+                QuicklinkForm.view(draft: draft, problems: problems, applications: applications)
+            case .snippet(let draft, let problems):
+                SnippetForm.view(draft: draft, problems: problems)
+            }
+        }
+
+        var saveNode: Int {
+            if case .quicklink = content { QuicklinkForm.Node.save } else { SnippetForm.Node.save }
+        }
+
+        /// Clears the problem of the field `node`, after an edit; false when it had none.
+        mutating func clearProblem(of node: Int) -> Bool {
+            switch content {
+            case .quicklink(let draft, let applications, var problems):
+                switch node {
+                case QuicklinkForm.Node.name where problems.name != nil: problems.name = nil
+                case QuicklinkForm.Node.link where problems.link != nil: problems.link = nil
+                default: return false
+                }
+                content = .quicklink(draft, applications: applications, problems: problems)
+            case .snippet(let draft, var problems):
+                switch node {
+                case SnippetForm.Node.name where problems.name != nil: problems.name = nil
+                case SnippetForm.Node.text where problems.text != nil: problems.text = nil
+                case SnippetForm.Node.keyword where problems.keyword != nil: problems.keyword = nil
+                default: return false
+                }
+                content = .snippet(draft, problems: problems)
+            }
+            return true
+        }
     }
 
-    @ObservationIgnored private var quicklinkForm: QuicklinkFormState?
+    /// The sessions of Fudge's own forms, which never reach the host.
+    static let builtInFormSessions: Set<String> = [QuicklinkForm.session, SnippetForm.session]
+
+    @ObservationIgnored private var builtInForm: BuiltInFormState?
     @ObservationIgnored private var quicklinkApplicationList: [QuicklinkApplication]?
 
     /// Open With's choices: root search's applications, with their bundle ids.
@@ -1599,90 +1655,122 @@ final class LauncherModel {
     /// Shows the Create Quicklink form on `draft`: from root search, or over an extension's view (`over`), which
     /// it goes back to when it closes.
     private func showQuicklinkForm(_ draft: QuicklinkDraft, over returnTo: CommandScreen? = nil) {
-        let applications = quicklinkApplications()
+        showBuiltInForm(
+            BuiltInFormState(
+                content: .quicklink(draft, applications: quicklinkApplications(), problems: .init()), returnTo: returnTo
+            ))
+    }
+
+    /// Shows the Create Snippet form on `draft`, as `showQuicklinkForm` does.
+    private func showSnippetForm(_ draft: SnippetDraft, over returnTo: CommandScreen? = nil) {
+        showBuiltInForm(BuiltInFormState(content: .snippet(draft, problems: .init()), returnTo: returnTo))
+    }
+
+    private func showBuiltInForm(_ state: BuiltInFormState) {
         actionPanel = nil
         dropdownPanel = nil
         datePanel = nil
-        quicklinkForm = QuicklinkFormState(draft: draft, applications: applications, returnTo: returnTo)
-        var form = CommandScreen(session: QuicklinkForm.session, title: QuicklinkForm.title(for: draft))
+        builtInForm = state
+        var form = CommandScreen(session: state.session, title: state.title)
         form.storedFormValues = [:]
-        form.view = QuicklinkForm.view(draft: draft, applications: applications)
+        form.view = state.view
         refreshForm(&form)
         screen = .command(form)
     }
 
     /// Draws the form again with its problems, keeping what was typed.
-    private func renderQuicklinkForm() {
-        guard let form = quicklinkForm, case .command(var command) = screen, command.session == QuicklinkForm.session
-        else { return }
-        command.view = QuicklinkForm.view(draft: form.draft, problems: form.problems, applications: form.applications)
+    private func renderBuiltInForm() {
+        guard let form = builtInForm, case .command(var command) = screen, command.session == form.session else {
+            return
+        }
+        command.view = form.view
         refreshForm(&command)
         screen = .command(command)
     }
 
-    /// The form's events, as `send` hands them over: Save Quicklink's `onAction`, and each edit's `onChange`, which
+    /// The form's events, as `send` hands them over: its Save action's `onAction`, and each edit's `onChange`, which
     /// clears that field's problem.
-    private func quicklinkFormEvent(node: Int, path: [String]) {
-        guard var form = quicklinkForm else { return }
+    private func builtInFormEvent(node: Int, path: [String]) {
+        guard var form = builtInForm else { return }
         switch path {
-        case ["onAction"] where node == QuicklinkForm.Node.save:
-            saveQuicklinkForm()
+        case ["onAction"] where node == form.saveNode:
+            saveBuiltInForm()
         case ["onChange"]:
-            if node == QuicklinkForm.Node.name, form.problems.name != nil {
-                form.problems.name = nil
-            } else if node == QuicklinkForm.Node.link, form.problems.link != nil {
-                form.problems.link = nil
-            } else {
-                return
-            }
-            quicklinkForm = form
-            renderQuicklinkForm()
+            guard form.clearProblem(of: node) else { return }
+            builtInForm = form
+            renderBuiltInForm()
         default:
             break
         }
     }
 
-    /// ⌘↵ Save Quicklink: refused with each field's problem (`QuicklinkDraft.problems`), else saved in place of the
-    /// edited one or as a new one, with a HUD, and the form closes. A `quicklinks.json` Fudge can't read stays as
+    /// ⌘↵ Save: refused with each field's problem (`QuicklinkDraft.problems`, `SnippetDraft.problems`), else saved
+    /// in place of the edited one or as a new one, with a HUD, and the form closes. A file Fudge can't read stays as
     /// it is, and a toast says why.
-    private func saveQuicklinkForm() {
-        guard var form = quicklinkForm, let command, command.session == QuicklinkForm.session,
-            let content = command.form
-        else { return }
+    private func saveBuiltInForm() {
+        guard var form = builtInForm, let command, command.session == form.session, let content = command.form else {
+            return
+        }
         var values: [String: JSONValue] = [:]
         for field in content.fields {
             if let id = field.fieldId, let value = command.fieldValues[field.id]?.value { values[id] = value }
         }
-        let draft = QuicklinkForm.draft(form.draft, with: values)
-        let file = paths.quicklinksFile
-        var store = QuicklinkStore.load(from: file)
-        form.problems = draft.problems(among: store.quicklinks)
-        guard form.problems.isEmpty else {
-            quicklinkForm = form
-            renderQuicklinkForm()
-            return
-        }
-        draft.save(into: &store)
-        do {
-            try store.save(to: file)
-        } catch {
-            showFailureToast("Can't save the quicklink", message: String(describing: error))
-            return
+        let saved: String
+        switch form.content {
+        case .quicklink(let draft, let applications, _):
+            let draft = QuicklinkForm.draft(draft, with: values)
+            let file = paths.quicklinksFile
+            var store = QuicklinkStore.load(from: file)
+            let problems = draft.problems(among: store.quicklinks)
+            guard problems.isEmpty else {
+                form.content = .quicklink(draft, applications: applications, problems: problems)
+                builtInForm = form
+                renderBuiltInForm()
+                return
+            }
+            draft.save(into: &store)
+            do {
+                try store.save(to: file)
+            } catch {
+                showFailureToast("Can't save the quicklink", message: String(describing: error))
+                return
+            }
+            saved = "Quicklink saved"
+        case .snippet(let draft, _):
+            let draft = SnippetForm.draft(draft, with: values)
+            let file = paths.snippetsFile
+            var store = SnippetStore.load(from: file)
+            let problems = draft.problems(among: store.snippets)
+            guard problems.isEmpty else {
+                form.content = .snippet(draft, problems: problems)
+                builtInForm = form
+                renderBuiltInForm()
+                return
+            }
+            draft.save(into: &store)
+            do {
+                try store.save(to: file)
+            } catch {
+                showFailureToast("Can't save the snippet", message: String(describing: error))
+                return
+            }
+            saved = "Snippet saved"
         }
         let fromRootSearch = form.returnTo == nil
-        closeQuicklinkForm()
+        closeBuiltInForm()
         applySettings()
         if fromRootSearch { searchText = "" }
-        showHUD("Quicklink saved")
+        showHUD(saved)
     }
 
-    /// Closes the Create Quicklink form (Esc, or a save): back to the extension's view it was opened over, with
-    /// what that rendered meanwhile, or to root search. False when the form isn't on screen.
+    /// Closes Fudge's form (Esc, or a save): back to the extension's view it was opened over, with what that
+    /// rendered meanwhile, or to root search. False when the form isn't on screen.
     @discardableResult
-    private func closeQuicklinkForm() -> Bool {
-        guard let form = quicklinkForm, case .command(let command) = screen, command.session == QuicklinkForm.session
-        else { return false }
-        quicklinkForm = nil
+    private func closeBuiltInForm() -> Bool {
+        guard let form = builtInForm, case .command(let command) = screen, command.session == form.session else {
+            return false
+        }
+        builtInForm = nil
         actionPanel = nil
         dropdownPanel = nil
         datePanel = nil
@@ -1696,12 +1784,12 @@ final class LauncherModel {
         return true
     }
 
-    /// The screen changed. When the Create Quicklink form went some other way than closing (a launch, Pop to Root
-    /// Search, the panel's reset), the extension's view under it is unloaded too, as the one on screen would be.
-    private func quicklinkFormLeft() {
-        guard let form = quicklinkForm else { return }
-        if case .command(let command) = screen, command.session == QuicklinkForm.session { return }
-        quicklinkForm = nil
+    /// The screen changed. When Fudge's form went some other way than closing (a launch, Pop to Root Search, the
+    /// panel's reset), the extension's view under it is unloaded too, as the one on screen would be.
+    private func builtInFormLeft() {
+        guard let form = builtInForm else { return }
+        if case .command(let command) = screen, command.session == form.session { return }
+        builtInForm = nil
         guard let covered = form.returnTo?.session else { return }
         for case .exit(let session, let reason) in form.deferred { handle(.exit(session: session, reason: reason)) }
         if case .command(let command) = screen, command.session == covered { return }
@@ -2061,7 +2149,7 @@ final class LauncherModel {
         case .clearSearch:
             searchText = ""
         case .leaveCommand:
-            if closeQuicklinkForm() { return }
+            if closeBuiltInForm() { return }
             leaveCommand()
         case .dismissFailure:
             screen = .root
@@ -2640,15 +2728,14 @@ final class LauncherModel {
     }
 
     private func send(_ message: AppMessage) {
-        // Fudge's own Create Quicklink form answers its events itself.
-        if case .event(QuicklinkForm.session, let node, let path, _) = message {
-            quicklinkFormEvent(node: node, path: path)
+        // Fudge's own forms answer their events themselves, and nothing of theirs reaches the host.
+        if case .event(let session, let node, let path, _) = message, Self.builtInFormSessions.contains(session) {
+            if session == builtInForm?.session { builtInFormEvent(node: node, path: path) }
             return
         }
         switch message {
-        case .pop(QuicklinkForm.session), .unload(QuicklinkForm.session), .rpcResult(QuicklinkForm.session, _, _, _),
-            .toastAction(QuicklinkForm.session, _, _):
-            return
+        case .pop(let session), .unload(let session), .rpcResult(let session, _, _, _), .toastAction(let session, _, _):
+            if Self.builtInFormSessions.contains(session) { return }
         default:
             break
         }
@@ -2666,14 +2753,16 @@ final class LauncherModel {
         background.removeAll()
         quietSessions.removeAll()
         menuBar.hostStopped()
-        if case .command(var command) = screen, command.failure == nil, command.session != QuicklinkForm.session {
+        if case .command(var command) = screen, command.failure == nil,
+            !Self.builtInFormSessions.contains(command.session)
+        {
             command.failure = Failure(title: "\(command.title) stopped", message: "The extension host exited.")
             screen = .command(command)
         }
-        // The Create Quicklink form needs no host; the view under it shows that it stopped once it's back.
-        if var covered = quicklinkForm?.returnTo, covered.failure == nil {
+        // Fudge's forms need no host; the view under one shows that it stopped once it's back.
+        if var covered = builtInForm?.returnTo, covered.failure == nil {
             covered.failure = Failure(title: "\(covered.title) stopped", message: "The extension host exited.")
-            quicklinkForm?.returnTo = covered
+            builtInForm?.returnTo = covered
         }
     }
 
@@ -2692,12 +2781,12 @@ final class LauncherModel {
     }
 
     private func handle(_ message: HostMessage) {
-        // The extension's view under the Create Quicklink form gets its renders, errors and exit once it's shown
-        // again; its calls are answered meanwhile.
-        if let covered = quicklinkForm?.returnTo?.session, message.session == covered {
+        // The extension's view under Fudge's form gets its renders, errors and exit once it's shown again; its calls
+        // are answered meanwhile.
+        if let covered = builtInForm?.returnTo?.session, message.session == covered {
             switch message {
             case .render, .error, .exit:
-                quicklinkForm?.deferred.append(message)
+                builtInForm?.deferred.append(message)
                 return
             default:
                 break
