@@ -34,8 +34,7 @@ struct ECBRatesFetcher: RatesFetcher {
 
     func fetchRates() async throws -> Data {
         var request = URLRequest(url: Self.url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        request.setValue("fudge/\(version ?? FudgeVersion.current)", forHTTPHeaderField: "User-Agent")
+        request.setValue("fudge/\(AppVersion.current)", forHTTPHeaderField: "User-Agent")
         let (bytes, response) = try await session.bytes(for: request)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 { throw Failure.status(http.statusCode) }
         if response.expectedContentLength > Self.byteLimit { throw Failure.tooLarge }

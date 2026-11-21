@@ -281,6 +281,13 @@ struct OnboardingView: View {
                         .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
+        case .updates:
+            VStack(alignment: .leading, spacing: 14) {
+                title("Updates")
+                Text("Fudge can ask GitHub whether there's a new version, and tell you when there is.")
+                Text("It never downloads or installs anything by itself.").foregroundStyle(.secondary)
+                SettingsGroup { UpdateCheckChoice(model: settings) }
+            }
         case .done:
             VStack(alignment: .leading, spacing: 14) {
                 title("You're all set")
@@ -290,6 +297,7 @@ struct OnboardingView: View {
                     summary("Open at Login") { Text(settings.loginItemState.isOn ? "On" : "Off") }
                     summary("Currency conversion") { Text(settings.currencyRates ? "On" : "Off") }
                     summary("Clipboard history") { Text(settings.clipboardHistory ? "On" : "Off") }
+                    summary("Check for updates") { Text(settings.updateCheck?.onboardingTitle ?? "Off") }
                 }
                 Text("Change any of these in Settings.").foregroundStyle(.secondary)
             }
@@ -310,6 +318,13 @@ struct OnboardingView: View {
                 model.next()
             }
             Button("Not Now") { model.next() }.keyboardShortcut(.defaultAction)
+        case .updates:
+            // Answering saves the choice, Daily if it wasn't changed: until then nothing is checked.
+            Button("Continue") {
+                settings.setUpdateCheck(settings.updateCheck ?? .daily)
+                model.next()
+            }
+            .keyboardShortcut(.defaultAction)
         case .done:
             Button("Start Using Fudge") { model.finish() }.keyboardShortcut(.defaultAction)
         default:
