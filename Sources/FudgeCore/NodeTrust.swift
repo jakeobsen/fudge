@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// How the extension host comes to trust the certificates the Mac trusts (SPEC-081). Node ignores the macOS trust
 /// store, so a server behind a company's own CA would fail TLS in extensions though Safari trusts it.
@@ -109,10 +110,11 @@ public enum NodeTrust {
 
     /// What the host starts with: `--use-system-ca` when the Node has it, an inherited `NODE_EXTRA_CA_CERTS` passing
     /// through unchanged; otherwise `NODE_EXTRA_CA_CERTS` naming `rootsFile`, written afresh from `certificates` (folder
-    /// 0700, file 0600), with the certificates of an inherited `NODE_EXTRA_CA_CERTS` file first, so one set for Fudge (by
-    /// the user or a profile) is never dropped. Only well-formed PEM certificates are taken from that file, so a bad one
-    /// can't make Node refuse ours. With nothing of the Mac's to add, or an inherited file that can't be read, the
-    /// environment stays as it is.
+    /// 0700, file 0600), followed by the certificates of an inherited `NODE_EXTRA_CA_CERTS` file, so one set for Fudge
+    /// (by the user or a profile) is never dropped. Node stops reading the file at the first block it can't load, so the
+    /// Mac's come first, and only blocks macOS reads as certificates are taken from the inherited file
+    /// (`pemCertificates`). With nothing of the Mac's to add, or an inherited file that can't be read, the environment
+    /// stays as it is.
     public static func launch(
         nodeVersion: String?, certificates: () -> [Certificate], rootsFile: URL,
         inherited: [String: String] = ProcessInfo.processInfo.environment
@@ -130,7 +132,7 @@ public enum NodeTrust {
             let folder = rootsFile.deletingLastPathComponent()
             try files.createDirectory(
                 at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            try Data((theirs + pem(roots)).utf8).write(to: rootsFile, options: .atomic)
+            try Data((pem(roots) + theirs).utf8).write(to: rootsFile, options: .atomic)
             try files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: rootsFile.path)
         } catch {
             return ([], [:])
@@ -138,8 +140,9 @@ public enum NodeTrust {
         return ([], [extraCertsVariable: rootsFile.path])
     }
 
-    /// The well-formed PEM certificate blocks in `text`, each as one block ending in a newline: a BEGIN and END line
-    /// around base64 that decodes.
+    /// The PEM certificate blocks in `text` that macOS reads as certificates (`SecCertificateCreateWithData`), each as
+    /// one block ending in a newline. Base64 that decodes isn't enough: Node drops everything after a block it can't
+    /// load.
     static func pemCertificates(in text: String) -> [String] {
         let begin = "-----BEGIN CERTIFICATE-----"
         let end = "-----END CERTIFICATE-----"
@@ -148,10 +151,17 @@ public enum NodeTrust {
         while let start = rest.range(of: begin), let stop = rest.range(of: end, range: start.upperBound..<rest.endIndex)
         {
             let body = rest[start.upperBound..<stop.lowerBound].filter { !$0.isWhitespace }
-            if !body.isEmpty, let der = Data(base64Encoded: String(body)), !der.isEmpty { blocks.append(pem([der])) }
+            if !body.isEmpty, let der = Data(base64Encoded: String(body)), isCertificate(der) {
+                blocks.append(pem([der]))
+            }
             rest = rest[stop.upperBound...]
         }
         return blocks
+    }
+
+    /// Whether `der` is an X.509 certificate, as the Security framework parses one. Only parses: no Keychain.
+    static func isCertificate(_ der: Data) -> Bool {
+        !der.isEmpty && SecCertificateCreateWithData(nil, der as CFData) != nil
     }
 
     /// `node --version`, read when the host starts; nil if it doesn't answer within 5 seconds.

@@ -84,15 +84,44 @@ private func cert(_ byte: UInt8, _ settings: [NodeTrust.Domain: [NodeTrust.Setti
     #expect(unknown.environment == ["NODE_EXTRA_CA_CERTS": file.path])
 }
 
+/// Two made-up, self-signed test roots ("Fudge Test Root A" and "B"), for the inherited `NODE_EXTRA_CA_CERTS` file:
+/// real certificates, since only what macOS reads as one is kept. Their keys were thrown away.
+private let testRootA = """
+    -----BEGIN CERTIFICATE-----
+    MIIBbjCCARSgAwIBAgIUPu7HqSJ9133lY/fre7hkDLH8hgowCgYIKoZIzj0EAwIw
+    HDEaMBgGA1UEAwwRRnVkZ2UgVGVzdCBSb290IEEwIBcNMjYxMTIxMTMwMDU3WhgP
+    MjEyNjEwMjgxMzAwNTdaMBwxGjAYBgNVBAMMEUZ1ZGdlIFRlc3QgUm9vdCBBMFkw
+    EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEnLFQACWIgwQB7VDF/ouYRs5ITvZtgkGz
+    vlTU+DbXrHBZ3KC6BSz9QAgcSqLdWZQd4ymTvyk1UfkLpLo1W7rIMqMyMDAwHQYD
+    VR0OBBYEFHmgg9A+Z1cnbypKcYzSUFwPdsyGMA8GA1UdEwEB/wQFMAMBAf8wCgYI
+    KoZIzj0EAwIDSAAwRQIgduckcFCkXOcW0ezqZ0a7vQ7+K6PDMEXQTJplNejrhCMC
+    IQDTsKriNFK2fU5hcYM+r7NZsEVf6t6Z2MIl/7jz2+5paw==
+    -----END CERTIFICATE-----
+    """ + "\n"
+private let testRootB = """
+    -----BEGIN CERTIFICATE-----
+    MIIBbjCCARSgAwIBAgIUKDDPRiLlvuCXEDJHVat5Xp7V2xIwCgYIKoZIzj0EAwIw
+    HDEaMBgGA1UEAwwRRnVkZ2UgVGVzdCBSb290IEIwIBcNMjYxMTIxMTMwMDU3WhgP
+    MjEyNjEwMjgxMzAwNTdaMBwxGjAYBgNVBAMMEUZ1ZGdlIFRlc3QgUm9vdCBCMFkw
+    EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE/GryLMx8tevAWicX4Awyj5S2lOBw+j49
+    F+/nIc3CvFlAIcz67nJ0t/O4O3iabMIGjkpmG0UuFmqWajx6z4CCEaMyMDAwHQYD
+    VR0OBBYEFNTA0DM6XUfFdiJEjnJC39wcIKf0MA8GA1UdEwEB/wQFMAMBAf8wCgYI
+    KoZIzj0EAwIDSAAwRQIgIjy1kC04GiffwWTbZ8y5ExOJmG9XUDzFj1jdbzmk35wC
+    IQC1BoqwyiqAcurUh4Pl/jW5qbf22VMaVrLhEKGpSJLJHQ==
+    -----END CERTIFICATE-----
+    """ + "\n"
+/// Base64 that decodes, but isn't a certificate: Node would stop reading the file at it.
+private let notACertificate =
+    "-----BEGIN CERTIFICATE-----\nbm90IGEgY2VydGlmaWNhdGUsIGp1c3QgYmFzZTY0\n-----END CERTIFICATE-----\n"
+
 @Test func anInheritedExtraCertsFileIsKeptNeverDropped() throws {
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent("fudge-trust-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: folder) }
     let file = folder.appendingPathComponent("trust/roots.pem")
     let theirs = folder.appendingPathComponent("company.pem")
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    let company = NodeTrust.pem([Data([0x30, 9, 9])])
-    try Data(("junk before\n" + company + "-----BEGIN CERTIFICATE-----\n!!!\n-----END CERTIFICATE-----\n").utf8)
-        .write(to: theirs)
+    let malformed = "-----BEGIN CERTIFICATE-----\n!!!\n-----END CERTIFICATE-----\n"
+    try Data(("junk before\n" + testRootA + notACertificate + testRootB + malformed).utf8).write(to: theirs)
     let mac = { [cert(1, [.user: []])] }
     let inherited = ["NODE_EXTRA_CA_CERTS": theirs.path]
 
@@ -100,10 +129,13 @@ private func cert(_ byte: UInt8, _ settings: [NodeTrust.Domain: [NodeTrust.Setti
     let flagged = NodeTrust.launch(nodeVersion: "v24.1.0", certificates: mac, rootsFile: file, inherited: inherited)
     #expect(flagged.arguments == ["--use-system-ca"] && flagged.environment.isEmpty)
 
-    // Without it, our file holds their well-formed certificates first, then the Mac's.
+    // Without it, our file holds the Mac's first, then their certificates: only the blocks macOS reads as one, so
+    // Node, which stops at the first block it can't load, loses nothing.
     let merged = NodeTrust.launch(nodeVersion: "v23.1.0", certificates: mac, rootsFile: file, inherited: inherited)
     #expect(merged.environment == ["NODE_EXTRA_CA_CERTS": file.path])
-    #expect(try String(contentsOf: file, encoding: .utf8) == company + NodeTrust.pem([Data([0x30, 1])]))
+    let written = try String(contentsOf: file, encoding: .utf8)
+    #expect(written == NodeTrust.pem([Data([0x30, 1])]) + testRootA + testRootB)
+    #expect(written.hasPrefix(NodeTrust.pem([Data([0x30, 1])])), "the Mac's come first")
 
     // Nothing of the Mac's to add, or a file that can't be read: theirs passes through, untouched.
     let nothing = NodeTrust.launch(nodeVersion: "v23.1.0", certificates: { [] }, rootsFile: file, inherited: inherited)
@@ -111,6 +143,14 @@ private func cert(_ byte: UInt8, _ settings: [NodeTrust.Domain: [NodeTrust.Setti
     let missing = ["NODE_EXTRA_CA_CERTS": folder.appendingPathComponent("gone.pem").path]
     let unread = NodeTrust.launch(nodeVersion: "v23.1.0", certificates: mac, rootsFile: file, inherited: missing)
     #expect(unread.arguments.isEmpty && unread.environment.isEmpty)
+}
+
+@Test func onlyBlocksMacOSReadsAsCertificatesAreTakenFromTheInheritedFile() {
+    #expect(NodeTrust.pemCertificates(in: testRootA + notACertificate + testRootB) == [testRootA, testRootB])
+    #expect(NodeTrust.pemCertificates(in: notACertificate).isEmpty, "base64 that decodes isn't a certificate")
+    #expect(NodeTrust.isCertificate(Data()) == false)
+    let der = Data(base64Encoded: testRootA.split(separator: "\n").dropFirst().dropLast().joined())
+    #expect(der.map(NodeTrust.isCertificate) == true)
 }
 
 @Test func theNodeVersionIsReadOncePerBinaryAndAgainWhenItChanges() throws {
