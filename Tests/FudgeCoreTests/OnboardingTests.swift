@@ -271,8 +271,10 @@ import Testing
     #expect(existing.pending == [.snippetExpansion, .done])
     #expect(existing.hasSomethingNew)
     // The step and the Snippets page's sheet say the same thing, from one string.
-    #expect(SnippetExpander.inputMonitoringExplanation.contains("Input Monitoring"))
-    #expect(SnippetExpander.inputMonitoringExplanation.contains("while macOS protects a password field"))
+    #expect(SnippetExpander.permissionsExplanation.contains("Input Monitoring"))
+    #expect(SnippetExpander.permissionsExplanation.contains("while macOS protects a password field"))
+    // Pasting the snippet needs Accessibility, so the step says that too (SPEC-114 §5).
+    #expect(SnippetExpander.permissionsExplanation.contains("Pasting the snippet in its place needs Accessibility."))
 }
 
 @Test func hyperkeyIsAskedAfterClipboardHistoryAndExistingUsersSeeJustIt() {

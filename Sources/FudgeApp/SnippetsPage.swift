@@ -115,7 +115,7 @@ struct ExpandSnippetsRow: View {
     static let explanation = "Type a snippet's keyword in any app to replace it with the snippet."
     static let permissionRequest = LauncherModel.AlertRequest(
         title: "Allow Input Monitoring?",
-        message: SnippetExpander.inputMonitoringExplanation,
+        message: SnippetExpander.permissionsExplanation,
         primary: "Open System Settings", dismiss: "Cancel", destructive: false)
 
     var body: some View {

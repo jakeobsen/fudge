@@ -115,7 +115,7 @@ private func type(
     expander.reset(.secureInput)
     #expect(type("dr", into: &expander).isEmpty)
     #expect(
-        SnippetExpander.inputMonitoringExplanation.hasSuffix("nothing is read while macOS protects a password field."))
+        SnippetExpander.permissionsExplanation.hasSuffix("nothing is read while macOS protects a password field."))
 }
 
 @Test func fudgesOwnKeysAreIgnored() {
