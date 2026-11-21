@@ -179,8 +179,16 @@ public final class Paste {
             restore(snapshot, ifStill: written)
             throw PasteError.secureInput
         }
-        let landing = await postPaste(
-            content, to: target.pid, backspaces: backspaces, deletedBefore: deletedBefore, leftArrows: leftArrows)
+        let landing: PasteWatch
+        do {
+            landing = try await postPaste(
+                content, to: target.pid, backspaces: backspaces, deletedBefore: deletedBefore, leftArrows: leftArrows,
+                secureInput: secureInput)
+        } catch {
+            // Secure input came on while the field was being read: nothing was posted.
+            restore(snapshot, ifStill: written)
+            throw error
+        }
         let task = Task { [weak self] in
             await landing.wait()
             guard !Task.isCancelled, let self else { return }
@@ -191,16 +199,20 @@ public final class Paste {
     }
 
     /// Posts ⌘V to `pid`, reading the focused field before it, and, for a `{cursor}`, places the caret once the paste
-    /// has landed. The field is watched off the main actor, and the result is what the restore waits for.
+    /// has landed. The field is watched off the main actor, and the result is what the restore waits for. Secure input
+    /// is checked again right before the first key, since the read can take seconds: then nothing is posted and it
+    /// throws `PasteError.secureInput`.
     private func postPaste(
-        _ content: PasteboardContents, to pid: Int32, backspaces: Int, deletedBefore: Int, leftArrows: Int
-    ) async -> PasteWatch {
+        _ content: PasteboardContents, to pid: Int32, backspaces: Int, deletedBefore: Int, leftArrows: Int,
+        secureInput: () -> Bool
+    ) async throws -> PasteWatch {
         let pasted = Self.plainText(of: content).map {
             PastedText(text: $0, afterCursor: leftArrows, deletedBefore: deletedBefore)
         }
         let placer = caret
         // The field is read before any key goes out, so before an expansion's ⌫s, which `deletedBefore` counts.
         let before = pasted == nil ? nil : await placer.read(pid)
+        guard !secureInput() else { throw PasteError.secureInput }
         let posted = placer.now()
         if backspaces > 0 { keys.postDelete(backspaces, to: pid) }
         keys.postPaste(to: pid)

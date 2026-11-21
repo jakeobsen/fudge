@@ -203,7 +203,7 @@ Extensions run in a separate Node.js process, the extension host.
       `SnippetExpansion` (app) then runs a **listen-only** `CGEventTap` on key-down and clicks (it can't swallow or change a key), at the annotated session point, so each key names the app it goes to (`eventTargetUnixProcessID`).
       The tap runs only while some snippet has a keyword and Input Monitoring is allowed (`IOHIDCheckAccess`, checked every 2 s, so revoking it removes the tap), and goes at once when switched off.
       Each key's facts go to `SnippetExpander` (core), which keeps the last 32 characters typed and answers only `.expand(snippetID:)` when they end with a keyword, matched exactly as written.
-      **What's typed never leaves it** (the reviewer's MUST 2): the buffer is private, its description and mirror show nothing typed, and the one line in the launcher's log is "expand snippet", with the id `.private`.
+      **What's typed never leaves it** (the reviewer's MUST 2): the buffer is private, its description and mirror show nothing typed, and all the launcher's log gets is "expand snippet", with the id `.private`, then, for a `{cursor}`, `Paste`'s caret line (numbers only).
       It's cleared by a click, an app switch, Return, Tab, Esc, ⌦, the arrows and page keys, the function keys, ⌥⌫, a ⌘ or ⌃ combination, one of Fudge's windows having the keyboard (the launcher's non-activating panel included), the snippets changing, switching off and the permission being revoked; ⌫ takes one character back.
       A key that goes to another app than the last one clears it too (`SnippetKeyEvent.target`), so a panel that takes the keyboard mid-keyword never gets the ⌫s.
       Under secure input (`IsSecureEventInputEnabled()`) nothing is kept or expanded.
@@ -214,7 +214,7 @@ Extensions run in a separate Node.js process, the extension host.
       Expanding checks secure input and Fudge's windows again, then `SystemCalls.expandSnippet` checks Accessibility without a prompt (without it nothing is deleted, the clipboard isn't touched, and a HUD says so once per run).
       It pastes through `Paste.expand` in its turn: `backspaces` ⌫ presses delete the keyword just before ⌘V, and `{cursor}`'s ← presses follow.
       All of them go to the app the keyword's last key went to, never to the frontmost app when that's another (a panel such as Spotlight's has the keyboard without being frontmost).
-      Nothing is posted when that app is unknown or Fudge, or when secure input is on by the time the turn comes, and the clipboard is put back.
+      Nothing is posted when that app is unknown or Fudge, or when secure input is on by the time the turn comes or comes on while the field is read (checked again right before the first key), and the clipboard is put back.
       `SnippetTemplate.leftArrows` caps those at 2,000, past which the caret stays at the end.
       The switch's row shows Input Monitoring's status every second while the page is on screen; turning it on without the permission explains it in a sheet, then asks macOS (its prompt the first time, the Input Monitoring pane after that); onboarding's step turns it on the same way (`SettingsModel.turnOnSnippetExpansion`).
       Snapshot runs never tap (`--input-monitoring allowed|missing` fixes the status shown).
