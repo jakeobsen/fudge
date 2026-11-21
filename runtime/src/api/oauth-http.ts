@@ -99,31 +99,24 @@ function dechunk(raw: Buffer): Buffer {
 /** How the caller made the request: Node's own function, its `this`, its arguments, and the options they add up to. */
 type Caller = { original: RequestFunction; self: unknown; args: unknown[]; options: Record<string, unknown> };
 
-/** The TLS options a caller can give a request (or its agent), which a connection Fudge opens for it keeps. */
-const tlsKeys = [
-    "ca",
-    "cert",
-    "key",
-    "pfx",
-    "passphrase",
-    "crl",
-    "ciphers",
-    "ecdhCurve",
-    "sigalgs",
-    "minVersion",
-    "maxVersion",
-    "secureProtocol",
-    "secureOptions",
-    "honorCipherOrder",
-    "rejectUnauthorized",
-    "checkServerIdentity",
-];
+/**
+ * The caller's TLS options a connection to the relay keeps, from the request and its agent: only what adds trust or
+ * proves who the client is (a CA, a revocation list, a client certificate), and a `minVersion` no lower than Node's
+ * default. Nothing that weakens verification goes along (`rejectUnauthorized: false`, `checkServerIdentity`, ciphers,
+ * `secureOptions`, a lower version, …), since the request carries the code and verifier, or the refresh token. A
+ * request passed through unchanged keeps all its options; it goes where the caller sent it.
+ */
+const relayTLSKeys = ["ca", "crl", "cert", "key", "pfx", "passphrase"];
+const tlsVersions = ["TLSv1", "TLSv1.1", "TLSv1.2", "TLSv1.3"];
 
-export function tlsOptions(options: Record<string, unknown>): Record<string, unknown> {
+export function relayTLSOptions(options: Record<string, unknown>): Record<string, unknown> {
     const agent = options.agent as { options?: Record<string, unknown> } | undefined;
     const picked: Record<string, unknown> = {};
     for (const source of [agent && typeof agent === "object" ? (agent.options ?? {}) : {}, options]) {
-        for (const key of tlsKeys) if (source[key] !== undefined) picked[key] = source[key];
+        for (const key of relayTLSKeys) if (source[key] !== undefined) picked[key] = source[key];
+        const version = tlsVersions.indexOf(String(source.minVersion));
+        const floor = tlsVersions.indexOf(tls.DEFAULT_MIN_VERSION);
+        if (version >= 0 && version >= floor) picked.minVersion = source.minVersion;
     }
     return picked;
 }
@@ -246,12 +239,12 @@ class Gate extends Duplex {
         ];
         const port = Number(to.port) || (to.protocol === "https:" ? 443 : 80);
         const host = to.hostname.startsWith("[") ? to.hostname.slice(1, -1) : to.hostname;
-        // The caller's TLS options go along (a custom CA, a client certificate), except the name, which is the
-        // relay's.
+        // The caller's trust and identity go along (a CA, a client certificate), never anything that weakens
+        // verification, and the name is the relay's.
         const socket =
             to.protocol === "https:"
                 ? tls.connect({
-                      ...tlsOptions(this.caller.options),
+                      ...relayTLSOptions(this.caller.options),
                       host,
                       port,
                       servername: net.isIP(host) ? undefined : host,

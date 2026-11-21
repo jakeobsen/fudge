@@ -22,7 +22,7 @@ import {
     type OAuthProvider,
     type ServerAnswer,
 } from "../src/api/oauth-fetch.ts";
-import { guardConnections, guardRequests, requestURL } from "../src/api/oauth-http.ts";
+import { guardConnections, guardRequests, relayTLSOptions, requestURL } from "../src/api/oauth-http.ts";
 import { signInOffMessage } from "../src/api/oauth.ts";
 
 const table = providersFromEnvironment(readFileSync(new URL("./fixtures/oauth-providers.json", import.meta.url), "utf8"));
@@ -341,4 +341,53 @@ test("a request rewritten to the relay keeps the caller's TLS options, but not i
         /self[- ]signed/,
         "the relay's certificate is checked with the caller's CA, or the system's",
     );
+});
+
+test("a request rewritten to the relay never takes an option that weakens verification", async () => {
+    // Only trust and identity go along, and a minimum version no lower than Node's.
+    const agent = new https.Agent({ ca: "agent-ca", rejectUnauthorized: false });
+    const kept = relayTLSOptions({
+        agent,
+        cert: "c",
+        key: "k",
+        crl: "r",
+        rejectUnauthorized: false,
+        checkServerIdentity: () => undefined,
+        ciphers: "NULL",
+        secureOptions: 4,
+        minVersion: "TLSv1",
+        maxVersion: "TLSv1",
+        secureProtocol: "TLSv1_method",
+        servername: "elsewhere.example",
+    });
+    assert.deepEqual(kept, { ca: "agent-ca", cert: "c", key: "k", crl: "r" });
+    assert.deepEqual(relayTLSOptions({ minVersion: "TLSv1.3" }), { minVersion: "TLSv1.3" });
+    agent.destroy();
+
+    // End to end: with the relay's certificate unknown to the system, each weakening option on its own still
+    // leaves the request refused by verification, and the caller's checkServerIdentity is never asked.
+    answer = { server: secureBase(), signedIn: false };
+    secureSeen.length = 0;
+    let asked = 0;
+    const weakening: Record<string, unknown>[] = [
+        { rejectUnauthorized: false },
+        { checkServerIdentity: () => void asked++ },
+        { minVersion: "TLSv1" },
+        { secureOptions: 0 },
+        { ciphers: "ALL" },
+        { agent: new https.Agent({ rejectUnauthorized: false }) },
+    ];
+    for (const option of weakening) {
+        await assert.rejects(
+            exchange(() => https.request("https://github.oauth.raycast.com/token", { ...post, ...option }), codeGrant),
+            /self[- ]signed/,
+            Object.keys(option).join(),
+        );
+    }
+    assert.equal(asked, 0);
+    assert.equal(secureSeen.length, 0, "nothing reached the relay unverified");
+
+    // A request passed through unchanged keeps them: it goes where the caller sent it.
+    const passed = await exchange(() => https.request(`${secureBase()}/token`, { ...post, rejectUnauthorized: false }), codeGrant);
+    assert.equal(passed.body, '{"secure":true}');
 });
