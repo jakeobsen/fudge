@@ -125,12 +125,15 @@ public struct MenuNode<Handle> {
 
     public var role: Role
     public var title: String
-    public var enabled: Bool
+    /// Whether the item is turned on; nil when the app didn't say (it didn't answer for that attribute in time), which
+    /// the list shows, and a press takes as no answer.
+    public var enabled: Bool?
     public var children: [Handle]
     public var shortcut: MenuShortcut?
 
-    public init(role: Role, title: String, enabled: Bool = true, children: [Handle] = [], shortcut: MenuShortcut? = nil)
-    {
+    public init(
+        role: Role, title: String, enabled: Bool? = true, children: [Handle] = [], shortcut: MenuShortcut? = nil
+    ) {
         self.role = role
         self.title = title
         self.enabled = enabled
@@ -391,7 +394,7 @@ public struct MenuReader<System: MenuSystem>: Sendable {
                 walk.missed()
                 continue
             }
-            guard node.enabled, let title = Self.title(node) else { continue }
+            guard node.enabled != false, let title = Self.title(node) else { continue }
             let top = Top(path: [title], inAppMenu: index == 1)
             guard read(below: node, top: top, depth: 1, system: system, into: walk) else { break }
         }
@@ -422,7 +425,7 @@ public struct MenuReader<System: MenuSystem>: Sendable {
                     walk.missed()
                     continue
                 }
-                guard item.role == .item, item.enabled, let title = Self.title(item) else { continue }
+                guard item.role == .item, item.enabled != false, let title = Self.title(item) else { continue }
                 if item.children.isEmpty {
                     let found = FoundMenuItem(
                         handle: entry, title: title, path: top.path, inAppMenu: top.inAppMenu, shortcut: item.shortcut)
@@ -447,13 +450,14 @@ public struct MenuReader<System: MenuSystem>: Sendable {
     /// The item `item` names, now: the element read, if it still answers as an item with that title; else the item
     /// found again in `pid` by its whole path and title (`locate`), as the `place`th of the `count` items the read
     /// saw with that path and title. The app may have rebuilt its menus since, or been started again with another
-    /// pid. An item that's turned off now is `.disabled`, never pressed. Blocks.
+    /// pid. An item that's turned off now is `.disabled`, and one whose state the app didn't give is `.noAnswer`:
+    /// neither is pressed. Blocks.
     public func current(_ item: FoundMenuItem<System.Handle>, place: Int = 0, count: Int = 1, in pid: Int32)
         -> MenuLookup<System.Handle>
     {
         switch system.node(item.handle) {
         case .answered(let node) where node.role == .item && node.title == item.title && node.children.isEmpty:
-            return node.enabled ? .ready(item.handle) : .disabled
+            return Self.lookup(item.handle, enabled: node.enabled)
         case .noAnswer:
             return .noAnswer
         default:
@@ -471,7 +475,7 @@ public struct MenuReader<System: MenuSystem>: Sendable {
     {
         guard let first = path.first else { return .gone }
         guard case .answered(let bar) = system.menuBar(of: pid) else { return .noAnswer }
-        var matches: [(handle: System.Handle, enabled: Bool)] = []
+        var matches: [(handle: System.Handle, enabled: Bool?)] = []
         var silent = false
         for item in bar.dropFirst() {
             switch system.node(item) {
@@ -483,13 +487,22 @@ public struct MenuReader<System: MenuSystem>: Sendable {
         }
         if silent { return .noAnswer }
         guard matches.count == count, matches.indices.contains(place) else { return .gone }
-        return matches[place].enabled ? .ready(matches[place].handle) : .disabled
+        return Self.lookup(matches[place].handle, enabled: matches[place].enabled)
+    }
+
+    /// Ready only when the app says the item is on now.
+    private static func lookup(_ handle: System.Handle, enabled: Bool?) -> MenuLookup<System.Handle> {
+        switch enabled {
+        case true: .ready(handle)
+        case false: .disabled
+        case nil: .noAnswer
+        }
     }
 
     /// Adds every leaf titled `title` under `path` below `parent`, in menu order; false when some menu didn't answer.
     private func collect(
         _ path: [String], title: String, below parent: MenuNode<System.Handle>,
-        into matches: inout [(handle: System.Handle, enabled: Bool)]
+        into matches: inout [(handle: System.Handle, enabled: Bool?)]
     ) -> Bool {
         var answered = true
         for child in parent.children {

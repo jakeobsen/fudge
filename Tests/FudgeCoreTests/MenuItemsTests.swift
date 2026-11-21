@@ -559,6 +559,10 @@ private let alike: [FixedMenu] = [
     system.rebuild(alike)
     #expect(await runItem(rows[1], of: listing, probe: RunProbe()) == .pressed(.pressed))
     #expect(system.pressedElements == [system.items(titled: "bash")[1]])
+    // And the first row the first, after another rebuild.
+    system.rebuild(alike)
+    #expect(await runItem(rows[0], of: listing, probe: RunProbe()) == .pressed(.pressed))
+    #expect(system.pressedElements.last == system.items(titled: "bash")[0])
 }
 
 @MainActor
@@ -589,6 +593,23 @@ private let alike: [FixedMenu] = [
     #expect(await runItem(row, of: listing, probe: probe) == .disabled)
     #expect(system.pressed.isEmpty)
     #expect(MenuItemsList.turnedOff == "That menu item is turned off right now.")
+}
+
+@MainActor
+@Test func anItemWhoseStateTheAppDoesntGiveIsListedButNotPressed() async throws {
+    let system = FixedMenuSystem(menus: menus)
+    system.setEnabled(nil, titled: "As PDF…")
+    let listing = try read(system)
+    let row = try #require(
+        listing.rows.firstIndex { $0.title == "As PDF…" }, "listed: only an item said to be off isn't")
+    let probe = RunProbe()
+    #expect(await runItem(row, of: listing, probe: probe) == .noAnswer)
+    #expect(probe.done.isEmpty, "nothing hidden, activated or pressed")
+    // Found again by its path, still unknown.
+    system.rebuild(menus)
+    system.setEnabled(nil, titled: "As PDF…")
+    #expect(await runItem(row, of: listing, probe: probe) == .noAnswer)
+    #expect(system.pressed.isEmpty)
 }
 
 @Test func aCancelledReadDoesntHoldUpTheNextOne() throws {

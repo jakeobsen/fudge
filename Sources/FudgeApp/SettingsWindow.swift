@@ -890,12 +890,9 @@ final class SettingsModel {
         hotkeyNotes[commandID] = note(displaced)
     }
 
-    /// "Removed from <command>, which isn't installed", for the hotkeys a new one took over; nil for none.
+    /// What the hotkeys a new one took over were (`HotKeyConflict.displacedNote`), by title; nil for none.
     private func note(_ displaced: [String]) -> String? {
-        guard !displaced.isEmpty else { return nil }
-        let names = displaced.formatted(.list(type: .and))
-        return displaced.count == 1
-            ? "Removed from \(names), which isn't installed" : "Removed from \(names), which aren't installed"
+        HotKeyConflict.displacedNote(displaced, title: title(ofCommand:))
     }
 
     func clearHotkey(_ commandID: String) {

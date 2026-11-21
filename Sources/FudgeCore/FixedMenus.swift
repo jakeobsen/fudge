@@ -98,8 +98,9 @@ public final class FixedMenuSystem: MenuSystem, @unchecked Sendable {
         }
     }
 
-    /// Turns the items titled `title` on or off, as an app does while its menus stay up.
-    public func setEnabled(_ enabled: Bool, titled title: String) {
+    /// Turns the items titled `title` on or off, as an app does while its menus stay up; nil is an app that doesn't
+    /// say.
+    public func setEnabled(_ enabled: Bool?, titled title: String) {
         lock.withLock {
             for index in elements.indices where elements[index].title == title {
                 elements[index].node.enabled = enabled
