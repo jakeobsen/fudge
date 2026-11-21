@@ -126,7 +126,7 @@ A snippet is text you use often, such as an address or a reply, saved to paste a
 
 To make one, open **Create Snippet**, give it a name and its text, and press ⌘↵. Extensions can offer to make one too (**Create Snippet** in their ⌘K). **Settings → Snippets** lists them all, to add, change or delete one.
 
-A snippet's text can fill itself in: `{clipboard}`, `{date}`, `{time}`, `{datetime}`, `{day}` and `{uuid}`, changed by `| uppercase`, `| lowercase` or `| trim`. `{cursor}` marks where the cursor ends up after pasting. A snippet can also have a keyword, such as `;addr`, which Search Snippets finds it by. No keyword can contain another.
+A snippet's text can fill itself in: `{clipboard}`, `{date}`, `{time}`, `{datetime}`, `{day}` and `{uuid}`, changed by `| uppercase`, `| lowercase` or `| trim`, and `{date format="yyyy-MM-dd"}` picks a date's format. `{cursor}` marks where the cursor ends up after pasting. These names are always filled in, wherever they appear, as in Raycast; any other text in braces, such as code or JSON, is pasted as it is. A snippet can also have a keyword, such as `;addr`, which Search Snippets finds it by. No keyword can contain another.
 
 ### Calculator and currency
 
