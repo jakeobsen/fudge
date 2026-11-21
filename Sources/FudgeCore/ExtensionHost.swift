@@ -10,10 +10,11 @@ public final class ExtensionHost: Sendable {
     private let input: FileHandle
     private let writeLock = NSLock()
 
-    public init(node: URL, script: URL, environment: [String: String] = [:]) throws {
+    /// `nodeArguments` go before the script, such as `--use-system-ca` (`NodeTrust`).
+    public init(node: URL, script: URL, nodeArguments: [String] = [], environment: [String: String] = [:]) throws {
         let process = Process()
         process.executableURL = node
-        process.arguments = [script.path]
+        process.arguments = nodeArguments + [script.path]
         process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in new }
         let stdin = Pipe()
         let stdout = Pipe()
