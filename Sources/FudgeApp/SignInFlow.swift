@@ -105,10 +105,11 @@ final class OAuthLoopback: @unchecked Sendable {
 
     private func begin() async throws {
         listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
+        // Called on `queue`, once `start` has run there.
+        listener.stateUpdateHandler = { [weak self] state in self?.started(state) }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             queue.async {
                 self.starting = continuation
-                self.listener.stateUpdateHandler = { [weak self] state in self?.started(state) }
                 self.listener.start(queue: self.queue)
             }
         }
