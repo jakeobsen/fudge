@@ -160,6 +160,8 @@ test-runtime: runtime/node_modules
 lint: runtime/node_modules
 	@swift format lint --strict --recursive Package.swift Sources Tests
 	@cd runtime && npm run --silent typecheck
+	@# Docs are one sentence per line: no line of CLAUDE.md or README.md over 400 characters, outside code and tables.
+	@perl -CSD -ne 'chomp; if (/^\s*(```|~~~)/) { $$fence = !$$fence } elsif (!$$fence && !/^\s*\|/ && length > 400) { print STDERR "$$ARGV:$$.: " . length . " characters; write docs one sentence per line\n"; $$bad = 1 } if (eof) { close ARGV; $$fence = 0 } END { exit $$bad }' CLAUDE.md README.md
 
 fmt:
 	@swift format --in-place --recursive Package.swift Sources Tests
