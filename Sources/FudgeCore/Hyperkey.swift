@@ -37,6 +37,9 @@ public protocol KeyMappingSystem: Sendable {
     func readMapping() throws -> String
     /// `hidutil property --matching keyboard --get UserKeyMapping`: each keyboard's own, one row each.
     func readKeyboardMappings() throws -> String
+    /// `hidutil property --matching keyboard --get HIDKeyboardModifierMappingPairs`: what System Settings → Keyboard →
+    /// Modifier Keys set for each keyboard, one row each.
+    func readModifierKeys() throws -> String
     /// `hidutil property --set <argument>`.
     func writeMapping(_ argument: String) throws
 }
@@ -56,8 +59,9 @@ public enum HyperkeyMapping {
         public var message: String {
             switch self {
             case .capsLockTaken(let destination):
-                return "Caps Lock is already mapped to \(HyperkeyMapping.keyName(destination)) on this Mac, so Fudge "
-                    + "leaves it alone. Remove that mapping first."
+                return "Caps Lock is already mapped to \(HyperkeyMapping.keyName(destination)) on this Mac (in System "
+                    + "Settings → Keyboard → Modifier Keys, or by a tool such as Karabiner-Elements), so Fudge leaves it "
+                    + "alone. Remove that mapping first."
             case .unreadable:
                 return "Fudge couldn't read this Mac's key mapping, so it left it alone."
             case .failed(let reason):
@@ -66,13 +70,15 @@ public enum HyperkeyMapping {
         }
     }
 
-    /// Adds Fudge's entry, keeping every other one. Refuses when Caps Lock is mapped elsewhere, in the mapping every
-    /// keyboard gets or in a keyboard's own (System Settings → Keyboard → Modifier Keys), and when either can't be read.
+    /// Adds Fudge's entry, keeping every other one. Refuses when Caps Lock is mapped elsewhere: in the mapping every
+    /// keyboard gets, in a keyboard's own, or in System Settings → Keyboard → Modifier Keys
+    /// (`HIDKeyboardModifierMappingPairs`), and when any of them can't be read.
     public static func apply(_ system: any KeyMappingSystem) throws(Problem) {
         let current = try read(system)
         let keyboards: [[KeyRemap]]
         do {
-            keyboards = try keyboardMappings(system.readKeyboardMappings())
+            keyboards =
+                try keyboardMappings(system.readKeyboardMappings()) + keyboardMappings(system.readModifierKeys())
         } catch {
             throw .unreadable
         }
@@ -90,7 +96,9 @@ public enum HyperkeyMapping {
     }
 
     public static func adding(to current: [KeyRemap], keyboards: [[KeyRemap]] = []) throws(Problem) -> [KeyRemap] {
-        for remap in current + keyboards.flatMap({ $0 }) where remap.source == Hyperkey.capsLockUsage {
+        // Caps Lock left as Caps Lock (Modifier Keys lists every key that way) isn't a mapping.
+        for remap in current + keyboards.flatMap({ $0 })
+        where remap.source == Hyperkey.capsLockUsage && remap.destination != remap.source {
             guard remap == entry else { throw .capsLockTaken(destination: remap.destination) }
         }
         return current.contains(entry) ? current : current + [entry]
@@ -123,12 +131,15 @@ public enum HyperkeyMapping {
         }
     }
 
-    /// `hidutil property --matching keyboard --get UserKeyMapping`'s output: a header line, then one row per keyboard,
-    /// its registry id, the key and the value, which runs on over the following lines when it's a list.
+    /// `hidutil property --matching keyboard --get UserKeyMapping` (or `HIDKeyboardModifierMappingPairs`)'s output: a
+    /// header line, then one row per keyboard, its registry id, the key and the value, which runs on over the
+    /// following lines when it's a list.
     public static func keyboardMappings(_ output: String) throws(Problem) -> [[KeyRemap]] {
         var values: [String] = []
         for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
-            if let row = line.wholeMatch(of: /\s*[0-9A-Fa-fx]+\s+UserKeyMapping\s+(.*)/) {
+            if let row = line.wholeMatch(
+                of: /\s*[0-9A-Fa-fx]+\s+(?:UserKeyMapping|HIDKeyboardModifierMappingPairs)\s+(.*)/)
+            {
                 values.append(String(row.1))
             } else if line.hasPrefix("RegistryID") || (values.isEmpty && line.allSatisfy(\.isWhitespace)) {
                 continue
@@ -143,6 +154,7 @@ public enum HyperkeyMapping {
 
     /// A key's name for the conflict message, for the usages Caps Lock is usually mapped to.
     public static func keyName(_ usage: UInt64) -> String {
+        if usage == 0 { return "No Action" }
         guard usage >> 32 == 7 else { return "another key" }
         switch usage & 0xFFFF {
         case 0x29: return "Escape"
@@ -275,5 +287,53 @@ public struct HyperTap: Sendable, Equatable {
     public mutating func reset(_ reason: Reset) {
         pressedAt = nil
         otherKeySincePress = false
+    }
+}
+
+/// When Hyperkey's service starts and stops (SPEC-093, and #125's review), checked at launch, on every change of the
+/// setting and every 2 s for Accessibility. It runs only while the setting is on and Accessibility is allowed.
+/// Otherwise Fudge's mapping goes, once, even when this run never added it: a crash, a kill or a force-quit skips
+/// the removal at quit, and a leftover Caps Lock → F18 with no tap leaves Caps Lock dead. A start that failed (the
+/// tap refused, the mapping refused) isn't tried again until the setting or Accessibility changes.
+public struct HyperkeyLifecycle: Sendable, Equatable {
+    public enum Step: Sendable, Equatable {
+        case nothing
+        /// Start the tap, then add Fudge's entry.
+        case start
+        /// Stop the tap if it runs, and remove Fudge's entry (`HyperkeyMapping.remove` writes nothing when it isn't
+        /// there).
+        case stop
+    }
+
+    public private(set) var running = false
+    private var removed = false
+    private var gaveUp = false
+    private var lastSetting: Bool?
+    private var lastTrusted: Bool?
+
+    public init() {}
+
+    public mutating func next(settingOn: Bool, trusted: Bool) -> Step {
+        if lastSetting != settingOn || lastTrusted != trusted { gaveUp = false }
+        lastSetting = settingOn
+        lastTrusted = trusted
+        if settingOn && trusted {
+            guard !running, !gaveUp else { return .nothing }
+            running = true
+            removed = false
+            return .start
+        }
+        guard running || !removed else { return .nothing }
+        running = false
+        removed = true
+        return .stop
+    }
+
+    /// The start failed: Hyperkey stops, its entry goes, and it waits for a change before trying again.
+    public mutating func startFailed() -> Step {
+        running = false
+        removed = true
+        gaveUp = true
+        return .stop
     }
 }

@@ -29,6 +29,8 @@ private final class FakeKeyMapping: KeyMappingSystem, @unchecked Sendable {
     var keyboards: String
     var readFails = false
     var keyboardsFail = false
+    var modifierKeys = "RegistryID  Key                   Value\n"
+    var modifierKeysFail = false
     var writeFails = false
     private(set) var writes: [String] = []
 
@@ -47,6 +49,11 @@ private final class FakeKeyMapping: KeyMappingSystem, @unchecked Sendable {
     func readKeyboardMappings() throws -> String {
         if keyboardsFail { throw Failed() }
         return keyboards
+    }
+
+    func readModifierKeys() throws -> String {
+        if modifierKeysFail { throw Failed() }
+        return modifierKeys
     }
 
     func writeMapping(_ argument: String) throws {
@@ -327,4 +334,89 @@ private let t: UInt16 = 17
     #expect(loaded.hyperkey && loaded.hyperkeyQuickPress)
     try Data(#"{"hyperkey": "yes", "hyperkeyQuickPress": 1}"#.utf8).write(to: file)
     #expect(!FudgeSettings.load(from: file).hyperkey, "only a JSON true turns it on")
+}
+
+// MARK: - #125's review
+
+@Test func capsLockMappedInModifierKeysIsRefused() {
+    // System Settings → Keyboard → Modifier Keys writes `HIDKeyboardModifierMappingPairs`, not `UserKeyMapping`.
+    let system = FakeKeyMapping()
+    system.modifierKeys = """
+        RegistryID  Key                   Value
+        100000b43   HIDKeyboardModifierMappingPairs   (null)
+        100009295   HIDKeyboardModifierMappingPairs   (
+                {
+                HIDKeyboardModifierMappingDst = 30064771296;
+                HIDKeyboardModifierMappingSrc = 30064771129;
+            }
+        )
+        """
+    #expect(throws: HyperkeyMapping.Problem.capsLockTaken(destination: leftControl)) {
+        try HyperkeyMapping.apply(system)
+    }
+    #expect(system.writes.isEmpty)
+    #expect(HyperkeyMapping.Problem.capsLockTaken(destination: leftControl).message.contains("Modifier Keys"))
+    // Caps Lock left as Caps Lock there isn't a mapping.
+    system.modifierKeys = """
+        RegistryID  Key                   Value
+        100009295   HIDKeyboardModifierMappingPairs   (
+                {
+                HIDKeyboardModifierMappingDst = 30064771129;
+                HIDKeyboardModifierMappingSrc = 30064771129;
+            }
+        )
+        """
+    #expect(throws: Never.self) { try HyperkeyMapping.apply(system) }
+    let unreadable = FakeKeyMapping()
+    unreadable.modifierKeysFail = true
+    #expect(throws: HyperkeyMapping.Problem.unreadable) { try HyperkeyMapping.apply(unreadable) }
+    #expect(HyperkeyMapping.keyName(0) == "No Action")
+}
+
+/// Runs the lifecycle's steps against the fake mapping as the app does: a start adds the entry unless the tap is
+/// refused, which `startFailed` turns into a stop.
+private func run(
+    _ lifecycle: inout HyperkeyLifecycle, settingOn: Bool, trusted: Bool, tapStarts: Bool = true,
+    on system: FakeKeyMapping
+) throws {
+    var step = lifecycle.next(settingOn: settingOn, trusted: trusted)
+    if step == .start {
+        if tapStarts { try HyperkeyMapping.apply(system) } else { step = lifecycle.startFailed() }
+    }
+    if step == .stop { try HyperkeyMapping.remove(system) }
+}
+
+@Test func aLeftoverEntryIsRemovedAtLaunchWheneverHyperkeyWontRun() throws {
+    // Fudge was killed with Hyperkey on: Caps Lock → F18 is still there, and nothing handles F18.
+    for (settingOn, trusted, tapStarts) in [(false, true, true), (true, false, true), (true, true, false)] {
+        let system = FakeKeyMapping(mapping: printedList)
+        var lifecycle = HyperkeyLifecycle()
+        try run(&lifecycle, settingOn: settingOn, trusted: trusted, tapStarts: tapStarts, on: system)
+        try #require(system.writes.count == 1, "setting \(settingOn), Accessibility \(trusted), tap \(tapStarts)")
+        #expect(
+            try system.written(0) == [KeyRemap(source: rightOption, destination: escape)],
+            "setting \(settingOn), Accessibility \(trusted), tap \(tapStarts): Fudge's entry goes, the other stays")
+        // The 2 s check doesn't do it again, nor start a tap again and again.
+        system.mapping = "(null)"
+        for _ in 0..<3 {
+            #expect(lifecycle.next(settingOn: settingOn, trusted: trusted) == .nothing)
+        }
+        #expect(system.writes.count == 1)
+    }
+}
+
+@Test func hyperkeyFollowsTheSettingAndAccessibility() {
+    var lifecycle = HyperkeyLifecycle()
+    #expect(lifecycle.next(settingOn: true, trusted: true) == .start)
+    #expect(lifecycle.next(settingOn: true, trusted: true) == .nothing)
+    #expect(lifecycle.next(settingOn: true, trusted: false) == .stop, "Accessibility revoked")
+    #expect(lifecycle.next(settingOn: true, trusted: false) == .nothing)
+    #expect(lifecycle.next(settingOn: true, trusted: true) == .start, "and back")
+    #expect(lifecycle.next(settingOn: false, trusted: true) == .stop, "switched off")
+    // A refused start waits for a change before it's tried again.
+    #expect(lifecycle.next(settingOn: true, trusted: true) == .start)
+    #expect(lifecycle.startFailed() == .stop)
+    #expect(lifecycle.next(settingOn: true, trusted: true) == .nothing)
+    #expect(lifecycle.next(settingOn: false, trusted: true) == .nothing, "already removed")
+    #expect(lifecycle.next(settingOn: true, trusted: true) == .start, "the switch again")
 }

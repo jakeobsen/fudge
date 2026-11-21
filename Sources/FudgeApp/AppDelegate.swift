@@ -40,6 +40,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var quickLook: QuickLookPreview?
     /// Hyperkey (SPEC-093): Caps Lock as ⌘⌥⌃⇧. Never in snapshot runs.
     private var hyperkey: HyperkeyService?
+    /// SIGTERM quits as Quit does, so what `applicationWillTerminate` puts back (Hyperkey's mapping) goes with a kill
+    /// or a restart too. Never in snapshot runs.
+    private var terminationSignal: DispatchSourceSignal?
 
     func applicationWillTerminate(_ notification: Notification) {
         // Clipboard History's decrypted image copies don't outlive the run.
@@ -201,6 +204,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.hyperkeyQuickPressChanged = { [weak hyperkey] in hyperkey?.update() }
         self.hyperkey = hyperkey
         hyperkey.update()
+
+        signal(SIGTERM, SIG_IGN)
+        let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        termination.setEventHandler { NSApp.terminate(nil) }
+        termination.resume()
+        terminationSignal = termination
 
         let quickLook = QuickLookPreview()
         quickLook.launcherLevel = panel.level

@@ -25,128 +25,94 @@ final class HyperkeyService {
     /// `hidutil` runs here, in order, off the main thread.
     private let queue = DispatchQueue(label: "io.github.jakeobsen.fudge.hyperkey")
     private var tap: HyperTapThread?
-    /// Fudge's entry is in the key mapping, as far as this run knows: added, and not removed since.
-    private var mapped = false
+    /// When it runs, and when its mapping goes (core, tested).
+    private var lifecycle = HyperkeyLifecycle()
     private var permissionCheck: Timer?
+    /// The switch's turn-on is under way: it isn't saved yet, so the 2 s check leaves it alone meanwhile.
+    private var turningOn = false
 
     init(paths: FudgePaths, mapping: any KeyMappingSystem = HidutilKeyMapping()) {
         self.paths = paths
         self.mapping = mapping
     }
 
-    /// Follows `settings.json`: at launch, after an import, and when Quick press changes. Starts Hyperkey when it's
-    /// on and Accessibility is allowed, and stops it otherwise. Nothing runs while it's off and was never on.
+    /// Follows `settings.json` and Accessibility: at launch, after an import, when Quick press changes, and every
+    /// 2 s. At launch with Hyperkey off, or without Accessibility, a leftover entry of Fudge's is removed, once.
     func update() {
         let settings = FudgeSettings.load(from: paths.settingsFile)
-        guard settings.hyperkey else {
-            if tap != nil || mapped { turnOff() }
-            return
-        }
         tap?.setQuickPress(settings.hyperkeyQuickPress)
-        checkPermission()
-        followPermission()
-    }
-
-    /// Accessibility can be turned off in System Settings at any time; Hyperkey goes with it, and Caps Lock is Caps
-    /// Lock again until it's back.
-    private func checkPermission() {
-        guard permissionCheck == nil else { return }
-        permissionCheck = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.followPermission() }
+        if settings.hyperkey, !settings.hyperkeyQuickPress { CapsLock.turnOff() }
+        if permissionCheck == nil {
+            permissionCheck = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.check() }
+            }
         }
+        check()
     }
 
     /// The switch, or onboarding's step, turning it on: the tap first, then Fudge's entry. `done` gets the problem,
     /// if any, and Hyperkey is off again then; the caller saves the setting only when there's none. It isn't called
     /// when Hyperkey was switched off before the mapping was in.
     func turnOn(quickPress: Bool, done: @escaping @MainActor (String?) -> Void) {
-        guard AXIsProcessTrusted() else {
-            done(Self.needsAccessibility)
-            return
-        }
-        guard startTap(quickPress: quickPress) else {
-            done(Self.tapRefused)
-            return
-        }
-        addMapping { [weak self] problem in
-            guard let self else { return }
-            if problem == nil {
-                checkPermission()
-            } else {
-                stopTap()
+        let trusted = AXIsProcessTrusted()
+        switch lifecycle.next(settingOn: true, trusted: trusted) {
+        case .start:
+            turningOn = true
+            start(quickPress: quickPress) { [weak self] problem in
+                self?.turningOn = false
+                if problem == nil, !quickPress { CapsLock.turnOff() }
+                done(problem)
             }
-            self.problem = problem
-            done(problem)
+        case .stop:
+            stop()
+            done(trusted ? Self.tapRefused : Self.needsAccessibility)
+        case .nothing:
+            done(tap == nil ? Self.tapRefused : nil)
         }
     }
 
-    /// The switch turning it off: the tap stops, and Fudge's entry is removed, always, whatever this run knows.
+    /// The switch turning it off: the tap stops, and Fudge's entry is removed.
     func turnOff() {
-        permissionCheck?.invalidate()
-        permissionCheck = nil
-        stopTap()
-        mapped = false
-        let mapping = self.mapping
-        queue.async { try? HyperkeyMapping.remove(mapping) }
+        if lifecycle.next(settingOn: false, trusted: AXIsProcessTrusted()) == .stop { stop() }
         problem = nil
     }
 
-    /// Fudge is quitting: Caps Lock goes back to Caps Lock before it exits.
+    /// Fudge is quitting (or was asked to by SIGTERM): Caps Lock goes back to Caps Lock before it exits.
     func quit() {
-        guard tap != nil || mapped else { return }
-        stopTap()
-        let mapping = self.mapping
-        queue.sync { try? HyperkeyMapping.remove(mapping) }
-        mapped = false
-    }
-
-    private func followPermission() {
-        if !AXIsProcessTrusted() {
-            if tap != nil || mapped {
-                stopTap()
-                mapped = false
-                let mapping = self.mapping
-                queue.async { try? HyperkeyMapping.remove(mapping) }
-            }
-            problem = Self.needsAccessibility
-            return
-        }
-        guard tap == nil else { return }
-        let settings = FudgeSettings.load(from: paths.settingsFile)
-        guard settings.hyperkey else { return }
-        guard startTap(quickPress: settings.hyperkeyQuickPress) else {
-            problem = Self.tapRefused
-            return
-        }
-        addMapping { [weak self] problem in
-            guard let self else { return }
-            if problem != nil {
-                stopTap()
-                // Not again every 2 s: the next launch or change of the switch tries again.
-                permissionCheck?.invalidate()
-                permissionCheck = nil
-            }
-            self.problem = problem
-        }
-    }
-
-    private func startTap(quickPress: Bool) -> Bool {
-        if let tap {
-            tap.setQuickPress(quickPress)
-            return true
-        }
-        let thread = HyperTapThread(quickPress: quickPress)
-        guard thread.begin() else { return false }
-        tap = thread
-        return true
-    }
-
-    private func stopTap() {
+        guard tap != nil || lifecycle.running else { return }
         tap?.end()
         tap = nil
+        let mapping = self.mapping
+        queue.sync { try? HyperkeyMapping.remove(mapping) }
     }
 
-    private func addMapping(_ done: @escaping @MainActor (String?) -> Void) {
+    private func check() {
+        guard !turningOn else { return }
+        let settings = FudgeSettings.load(from: paths.settingsFile)
+        let trusted = AXIsProcessTrusted()
+        switch lifecycle.next(settingOn: settings.hyperkey, trusted: trusted) {
+        case .start:
+            start(quickPress: settings.hyperkeyQuickPress) { [weak self] problem in self?.problem = problem }
+        case .stop:
+            stop()
+            problem = settings.hyperkey && !trusted ? Self.needsAccessibility : problem
+        case .nothing:
+            // macOS can leave a tap turned off; it goes back on, starting over.
+            tap?.ensureEnabled()
+            if settings.hyperkey, !trusted { problem = Self.needsAccessibility }
+            if !settings.hyperkey { problem = nil }
+        }
+    }
+
+    /// The tap, then the mapping; a refusal of either stops Hyperkey and removes its entry (`startFailed`).
+    private func start(quickPress: Bool, done: @escaping @MainActor (String?) -> Void) {
+        let thread = HyperTapThread(quickPress: quickPress)
+        guard thread.begin() else {
+            if lifecycle.startFailed() == .stop { stop() }
+            return done(Self.tapRefused)
+        }
+        tap = thread
+        let started = ObjectIdentifier(thread)
         let mapping = self.mapping
         queue.async {
             var problem: String?
@@ -157,13 +123,20 @@ final class HyperkeyService {
             }
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    // Switched off meanwhile: `turnOff` has queued the removal after this, and nothing is saved.
-                    guard self.tap != nil else { return }
-                    if problem == nil { self.mapped = true }
+                    // Switched off meanwhile: the removal is queued after this, and nothing is saved.
+                    guard self.tap.map(ObjectIdentifier.init) == started else { return }
+                    if problem != nil, self.lifecycle.startFailed() == .stop { self.stop() }
                     done(problem)
                 }
             }
         }
+    }
+
+    private func stop() {
+        tap?.end()
+        tap = nil
+        let mapping = self.mapping
+        queue.async { try? HyperkeyMapping.remove(mapping) }
     }
 }
 
@@ -180,6 +153,10 @@ struct HidutilKeyMapping: KeyMappingSystem {
 
     func readKeyboardMappings() throws -> String {
         try run(["property", "--matching", "keyboard", "--get", "UserKeyMapping"])
+    }
+
+    func readModifierKeys() throws -> String {
+        try run(["property", "--matching", "keyboard", "--get", "HIDKeyboardModifierMappingPairs"])
     }
 
     func writeMapping(_ argument: String) throws {
@@ -204,6 +181,19 @@ struct HidutilKeyMapping: KeyMappingSystem {
 /// Caps Lock's own state, which a posted key event can't toggle.
 enum CapsLock {
     static func toggle() {
+        withLockState { connection, on in
+            IOHIDSetModifierLockState(connection, Int32(kIOHIDCapsLockState), !on)
+        }
+    }
+
+    /// With Hyperkey on and no quick press, the key can't turn caps off any more, so it's turned off for the user.
+    static func turnOff() {
+        withLockState { connection, on in
+            if on { IOHIDSetModifierLockState(connection, Int32(kIOHIDCapsLockState), false) }
+        }
+    }
+
+    private static func withLockState(_ body: (io_connect_t, Bool) -> Void) {
         let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching(kIOHIDSystemClass))
         guard service != 0 else { return }
         defer { IOObjectRelease(service) }
@@ -213,7 +203,7 @@ enum CapsLock {
         defer { IOServiceClose(connection) }
         var on = false
         guard IOHIDGetModifierLockState(connection, Int32(kIOHIDCapsLockState), &on) == KERN_SUCCESS else { return }
-        IOHIDSetModifierLockState(connection, Int32(kIOHIDCapsLockState), !on)
+        body(connection, on)
     }
 }
 
@@ -226,6 +216,8 @@ final class HyperTapThread: Thread, @unchecked Sendable {
     private var tap: CFMachPort?
     private var runLoop: CFRunLoop?
     private var running = false
+    /// Set by `end()`; the run loop checks it, so a stop asked for before it runs isn't lost.
+    private var stopping = false
     private let ready = DispatchSemaphore(value: 0)
 
     init(quickPress: Bool) {
@@ -246,9 +238,19 @@ final class HyperTapThread: Thread, @unchecked Sendable {
     func end() {
         let loop = lock.withLock {
             state.reset(.switchedOff)
+            stopping = true
             return runLoop
         }
         if let loop { CFRunLoopStop(loop) }
+    }
+
+    /// Turns the tap back on if macOS left it off, starting over (the 2 s check).
+    func ensureEnabled() {
+        let tap = lock.withLock { self.tap }
+        guard let tap, !CGEvent.tapIsEnabled(tap: tap) else { return }
+        lock.withLock { state.reset(.tapDisabled) }
+        CGEvent.tapEnable(tap: tap, enable: true)
+        lock.withLock { state.reset(.tapEnabled) }
     }
 
     func setQuickPress(_ on: Bool) {
@@ -275,7 +277,9 @@ final class HyperTapThread: Thread, @unchecked Sendable {
             running = true
         }
         ready.signal()
-        CFRunLoopRun()
+        while !lock.withLock({ stopping }) {
+            CFRunLoopRunInMode(.defaultMode, 0.5, false)
+        }
         CGEvent.tapEnable(tap: tap, enable: false)
         CFRunLoopRemoveSource(loop, source, .commonModes)
         CFMachPortInvalidate(tap)
@@ -310,7 +314,9 @@ final class HyperTapThread: Thread, @unchecked Sendable {
         else { return Unmanaged.passUnretained(event) }
         let facts = HyperTapEvent(
             kind: kind, keyCode: UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode)),
-            isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0, time: event.timestamp)
+            // The time is read here, in nanoseconds of uptime: an event's own timestamp isn't nanoseconds everywhere.
+            isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0,
+            time: clock_gettime_nsec_np(CLOCK_UPTIME_RAW))
         let f18Down = CGEventSource.keyState(.hidSystemState, key: CGKeyCode(Hyperkey.f18KeyCode))
         let secureInput = IsSecureEventInputEnabled()
         let decision = lock.withLock { state.handle(facts, f18Down: f18Down, secureInput: secureInput) }
