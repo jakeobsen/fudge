@@ -75,11 +75,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { await self.exchangeRates.updateIfNeeded(now: Date(), explicit: true) }
         }
         settingsModel.resetAfterChanged = { [weak self] setting in self?.model.panelReset.setting = setting }
-        settingsModel.extensionStoreChanged = { [weak self] in
-            guard let self else { return }
-            self.model.reload()
-            self.applyCommandHotkeys()
-        }
+        // The store stays installed either way; the launcher reads settings.json again.
+        settingsModel.extensionStoreChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.stopExtensionStore = { [weak self] in
             await self?.model.unloadSessions(ofExtension: ExtensionStore.extensionName)
         }
