@@ -120,13 +120,13 @@ final class SystemPasteboard: PasteboardAccess {
 /// Permission to send Apple Events (Automation).
 @MainActor
 final class SystemAutomationPermission: AutomationPermission {
-    func determine(bundleIdentifier: String) async -> Int32 {
+    func determine(bundleIdentifier: String, askUserIfNeeded: Bool) async -> Int32 {
         await withCheckedContinuation { continuation in
             // Blocks while macOS shows its consent dialog, so it gets a thread of its own and no timeout.
             DispatchQueue.global(qos: .userInitiated).async {
                 let target = NSAppleEventDescriptor(bundleIdentifier: bundleIdentifier)
                 let status = AEDeterminePermissionToAutomateTarget(
-                    target.aeDesc, FinderEvents.code("core"), FinderEvents.code("getd"), true)
+                    target.aeDesc, FinderEvents.code("core"), FinderEvents.code("getd"), askUserIfNeeded)
                 continuation.resume(returning: status)
             }
         }

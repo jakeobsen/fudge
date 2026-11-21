@@ -9,6 +9,8 @@ public enum SelectionError: Error, Equatable, Sendable, CustomStringConvertible 
     case accessibilityNeeded
     case finderNotFrontmost
     case finderAutomationDenied
+    /// A background call found Automation of Finder undecided, and didn't ask.
+    case finderAutomationNotAsked
     case finderTimedOut
     /// An Apple Event error other than a denial or a timeout, with its OSStatus.
     case finderFailed(Int)
@@ -24,6 +26,8 @@ public enum SelectionError: Error, Equatable, Sendable, CustomStringConvertible 
             "Finder isn't the frontmost application"
         case .finderAutomationDenied:
             "fudge needs permission to control Finder. Allow it in System Settings → Privacy & Security → Automation."
+        case .finderAutomationNotAsked:
+            "Fudge isn't allowed to control Finder yet: it asks when you open this command from Fudge."
         case .finderTimedOut:
             "Finder didn't answer in time"
         case .finderFailed(let status):
@@ -297,9 +301,10 @@ enum CommandKey {
 /// Permission to send Apple Events to an application (Automation in System Settings).
 @MainActor
 public protocol AutomationPermission: AnyObject {
-    /// `AEDeterminePermissionToAutomateTarget` for `bundleIdentifier`, asking the user if needed. Returns its
-    /// OSStatus. It doesn't time out: the user may be reading the consent dialog.
-    func determine(bundleIdentifier: String) async -> Int32
+    /// `AEDeterminePermissionToAutomateTarget` for `bundleIdentifier`. Returns its OSStatus. With
+    /// `askUserIfNeeded`, macOS asks the user if they haven't decided yet, and it doesn't time out: the user may be
+    /// reading the consent dialog. Without it, an undecided permission is `errAEEventWouldRequireUserConsent`.
+    func determine(bundleIdentifier: String, askUserIfNeeded: Bool) async -> Int32
 }
 
 /// An Apple Event that failed, with its OSStatus.
@@ -324,18 +329,23 @@ public enum FinderSelection {
     public static let timeout: Duration = .seconds(5)
     /// `errAEEventNotPermitted`: the user denied fudge Automation of Finder.
     static let notPermitted = -1743
+    /// `errAEEventWouldRequireUserConsent`: the user hasn't decided yet, and the call didn't ask.
+    static let needsConsent = -1744
     /// `errAETimeout`.
     static let timedOut = -1712
 
-    /// The POSIX paths of the items selected in Finder, in Finder's order.
+    /// The POSIX paths of the items selected in Finder, in Finder's order. Only a user-initiated call may ask for
+    /// macOS's "control Finder" consent (SPEC-045); a background one is refused until the user has decided.
     @MainActor
     public static func read(
         from frontmost: FrontmostApplication?,
         permission: any AutomationPermission,
-        source: any FinderSelectionSource
+        source: any FinderSelectionSource,
+        origin: CallOrigin
     ) async throws -> [String] {
         guard frontmost?.bundleIdentifier == bundleIdentifier else { throw SelectionError.finderNotFrontmost }
-        let status = Int(await permission.determine(bundleIdentifier: bundleIdentifier))
+        let status = Int(
+            await permission.determine(bundleIdentifier: bundleIdentifier, askUserIfNeeded: origin.mayComeForward))
         guard status == 0 else { throw error(for: status) }
         do {
             return paths(try await source.selection(timeout: timeout))
@@ -355,6 +365,7 @@ public enum FinderSelection {
     static func error(for status: Int) -> SelectionError {
         switch status {
         case notPermitted: .finderAutomationDenied
+        case needsConsent: .finderAutomationNotAsked
         case timedOut: .finderTimedOut
         default: .finderFailed(status)
         }

@@ -309,9 +309,11 @@ private func reader(
 private final class FakePermission: AutomationPermission {
     var status: Int32 = 0
     var asked: [String] = []
+    var askedUser: [Bool] = []
 
-    func determine(bundleIdentifier: String) async -> Int32 {
+    func determine(bundleIdentifier: String, askUserIfNeeded: Bool) async -> Int32 {
         asked.append(bundleIdentifier)
+        askedUser.append(askUserIfNeeded)
         return status
     }
 }
@@ -334,7 +336,8 @@ private let finder = FrontmostApplication(pid: 5, bundleIdentifier: "com.apple.f
     let source = FakeFinder()
     for frontmost in [app, nil] {
         await #expect(throws: SelectionError.finderNotFrontmost) {
-            try await FinderSelection.read(from: frontmost, permission: permission, source: source)
+            try await FinderSelection.read(
+                from: frontmost, permission: permission, source: source, origin: .userInitiated)
         }
     }
     #expect(permission.asked.isEmpty)
@@ -347,7 +350,7 @@ private let finder = FrontmostApplication(pid: 5, bundleIdentifier: "com.apple.f
     let source = FakeFinder()
 
     await #expect(throws: SelectionError.finderAutomationDenied) {
-        try await FinderSelection.read(from: finder, permission: permission, source: source)
+        try await FinderSelection.read(from: finder, permission: permission, source: source, origin: .userInitiated)
     }
     #expect(permission.asked == ["com.apple.finder"])
     #expect(source.timeouts.isEmpty)
@@ -356,7 +359,7 @@ private let finder = FrontmostApplication(pid: 5, bundleIdentifier: "com.apple.f
     permission.status = 0
     source.result = .failure(AppleEventError(status: -1743))
     await #expect(throws: SelectionError.finderAutomationDenied) {
-        try await FinderSelection.read(from: finder, permission: permission, source: source)
+        try await FinderSelection.read(from: finder, permission: permission, source: source, origin: .userInitiated)
     }
 }
 
@@ -364,18 +367,23 @@ private let finder = FrontmostApplication(pid: 5, bundleIdentifier: "com.apple.f
     let source = FakeFinder()
     source.result = .failure(AppleEventError(status: -1712))
     await #expect(throws: SelectionError.finderTimedOut) {
-        try await FinderSelection.read(from: finder, permission: FakePermission(), source: source)
+        try await FinderSelection.read(
+            from: finder, permission: FakePermission(), source: source, origin: .userInitiated)
     }
     #expect(source.timeouts == [.seconds(5)])
 
     source.result = .failure(AppleEventError(status: -600))
     await #expect(throws: SelectionError.finderFailed(-600)) {
-        try await FinderSelection.read(from: finder, permission: FakePermission(), source: source)
+        try await FinderSelection.read(
+            from: finder, permission: FakePermission(), source: source, origin: .userInitiated)
     }
 }
 
 @Test @MainActor func emptyFinderSelectionResolvesEmpty() async throws {
-    #expect(try await FinderSelection.read(from: finder, permission: FakePermission(), source: FakeFinder()).isEmpty)
+    #expect(
+        try await FinderSelection.read(
+            from: finder, permission: FakePermission(), source: FakeFinder(), origin: .userInitiated
+        ).isEmpty)
 }
 
 @Test @MainActor func finderItemsArePathsInFindersOrderWithoutTrailingSlashes() async throws {
@@ -388,11 +396,41 @@ private let finder = FrontmostApplication(pid: 5, bundleIdentifier: "com.apple.f
         URL(fileURLWithPath: "/Users/someone/a b/./ü.md"),
     ])
     #expect(
-        try await FinderSelection.read(from: finder, permission: FakePermission(), source: source) == [
-            "/Users/someone/Notes.txt",
-            "/Users/someone/Projects",
-            "/Volumes/Backup Disk",
-            "/",
-            "/Users/someone/a b/ü.md",
-        ])
+        try await FinderSelection.read(
+            from: finder, permission: FakePermission(), source: source, origin: .userInitiated) == [
+                "/Users/someone/Notes.txt",
+                "/Users/someone/Projects",
+                "/Volumes/Backup Disk",
+                "/",
+                "/Users/someone/a b/ü.md",
+            ])
+}
+
+@Test @MainActor func onlyAUserInitiatedCallAsksForFinderConsent() async throws {
+    // SPEC-045: macOS's "control Finder" dialog interrupts the user like any alert, so a background call never
+    // raises it. Undecided, it's refused with its own message, and the next user-initiated call asks.
+    let permission = FakePermission()
+    permission.status = -1744
+    let source = FakeFinder()
+    await #expect(throws: SelectionError.finderAutomationNotAsked) {
+        try await FinderSelection.read(from: finder, permission: permission, source: source, origin: .background)
+    }
+    #expect(permission.askedUser == [false])
+    #expect(source.timeouts.isEmpty, "no event is sent")
+    #expect(
+        SelectionError.finderAutomationNotAsked.description
+            == "Fudge isn't allowed to control Finder yet: it asks when you open this command from Fudge.")
+
+    permission.status = 0
+    source.result = .success([URL(fileURLWithPath: "/Users/someone/a.txt")])
+    #expect(
+        try await FinderSelection.read(from: finder, permission: permission, source: source, origin: .userInitiated)
+            == ["/Users/someone/a.txt"])
+    #expect(permission.askedUser == [false, true])
+
+    // Once the user has decided, a background call reads the selection without asking.
+    #expect(
+        try await FinderSelection.read(from: finder, permission: permission, source: source, origin: .background)
+            == ["/Users/someone/a.txt"])
+    #expect(permission.askedUser == [false, true, false])
 }

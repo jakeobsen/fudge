@@ -79,7 +79,8 @@ enum SystemCalls {
         case "selection.text":
             return .string(try await selectedText.read(from: frontmost(), origin: origin))
         case "selection.finderItems":
-            let paths = try await FinderSelection.read(from: frontmost(), permission: automation, source: finder)
+            let paths = try await FinderSelection.read(
+                from: frontmost(), permission: automation, source: finder, origin: origin)
             return .array(paths.map { .object(["path": .string($0)]) })
         default:
             throw Failure(description: "\(method) isn't available in fudge yet")

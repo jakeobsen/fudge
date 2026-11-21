@@ -39,6 +39,18 @@ extension MenuBarLifecycle {
     }
 }
 
+extension LaunchRequest {
+    /// The request as Fudge runs it for a caller with this origin. A background caller's request is a Background
+    /// launch, whatever type it asks for: it can't show the panel, argument fields or Settings, and fails where a
+    /// Background launch would. Only a session the user is using launches UserInitiated.
+    public func asCalled(from origin: CallOrigin) -> LaunchRequest {
+        guard type == .userInitiated, !origin.mayComeForward else { return self }
+        var request = self
+        request.type = .background
+        return request
+    }
+}
+
 /// What to do about "Allow <A> to open <B>'s commands?" for one `launchCommand`.
 public enum LaunchPermissionStep: Sendable, Equatable {
     /// Answered before: allowed.
