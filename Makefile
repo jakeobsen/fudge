@@ -28,9 +28,10 @@ ESBUILD    = $(firstword $(wildcard runtime/node_modules/@esbuild/darwin-*/bin/e
 
 # The identity `make app` signs with: a name or SHA-1 hash that `security find-identity -v -p codesigning` lists, or -
 # for ad hoc. macOS ties Accessibility and Automation grants to the signature, and an ad hoc one changes with every
-# build. The default is "fudge local signing", else the first "Apple Development:" identity, else ad hoc (CI and
-# releases have neither). It's picked by hash, so two certificates with the same name can't make codesign refuse
-# the name as ambiguous. See the README.
+# build. The default is "fudge local signing", else the first "Apple Development:" identity, else ad hoc (CI has
+# neither; a release is built ad hoc, then signed again with the Developer ID identity by scripts/release.sh). It's
+# picked by hash, so two certificates with the same name can't make codesign refuse the name as ambiguous. See the
+# README.
 # (Every parenthesis in the awk program is balanced: make counts them to find the end of $(shell).)
 SIGN_IDENTITY ?= $(shell security find-identity -v -p codesigning 2>/dev/null | awk -F'"' \
 	'{ split($$1, f, " ") } length(f[2]) == 40 && f[2] ~ /^[0-9A-F]+$$/ { \
@@ -56,7 +57,7 @@ NODE              := $(NODE_HOME)/bin/node
 # Every recipe's node, npm and npx are that Node.js's, whatever else is on PATH.
 export PATH := $(NODE_HOME)/bin:$(PATH)
 
-.PHONY: help release-check app dmg run install-extension build runtime node test test-swift test-runtime lint fmt raycast-types compat-scan clean
+.PHONY: help release-check app dmg dmg-image release run install-extension build runtime node test test-swift test-runtime lint fmt raycast-types compat-scan clean
 
 help:
 	@printf 'Fudge — a keyboard launcher for macOS, built to run Raycast extensions\n\n'
@@ -65,6 +66,8 @@ help:
 	@printf '  app            Build %s (CONFIG=debug|release, now: %s). Signs with SIGN_IDENTITY: by default\n' '$(APP)' '$(CONFIG)'
 	@printf '                 "fudge local signing", else an Apple Development identity, else ad hoc (-). See README.md.\n'
 	@printf '  dmg            Build the app, then %s: the app and a link to Applications (RELEASE_TAG=<tag> for a release).\n' '$(DMG)'
+	@printf '  dmg-image      Make %s from the app as it is, without building it.\n' '$(DMG)'
+	@printf '  release        Build %s signed with Developer ID, notarized and stapled, after secret env apple.\n' '$(DMG)'
 	@printf '  run            Build the app and open it, quitting a running copy first.\n'
 	@printf '  install-extension DIR=<folder>  Build the app, then compile and install the extension in <folder>.\n'
 	@printf '  build          Build the Swift targets and the extension host.\n'
@@ -164,28 +167,18 @@ app: release-check build
 		mv "$$scratch"/* "$(APP)/Contents/Resources/$$folder" && rm -rf "$$scratch" \
 		|| { echo "make app: building runtime/$$folder failed"; exit 1; }; \
 	done
-	@# Each failure exits explicitly: make 3.81, the one macOS ships, ignores .SHELLFLAGS. No timestamp, so signing
-	@# never goes over the network. An identity's errors stay visible, and the last line names it as listed.
-	@# Node.js runs under the hardened runtime with its own entitlements (App/Node.entitlements), signed after the other
-	@# helpers so they don't replace it.
-	@identity='$(SIGN_IDENTITY)'; \
-	if [ "$$identity" = - ]; then \
-		codesign --force --sign - '$(APP)'/Contents/Helpers/* 2>/dev/null && \
-		codesign --force --sign - --options runtime --entitlements App/Node.entitlements \
-			'$(APP)'/Contents/Helpers/node 2>/dev/null && \
-		codesign --force --sign - '$(APP)' 2>/dev/null && \
-		signed='ad hoc'; \
-	else \
-		name=$$(security find-identity -v -p codesigning 2>/dev/null | \
-			awk -F'"' -v id="$$identity" '{ split($$1, f, " ") } f[2] == id || $$2 == id { print $$2; exit }'); \
-		{ codesign --force --timestamp=none --sign "$$identity" '$(APP)'/Contents/Helpers/* && \
-			codesign --force --timestamp=none --sign "$$identity" --options runtime \
-				--entitlements App/Node.entitlements '$(APP)'/Contents/Helpers/node && \
-			codesign --force --timestamp=none --sign "$$identity" '$(APP)'; } || \
-			{ printf 'codesign could not sign with "%s" (see its error above)\n' "$${name:-$$identity}"; exit 1; }; \
-		signed="with $${name:-$$identity}"; \
-	fi && \
-	printf '→ built %s (%s, %s, signed %s)\n' '$(APP)' '$(VERSION)' '$(CONFIG)' "$$signed"
+	@# A release ships without the binaries' debug and local symbols, which name the builder's folders (/Users/…).
+	@# strip warns that it invalidates the linker's signature, which the signing below replaces, so its output shows
+	@# only when it fails.
+	@if [ '$(CONFIG)' = release ]; then \
+		out=$$(strip -S -x '$(APP)/Contents/MacOS/Fudge' '$(APP)/Contents/Helpers/fudge' 2>&1) || \
+			{ printf '%s\nmake app: strip failed\n' "$$out"; exit 1; }; \
+	fi
+	@# Signed inside-out with the hardened runtime (scripts/sign-app.sh): each helper with App/Helpers/<name>.entitlements
+	@# when it has them (Node.js does), then the app with App/Fudge.entitlements, with no timestamp unless it's a
+	@# Developer ID. Each failure exits explicitly: make 3.81, the one macOS ships, ignores .SHELLFLAGS.
+	@signed=$$(scripts/sign-app.sh '$(APP)' '$(SIGN_IDENTITY)') && \
+	printf '→ built %s (%s, %s, signed %s, hardened runtime)\n' '$(APP)' '$(VERSION)' '$(CONFIG)' "$$signed"
 
 # The user's fudge: Fudge processes launched as the app, by LaunchServices (their parent is launchd), with no
 # arguments. `--snapshot` runs, key probes and test harnesses that agents start from a shell are left alone.
@@ -199,12 +192,24 @@ USER_FUDGE_PIDS = for pid in $$(pgrep -x Fudge); do \
 # A release's disk image: the app as `make app` built it, and a link to /Applications to drag it onto, compressed
 # (UDZO), with the volume name Fudge. The staging folder is gone afterwards.
 dmg: app
+	@$(MAKE) --no-print-directory dmg-image
+
+# The disk image of the app as it is, without building it again: the release script notarizes and staples the app
+# before packing it.
+dmg-image:
+	@test -d '$(APP)' || { printf 'make dmg-image: there is no %s; run make app first\n' '$(APP)'; exit 1; }
 	@rm -rf build/dmg '$(DMG)' && mkdir -p build/dmg
 	@ditto '$(APP)' build/dmg/Fudge.app && ln -s /Applications build/dmg/Applications
 	@hdiutil create -volname Fudge -srcfolder build/dmg -format UDZO -ov '$(DMG)' >/dev/null \
-		|| { echo 'make dmg: hdiutil could not create $(DMG)'; rm -rf build/dmg; exit 1; }
+		|| { echo 'make dmg-image: hdiutil could not create $(DMG)'; rm -rf build/dmg; exit 1; }
 	@rm -rf build/dmg
 	@printf '→ built %s\n' '$(DMG)'
+
+# A release's disk image signed with the Developer ID identity, notarized and stapled, with the variables
+# `secret env apple` sets (scripts/release.sh). It refuses a tree with changes, and never pushes or tags. With
+# RELEASE_TAG, it's that tag's release, which must be on this commit.
+release:
+	@scripts/release.sh $(if $(RELEASE_TAG),--tag '$(RELEASE_TAG)',--version '$(VERSION)')
 
 run: app
 	@# Quit the user's fudge and wait for exactly those processes: open hands off to a Fudge that's still quitting
