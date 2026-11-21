@@ -5,7 +5,11 @@ import Testing
 
 @Test func nothingAnsweredShowsEveryStep() {
     let onboarding = Onboarding()
-    #expect(onboarding.pending == [.welcome, .hotkey, .accessibility, .openAtLogin, .currency, .updates, .done])
+    #expect(
+        onboarding.pending == [
+            .welcome, .hotkey, .accessibility, .openAtLogin, .currency, .extensionStore, .signIn, .clipboardHistory,
+            .updates, .done,
+        ])
     #expect(onboarding.pending == OnboardingStep.allCases, "the cases are the one step list")
     #expect(!onboarding.isComplete)
     #expect(!onboarding.hasSomethingNew)
@@ -16,7 +20,9 @@ import Testing
     onboarding.answer(.welcome)
     onboarding.answer(.hotkey)
     #expect(
-        onboarding.pending == [.accessibility, .openAtLogin, .currency, .updates, .done], "Welcome isn't shown again")
+        onboarding.pending == [
+            .accessibility, .openAtLogin, .currency, .extensionStore, .signIn, .clipboardHistory, .updates, .done,
+        ], "Welcome isn't shown again")
     #expect(!onboarding.hasSomethingNew, "not completed yet, so nothing is new")
 }
 
@@ -37,28 +43,30 @@ import Testing
     onboarding.answer(.hotkey)
     // "Not now" on Accessibility answers it as Continue would.
     onboarding.answer(.accessibility)
-    #expect(onboarding.pending == [.openAtLogin, .currency, .updates, .done])
+    #expect(
+        onboarding.pending == [.openAtLogin, .currency, .extensionStore, .signIn, .clipboardHistory, .updates, .done])
 }
 
 @Test func aNewStepShowsOnlyThatStepAndDone() {
-    // A user who completed onboarding before the Currency and Updates steps existed.
+    // A user who completed onboarding before the Currency step and the ones after it existed.
     let onboarding = Onboarding(answered: ["welcome", "hotkey", "accessibility", "openAtLogin", "done"])
-    #expect(onboarding.pending == [.currency, .updates, .done])
+    #expect(onboarding.pending == [.currency, .extensionStore, .signIn, .clipboardHistory, .updates, .done])
     #expect(onboarding.hasSomethingNew)
     #expect(!onboarding.isComplete)
     // Welcome never comes back once completed, even if its id is missing.
     let noWelcome = Onboarding(answered: ["hotkey", "accessibility", "openAtLogin", "currency", "done"])
-    #expect(noWelcome.pending == [.updates, .done])
+    #expect(noWelcome.pending == [.extensionStore, .signIn, .clipboardHistory, .updates, .done])
     let complete = Onboarding(answered: OnboardingStep.allCases.map(\.rawValue) + ["retiredStep"])
     #expect(complete.isComplete, "ids that aren't a step any more don't count")
 }
 
-@Test func theUpdatesStepComesAfterCurrencyAndShowsAloneToThoseWhoFinished() {
+@Test func theUpdatesStepComesAfterClipboardHistoryAndShowsAloneToThoseWhoFinished() {
     let steps = OnboardingStep.allCases
-    #expect(steps.firstIndex(of: .updates) == steps.firstIndex(of: .currency).map { $0 + 1 })
+    // The order agreed between FUD-114 and FUD-117: Currency, Clipboard history, Updates.
+    #expect(steps.firstIndex(of: .updates) == steps.firstIndex(of: .clipboardHistory).map { $0 + 1 })
     #expect(OnboardingStep.updates.rawValue == "updates", "the id kept in onboarding.json")
     // A user who completed onboarding before the Updates step existed sees just it, under "Something new to decide".
-    var onboarding = Onboarding(answered: ["welcome", "hotkey", "accessibility", "openAtLogin", "currency", "done"])
+    var onboarding = Onboarding(answered: OnboardingStep.allCases.filter { $0 != .updates }.map(\.rawValue))
     #expect(onboarding.pending == [.updates, .done])
     #expect(onboarding.hasSomethingNew)
     onboarding.answer(.updates)
@@ -103,4 +111,119 @@ import Testing
     #expect(AccessibilityPermission.request(promptShown: false) == .prompt)
     #expect(AccessibilityPermission.request(promptShown: true) == .openPane)
     #expect(AccessibilityPermission.reason.contains("paste"), "Paste needs it too")
+}
+
+@Test func clipboardHistoryComesAfterSignInAndExistingUsersSeeJustIt() {
+    let steps = OnboardingStep.allCases
+    #expect(steps.firstIndex(of: .clipboardHistory) == steps.firstIndex(of: .signIn)! + 1)
+    #expect(steps.last == .done)
+
+    // Someone who finished onboarding before the step existed: just it, then Done, as something new.
+    let existing = Onboarding(answered: OnboardingStep.allCases.filter { $0 != .clipboardHistory }.map(\.rawValue))
+    #expect(existing.pending == [.clipboardHistory, .done])
+    #expect(existing.hasSomethingNew)
+}
+
+@Test func theStepsChoiceWritesWhatTheSwitchWrites() {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    var fromStep = FudgeSettings()
+    fromStep.setClipboardHistory(true, now: now)
+    #expect(fromStep.isClipboardHistoryOn)
+    #expect(fromStep.clipboardHistoryConsentAt == ISO8601DateFormatter().string(from: now))
+    #expect(!FudgeSettings().isClipboardHistoryOn, "Not Now writes nothing, so it stays off")
+}
+
+@Test func theConsentTextIsOneSharedString() {
+    let message = ClipboardHistory.consentMessage
+    for clause in [
+        "keep what you copy", "encrypted on this Mac", "password managers mark as private are skipped",
+        "Extensions can read it, as in Raycast.",
+    ] {
+        #expect(message.contains(clause), "\(clause)")
+    }
+}
+
+// MARK: - Every opt-in asks (SPEC-096)
+
+@Test func theStepsAreInTheirAgreedOrder() {
+    #expect(
+        OnboardingStep.allCases == [
+            .welcome, .hotkey, .accessibility, .openAtLogin, .currency, .extensionStore, .signIn, .clipboardHistory,
+            .updates, .done,
+        ])
+    #expect(OnboardingStep.extensionStore.rawValue == "extensionStore", "the id kept in onboarding.json")
+    #expect(OnboardingStep.signIn.rawValue == "signIn")
+}
+
+@Test func someoneWhoFinishedBeforeSeesOnlyTheStoreAndSignInSteps() {
+    // Finished with every step mainline had before FUD-128.
+    let before: [OnboardingStep] = [
+        .welcome, .hotkey, .accessibility, .openAtLogin, .currency, .clipboardHistory, .updates, .done,
+    ]
+    var onboarding = Onboarding(answered: before.map(\.rawValue))
+    #expect(onboarding.pending == [.extensionStore, .signIn, .done])
+    #expect(onboarding.hasSomethingNew)
+    onboarding.answer(.extensionStore)
+    onboarding.answer(.signIn)
+    #expect(onboarding.isComplete, "Done was clicked before")
+}
+
+@Test func everyFeatureThatsOffByDefaultHasAStep() {
+    // Every stored property of FudgeSettings is either an opt-in, with the step that asks about it, or listed here as
+    // not one, with why. A new property fails this test until it's one or the other (CLAUDE.md, Conventions).
+    let notOptIns: [String: String] = [
+        "hotkey": "the launcher's hotkey, which has its own step",
+        "commands": "per-command aliases, hotkeys and Enabled",
+        "extensions": "per-extension Enabled; the store's is set by its step",
+        "numberFormat": "a format, not a feature",
+        "extensionStoreConsentAt": "the store's consent date, written with it",
+        "signInServerConsentAt": "the sign-in server's consent date, written with it",
+        "clipboardHistoryConsentAt": "clipboard history's consent date, written with it",
+        "clipboardHistoryKeepDays": "a detail of clipboard history",
+        "clipboardHistoryIgnoredApps": "a detail of clipboard history",
+        "resetAfter": "a choice that's on by default",
+        "showOnScreen": "a choice, not a feature",
+        "escapeBehavior": "a choice, not a feature",
+    ]
+    let defaults = FudgeSettings()
+    let properties = Mirror(reflecting: defaults).children.compactMap { child in child.label.map { ($0, child.value) } }
+    #expect(properties.count == OnboardingStep.optIns.count + notOptIns.count, "nothing listed twice or missed")
+    for (name, value) in properties {
+        if let step = OnboardingStep.optIns[name] {
+            #expect(notOptIns[name] == nil, "\(name) is listed as both")
+            #expect(OnboardingStep.allCases.contains(step) && step != .done)
+            // Off by default: false, or not set.
+            let off = (value as? Bool) == false || "\(value)" == "nil"
+            #expect(off, "\(name) is an opt-in, so it's off until the user turns it on")
+        } else {
+            #expect(notOptIns[name] != nil, "\(name): an off-by-default feature needs an onboarding step")
+        }
+    }
+    #expect(
+        Set(OnboardingStep.optIns.values) == [.currency, .extensionStore, .signIn, .clipboardHistory, .updates])
+}
+
+@Test func turningOnTheStoreInOnboardingWritesWhatTheSwitchWritesAndEnablesIt() {
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    var switched = FudgeSettings()
+    switched.setExtensionStore(true, now: now)
+    var onboarded = FudgeSettings()
+    onboarded.turnOnExtensionStore(now: now)
+    #expect(onboarded.isExtensionStoreOn)
+    #expect(onboarded.extensionStore == switched.extensionStore)
+    #expect(onboarded.extensionStoreConsentAt == switched.extensionStoreConsentAt)
+    #expect(onboarded.extensionStoreConsentAt == ISO8601DateFormatter().string(from: now))
+    // The switch alone never enables it on the Commands page; onboarding's Turn On does, so it's in root search.
+    #expect(!switched.isEnabled(extension: ExtensionStore.extensionName))
+    #expect(onboarded.isEnabled(extension: ExtensionStore.extensionName))
+    // Not Now writes nothing: the defaults stay off.
+    #expect(!FudgeSettings().isExtensionStoreOn && !FudgeSettings().isEnabled(extension: ExtensionStore.extensionName))
+}
+
+@Test func theStepsShowTheirSettingsOwnWords() {
+    // One string each, shared with the store's consent sheet and the Sign-in page.
+    #expect(SignInServer.explanation == "Extensions sign in to services like GitHub and Linear through this server.")
+    #expect(ExtensionStore.Consent.message.hasPrefix("This adds the Extension Store to Fudge."))
+    #expect(ExtensionStore.Consent.note.contains(ExtensionStore.Consent.issueLinkText))
+    #expect(FudgeSettings().signIn == .off, "Sign-in starts Off, which ↵ keeps")
 }

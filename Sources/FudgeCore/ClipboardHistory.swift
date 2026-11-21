@@ -87,6 +87,11 @@ public struct ClipboardEntry: Sendable, Equatable, Codable {
 /// The clipboard history (SPEC-077): entries newest first, with its limits. The app records copies into it, and
 /// `ClipboardHistoryStore` keeps it encrypted on disk. Pinned entries are kept whatever **Keep For** says.
 public struct ClipboardHistory: Sendable, Equatable, Codable {
+    /// What turning it on means, said the same way on the consent sheet and in onboarding.
+    public static let consentMessage =
+        "Fudge will keep what you copy, encrypted on this Mac. Copies password managers mark as private are skipped. "
+        + "Extensions can read it, as in Raycast."
+
     /// The bundled extension whose sessions may call `clipboardHistory.*`.
     public static let extensionName = "fudge-clipboard-history"
     /// What any other caller gets.

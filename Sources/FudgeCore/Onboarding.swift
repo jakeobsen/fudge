@@ -8,8 +8,25 @@ public enum OnboardingStep: String, CaseIterable, Sendable {
     case accessibility
     case openAtLogin
     case currency
+    /// Whether to turn on the Extension Store (FUD-128): its consent sheet's own words, Turn On or Not Now.
+    case extensionStore
+    /// Which sign-in server extensions use (FUD-128): the Sign-in page's own choice, with its consent sheet.
+    case signIn
+    /// Whether to keep clipboard history (FUD-117): an opt-in, with the consent sheet's own words.
+    case clipboardHistory
     case updates
     case done
+
+    /// Every feature that's off until the user turns it on, by its `FudgeSettings` property, with the step that asks
+    /// about it. Each such feature gets a step (CLAUDE.md, Conventions), and a test checks every property of
+    /// `FudgeSettings` is one of these or listed as not an opt-in.
+    public static let optIns: [String: OnboardingStep] = [
+        "currencyRates": .currency,
+        "extensionStore": .extensionStore,
+        "signInServer": .signIn,
+        "clipboardHistory": .clipboardHistory,
+        "updateCheck": .updates,
+    ]
 }
 
 /// Which onboarding steps the user has answered (`onboarding.json`). Onboarding opens at every launch until it's

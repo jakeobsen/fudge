@@ -18,6 +18,8 @@ final class OnboardingModel {
     @ObservationIgnored var leavingStep: () -> Void = {}
     /// Start Using fudge: closes the window and opens the launcher.
     @ObservationIgnored var finished: () -> Void = {}
+    /// Asks with a sheet on the onboarding window (the Sign-in step's consent); set by the window controller.
+    @ObservationIgnored var ask: (LauncherModel.AlertRequest) async -> Bool = { _ in false }
 
     init(onboarding: Onboarding, file: URL) {
         self.onboarding = onboarding
@@ -71,6 +73,12 @@ final class OnboardingNSWindow: NSWindow {
 
     override var canBecomeKey: Bool { !refusesKey && super.canBecomeKey }
     override var canBecomeMain: Bool { !refusesKey && super.canBecomeMain }
+
+    /// A snapshot run's window stays where it's put, off every screen, as Settings' does (`SettingsNSWindow`): AppKit
+    /// would otherwise move a titled window back onto one when it's ordered front.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        refusesKey ? frameRect : super.constrainFrameRect(frameRect, to: screen)
+    }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.type == .keyDown, let pressed = AppDelegate.shortcut(for: event),
@@ -139,6 +147,7 @@ final class OnboardingWindowController {
             self?.window?.close()
             self?.openLauncher()
         }
+        model.ask = { [weak self] request in await self?.confirm(request) ?? false }
         let view = NSHostingView(rootView: OnboardingView(model: model, settings: settings))
         if let window {
             window.contentView = view
@@ -178,6 +187,22 @@ final class OnboardingWindowController {
     }
 
     var contentView: NSView? { window?.contentView }
+    /// In a snapshot run, the alert a step's `ask` would have shown.
+    private(set) var snapshotSheet: NSWindow?
+
+    /// A sheet on the onboarding window, as the Settings window shows its own. A snapshot run lays it out off-screen
+    /// instead (`SnapshotSheet`), and the answer is no.
+    private func confirm(_ request: LauncherModel.AlertRequest) async -> Bool {
+        guard let window else { return false }
+        let alert = SettingsWindowController.alert(for: request)
+        if (window as? OnboardingNSWindow)?.refusesKey == true {
+            snapshotSheet = SnapshotSheet.laidOut(alert)
+            return false
+        }
+        return await withCheckedContinuation { continuation in
+            alert.beginSheetModal(for: window) { continuation.resume(returning: $0 == .alertFirstButtonReturn) }
+        }
+    }
 
     private static func center(_ window: NSWindow, on screen: NSScreen?) {
         guard let frame = (screen ?? NSScreen.main)?.visibleFrame else {
@@ -263,6 +288,41 @@ struct OnboardingView: View {
                 Text("The calculator can convert currencies, like 100 usd to eur.")
                 SettingsGroup { CurrencyRatesToggle(model: settings) }
             }
+        case .extensionStore:
+            VStack(alignment: .leading, spacing: 14) {
+                title("Extension Store")
+                Text("Find and install Raycast extensions from Fudge.")
+                if storeOn {
+                    Text("It's on. You can turn it off in Settings → Extension Store.").foregroundStyle(.secondary)
+                } else {
+                    // The consent sheet's own words.
+                    Text(ExtensionStore.Consent.message)
+                        .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(storeNote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        case .signIn:
+            VStack(alignment: .leading, spacing: 14) {
+                title("Sign-in")
+                Text("Some extensions sign in to your accounts with OAuth. Choose a server for them, or leave it off.")
+                SettingsGroup { SignInServerControls(model: settings, ask: model.ask) }
+                if let host = settings.signInServer.host {
+                    Text("Extensions sign in through \(host). You can change it in Settings → Sign-in.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        case .clipboardHistory:
+            VStack(alignment: .leading, spacing: 14) {
+                title("Clipboard history")
+                Text("Search and paste what you copied, from Clipboard History.")
+                if settings.clipboardHistory {
+                    Text("It's on. You can turn it off in Settings → Clipboard History.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(ClipboardHistory.consentMessage)
+                        .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
         case .updates:
             VStack(alignment: .leading, spacing: 14) {
                 title("Updates")
@@ -278,6 +338,9 @@ struct OnboardingView: View {
                     summary("Accessibility") { Text(settings.accessibility.isTrusted ? "Allowed" : "Not now") }
                     summary("Open at Login") { Text(settings.loginItemState.isOn ? "On" : "Off") }
                     summary("Currency conversion") { Text(settings.currencyRates ? "On" : "Off") }
+                    summary("Extension Store") { Text(storeOn ? "On" : "Off") }
+                    summary("Sign-in") { Text(settings.signInServer.host ?? "Off") }
+                    summary("Clipboard history") { Text(settings.clipboardHistory ? "On" : "Off") }
                     summary("Check for updates") { Text(settings.updateCheck?.onboardingTitle ?? "Off") }
                 }
                 Text("Change any of these in Settings.").foregroundStyle(.secondary)
@@ -292,6 +355,20 @@ struct OnboardingView: View {
             Button("Get Started") { model.next() }.keyboardShortcut(.defaultAction)
         case .accessibility where !settings.accessibility.isTrusted:
             Button("Not Now") { model.next() }
+        case .extensionStore where !storeOn:
+            // An opt-in that downloads from GitHub: ↵ is Not Now, never Turn On.
+            Button("Turn On Extension Store") {
+                settings.turnOnExtensionStore()
+                model.next()
+            }
+            Button("Not Now") { model.next() }.keyboardShortcut(.defaultAction)
+        case .clipboardHistory where !settings.clipboardHistory:
+            // An opt-in that records everything copied: ↵ is Not Now, never Keep.
+            Button("Keep Clipboard History") {
+                settings.keepClipboardHistory()
+                model.next()
+            }
+            Button("Not Now") { model.next() }.keyboardShortcut(.defaultAction)
         case .updates:
             // Answering saves the choice, Daily if it wasn't changed: until then nothing is checked.
             Button("Continue") {
@@ -304,6 +381,20 @@ struct OnboardingView: View {
         default:
             Button("Continue") { model.next() }.keyboardShortcut(.defaultAction)
         }
+    }
+
+    /// The store is on: its switch, and Enabled on the Commands page, which Turn On sets too.
+    private var storeOn: Bool {
+        settings.extensionStore && settings.isEnabled(extension: ExtensionStore.extensionName)
+    }
+
+    /// The consent sheet's second paragraph, with its link.
+    private var storeNote: AttributedString {
+        var note = AttributedString(ExtensionStore.Consent.note)
+        if let range = note.range(of: ExtensionStore.Consent.issueLinkText) {
+            note[range].link = ExtensionStore.Consent.issuesURL
+        }
+        return note
     }
 
     private func title(_ text: String) -> some View {

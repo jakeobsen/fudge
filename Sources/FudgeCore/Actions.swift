@@ -122,6 +122,10 @@ public enum RootAction: Sendable, Equatable {
     case editQuicklink(String)
     /// Deletes a quicklink, by id, after asking.
     case deleteQuicklink(String)
+    /// Opens Settings on the Sign-in page, from a "Sign-in is off" notice (`SignInNotice`).
+    case openSignInSettings
+    /// Runs a command again, by `<extension>/<command>`, from a cancelled or refused sign-in's notice.
+    case retryCommand(String)
 
     /// Drawn in red in the action panel.
     var isDestructive: Bool {
@@ -209,7 +213,7 @@ public enum RootActions {
         return section(entries)
     }
 
-    private static func section(_ entries: [(String, KeyShortcut?, RootAction)]) -> [ActionSection] {
+    static func section(_ entries: [(String, KeyShortcut?, RootAction)]) -> [ActionSection] {
         [
             ActionSection(
                 title: nil,

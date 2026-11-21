@@ -20,8 +20,7 @@ enum ClipboardHistorySheets {
     static var consent: LauncherModel.AlertRequest {
         LauncherModel.AlertRequest(
             title: "Turn on clipboard history?",
-            message: "Fudge will keep what you copy, encrypted on this Mac. Copies password managers mark as private "
-                + "are skipped. Extensions can read it, as in Raycast.",
+            message: ClipboardHistory.consentMessage,
             primary: "Turn On", dismiss: "Cancel", destructive: false)
     }
 
