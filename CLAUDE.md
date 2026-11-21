@@ -619,6 +619,7 @@ Extensions run in a separate Node.js process, the extension host.
 - **The extension host lives in `runtime/`.**
   It's written in TypeScript.
   Extensions trust the certificates the Mac trusts (SPEC-081, `NodeTrust`): the app starts the host with `--use-system-ca` when its Node has it (22.15+, 23.8+, 24 and later).
+  The Node.js Fudge bundles has it, so the `NODE_EXTRA_CA_CERTS` path below only runs while its version isn't known yet.
   `node --version` is read in the background when the app starts and kept for the run per resolved binary and its modification date (`NodeVersionCache`), so a host start never waits for it;
   while it isn't known, a start takes the `NODE_EXTRA_CA_CERTS` path, which works on any Node, and a host that ends at once on the flag, saying nothing, marks that binary as without it (a version manager's shim can switch Node underneath).
   Else the host starts with `NODE_EXTRA_CA_CERTS` naming `trust/roots.pem` in the support folder, written afresh at each start from the user's and admin's trust settings (`SystemTrustSettings`, read only; the system's roots are Apple's, and Node has its own).
@@ -871,6 +872,13 @@ Extensions run in a separate Node.js process, the extension host.
 - **The Makefile assembles the app bundle** (`make app`):
   - the `FudgeApp` binary becomes `Contents/MacOS/Fudge`
   - the `fudge` tool and esbuild's native binary go into `Contents/Helpers/`, where `ExtensionBuilder.locateEsbuild` finds esbuild next to the tool
+  - **Node.js** (SPEC-115): an official build from nodejs.org, `NODE_VERSION` in the `Makefile`, for the architecture the Mac builds for (arm64 or x64, never both: the app itself is built for one).
+    Its tarball's SHA-256, copied from the release's `SHASUMS256.txt`, is pinned beside the version, and `make` checks it before unpacking anything; a tarball that doesn't match is deleted, and the build fails.
+    It's downloaded once into `.cache/node` (ignored, and kept by `make clean`), and every Node step of the build runs it (`npm ci`, esbuild, the runtime's tests), since the `Makefile` puts it first on `PATH`.
+    To update it, change the version and both checksums together.
+    The bundle gets the binary as `Contents/Helpers/node`, npm from the same distribution as `Contents/Resources/node/npm`, and its `LICENSE` (Node.js's, with what it bundles) as `Contents/Resources/node/LICENSE`.
+    `fudge build` runs npm as `node npm-cli.js` (`BundledNode.npm`), with the helpers first on `PATH` so whatever npm starts gets the same Node.js.
+    Only `Contents/Helpers/node` runs under the hardened runtime, with `App/Node.entitlements`: `allow-jit`, without which V8 can't start, and `disable-library-validation`, without which an extension's native addon (`.node`), signed by whoever built it, is refused ("different Team IDs").
   - `App/Info.plist` gets the version from `git describe`
   - `App/AppIcon.icon` (an Icon Composer icon) is compiled by `actool` into `Assets.car` and an `AppIcon.icns` fallback.
     That needs Xcode 26 or later.
@@ -931,8 +939,9 @@ Extensions run in a separate Node.js process, the extension host.
 - **actool's paths must be absolute.**
   `xcrun actool` hands the work to a shared daemon, which resolves relative paths against its own working directory.
   That's whichever checkout started it, so with several worktrees, relative paths make one worktree's `make app` write the icon into another's `build/`. actool can also exit 0 when it compiled nothing, and it reports errors on stdout, so `make app` checks for `Assets.car` and then shows `build/actool.log`.
-- **Apps opened from Finder don't get the shell's `PATH`.**
-  That's why `Runtime.locateNode` checks `$FUDGE_NODE`, `Contents/Helpers`, Homebrew and `/usr/local` before `PATH`.
+- **Fudge runs only its own Node.js** (SPEC-115, D-74), never one the user has installed, so no setting, variable, Homebrew or `PATH` changes it.
+  The app and the `fudge` tool find it beside themselves (`Runtime.locateNode`: `Contents/Helpers/node`, the tool's folder with links resolved), and a missing or broken one says to reinstall Fudge (`Runtime.nodeMissing`).
+  The tests get it from `FUDGE_TEST_NODE`, which `make test` sets and only the test target reads; the tool's tests run a copy of `fudge` with a Node.js beside it, as in the bundle.
 - **SwiftUI's `TextField` writes its unchanged text back** now and then, three times on ↵ before `onSubmit` and again when it loses the keyboard.
   Setters bound to a field must ignore writes that change nothing, or they'll redo work such as resetting the selection.
 - **`.onAppear` runs once for the panel's lifetime**, not each time it's shown.

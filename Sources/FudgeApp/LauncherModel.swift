@@ -318,7 +318,7 @@ final class LauncherModel {
         )
         reload()
         // The extension host's first start shouldn't wait for `node --version` (SPEC-084).
-        if let node = Runtime.locateNode() { warmNodeVersion(node) }
+        if let node = Runtime.locateNode()?.node { warmNodeVersion(node) }
     }
 
     /// Clear Search History: root search forgets which results were opened, in memory and in `history.json`.
@@ -3897,11 +3897,8 @@ final class LauncherModel {
 
     private func ensureHost() throws -> ExtensionHost {
         if let host, host.isRunning { return host }
-        guard let node = Runtime.locateNode() else {
-            throw HostUnavailable(
-                description:
-                    "Fudge needs Node.js 22.18 or later. Install it with `brew install node`, or set FUDGE_NODE."
-            )
+        guard let node = Runtime.locateNode()?.node else {
+            throw HostUnavailable(description: Runtime.nodeMissing)
         }
         guard let script = Runtime.locateHostScript() else {
             throw HostUnavailable(
