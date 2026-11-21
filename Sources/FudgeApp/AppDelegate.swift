@@ -158,7 +158,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 snapshot.take(of: settingsWindow)
             } else {
                 // A `confirmAlert` (an extension's, or one an action asks for) is never begun as a sheet here: it's
-                // laid out off-screen and saved as the snapshot instead (`SnapshotSheet.holding`), answered Cancel.
+                // laid out off-screen and saved as the snapshot instead (`SnapshotSheet.laidOut`), answered Cancel.
                 model.confirm = { request, _ in
                     snapshot.save(alert: Self.alert(for: request))
                     return false
@@ -803,7 +803,7 @@ struct Snapshot {
     /// Saves a `confirmAlert` the run reached, laid out but never shown, in place of the panel, and quits. It's
     /// saved a second later, as the Settings window's consent sheets are, once its icon has been drawn.
     func save(alert: NSAlert) {
-        let sheet = SnapshotSheet.holding(alert)
+        let sheet = SnapshotSheet.laidOut(alert)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             guard let view = sheet.contentView else { exit(1) }
             save(view)

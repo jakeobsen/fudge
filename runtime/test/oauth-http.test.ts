@@ -26,6 +26,7 @@ import {
 } from "../src/api/oauth-fetch.ts";
 import { guardConnections, guardRequests, relayTLSOptions, requestURL } from "../src/api/oauth-http.ts";
 import { signInOffMessage } from "../src/api/oauth.ts";
+import { noticeOf } from "../src/notice.ts";
 
 const table = providersFromEnvironment(readFileSync(new URL("./fixtures/oauth-providers.json", import.meta.url), "utf8"));
 const sendFetch = globalThis.fetch;
@@ -194,10 +195,10 @@ for (const [state, given] of [
             await assert.rejects(exchange(send, body), refused, name);
         }
         if (state === "off") {
-            await assert.rejects(
-                exchange(() => https.request("https://github.oauth.raycast.com/token", post), codeGrant),
-                { message: signInOffMessage },
+            const off = await exchange(() => https.request("https://github.oauth.raycast.com/token", post), codeGrant).catch(
+                (error: unknown) => error,
             );
+            assert.deepEqual(noticeOf(off), { notice: "signInOff", message: signInOffMessage });
         }
         assert.equal(relaySeen.length, 0, "nothing went anywhere");
     });

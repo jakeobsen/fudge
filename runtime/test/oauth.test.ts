@@ -3,14 +3,23 @@
 // @raycast/utils (the pinned devDependency) against Fudge's API module, as an extension bundles it.
 
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import Module, { createRequire } from "node:module";
 import { after, afterEach, test } from "node:test";
 import { createElement as h } from "react";
 import { connect, settle, type RpcRequest } from "../src/bridge.ts";
 import { placeholderEnvironment, setLaunchContext } from "../src/api/launch.ts";
 import { createApiModule } from "../src/api/module.ts";
-import { codeChallenge, codeVerifier, explainRenderError, signInOffMessage, storedTokens } from "../src/api/oauth.ts";
+import {
+    codeChallenge,
+    codeVerifier,
+    explainRenderError,
+    signInOffMessage,
+    signInOffNotice,
+    storedTokens,
+} from "../src/api/oauth.ts";
 import { NavigationRoot } from "../src/api/navigation.ts";
+import { errorReport, noticeOf } from "../src/notice.ts";
 import { createRoot } from "../src/renderer/root.ts";
 import { mount } from "./support/mount.ts";
 
@@ -33,7 +42,8 @@ function fakeApp(handlers: Record<string, Handler>): RpcRequest[] {
             try {
                 settle(request.id, await handler(request.params));
             } catch (error) {
-                settle(request.id, undefined, (error as Error).message);
+                // A handler refuses on purpose as the app does: with a `notice` beside the message.
+                settle(request.id, undefined, (error as Error).message, (error as { notice?: string }).notice);
             }
         });
     });
@@ -122,26 +132,46 @@ test("authorizationRequest points at the relay with OAuthService's parameters", 
     });
 });
 
+/** The app's refusal while sign-in is off: its message, with the `signInOff` notice (SPEC-095). */
+const signInOff = () => Object.assign(new Error(signInOffMessage), { notice: signInOffNotice });
+
 test("while sign-in is off, signing in rejects with the app's message, and the render error says it", async () => {
     fakeApp({
         "oauth.prepare": () => {
-            throw new Error(signInOffMessage);
+            throw signInOff();
         },
     });
     const client = new OAuth.PKCEClient({ redirectMethod: OAuth.RedirectMethod.Web, providerName: "GitHub" });
-    await assert.rejects(client.authorizationRequest({ endpoint: "https://github.oauth.raycast.com/authorize" }), {
-        message: signInOffMessage,
-    });
-    assert.equal(
-        signInOffMessage,
-        "Sign-in is off. Turn it on in Fudge's Settings → Sign-in, or use a token in this extension's settings (⌘⇧,).",
-    );
+    const refused = await client
+        .authorizationRequest({ endpoint: "https://github.oauth.raycast.com/authorize" })
+        .catch((error: unknown) => error);
+    assert.equal((refused as Error).message, signInOffMessage);
+    assert.equal(noticeOf(refused)?.notice, "signInOff");
+    // The fixture is the app's own text too (`SignInRefusal.off`, pinned by a Swift test).
+    const pinned = JSON.parse(readFileSync(new URL("./fixtures/sign-in-notice.json", import.meta.url), "utf8"));
+    assert.equal(signInOffMessage, pinned.signInOffMessage);
+    assert.ok(pinned.kinds.includes(signInOffNotice));
     const loop = new Error("Minified React error #482; visit https://react.dev/errors/482 for the full message");
     const other = new Error("Something else broke");
     assert.equal(explainRenderError(other), other);
-    assert.equal((explainRenderError(loop) as Error).message, signInOffMessage);
+    const explained = explainRenderError(loop);
+    assert.equal((explained as Error).message, signInOffMessage);
+    assert.equal(noticeOf(explained)?.notice, "signInOff", "the explained error keeps the refusal's notice");
     assert.equal(explainRenderError(loop), loop, "once: a later #482 isn't the sign-in's");
     assert.equal(explainRenderError(other), other);
+});
+
+test("a refusal that isn't on purpose explains the render error without a notice", async () => {
+    fakeApp({
+        "oauth.prepare": () => {
+            throw new Error("Fudge can't sign in to X yet.");
+        },
+    });
+    const client = new OAuth.PKCEClient({ redirectMethod: OAuth.RedirectMethod.Web, providerName: "X" });
+    await assert.rejects(client.authorizationRequest({ endpoint: "https://x.example/authorize" }));
+    const explained = explainRenderError(new Error("Minified React error #482"));
+    assert.equal((explained as Error).message, "Fudge can't sign in to X yet.");
+    assert.equal(noticeOf(explained), undefined);
 });
 
 test("authorize hands the app the URL, its state and the provider's prompt, and returns its code", async () => {
@@ -224,9 +254,9 @@ after(() => {
 
 const require = createRequire(import.meta.url);
 
-/** A fresh copy of @raycast/utils: it keeps the access token in module state. */
-function freshUtils(): Record<string, any> {
-    const path = require.resolve("@raycast/utils");
+/** A fresh copy of @raycast/utils (2.x, or `raycast-utils-1` for 1.18.1): it keeps the access token in module state. */
+function freshUtils(name = "@raycast/utils"): Record<string, any> {
+    const path = require.resolve(name);
     delete require.cache[path];
     return require(path) as Record<string, any>;
 }
@@ -274,28 +304,61 @@ test("with a personal token, OAuthService.github renders after onAuthorize, neve
     );
 });
 
-test("while sign-in is off, a view command without a token reports the message as its error", async () => {
-    launch("view");
-    fakeApp({
-        "oauth.tokens.get": () => null,
-        "oauth.prepare": () => {
-            throw new Error(signInOffMessage);
-        },
+// SPEC-095's MUST: the notice survives the path the architect hit, with the @raycast/utils that store extensions bundle
+// (1.18.1, whose view path rethrows the refusal it cached) and with 2.x (which asks again until React gives up, #482).
+for (const [version, utils] of [
+    ["2.x", "@raycast/utils"],
+    ["1.18.1", "raycast-utils-1"],
+]) {
+    test(`while sign-in is off, a view command without a token reports a notice, not a failure (@raycast/utils ${version})`, async () => {
+        launch("view");
+        fakeApp({
+            "oauth.tokens.get": () => null,
+            "oauth.prepare": () => {
+                throw signInOff();
+            },
+        });
+        const { OAuthService, withAccessToken } = freshUtils(utils);
+        const Command = withAccessToken(OAuthService.github({ scope: "repo" }))(() => h(Detail, { markdown: "never" }));
+        const reports: unknown[] = [];
+        const snapshots: unknown[] = [];
+        const root = createRoot({
+            onRender: (snapshot) => snapshots.push(snapshot),
+            // As the worker reports a render error.
+            onError: (error) => reports.push(errorReport(explainRenderError(error), true)),
+        });
+        root.render(h(NavigationRoot, { root: h(Command), handle: { current: null } }));
+        for (let i = 0; i < 100 && reports.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+        assert.equal(reports.length, 1);
+        assert.deepEqual(
+            reports.map((report) => {
+                const { message, fatal, notice } = report as Record<string, unknown>;
+                return { message, fatal, notice };
+            }),
+            [{ message: signInOffMessage, fatal: true, notice: "signInOff" }],
+        );
+        assert.equal(JSON.stringify(snapshots).includes("never"), false);
+        root.unmount();
     });
-    const { OAuthService, withAccessToken } = freshUtils();
-    const Command = withAccessToken(OAuthService.github({ scope: "repo" }))(() => h(Detail, { markdown: "never" }));
-    const errors: unknown[] = [];
-    const snapshots: unknown[] = [];
-    const root = createRoot({
-        onRender: (snapshot) => snapshots.push(snapshot),
-        onError: (error) => errors.push(explainRenderError(error)),
+
+    test(`while sign-in is off, a no-view command without a token reports a notice (@raycast/utils ${version})`, async () => {
+        launch("no-view");
+        fakeApp({
+            "oauth.tokens.get": () => null,
+            "oauth.prepare": () => {
+                throw signInOff();
+            },
+        });
+        const { OAuthService, withAccessToken } = freshUtils(utils);
+        const run = withAccessToken(OAuthService.github({ scope: "repo" }))(async () => "never");
+        const error = await run({}).then(
+            () => assert.fail("it ran"),
+            (rejection: unknown) => rejection,
+        );
+        const { message, notice } = errorReport(error, true);
+        assert.deepEqual({ message, notice }, { message: signInOffMessage, notice: "signInOff" });
+        // An extension that wraps it in its own error still reports the notice, with the refusal's message.
+        const wrapped = errorReport(new Error("Couldn't search repositories", { cause: error }), true);
+        assert.deepEqual({ message: wrapped.message, notice: wrapped.notice }, { message: signInOffMessage, notice: "signInOff" });
     });
-    root.render(h(NavigationRoot, { root: h(Command), handle: { current: null } }));
-    for (let i = 0; i < 100 && errors.length === 0; i++) await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.deepEqual(
-        errors.map((error) => (error as Error).message),
-        [signInOffMessage],
-    );
-    assert.equal(JSON.stringify(snapshots).includes("never"), false);
-    root.unmount();
-});
+}

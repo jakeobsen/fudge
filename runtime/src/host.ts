@@ -120,6 +120,7 @@ input.on("line", (line) => {
                 id: message.id,
                 result: message.result,
                 error: message.error,
+                ...(message.notice === undefined ? {} : { notice: message.notice }),
             } satisfies HostToWorker);
             return;
     }

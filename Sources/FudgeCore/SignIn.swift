@@ -78,6 +78,9 @@ public enum SignInServer: Sendable, Equatable {
     case fudge
     case custom(URL)
 
+    /// What the server is for, under the Sign-in page's choice and onboarding's.
+    public static let explanation = "Extensions sign in to services like GitHub and Linear through this server."
+
     /// Fudge's sign-in server.
     public static let fudgeURL = URL(string: "https://fudge-oauth.rackofpain.net")!
 
@@ -486,8 +489,7 @@ public enum SignInRefusal: Error, Equatable, Sendable {
 
     public var message: String {
         switch self {
-        case .off:
-            "Sign-in is off. Turn it on in Fudge's Settings → Sign-in, or use a token in this extension's settings (⌘⇧,)."
+        case .off: "Sign-in is off. " + SignInNotice.offText(extensionTitle: nil)
         case .unknownProvider(let name): "Fudge can't sign in to \(name.isEmpty ? "this service" : name) yet."
         case .background: "Sign in from Fudge to continue."
         case .busy: "Another sign-in is in progress. Finish or cancel it first."
@@ -497,6 +499,18 @@ public enum SignInRefusal: Error, Equatable, Sendable {
         case .refused(let provider, let error, let description):
             "\(provider) didn't sign you in: \(description ?? error)"
         case .browser: "Fudge couldn't open the browser."
+        }
+    }
+
+    /// The notice the command shows for this refusal instead of a failure (SPEC-095), sent with it as `rpcResult`'s
+    /// `notice`; nil for the refusals that are failures.
+    public var notice: SignInNotice.Kind? {
+        switch self {
+        case .off: .off
+        case .cancelled: .cancelled
+        case .timedOut: .timedOut
+        case .refused: .refused
+        case .unknownProvider, .background, .busy, .notPrepared, .browser: nil
         }
     }
 }

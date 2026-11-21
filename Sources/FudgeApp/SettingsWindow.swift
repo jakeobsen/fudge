@@ -430,6 +430,15 @@ final class SettingsModel {
         }
     }
 
+    /// Onboarding's Turn On Extension Store, under the consent sheet's own words: what the switch and its sheet write,
+    /// and the store's Enabled too, so it's in root search straight away.
+    func turnOnExtensionStore() {
+        guard change({ $0.turnOnExtensionStore(now: Date()) }) else { return }
+        _ = applyHotkeys()
+        reload()
+        extensionStoreChanged()
+    }
+
     // MARK: - Clipboard history (SPEC-077)
 
     /// Whether clipboard history is on: switched on through its consent sheet.
@@ -515,10 +524,12 @@ final class SettingsModel {
     }
 
     /// Chooses a server: the consent sheet first (Continue saves it). Changing from one server to another, or to off,
-    /// signs out of everything, after its own sheet when there are sign-ins.
-    func setSignInServer(_ server: SignInServer) {
+    /// signs out of everything, after its own sheet when there are sign-ins. The sheets go on the Settings window, or
+    /// where `ask` shows them (onboarding's window).
+    func setSignInServer(_ server: SignInServer, ask: ((LauncherModel.AlertRequest) async -> Bool)? = nil) {
         guard server != signInServer else { return }
         signInProblem = nil
+        let confirm = ask ?? confirm
         Task {
             loadSignIns()
             if !signIns.isEmpty {
@@ -551,9 +562,9 @@ final class SettingsModel {
     }
 
     /// "Your own server…": the typed address, saved on ↵ when it's valid.
-    func setCustomSignInServer(_ text: String) {
+    func setCustomSignInServer(_ text: String, ask: ((LauncherModel.AlertRequest) async -> Bool)? = nil) {
         switch SignInServer.validate(text) {
-        case .success(let url): setSignInServer(.custom(url))
+        case .success(let url): setSignInServer(.custom(url), ask: ask)
         case .failure(let problem): signInProblem = problem.message
         }
     }
@@ -804,10 +815,10 @@ final class SnapshotSheet: NSPanel {
 
     /// A snapshot run's alert, which no one may see: it's laid out without being shown (`layout()` never orders its
     /// window in), and its content moves to a panel that can't become key and is never ordered in either, transparent
-    /// for good measure. It isn't begun as a sheet: a window a snapshot renders is transparent and off-screen, but a
-    /// sheet on it is a window of its own, which would show on the screen. Nobody answers it: the run saves it and
-    /// quits.
-    static func holding(_ alert: NSAlert) -> SnapshotSheet {
+    /// for good measure. It isn't begun as a sheet: the window a snapshot renders is transparent, but ordering it front
+    /// puts it back on screen, and a sheet on it is a window of its own, which would show there. Nobody answers it:
+    /// the run saves it and quits.
+    static func laidOut(_ alert: NSAlert) -> NSWindow {
         alert.layout()
         let laidOut = alert.window
         let sheet = SnapshotSheet(
@@ -914,14 +925,9 @@ final class SettingsWindowController {
             self.window = window
             model.confirm = { [weak self, weak window] request in
                 guard let window else { return false }
-                let alert = NSAlert()
-                alert.messageText = request.title
-                alert.informativeText = request.message ?? ""
-                if let footnote = request.footnote { alert.accessoryView = Self.footnoteView(footnote) }
-                alert.addButton(withTitle: request.primary).hasDestructiveAction = request.destructive
-                alert.addButton(withTitle: request.dismiss)
+                let alert = Self.alert(for: request)
                 if window.refusesKey {
-                    self?.snapshotSheet = SnapshotSheet.holding(alert)
+                    self?.snapshotSheet = SnapshotSheet.laidOut(alert)
                     return false
                 }
                 return await withCheckedContinuation { continuation in
@@ -956,6 +962,18 @@ final class SettingsWindowController {
     var contentView: NSView? { window?.contentView }
     /// In a snapshot run, the alert a `confirm` would have shown, for the run to save.
     private(set) var snapshotSheet: NSWindow?
+
+    /// The alert for a `confirm` request, on the Settings window or onboarding's: its title, message, footnote and
+    /// buttons, the primary one first.
+    static func alert(for request: LauncherModel.AlertRequest) -> NSAlert {
+        let alert = NSAlert()
+        alert.messageText = request.title
+        alert.informativeText = request.message ?? ""
+        if let footnote = request.footnote { alert.accessoryView = footnoteView(footnote) }
+        alert.addButton(withTitle: request.primary).hasDestructiveAction = request.destructive
+        alert.addButton(withTitle: request.dismiss)
+        return alert
+    }
 
     /// A sheet's last paragraph, as selectable text with a working link: an alert's own text can't hold one.
     /// Clicking the link opens the browser and leaves the sheet open.

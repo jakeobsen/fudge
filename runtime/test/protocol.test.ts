@@ -69,6 +69,15 @@ test("rpcResult carries a result or an error", () => {
         message: { type: "rpcResult", session: "s", id: 2, result: true, error: undefined },
     });
     assert.equal(parse({ type: "rpcResult", session: "s" }).ok, false);
+    // A refusal on purpose names its notice; anything but a string is no notice.
+    assert.deepEqual(parse({ type: "rpcResult", session: "s", id: 3, error: "Sign-in is off.", notice: "signInOff" }), {
+        ok: true,
+        message: { type: "rpcResult", session: "s", id: 3, result: undefined, error: "Sign-in is off.", notice: "signInOff" },
+    });
+    assert.deepEqual(parse({ type: "rpcResult", session: "s", id: 4, error: "x", notice: 7 }), {
+        ok: true,
+        message: { type: "rpcResult", session: "s", id: 4, result: undefined, error: "x" },
+    });
 });
 
 test("revive turns $date markers back into Dates, deeply", () => {
