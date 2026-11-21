@@ -2,11 +2,12 @@ name: Release
 
 # A v* tag becomes a GitHub Release with the app's disk image. Tags are pushed only with the maintainer's explicit
 # permission. The build job runs the repo's code with a read-only token; only the publish job, which runs none of it,
-# may write.
+# may write. Run by hand (workflow_dispatch), it only builds: the disk image is an artifact, and nothing is published.
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -20,6 +21,7 @@ jobs:
       TAG: ${{ github.ref_name }}
     steps:
       - name: Check the tag
+        if: github.event_name == 'push'
         run: |
           if ! printf '%s\n' "$TAG" | grep -Eqx 'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?'; then
             echo "::error::$TAG isn't v and a semantic version (v1.2.0, v1.2.0-rc.1)"
@@ -39,12 +41,19 @@ jobs:
       - name: Test
         run: make test
 
+      # A run by hand takes the version `git describe` gives the commit, as `make app` does.
       - name: Build the disk image
-        run: make dmg CONFIG=release VERSION="$TAG"
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            make dmg CONFIG=release VERSION="$TAG"
+          else
+            make dmg CONFIG=release
+          fi
 
       - name: Checksum
         working-directory: build
-        run: shasum -a 256 "Fudge-${TAG#v}.dmg" > "Fudge-${TAG#v}.dmg.sha256"
+        run: |
+          for dmg in Fudge-*.dmg; do shasum -a 256 "$dmg" > "$dmg.sha256"; done
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -56,6 +65,7 @@ jobs:
 
   publish:
     needs: build
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
