@@ -220,12 +220,18 @@ test("a menu-bar command renders its MenuBarExtra, and every event is answered o
     assert.equal((rendered.view as UINode).props.title, "11");
     assert.ok(host.arrived.indexOf(rendered) < host.arrived.indexOf(settled), "the render arrived before eventSettled");
 
-    // A rejected promise is reported, then settled; a stale node is logged, then settled.
+    // A rejected promise is reported and logged with its stack, then settled; a stale node is logged as a warning,
+    // then settled.
     host.send({ type: "event", session: "mb", node: fail!.id, path: ["onAction"], args: [] });
     assert.equal((await host.next(of("mb", "error"))).message, "nope");
+    const logged = await host.next(of("mb", "log"));
+    assert.equal(logged.level, "error");
+    assert.match(String(logged.message), /^Error: nope\n {4}at onAction /);
     await host.next(of("mb", "eventSettled"));
     host.send({ type: "event", session: "mb", node: 99999, path: ["onAction"], args: [] });
-    assert.match(String((await host.next(of("mb", "log"))).message), /ignored an event/);
+    const ignored = await host.next(of("mb", "log"));
+    assert.equal(ignored.level, "warning");
+    assert.match(String(ignored.message), /ignored an event/);
     await host.next(of("mb", "eventSettled"));
 
     host.send({ type: "unload", session: "mb" });
@@ -527,5 +533,97 @@ test("two sessions run side by side", async () => {
 
     host.send({ type: "launch", session: "a", entry: fixture("counter.cjs"), mode: "view" });
     assert.match(String((await host.next((m) => m.type === "protocolError")).message), /already running/);
+    await host.close();
+});
+
+// SPEC-124: a command's log lines.
+
+/** Launches `logging.cjs` and returns a function that clicks one of its items and waits for the event to settle. */
+async function launchLogging(host: Host, session: string) {
+    host.send({
+        type: "launch",
+        session,
+        entry: fixture("logging.cjs"),
+        mode: "menu-bar",
+        environment: { extensionName: "amazon-aws", commandName: "console" },
+    });
+    const view = (await host.next(of(session, "render"))).view as UINode;
+    const items = new Map(view.children.map((item) => [String(item.props.title), item.id]));
+    return async (title: string) => {
+        host.send({ type: "event", session, node: items.get(title), path: ["onAction"], args: [] });
+        await host.next(of(session, "eventSettled"));
+    };
+}
+
+const logsOf = (host: Host, session: string) => host.arrived.filter(of(session, "log"));
+
+test("a command's console lines carry its extension and command, at the Log level the app sets, also while it runs", async () => {
+    const host = start();
+    host.send({ type: "logLevel", level: "error" });
+    const click = await launchLogging(host, "lv");
+    const levels: [string, string[]][] = [
+        ["error", ["error: an error line"]],
+        ["warning", ["error: an error line", "warning: a warning line"]],
+        ["info", ["error: an error line", "warning: a warning line", "info: a log line", "info: an info line"]],
+        ["debug", ["error: an error line", "warning: a warning line", "info: a log line", "info: an info line", "debug: a debug line"]],
+    ];
+    for (const [level, expected] of levels) {
+        // The running command gets the change: no relaunch.
+        host.send({ type: "logLevel", level });
+        const before = logsOf(host, "lv").length;
+        await click("Levels");
+        const lines = logsOf(host, "lv").slice(before);
+        assert.deepEqual(lines.map((m) => `${m.level}: ${m.message}`), expected, `at ${level}`);
+        for (const line of lines) assert.deepEqual([line.extension, line.command], ["amazon-aws", "console"]);
+    }
+    await host.close();
+});
+
+test("a thrown error, an unhandled rejection and failure toasts are errors in the log at the default level", async () => {
+    const host = start();
+    host.send({ type: "logLevel", level: "error" });
+    const click = await launchLogging(host, "er");
+    const logged = (pattern: RegExp) => host.next((m) => of("er", "log")(m) && pattern.test(String(m.message)));
+
+    await click("Throw");
+    const thrown = await logged(/thrown later/);
+    assert.equal(thrown.level, "error");
+    assert.match(String(thrown.message), /^Error: thrown later\n {4}at /, "with its stack");
+    await click("Reject");
+    assert.match(String((await logged(/rejected later/)).message), /^Error: rejected later\n {4}at /);
+
+    // amazon-aws's Console (#5151) failed through showFailureToast, which is a failure toast like this one.
+    await click("Failure Toast");
+    const toast = await logged(/^Failure toast/);
+    assert.equal(toast.message, "Failure toast: Failed to fetch latest data\nENOENT: no such file");
+    assert.deepEqual([toast.level, toast.extension, toast.command], ["error", "amazon-aws", "console"]);
+    // An animated toast that becomes a failure is logged once, with the title and message it got with its new style.
+    await click("Animated Then Failure");
+    assert.equal((await logged(/^Failure toast/)).message, "Failure toast: Couldn't load\nbecause");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(logsOf(host, "er").filter((m) => /Couldn't load/.test(String(m.message))).length, 1);
+    await host.close();
+});
+
+test("a command printing in a loop is cut at 1,000 lines a second and the count follows; another's lines arrive in order", async () => {
+    const host = start();
+    host.send({ type: "logLevel", level: "error" });
+    const flood = await launchLogging(host, "fl");
+    const steady = await launchLogging(host, "st");
+    await Promise.all([flood("Flood"), steady("Steady")]);
+    const dropped = await host.next((m) => of("fl", "log")(m) && /dropped/.test(String(m.message)), 3000);
+    // As severe as the lines it stands for, so the level that recorded them records it.
+    assert.deepEqual([dropped.level, dropped.message], ["error", "… 2000 lines dropped"]);
+    const flooded = logsOf(host, "fl").filter((m) => /^flood /.test(String(m.message)));
+    assert.deepEqual(
+        flooded.map((m) => m.message),
+        Array.from({ length: 1000 }, (_, i) => `flood ${i + 1}`),
+        "the first thousand, in order",
+    );
+    assert.ok(host.arrived.indexOf(flooded.at(-1)!) < host.arrived.indexOf(dropped), "the count comes after them");
+    assert.deepEqual(
+        logsOf(host, "st").map((m) => m.message),
+        Array.from({ length: 50 }, (_, i) => `steady ${i + 1}`),
+    );
     await host.close();
 });

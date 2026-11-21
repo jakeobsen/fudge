@@ -2,7 +2,7 @@
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "jsx": "react-jsx",
-    "paths": { "@raycast/api": ["../vendor/raycast-api/index.d.ts"] }
+    "paths": { "@raycast/api": ["../vendor/raycast-api/index.d.ts"], "fudge:app": ["../src/fudge-app.ts"] }
   },
   "include": ["src"]
 }

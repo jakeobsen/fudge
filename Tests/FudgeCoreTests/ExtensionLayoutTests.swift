@@ -181,7 +181,7 @@ struct OwnFilesTests {
         while true {
             let message = try await next(&messages, timeout: .seconds(30)) { $0.session == command }
             switch message {
-            case .log(_, _, let line): logged.append(line)
+            case .log(_, _, let line, _): logged.append(line)
             case .error(_, let text, _, _, _): return .failure(ExtensionError(message: text))
             case .exit(_, let reason):
                 return reason == "finished" ? .success(logged) : .failure(ExtensionError(message: reason))

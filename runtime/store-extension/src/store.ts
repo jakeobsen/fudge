@@ -237,6 +237,12 @@ export async function uninstall(entry: StoreEntry, context: StoreContext): Promi
  * What the failure view needs from a failed install: `fudge build`'s whole output with its command and exit, git's
  * stderr with its command, or one of the store's own refusals, whose message is the store's own words.
  */
+/** `Fudge.log`'s lines for a step that failed: what failed, the command and its exit code, then its output. */
+export function failureLog(title: string, details: FailureDetails): string {
+    const command = details.command && `${details.command}${details.code === undefined ? "" : ` (exit code ${details.code})`}`;
+    return [title, command, details.output.trimEnd()].filter((part) => part).join("\n");
+}
+
 export function failureDetails(error: unknown): FailureDetails {
     if (error instanceof BuildFailed) return { output: error.output, command: error.command, code: error.code };
     if (error instanceof GitError) return { output: error.message, command: error.command };

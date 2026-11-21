@@ -154,14 +154,14 @@ private final class WatcherStream: @unchecked Sendable {
                 FSEventStreamCreateFlags(flags))
         else {
             Unmanaged<ExtensionsWatcherSink>.fromOpaque(info).release()
-            FileHandle.standardError.write(Data("fudge: couldn't watch \(path): FSEvents refused the stream\n".utf8))
+            FudgeLog.error("couldn't watch \(path): FSEvents refused the stream")
             return
         }
         FSEventStreamSetDispatchQueue(stream, queue)
         guard FSEventStreamStart(stream) else {
             FSEventStreamInvalidate(stream)
             FSEventStreamRelease(stream)
-            FileHandle.standardError.write(Data("fudge: couldn't watch \(path): FSEvents didn't start\n".utf8))
+            FudgeLog.error("couldn't watch \(path): FSEvents didn't start")
             return
         }
         self.stream = stream

@@ -45,7 +45,11 @@ import { detailMarkdown, fetchReadme, refetching, shownReadme } from "./readme.t
 import { RestingWork } from "./resting.ts";
 import type { FailureDetails } from "./failure.ts";
 import { FailureView, LoadFailure, NeedsGit } from "./failure-view.tsx";
-import { failureDetails, install, oneAtATime, readInstalled, uninstall, type StoreContext } from "./store.ts";
+import { failureDetails, failureLog, install, oneAtATime, readInstalled, uninstall, type StoreContext } from "./store.ts";
+import { logToFudge } from "fudge:app";
+
+/** A failure the store had goes into `Fudge.log` too, with its output (SPEC-124); writing it never fails a step. */
+const logFailure = (title: string, error: unknown) => void logToFudge("error", failureLog(title, failureDetails(error))).catch(() => {});
 
 type Loaded = { entries: StoreEntry[]; installed: Installed; trees: Map<string, string>; commit: string };
 /** The cached scans this Fudge's scanner wrote, by tree id, and the trees whose check failed in this run. */
@@ -140,6 +144,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                     await toast.hide();
                 } catch (error) {
                     const title = first ? "Couldn't download the store's list" : "Couldn't update the store's list";
+                    logFailure(title, error);
                     toast.style = Toast.Style.Failure;
                     toast.title = title;
                     toast.message = message(error);
@@ -268,6 +273,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                 // The whole error, its likely cause, Copy Error and Try Again, in a view of its own (SPEC-116); the
                 // toast only says where to look.
                 const title = `Couldn't ${updating ? "update" : "install"} ${entry.title}`;
+                logFailure(title, error);
                 toast.style = Toast.Style.Failure;
                 toast.title = title;
                 toast.message = "See the details.";
@@ -290,6 +296,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                 await load();
                 await showToast({ style: Toast.Style.Success, title: `Uninstalled ${entry.title}` });
             } catch (error) {
+                logFailure(`Couldn't uninstall ${entry.title}`, error);
                 await showToast({
                     style: Toast.Style.Failure,
                     title: `Couldn't uninstall ${entry.title}`,

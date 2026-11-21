@@ -432,6 +432,32 @@ Extensions run in a separate Node.js process, the extension host.
       **The launcher's log** (`LauncherLog`, the unified log's subsystem `io.github.jakeobsen.fudge`, category `launcher`) records each step from a shortcut press to the panel hiding: the key and `handleKey`'s answer, Quick Look's toggle and show, each resign and its settled decision, Fudge becoming active or not, and every `hidePanel` with its reason (the model's `hide()` passes its caller).
       It holds public facts only: window classes and levels, bundle ids and decisions, never paths, titles or typing.
       Read it with `/usr/bin/log show --last 2m --predicate 'subsystem == "io.github.jakeobsen.fudge"' --info` (in zsh, a bare `log` is a builtin).
+    - **The log files** (SPEC-124) are in `~/Library/Logs/Fudge/` (`FudgePaths.logsDirectory`), or `$FUDGE_SUPPORT_DIR/Logs/` when that's set, so tests and snapshot runs never write the user's logs.
+      `Fudge.log` is Fudge's own, and `Extensions/<name>.log` each extension's, bundled ones included, by its manifest `name`.
+      Folders and files are made with the first line written to them.
+      A line is a local ISO 8601 time with milliseconds and its offset, the level, `[<command>]` on an extension's line, and the message, its further lines indented under the first (`LogLine`).
+      Each file's first line in a run is Fudge's version and commit.
+      **What goes in `Fudge.log`:** every `fudge: couldn't …` line, through `FudgeLog`, which also writes it to stderr as before, so `make run` from a terminal still shows them.
+      Also the extension host's own stderr, a refused protocol message, a launch that failed, and the host stopping, naming the commands it ended.
+      Also installs, updates and removals as the app sees them when it reads the extensions folder (`InstallStamp`), so the store's and `fudge build`'s alike.
+      Also the Extension Store's failed downloads, installs, updates and uninstalls with the build's output (`logToFudge` in `fudge:app`, the `fudge.log` call, answered only for the store), sign-in errors, and failed update checks.
+      **What goes in an extension's file:** its `console` (`console.error` an error, `console.warn` a warning, `console.log` and `console.info` info, `console.debug` debug), and what it writes to stdout (info) or stderr (error) itself.
+      Also uncaught exceptions and unhandled rejections with their stack, and a command that crashed or was stopped for not finishing after it was closed.
+      Also failure toasts with their title and message, including an animated toast that becomes one, logged once with the title and message it ends up with.
+      An extension's lines go only to its own file and stderr, never `Fudge.log`.
+      **Log level** (`logLevel` in `settings.json`, General's Logs section): Errors (the default), Warnings, Info or Debug; each records its own lines and every level above.
+      Lines below it are dropped where they're made: in the worker before they're formatted (`src/log.ts`), in the host for a command's raw output, and in `FudgeLog`; errors and warnings of Fudge's own still go to stderr.
+      A change goes to the host as a `logLevel` message, which passes it to every running worker, and the host gets it at each start before any launch.
+      **Nothing slows the launcher:** the host stamps each `log` line with the extension's and command's names from the launch, and `ExtensionHost` hands it to `FudgeLog.command` on the thread that reads the host, never through the main actor.
+      The host lets a command send 1,000 lines a second, then drops and counts them and sends one `… N lines dropped` line when the second is up, as severe as the worst line it stands for.
+      `LogWriter` writes on a queue of its own, in order, with a buffer of 2,000 lines per file: a full buffer drops and counts in the same way, and other files are unaffected.
+      Past 5 MB (`Fudge.log`) or 1 MB (an extension's), a file becomes `<name>.old.log`, replacing the last one; nothing else is kept.
+      A failed write goes to stderr only, and the next line tries again.
+      Uninstalling an extension leaves its log, and a reinstall appends to it.
+      Only the app writes these files; the `fudge` tool writes to its own stderr.
+      **Never logged:** what the user types, clipboard and snippet contents, preference values, tokens, OAuth codes, secrets, URLs with their query and response bodies; a sign-in error names the call, the extension and the refusal, or only the error's domain and code.
+      An extension's own output is written as it wrote it, which is why the default is Errors.
+      Show Logs opens the folder in Finder (`NSWorkspace`), making it first.
     - **The General page** (`GeneralPage.swift`) is the Settings window's first page, and the one ⌘, Settings… and "Fudge Settings" open on:
       Open at Login, the launcher's hotkey, Show Fudge on, Pop to Root Search, Escape Key Behavior (all three `SettingsPopupRow`s), Keyboard (Hyperkey and its Quick press switch, which is disabled while Hyperkey is off), Updates (Check for Updates, another `SettingsPopupRow` with Daily, Weekly, Monthly and Never, then `UpdateStatusRow`:
       While the update check is unset, that popup shows Not Chosen first (`UpdateCheckSetting.popupOptions`): it checks nothing, as Never does, and can't be picked again once something is chosen.
@@ -678,7 +704,7 @@ Extensions run in a separate Node.js process, the extension host.
     - Search Snippets
     - Switch Windows
 
-    stdout carries nothing but the protocol: in the host, `console.log` goes to stderr, and a worker's output arrives as `log` messages.
+    stdout carries nothing but the protocol: in the host, `console.log` goes to stderr, and a worker's `console` and output arrive as `log` messages, named and bounded by the host (see the log files).
   - **Extensions share one process, as in Raycast.**
     Every command is a worker thread in the one host, so a running extension can read and write the protocol channel (the host's stdin and stdout) and reach the host's main thread (`inspector`).
     Extensions running together can reach each other and the host.

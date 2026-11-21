@@ -134,7 +134,7 @@ final class ClipboardHistoryService {
             do {
                 try store.save(history)
             } catch {
-                FileHandle.standardError.write(Data("fudge: clipboard history: \(error)\n".utf8))
+                FudgeLog.error("clipboard history: \(error)")
             }
         }
     }
@@ -302,7 +302,7 @@ final class ClipboardHistoryService {
             do {
                 try store.deleteAll()
             } catch {
-                FileHandle.standardError.write(Data("fudge: clipboard history: \(error)\n".utf8))
+                FudgeLog.error("clipboard history: \(error)")
             }
         }
     }
