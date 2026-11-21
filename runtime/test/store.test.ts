@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -21,6 +22,7 @@ import {
     type StoreEntry,
 } from "../store-extension/src/catalog.ts";
 import {
+    builtCompatibility,
     checkFolder,
     compatibilityFile,
     compatibilityTag,
@@ -28,6 +30,7 @@ import {
     compatibilityText,
     CompatibilityChecks,
     fromReport,
+    installNote,
     isNotCompatible,
     isPartlyCompatible,
     maxCachedResults,
@@ -786,6 +789,8 @@ async function storeContext(
         folders?: { dir: string; name: string; tree: string }[];
         /** The files under each folder's `src/`, as `ls-tree -r` lists them, by folder. */
         sources?: Record<string, string[]>;
+        /** What the build writes as the install's `compatibility.json`; nothing when its own scan failed. */
+        built?: unknown;
     } = {},
 ) {
     const root = await temporary();
@@ -828,11 +833,15 @@ async function storeContext(
         }
         return {};
     });
-    const cli = fakeRun((_program, args) =>
-        args[0] === "scan"
-            ? { code: 0, stdout: JSON.stringify(supportedScan), ...options.scan }
-            : { code: options.cliCode ?? 0, stderr: options.cliCode ? "error: esbuild failed" : "" },
-    );
+    const cli = fakeRun((_program, args) => {
+        if (args[0] === "scan") return { code: 0, stdout: JSON.stringify(supportedScan), ...options.scan };
+        if (args[0] === "build" && options.built !== undefined && !options.cliCode) {
+            const installed = path.join(args[3]!, path.basename(args[1]!));
+            mkdirSync(installed, { recursive: true });
+            writeFileSync(path.join(installed, "compatibility.json"), JSON.stringify(options.built));
+        }
+        return { code: options.cliCode ?? 0, stderr: options.cliCode ? "error: esbuild failed" : "" };
+    });
     const asked: { title: string; message: string; primary: string }[] = [];
     const trashed: string[] = [];
     const context: StoreContext = {
@@ -856,7 +865,7 @@ const alphaEntry = parseManifest("alpha", manifest("alpha"))!;
 
 test("install fetches the source, checks it, asks, builds into FUDGE_EXTENSIONS_DIR and records it", async () => {
     const { context, git, cli, asked, extensionsDir, supportPath, repoPath } = await storeContext();
-    assert.equal(await install(alphaEntry, context), true);
+    assert.deepEqual(await install(alphaEntry, context), {});
     assert.deepEqual(git.calls[0]!.args, ["sparse-checkout", "add", "/extensions/alpha/"]);
     assert.deepEqual(asked, [
         {
@@ -882,7 +891,7 @@ test("a folder whose manifest has another name installs from the folder, under t
         folders: [{ dir: "amazon-aws", name: "aws", tree: "a5a1" }],
     });
     const aws = parseManifest("amazon-aws", manifest("aws", { title: "Amazon AWS" }))!;
-    assert.equal(await install(aws, context), true);
+    assert.deepEqual(await install(aws, context), {});
     assert.deepEqual(git.calls[0]!.args, ["sparse-checkout", "add", "/extensions/amazon-aws/"]);
     assert.deepEqual(cli.calls.at(-1)!.args, ["build", path.join(repoPath, "extensions/amazon-aws"), "--into", extensionsDir]);
     assert.deepEqual((await readInstalled(supportPath)).aws, {
@@ -905,7 +914,7 @@ test("two folders with one name: the second can't install over the first, and up
     });
     const first = parseManifest("world-clock", manifest("world-clock"))!;
     const second = parseManifest("world-clock-2", manifest("world-clock"))!;
-    assert.equal(await install(first, context), true);
+    assert.deepEqual(await install(first, context), {});
     await mkdir(path.join(extensionsDir, "world-clock"));
     await assert.rejects(install(second, context), (error: unknown) => {
         assert.ok(error instanceof StoreError);
@@ -913,7 +922,7 @@ test("two folders with one name: the second can't install over the first, and up
         return true;
     });
     await assert.rejects(uninstall(second, context), /wasn't installed by the store/, "nor removed through the other row");
-    assert.equal(await install(first, context), true, "updating the first one");
+    assert.deepEqual(await install(first, context), {}, "updating the first one");
     assert.equal(asked.at(-1)!.title, "Update World-clock?");
     assert.equal((await readInstalled(supportPath))["world-clock"]?.dir, "world-clock");
 });
@@ -1004,7 +1013,7 @@ test("updating an installed extension asks to update and records the new tree", 
     const { context, asked, supportPath, extensionsDir } = await storeContext({ tree: "bbb2" });
     await writeInstalled(supportPath, { alpha: { tree: "aaa1", commit: "old", installedAt: "x", dir: "alpha" } });
     await mkdir(path.join(extensionsDir, "alpha"));
-    assert.equal(await install(alphaEntry, context), true, "its own folder isn't a clash");
+    assert.deepEqual(await install(alphaEntry, context), {}, "its own folder isn't a clash");
     assert.equal(asked[0]!.title, "Update Alpha?");
     assert.equal((await readInstalled(supportPath)).alpha?.tree, "bbb2");
 });
@@ -1225,7 +1234,7 @@ test("a cached result keeps its commands, and one with a bad commands entry is d
 test("install's confirmation carries the scan's gaps, and a failed scan doesn't stop the install", async () => {
     const report = { extension: "alpha", supported: false, gaps: [{ api: "AI.ask", kind: "missing", byDesign: "AI" }], unreadable: [] };
     const withGaps = await storeContext({ scan: { stdout: JSON.stringify(report) } });
-    assert.equal(await install(alphaEntry, withGaps.context), true);
+    assert.deepEqual(await install(alphaEntry, withGaps.context), {});
     assert.match(
         withGaps.asked[0]!.message,
         /\n\nNot compatible with Fudge: this extension uses Raycast AI, which Fudge doesn't support\. Commands that use it won't work\.$/,
@@ -1233,7 +1242,7 @@ test("install's confirmation carries the scan's gaps, and a failed scan doesn't 
 
     for (const scan of [{ code: 1, stdout: "" }, { stdout: "not json" }, { stdout: "{}" }]) {
         const failed = await storeContext({ scan });
-        assert.equal(await install(alphaEntry, failed.context), true, JSON.stringify(scan));
+        assert.deepEqual(await install(alphaEntry, failed.context), {}, JSON.stringify(scan));
         assert.match(failed.asked[0]!.message, /\n\nFudge couldn't check what this extension uses\.$/);
     }
 });
@@ -1615,17 +1624,17 @@ test("install uses this version's cached result instead of scanning, and caches 
     const tree = treeOf(42);
     const cached = await storeContext({ tree });
     await rememberCompatibility(cached.supportPath, await scannerIdentity(cached.context.cli), tree, aiOnly);
-    assert.equal(await install(alphaEntry, cached.context), true);
+    assert.deepEqual(await install(alphaEntry, cached.context), {});
     assert.deepEqual(cached.cli.calls.map((call) => call.args[0]), ["build"], "no scan");
     assert.match(cached.asked[0]!.message, /Not compatible with Fudge: this extension uses Raycast AI/);
 
     const notChecked = await storeContext({ tree });
     await rememberCompatibility(notChecked.supportPath, await scannerIdentity(notChecked.context.cli), tree, { notChecked: true });
-    assert.equal(await install(alphaEntry, notChecked.context), true);
+    assert.deepEqual(await install(alphaEntry, notChecked.context), {});
     assert.deepEqual(notChecked.cli.calls.map((call) => call.args[0]), ["scan", "build"], "too big to check while browsing: installing scans");
 
     const fresh = await storeContext({ tree });
-    assert.equal(await install(alphaEntry, fresh.context), true);
+    assert.deepEqual(await install(alphaEntry, fresh.context), {});
     assert.deepEqual(
         (await readCompatibility(fresh.supportPath, await scannerIdentity(fresh.context.cli))).get(tree),
         { notSupported: [], missing: [], signsIn: false, unreadable: false },
@@ -2059,4 +2068,85 @@ test("a linked package.json leaves the list, and a linked or missing file fails 
     await symlink(path.join(source, "package.json"), path.join(linkedManifest, "package.json"));
     assert.equal(await sourceProblem(linkedManifest), "Its package.json isn't a regular file of at most 1 MB");
     assert.equal(await sourceProblem(await temporary()), "It has no package.json");
+});
+
+// MARK: - What the install turns off is what's said (SPEC-121 §2)
+
+/** A scan that says alpha's one command, Run, uses Raycast AI. */
+const runUsesAI = {
+    extension: "alpha",
+    supported: false,
+    gaps: [{ api: "AI.ask", kind: "missing", byDesign: "AI" }],
+    unreadable: [],
+    commands: [{ name: "run", unsupported: ["AI"], traced: true }],
+};
+
+test("the build found AI commands the store's failed scan couldn't name: the done message names them", async () => {
+    const { context, asked } = await storeContext({ scan: { code: 1, stdout: "" }, built: { commands: { run: ["AI"] } } });
+    assert.deepEqual(await install(alphaEntry, context), {
+        note: "Turned off: Run, which uses Raycast AI. You can turn it on in Settings → Commands.",
+    });
+    assert.match(asked[0]!.message, /Fudge couldn't check what this extension uses\.$/);
+});
+
+test("the store's scan named AI commands but the build's failed: the done message says every command is on", async () => {
+    const { context, asked } = await storeContext({ scan: { stdout: JSON.stringify(runUsesAI) } });
+    assert.deepEqual(await install(alphaEntry, context), {
+        note: "Fudge couldn't check which of its commands use Raycast AI, so every command is on.",
+    });
+    assert.match(asked[0]!.message, /Not compatible with Fudge: every command uses Raycast AI/);
+});
+
+test("when the build turns off what the confirmation named, the done message adds nothing", async () => {
+    const agree = await storeContext({ scan: { stdout: JSON.stringify(runUsesAI) }, built: { commands: { run: ["AI"] } } });
+    assert.deepEqual(await install(alphaEntry, agree.context), {});
+    const none = await storeContext({ built: { commands: {} } });
+    assert.deepEqual(await install(alphaEntry, none.context), {}, "nothing named, nothing off");
+    const neither = await storeContext({ scan: { code: 1, stdout: "" } });
+    assert.deepEqual(await install(alphaEntry, neither.context), {}, "neither could check: the confirmation said so");
+});
+
+test("installNote names what's really on and off, in each case", () => {
+    const named = (...using: string[]): Compatibility => ({
+        notSupported: ["AI"],
+        missing: [],
+        signsIn: false,
+        unreadable: false,
+        byCommand: { count: 3, using },
+    });
+    const titles = (name: string) => name.replace(/^./, (c) => c.toUpperCase());
+    assert.equal(installNote(named("ask"), { ask: ["AI"] }, titles), undefined);
+    assert.equal(installNote(undefined, {}, titles), undefined);
+    assert.equal(installNote({ notChecked: true }, undefined, titles), undefined);
+    assert.equal(
+        installNote(named("ask"), { ask: ["AI"], tabs: ["Browser Extension"] }, titles),
+        "Turned off: Ask and Tabs, which use Raycast AI or the Raycast Browser Extension. You can turn them on in " +
+            "Settings → Commands.",
+    );
+    assert.equal(installNote(named("ask"), {}, titles), "Every command is on: none of them uses Raycast AI.");
+    assert.equal(
+        installNote(named("ask", "summarize"), undefined, titles),
+        "Fudge couldn't check which of its commands use Raycast AI, so every command is on.",
+    );
+    // A result from before per-command scans names no command, so whatever the build turned off is named.
+    const whole: Compatibility = { notSupported: ["AI"], missing: [], signsIn: false, unreadable: false };
+    assert.equal(
+        installNote(whole, { ask: ["AI"] }, titles),
+        "Turned off: Ask, which uses Raycast AI. You can turn it on in Settings → Commands.",
+    );
+});
+
+test("the install's compatibility.json is read as the app reads it", async () => {
+    const installed = await temporary();
+    assert.equal(await builtCompatibility(installed, ["ask"]), undefined, "no file: the build couldn't check");
+    await writeJSON(path.join(installed, "compatibility.json"), {
+        commands: { ask: ["AI", "Telepathy"], gone: ["AI"], plain: [], odd: "AI" },
+    });
+    assert.deepEqual(await builtCompatibility(installed, ["ask", "plain", "odd"]), { ask: ["AI"] }, "manifest commands only");
+    await writeFile(path.join(installed, "compatibility.json"), "not json");
+    assert.equal(await builtCompatibility(installed, ["ask"]), undefined);
+    const linked = await temporary();
+    await writeJSON(path.join(linked, "real.json"), { commands: { ask: ["AI"] } });
+    await symlink(path.join(linked, "real.json"), path.join(linked, "compatibility.json"));
+    assert.equal(await builtCompatibility(linked, ["ask"]), undefined, "never through a link");
 });

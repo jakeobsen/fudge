@@ -892,7 +892,9 @@ Extensions run in a separate Node.js process, the extension host.
   - `store.ts` installs with `$FUDGE_CLI build <source> --into $FUDGE_EXTENSIONS_DIR`.
     Every git operation (refresh, a README's `sparse-checkout add`, a detail's scan, install, uninstall) waits its turn in one queue (`oneAtATime`), so none overlaps another.
     Before asking, it takes this version's cached result, or runs `$FUDGE_CLI scan <source> --json` and caches it, and the confirmation says what it found (`compatibilityLine`).
-    For Raycast AI or the Raycast Browser Extension, which Fudge doesn't support, it's "Partly compatible with Fudge", naming exactly the commands the build installs turned off, or "Not compatible with Fudge" when that's every command; installing stays possible either way.
+    For Raycast AI or the Raycast Browser Extension, which Fudge doesn't support, it's "Partly compatible with Fudge", naming the commands its scan found, which the build turns off, or "Not compatible with Fudge" when that's every command; installing stays possible either way.
+    The build scans the source again, exactly what it installs, so its `compatibility.json` is what's true: after the build, the store reads it (`builtCompatibility`), and when it isn't what the confirmation named, the done message says what is, in a toast instead of the HUD (`installNote`, SPEC-121 §2).
+    That's "Turned off: …" for commands the confirmation didn't name (its scan failed, say), "Every command is on" when the build found none, and that Fudge couldn't check, so every command is on, when the build's scan failed after the confirmation named some.
     Then it names up to five APIs it doesn't have yet and how many more; that it signs in with OAuth, which works if the chosen sign-in server supports its provider (never called not compatible); everything supported; or that the scan couldn't run, which doesn't stop the install.
     It records the folder's git tree id in `installed.json` ("Update available" when the id changes), and uninstalls only what it recorded.
     **Unloading the store doesn't stop a `fudge build` it started** (or npm under it), unlike its git: the worker's timeout goes with it, so the build runs to the end, or until npm's own network timeouts give up.
@@ -968,6 +970,7 @@ Extensions run in a separate Node.js process, the extension host.
     Sources are read as regular files of at most 5 MB (`scripts/compat/files.ts`, as the store's `files.ts` does); a link, FIFO, device, folder or bigger file with a source's name is listed as unreadable, and nothing is followed.
     Tests and mocks are skipped (`*.test.*`, `*.spec.*`, and `__mocks__/`, `__tests__/`, `test/` and `tests/` folders).
     It collects the API paths used through `@raycast/api` imports (`Clipboard.copy`, `Action.CopyToClipboard`) and the names imported from `@raycast/utils`.
+    An export passed whole to `canAccess` (`environment.canAccess(AI)`, or `canAccess(BrowserExtension)` destructured) isn't a use, since that's how an extension asks whether it's there, and Fudge answers no (`isAccessCheck`, SPEC-121 §1); any other reference is, `AI.ask` and `const x = AI` included.
   - Each path is checked against `createApiModule()`.
     A stub anywhere on the path makes it `missing`, a lowercase member's included.
     So do the markers in `src/api/stubs.ts`: `UNAVAILABLE` is on the actions that render but fail when picked (`render-but-fail`), `NOT_DRAWN` is on the components the app can't draw yet, listed at the end of `components.ts` (`not-drawn`), and `LEFT_OUT` is on `OAuth`, which is there but counted apart,
