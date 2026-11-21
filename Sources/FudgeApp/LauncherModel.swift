@@ -167,6 +167,8 @@ final class LauncherModel {
     /// Asks the user to confirm (title, message, primary, dismiss, destructive); set by the app delegate.
     /// Asks the user, for a call from `origin`; a background call gets `CallOrigin.unaskedAnswer` without an alert.
     @ObservationIgnored var confirm: (AlertRequest, CallOrigin) async -> Bool = { _, _ in false }
+    /// The system's part of the System commands. `AppDelegate` gives snapshot runs inert ones, which do nothing.
+    @ObservationIgnored var systemActions: any SystemActions = MacSystemActions()
 
     /// "Sign in to <provider>" on screen, over whatever the command shows (SPEC-056).
     private(set) var signIn: SignInPrompt?
@@ -177,6 +179,8 @@ final class LauncherModel {
     /// Each session's latest `oauth.prepare` and the one the prompt shows, with their loopback listeners, and the relay
     /// sign-ins pending (`SignInCalls.pending`).
     @ObservationIgnored private var signInRequests = SignInRequests<OAuthLoopback>()
+    /// `node --version` per binary, read off the main actor (SPEC-084).
+    @ObservationIgnored private let nodeVersions = NodeVersionCache()
     /// The user's answer to the prompt on screen: true for ↵, false for Esc or the command going away.
     @ObservationIgnored private var signInAnswer: CheckedContinuation<Bool, Never>?
 
@@ -288,6 +292,8 @@ final class LauncherModel {
             log: { [weak self] session, level, message in self?.log(session, level, message) }
         )
         reload()
+        // The extension host's first start shouldn't wait for `node --version` (SPEC-084).
+        if let node = Runtime.locateNode() { warmNodeVersion(node) }
     }
 
     /// Clear Search History: root search forgets which results were opened, in memory and in `history.json`.
@@ -2542,7 +2548,25 @@ final class LauncherModel {
             Task {
                 if let message = await SystemCalls.windowCommand(command) { showHUD(message) }
             }
+        } else if group == BuiltInCommandGroup.system.name, let command = SystemCommand(rawValue: command) {
+            // As the window commands do: the panel goes first, so Hide All Apps, Lock Screen and the rest act on
+            // the Mac as the user left it. A command that asks does it in an alert of its own.
+            if !fromHotkey { searchText = "" }
+            if isVisible() { hide() }
+            let runner = SystemCommandRunner(actions: systemActions, ownPid: ProcessInfo.processInfo.processIdentifier)
+            Task {
+                let message = await runner.run(command) { [weak self] confirmation in
+                    await self?.confirm(Self.alertRequest(confirmation), .userInitiated) ?? false
+                }
+                if let message { showHUD(message) }
+            }
         }
+    }
+
+    private static func alertRequest(_ confirmation: SystemConfirmation) -> AlertRequest {
+        AlertRequest(
+            title: confirmation.title, message: confirmation.message, primary: confirmation.primary,
+            dismiss: confirmation.dismiss, destructive: true)
     }
 
     private func recordLaunch(_ item: RootItem) {
@@ -2888,10 +2912,18 @@ final class LauncherModel {
                 description: "The extension host is missing from Fudge.app. Rebuild it with `make app`.")
         }
         let cli = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/fudge")
-        // Extensions trust the certificates the Mac trusts (SPEC-081), read afresh at each start.
+        // Extensions trust the certificates the Mac trusts (SPEC-081). The Node version comes from the cache, never
+        // read here (SPEC-084): while it isn't known, this start takes the NODE_EXTRA_CA_CERTS path, which works on any
+        // Node, and it's read in the background for the next.
+        let version: String?
+        if case .known(let known) = nodeVersions.cached(node) {
+            version = known
+        } else {
+            version = nil
+            warmNodeVersion(node)
+        }
         let trust = NodeTrust.launch(
-            nodeVersion: NodeTrust.version(of: node), certificates: SystemTrustSettings.certificates,
-            rootsFile: paths.trustRootsFile)
+            nodeVersion: version, certificates: SystemTrustSettings.certificates, rootsFile: paths.trustRootsFile)
         let host = try ExtensionHost(
             node: node, script: script, nodeArguments: trust.arguments,
             environment: ExtensionStore.hostEnvironment(
@@ -2899,11 +2931,28 @@ final class LauncherModel {
             ).merging([OAuthProviders.environmentKey: OAuthProviders.environmentValue]) { _, new in new }
                 .merging(trust.environment) { _, new in new })
         self.host = host
+        let startedWithFlag = trust.arguments.contains(NodeTrust.systemCAFlag)
+        let started = ContinuousClock.now
         Task { [weak self] in
-            for await message in host.messages { self?.receive(message) }
+            var heard = false
+            for await message in host.messages {
+                heard = true
+                self?.receive(message)
+            }
+            // A host that ends at once, saying nothing, on `--use-system-ca`: its Node refused the flag (a version
+            // manager's shim can change Node underneath), so the next start takes the other path.
+            if startedWithFlag, !heard, ContinuousClock.now - started < .seconds(5) {
+                self?.nodeVersions.refuseSystemCA(node)
+            }
             self?.hostStopped(host)
         }
         return host
+    }
+
+    /// Reads the Node version in the background, for the next host start.
+    private func warmNodeVersion(_ node: URL) {
+        let versions = nodeVersions
+        Task.detached(priority: .utility) { versions.load(node) }
     }
 
     private func send(_ message: AppMessage) {

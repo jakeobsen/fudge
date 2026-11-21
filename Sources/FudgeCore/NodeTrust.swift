@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// How the extension host comes to trust the certificates the Mac trusts (SPEC-081). Node ignores the macOS trust
 /// store, so a server behind a company's own CA would fail TLS in extensions though Safari trusts it.
@@ -67,9 +68,11 @@ public enum NodeTrust {
         }
     }
 
-    /// The certificates Node can be told to trust for every server.
+    /// The certificates Node can be told to trust for every server, beyond its own bundle.
     ///
-    /// - A deny for SSL in any domain leaves a certificate out, whatever another domain says.
+    /// - Only a trust from the user's or the admin's domain counts: the system's roots are Apple's, and Node ships its
+    ///   own (SPEC-084).
+    /// - A deny for SSL in any domain, the system's included, leaves a certificate out, whatever another domain says.
     /// - Otherwise the most specific domain that says anything about SSL decides: the certificate goes in only if
     ///   that domain trusts it as a root, for SSL or every policy, with nothing that narrows it. A trust for one host
     ///   would become a trust for every host in Node, so a restricted one leaves the certificate out.
@@ -87,6 +90,8 @@ public enum NodeTrust {
         if all.contains(where: { $0.contains { $0.appliesToSSL && $0.result == .deny } }) { return false }
         for domain in Domain.allCases {
             guard let settings = certificate.settings[domain] else { continue }
+            // Only the user's and admin's trust goes in: the system's roots are Apple's, and Node has its own bundle.
+            guard domain != .system else { return false }
             if settings.isEmpty { return true }
             let ssl = settings.filter { $0.appliesToSSL && $0.result != .unspecified }
             guard !ssl.isEmpty else { continue }
@@ -103,13 +108,23 @@ public enum NodeTrust {
         }.joined()
     }
 
-    /// What the host starts with: `--use-system-ca` when the Node has it; otherwise `NODE_EXTRA_CA_CERTS` naming
-    /// `rootsFile`, written afresh from `certificates` (folder 0700, file 0600). With nothing to export, or a file
-    /// that can't be written, the host starts as before.
+    /// What the host starts with: `--use-system-ca` when the Node has it, an inherited `NODE_EXTRA_CA_CERTS` passing
+    /// through unchanged; otherwise `NODE_EXTRA_CA_CERTS` naming `rootsFile`, written afresh from `certificates` (folder
+    /// 0700, file 0600), followed by the certificates of an inherited `NODE_EXTRA_CA_CERTS` file, so one set for Fudge
+    /// (by the user or a profile) is never dropped. Node stops reading the file at the first block it can't load, so the
+    /// Mac's come first, and only blocks macOS reads as certificates are taken from the inherited file
+    /// (`pemCertificates`). With nothing of the Mac's to add, or an inherited file that can't be read, the environment
+    /// stays as it is.
     public static func launch(
-        nodeVersion: String?, certificates: () -> [Certificate], rootsFile: URL
+        nodeVersion: String?, certificates: () -> [Certificate], rootsFile: URL,
+        inherited: [String: String] = ProcessInfo.processInfo.environment
     ) -> (arguments: [String], environment: [String: String]) {
         if let nodeVersion, supportsSystemCA(version: nodeVersion) { return ([systemCAFlag], [:]) }
+        var theirs = ""
+        if let path = inherited[extraCertsVariable], !path.isEmpty, path != rootsFile.path {
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return ([], [:]) }
+            theirs = pemCertificates(in: String(decoding: data, as: UTF8.self)).joined()
+        }
         let roots = exportable(certificates())
         guard !roots.isEmpty else { return ([], [:]) }
         do {
@@ -117,12 +132,36 @@ public enum NodeTrust {
             let folder = rootsFile.deletingLastPathComponent()
             try files.createDirectory(
                 at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            try Data(pem(roots).utf8).write(to: rootsFile, options: .atomic)
+            try Data((pem(roots) + theirs).utf8).write(to: rootsFile, options: .atomic)
             try files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: rootsFile.path)
         } catch {
             return ([], [:])
         }
         return ([], [extraCertsVariable: rootsFile.path])
+    }
+
+    /// The PEM certificate blocks in `text` that macOS reads as certificates (`SecCertificateCreateWithData`), each as
+    /// one block ending in a newline. Base64 that decodes isn't enough: Node drops everything after a block it can't
+    /// load.
+    static func pemCertificates(in text: String) -> [String] {
+        let begin = "-----BEGIN CERTIFICATE-----"
+        let end = "-----END CERTIFICATE-----"
+        var blocks: [String] = []
+        var rest = Substring(text)
+        while let start = rest.range(of: begin), let stop = rest.range(of: end, range: start.upperBound..<rest.endIndex)
+        {
+            let body = rest[start.upperBound..<stop.lowerBound].filter { !$0.isWhitespace }
+            if !body.isEmpty, let der = Data(base64Encoded: String(body)), isCertificate(der) {
+                blocks.append(pem([der]))
+            }
+            rest = rest[stop.upperBound...]
+        }
+        return blocks
+    }
+
+    /// Whether `der` is an X.509 certificate, as the Security framework parses one. Only parses: no Keychain.
+    static func isCertificate(_ der: Data) -> Bool {
+        !der.isEmpty && SecCertificateCreateWithData(nil, der as CFData) != nil
     }
 
     /// `node --version`, read when the host starts; nil if it doesn't answer within 5 seconds.
@@ -143,5 +182,64 @@ public enum NodeTrust {
         let data = output.fileHandleForReading.readDataToEndOfFile()
         let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         return text.isEmpty ? nil : text
+    }
+}
+
+/// `node --version` per Node binary, for the run (SPEC-084): read once, off the main actor, and again only when the
+/// binary changes. It's keyed by the resolved binary (Homebrew's `node` is a link) and its modification date.
+public final class NodeVersionCache: @unchecked Sendable {
+    public enum Lookup: Equatable, Sendable {
+        case known(String?)
+        case unknown
+    }
+
+    private let lock = NSLock()
+    private var entries: [String: (stamp: Date?, version: String?)] = [:]
+    private let read: @Sendable (URL) -> String?
+    private let stamp: @Sendable (URL) -> Date?
+
+    public init(
+        read: @escaping @Sendable (URL) -> String? = { NodeTrust.version(of: $0) },
+        stamp: @escaping @Sendable (URL) -> Date? = NodeVersionCache.modificationDate
+    ) {
+        self.read = read
+        self.stamp = stamp
+    }
+
+    public static func modificationDate(of node: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: node.resolvingSymlinksInPath().path))?[.modificationDate]
+            as? Date
+    }
+
+    private static func key(_ node: URL) -> String { node.resolvingSymlinksInPath().path }
+
+    /// The version, when it's known for the binary as it is now. Never reads it, so the main actor can ask.
+    public func cached(_ node: URL) -> Lookup {
+        let now = stamp(node)
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = entries[Self.key(node)], entry.stamp == now else { return .unknown }
+        return .known(entry.version)
+    }
+
+    /// The version, read now unless it's known; this blocks, so call it off the main actor.
+    @discardableResult
+    public func load(_ node: URL) -> String? {
+        if case .known(let version) = cached(node) { return version }
+        let now = stamp(node)
+        let version = read(node)
+        lock.lock()
+        entries[Self.key(node)] = (now, version)
+        lock.unlock()
+        return version
+    }
+
+    /// The binary refused `--use-system-ca` (a version manager's shim can switch Node without changing): it counts
+    /// as having none until it changes.
+    public func refuseSystemCA(_ node: URL) {
+        let now = stamp(node)
+        lock.lock()
+        entries[Self.key(node)] = (now, nil)
+        lock.unlock()
     }
 }

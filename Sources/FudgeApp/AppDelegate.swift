@@ -24,6 +24,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The app that was frontmost when a FilePicker's open panel activated fudge; it gets the keyboard back when the
     /// launcher hides.
     private var appToRestore: NSRunningApplication?
+    /// In a snapshot run, the alert a `confirm` would have shown, which the run saves instead of the panel.
+    private var snapshotAlert: NSWindow?
     private var exchangeRates: ExchangeRateUpdater!
     private let exchangeRateSchedule = ExchangeRateSchedule()
     private var updates: UpdateChecker!
@@ -50,6 +52,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let files = snapshot.foundFiles.map { FixedFileQuery.load($0, home: FileSearchOptions.home()) } ?? []
             model.fileSearch = FileSearch { FixedFileQuery(files) }
             model.templateClipboard = { nil }
+            // Nor do the System commands do anything: no lock, sleep, restart, Apple Event, eject, hide or quit.
+            model.systemActions = InertSystemActions()
             // Nor the clipboard or the Keychain: Clipboard History gets `--clipboard-entries`' made-up entries.
             if let file = snapshot.clipboardEntries {
                 model.clipboardHistory = ClipboardHistoryService(
@@ -157,13 +161,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else if snapshot.settings {
                 snapshot.take(of: settingsWindow)
             } else {
-                // A `confirmAlert` (an extension's, or one an action asks for) is never begun as a sheet here: it's
-                // laid out off-screen and saved as the snapshot instead (`SnapshotSheet.laidOut`), answered Cancel.
-                model.confirm = { request, _ in
-                    snapshot.save(alert: Self.alert(for: request))
-                    return false
-                }
-                snapshot.take(of: panel, model: model)
+                snapshot.take(of: panel, model: model) { [weak self] in self?.snapshotAlert?.contentView }
             }
             return
         }
@@ -609,7 +607,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// user-initiated call gets one (SPEC-045); the model answers background calls without asking.
     private func confirm(_ request: LauncherModel.AlertRequest, origin: CallOrigin) async -> Bool {
         if let answer = origin.unaskedAnswer { return answer }
-        let alert = Self.alert(for: request)
+        let alert = NSAlert()
+        alert.messageText = request.title
+        alert.informativeText = request.message ?? ""
+        let primary = alert.addButton(withTitle: request.primary)
+        primary.hasDestructiveAction = request.destructive
+        alert.addButton(withTitle: request.dismiss)
+        // A snapshot run shows no alert and asks no one: it lays the alert out off-screen for the run to save, and the
+        // answer is no.
+        if Snapshot.isRequested(CommandLine.arguments) {
+            snapshotAlert = SnapshotSheet.laidOut(alert)
+            return false
+        }
         if panel.isVisible {
             return await withCheckedContinuation { continuation in
                 alert.beginSheetModal(for: panel) { [weak self] response in
@@ -826,7 +835,9 @@ struct Snapshot {
 
     /// Renders the panel without showing it: transparent, off-screen and never key,
     /// so taking a snapshot can't catch the user's clicks or keystrokes.
-    func take(of panel: LauncherPanel, model: LauncherModel) {
+    /// When the run ends on a `confirm` (`--query "empty trash" --activate`), `alert` gives the alert it laid out,
+    /// which is saved instead.
+    func take(of panel: LauncherPanel, model: LauncherModel, alert: @escaping @MainActor () -> NSView? = { nil }) {
         panel.alphaValue = 0
         panel.ignoresMouseEvents = true
         panel.allowsOffscreen = true
@@ -867,7 +878,7 @@ struct Snapshot {
             actions || pickDate != nil || !runActions.isEmpty || openDropdown || openTags || openDate || inCommand
         let afterActions = runActions.isEmpty ? 0 : 2.5 + 0.5 * Double(runActions.count) + 0.5
         DispatchQueue.main.asyncAfter(deadline: .now() + max(waits ? 3.5 : activate ? 3 : 1, afterActions)) {
-            guard let view = panel.contentView else { exit(1) }
+            guard let view = alert() ?? panel.contentView else { exit(1) }
             save(view)
         }
     }

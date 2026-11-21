@@ -74,7 +74,7 @@ final class SystemCopyKey: CopyKeyPoster, PasteKeyPoster {
     }
 
     /// What `code` types with ⌘ held in the current keyboard layout.
-    private static func charactersWithCommand(_ code: UInt16) -> String? {
+    static func charactersWithCommand(_ code: UInt16) -> String? {
         guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
             let pointer = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData)
         else { return nil }
