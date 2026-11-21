@@ -99,7 +99,8 @@ private func frame(_ command: WindowCommand, _ visible: CGRect = landscape, curr
 @Test func displaysAreOrderedLeftToRightThenTopToBottom() {
     let above = CGRect(x: 0, y: -1080, width: 1920, height: 1055)
     let left = CGRect(x: -1280, y: 100, width: 1280, height: 775)
-    #expect(WindowLayout.displayOrder([landscape, portrait, above, left]) == [left, above, landscape, portrait])
+    #expect(
+        WindowLayout.displayOrder([landscape, portrait, above, left]) { $0 } == [left, above, landscape, portrait])
     #expect(WindowLayout.neighbour(of: 0, among: 3, forward: true) == 1)
     #expect(WindowLayout.neighbour(of: 2, among: 3, forward: true) == 0)
     #expect(WindowLayout.neighbour(of: 0, among: 3, forward: false) == 2)

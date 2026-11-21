@@ -91,9 +91,9 @@ public enum WindowLayout {
                 height: height))
     }
 
-    /// Screens in the order Next and Previous Display go through: left to right, then top to bottom.
-    public static func displayOrder(_ visibleFrames: [CGRect]) -> [CGRect] {
-        visibleFrames.sorted { ($0.minX, $0.minY) < ($1.minX, $1.minY) }
+    /// Screens in the order Next and Previous Display go through: left to right, then top to bottom, by `frame`.
+    public static func displayOrder<Screen>(_ screens: [Screen], by frame: (Screen) -> CGRect) -> [Screen] {
+        screens.sorted { (frame($0).minX, frame($0).minY) < (frame($1).minX, frame($1).minY) }
     }
 
     /// The screen after (or, `forward` false, before) the one at `index` in `displayOrder`, wrapping around.

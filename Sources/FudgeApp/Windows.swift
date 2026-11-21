@@ -94,6 +94,8 @@ struct SystemWindows: WindowSystem, Sendable {
         switch change {
         case .fullScreen:
             try Self.set(window, Self.fullScreen, kCFBooleanTrue)
+        case .exitFullScreen:
+            try Self.set(window, Self.fullScreen, kCFBooleanFalse)
         case .frame(let position, let size):
             // Size first, so a window that's moving to a smaller place isn't pushed back by its old size; then again
             // after the move, which can change what size the app allows.

@@ -77,6 +77,13 @@ public enum PanelScreen {
             x: bounds.minX, y: primaryHeight - bounds.minY - bounds.height, width: bounds.width, height: bounds.height)
     }
 
+    /// A Cocoa frame (bottom-left origin, such as `NSScreen.visibleFrame`) in the window list's and the Accessibility
+    /// API's top-left coordinates, against the primary screen's height: the same flip as `cocoaFrame`, which is its
+    /// own inverse. Never against another screen's height.
+    public static func topLeftFrame(cocoa frame: CGRect, primaryHeight: CGFloat) -> CGRect {
+        cocoaFrame(windowListBounds: frame, primaryHeight: primaryHeight)
+    }
+
     /// The screen the mouse is on, as `NSMouseInRect` reads a point in an unflipped rect.
     static func withMouse(_ mouse: CGPoint, on screens: [CGRect]) -> Int? {
         screens.firstIndex { mouse.x >= $0.minX && mouse.x < $0.maxX && mouse.y > $0.minY && mouse.y <= $0.maxY }
