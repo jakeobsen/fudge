@@ -72,6 +72,12 @@ final class OnboardingNSWindow: NSWindow {
     override var canBecomeKey: Bool { !refusesKey && super.canBecomeKey }
     override var canBecomeMain: Bool { !refusesKey && super.canBecomeMain }
 
+    /// A snapshot run's window stays where it's put, off every screen, as Settings' does (`SettingsNSWindow`): AppKit
+    /// would otherwise move a titled window back onto one when it's ordered front.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        refusesKey ? frameRect : super.constrainFrameRect(frameRect, to: screen)
+    }
+
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.type == .keyDown, let pressed = AppDelegate.shortcut(for: event),
             WindowShortcut.closesWindow(pressed, recording: isRecording())
@@ -263,6 +269,18 @@ struct OnboardingView: View {
                 Text("The calculator can convert currencies, like 100 usd to eur.")
                 SettingsGroup { CurrencyRatesToggle(model: settings) }
             }
+        case .clipboardHistory:
+            VStack(alignment: .leading, spacing: 14) {
+                title("Clipboard history")
+                Text("Search and paste what you copied, from Clipboard History.")
+                if settings.clipboardHistory {
+                    Text("It's on. You can turn it off in Settings → Clipboard History.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(ClipboardHistory.consentMessage)
+                        .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
         case .done:
             VStack(alignment: .leading, spacing: 14) {
                 title("You're all set")
@@ -271,6 +289,7 @@ struct OnboardingView: View {
                     summary("Accessibility") { Text(settings.accessibility.isTrusted ? "Allowed" : "Not now") }
                     summary("Open at Login") { Text(settings.loginItemState.isOn ? "On" : "Off") }
                     summary("Currency conversion") { Text(settings.currencyRates ? "On" : "Off") }
+                    summary("Clipboard history") { Text(settings.clipboardHistory ? "On" : "Off") }
                 }
                 Text("Change any of these in Settings.").foregroundStyle(.secondary)
             }
@@ -284,6 +303,13 @@ struct OnboardingView: View {
             Button("Get Started") { model.next() }.keyboardShortcut(.defaultAction)
         case .accessibility where !settings.accessibility.isTrusted:
             Button("Not Now") { model.next() }
+        case .clipboardHistory where !settings.clipboardHistory:
+            // An opt-in that records everything copied: ↵ is Not Now, never Keep.
+            Button("Keep Clipboard History") {
+                settings.keepClipboardHistory()
+                model.next()
+            }
+            Button("Not Now") { model.next() }.keyboardShortcut(.defaultAction)
         case .done:
             Button("Start Using Fudge") { model.finish() }.keyboardShortcut(.defaultAction)
         default:
