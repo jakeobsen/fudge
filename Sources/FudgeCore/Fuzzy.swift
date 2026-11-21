@@ -17,7 +17,7 @@ public enum Fuzzy {
         let needle = Array(fold(query).filter { !$0.isWhitespace })
         guard !needle.isEmpty else { return FuzzyMatch(score: 0, positions: []) }
         let original = Array(candidate)
-        let haystack = original.map { Character(fold(String($0))) }
+        let haystack = folded(original, candidate)
         guard needle.count <= haystack.count else { return nil }
 
         // Prefer the alignment that hits word starts: try each word start as the
@@ -80,6 +80,15 @@ public enum Fuzzy {
         let current = text[index]
         if before == " " || before == "-" || before == "_" || before == "." || before == "/" { return true }
         return before.isLowercase && current.isUppercase
+    }
+
+    /// The candidate folded, one Character for each of `characters`, so positions stay those of the candidate.
+    /// Folding the whole string at once is much faster than a Character at a time, and gives the same Characters
+    /// whenever their count doesn't change. A Character that folds into several ("ß" into "ss") keeps the first.
+    private static func folded(_ characters: [Character], _ text: String) -> [Character] {
+        let whole = Array(fold(text))
+        if whole.count == characters.count { return whole }
+        return characters.map { fold(String($0)).first ?? $0 }
     }
 
     private static func fold(_ text: String) -> String {
