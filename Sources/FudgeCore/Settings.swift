@@ -133,6 +133,13 @@ public struct FudgeSettings: Sendable, Equatable {
         extensionStoreConsentAt = on ? ISO8601DateFormatter().string(from: now) : nil
     }
 
+    /// Onboarding's Turn On Extension Store, its consent words having been shown: what the switch and its consent
+    /// sheet write, and the store's Enabled on the Commands page too, so the store is in root search straight away.
+    public mutating func turnOnExtensionStore(now: Date) {
+        setExtensionStore(true, now: now)
+        setEnabled(true, extension: ExtensionStore.extensionName)
+    }
+
     /// The hotkeys to register: those of the commands in `installed` (command ids) that are enabled. Entries for
     /// commands that aren't installed are kept in the file but aren't available.
     public func availableHotkeys(installed: Set<String>) -> [String: HotKeySpec] {

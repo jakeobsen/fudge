@@ -78,6 +78,9 @@ public enum SignInServer: Sendable, Equatable {
     case fudge
     case custom(URL)
 
+    /// What the server is for, under the Sign-in page's choice and onboarding's.
+    public static let explanation = "Extensions sign in to services like GitHub and Linear through this server."
+
     /// Fudge's sign-in server.
     public static let fudgeURL = URL(string: "https://fudge-oauth.rackofpain.net")!
 
