@@ -5,15 +5,23 @@
 
 import { createHash } from "node:crypto";
 import { callApp } from "../bridge.ts";
+import { markNotice, noticeOf } from "../notice.ts";
 import { RAYCAST_ENUMS } from "./raycast-enums.generated.ts";
 import { LEFT_OUT, mark } from "./stubs.ts";
 
-/** What signing in rejects with while sign-in is off (the app says so too, in `oauth.prepare`). */
+/**
+ * What signing in rejects with while sign-in is off, as the app's `oauth.prepare` does (`SignInRefusal.off`), marked
+ * `signInOff` (SPEC-095). It's written to read well where an extension shows it in a toast of its own.
+ */
 export const signInOffMessage =
-    "Sign-in is off. Turn it on in Fudge's Settings → Sign-in, or use a token in this extension's settings (⌘⇧,).";
+    "Sign-in is off. This extension needs to sign in with OAuth to work. " +
+    "Turn on sign-in in Fudge's settings, or, if it takes a token, set it in its settings.";
 
-/** The message of the last refused sign-in in this worker, if any. */
-let refusal: string | null = null;
+/** The notice kind of a refusal while sign-in is off (`notice.ts`). */
+export const signInOffNotice = "signInOff";
+
+/** The last refused sign-in in this worker, if any: its message, and its notice when the app refused on purpose. */
+let refusal: { message: string; notice?: string } | null = null;
 
 /**
  * The error a view command's render reports, explained. `withAccessToken` suspends on its sign-in, and when that's
@@ -26,20 +34,22 @@ export function explainRenderError(error: unknown): unknown {
     const loop = error.message.includes("async Client Component") || /\berrors\/482\b|error #482\b/.test(error.message);
     if (!loop) return error;
     // Once: a later, unrelated #482 isn't the sign-in's.
-    const message = refusal;
+    const { message, notice } = refusal;
     refusal = null;
-    return new Error(message);
+    const explained = new Error(message);
+    return notice === undefined ? explained : markNotice(explained, notice);
 }
 
-/** Runs a call to the app, remembering a rejection's message for `explainRenderError`. */
+/** Runs a call to the app, remembering a rejection's message and notice for `explainRenderError`. */
 async function signInStep<T>(call: () => Promise<T>): Promise<T> {
     try {
         const result = await call();
         refusal = null;
         return result;
     } catch (error) {
-        refusal = error instanceof Error ? error.message : String(error);
-        throw error instanceof Error ? error : new Error(refusal);
+        const message = error instanceof Error ? error.message : String(error);
+        refusal = { message, notice: noticeOf(error)?.notice };
+        throw error instanceof Error ? error : new Error(message);
     }
 }
 

@@ -22,6 +22,7 @@ import { NavigationRoot, type NavigationHandle } from "./api/navigation.ts";
 import { recordRender } from "./api/render.ts";
 import { callApp, connect, holdWhilePending, settle } from "./bridge.ts";
 import { createFudgeAppModule } from "./fudge-app.ts";
+import { errorReport } from "./notice.ts";
 import { revive, type CommandMode, type HostToWorker, type LaunchProps, type WorkerMessage } from "./protocol.ts";
 import { createRoot, StaleCallbackError, type Root } from "./renderer/root.ts";
 
@@ -58,9 +59,9 @@ internals._load = function (request, parent, isMain) {
     return load.call(this, request, parent, isMain);
 };
 
+/** Reports an error to the app; one refused on purpose carries its notice (`errorReport`). */
 function report(error: unknown, fatal: boolean): void {
-    const failure = error instanceof Error ? error : new Error(String(error));
-    post({ type: "error", message: failure.message, stack: failure.stack, fatal });
+    post(errorReport(error, fatal));
 }
 
 // Dependencies' deprecation warnings (e.g. Node's punycode module) are noise to the user.
@@ -142,7 +143,7 @@ port.on("message", (message: HostToWorker) => {
             post({ type: "exit", reason: "unloaded" });
             return;
         case "rpcResult":
-            settle(message.id, message.result, message.error);
+            settle(message.id, message.result, message.error, message.notice);
             return;
         case "toastAction":
             try {

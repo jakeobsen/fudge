@@ -172,8 +172,8 @@ private let textEdit = FrontmostApplication(pid: 200, bundleIdentifier: "com.app
     #expect(AccessibilitySettingsAlert.title == "Allow Fudge to use Accessibility")
     #expect(
         AccessibilitySettingsAlert.text
-            == "Fudge needs Accessibility permission to read the selected text, to paste and to move windows. Turn Fudge "
-            + "on in System "
+            == "Fudge needs Accessibility permission to read the selected text, to paste, to move windows and to lock "
+            + "the screen. Turn Fudge on in System "
             + "Settings → Privacy & Security → Accessibility. If Fudge is already in the list, select it, remove it "
             + "with −, and add it again with +. An older build of Fudge can leave an entry that no longer matches.")
     #expect(AccessibilitySettingsAlert.openButton == "Open Accessibility Settings")

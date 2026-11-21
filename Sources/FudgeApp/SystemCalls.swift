@@ -31,6 +31,12 @@ enum SystemCalls {
     private static let gate = AccessibilityGate(
         access: accessibility, offerSettings: { accessibilitySettingsOffer?.offer(origin: $0) })
     private static let keys = SystemCopyKey()
+
+    /// Whether Fudge may post key events for one of its own commands, which the user started: the same gate as
+    /// reading the selection and pasting, so the prompt and the offer still show at most once per run.
+    static func mayPostKeysForUser() -> Bool {
+        gate.isTrusted(origin: .userInitiated)
+    }
     private static let pasteboard = SystemPasteboard()
     /// Shared by pasting and reading the selection's ⌘C fallback, so neither snapshots the pasteboard while the
     /// other's content is on it. Clipboard history asks them which changes were Fudge's own.

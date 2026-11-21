@@ -320,6 +320,34 @@ test("a toast's action runs when the app sends toastAction", async () => {
     await host.close();
 });
 
+test("a refusal on purpose comes back as a notice, through the extension's own wrapping (SPEC-095)", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "so", entry: fixture("sign-in-off.cjs"), mode: "no-view" });
+    const prepare = await host.next(of("so", "rpc"));
+    assert.equal(prepare.method, "oauth.prepare");
+    const refusal = "Sign-in is off. This extension needs to sign in with OAuth to work.";
+    host.send({ type: "rpcResult", session: "so", id: prepare.id, error: refusal, notice: "signInOff" });
+    const error = await host.next(of("so", "error"));
+    assert.deepEqual(
+        { message: error.message, fatal: error.fatal, notice: error.notice },
+        { message: refusal, fatal: true, notice: "signInOff" },
+    );
+    assert.match(String(error.stack), /Couldn't search repositories/, "the stack, for the log, is the extension's error");
+    assert.equal((await host.next(of("so", "exit"))).reason, "crashed");
+    await host.close();
+});
+
+test("a refusal the app gives no notice is a failure as before", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "sf", entry: fixture("sign-in-off.cjs"), mode: "no-view" });
+    const prepare = await host.next(of("sf", "rpc"));
+    host.send({ type: "rpcResult", session: "sf", id: prepare.id, error: "Fudge can't sign in to GitHub yet." });
+    const error = await host.next(of("sf", "error"));
+    assert.equal(error.message, "Couldn't search repositories");
+    assert.equal("notice" in error, false);
+    await host.close();
+});
+
 test("the extension and the renderer share one React", async () => {
     const host = start();
     host.send({ type: "launch", session: "r", entry: fixture("same-react.cjs"), mode: "view" });

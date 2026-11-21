@@ -187,7 +187,8 @@ import Testing
     #expect(PreparedSignIn.provider(for: github, providerName: "GitHub", server: .off).failure == .off)
     #expect(
         SignInRefusal.off.message
-            == "Sign-in is off. Turn it on in Fudge's Settings → Sign-in, or use a token in this extension's settings (⌘⇧,)."
+            == "Sign-in is off. This extension needs to sign in with OAuth to work. Turn on sign-in in Fudge's settings, "
+            + "or, if it takes a token, set it in its settings."
     )
     let unknown = PreparedSignIn.provider(for: "https://example.com/oauth", providerName: "Example", server: .fudge)
     #expect(unknown.failure == .unknownProvider("Example"))

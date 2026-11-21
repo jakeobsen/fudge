@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 import { callApp, connect, holdWhilePending, settle, type RpcRequest } from "../src/bridge.ts";
+import { noticeOf } from "../src/notice.ts";
 
 afterEach(() => {
     connect(null);
@@ -23,6 +24,18 @@ test("an error from the app rejects the call", async () => {
     const answer = callApp("alert.confirm");
     settle(sent[0]!.id, undefined, "the user closed the window");
     await assert.rejects(answer, /the user closed the window/);
+});
+
+test("a refusal on purpose rejects with the app's notice marked on the error", async () => {
+    const sent: RpcRequest[] = [];
+    connect((request) => sent.push(request));
+    const refused = callApp("oauth.prepare");
+    const plain = callApp("oauth.prepare");
+    settle(sent[0]!.id, undefined, "Sign-in is off.", "signInOff");
+    settle(sent[1]!.id, undefined, "Fudge can't sign in to X yet.");
+    const error = await refused.catch((e: unknown) => e);
+    assert.deepEqual(noticeOf(error), { notice: "signInOff", message: "Sign-in is off." });
+    assert.equal(noticeOf(await plain.catch((e: unknown) => e)), undefined);
 });
 
 test("calls fail cleanly when the bridge isn't connected", async () => {

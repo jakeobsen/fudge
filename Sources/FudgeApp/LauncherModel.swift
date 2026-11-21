@@ -13,11 +13,13 @@ final class LauncherModel {
         /// Set when it's a notice rather than an error, like the Extension Store's "off" view.
         var notice: Notice?
 
-        /// A notice is drawn like an empty view. Its actions take Back's place (↵ runs the first, ⌘K lists them),
-        /// and ⌘⇧, opens `extensionName`'s settings.
+        /// A notice is drawn like an empty view: `symbol`, the title and the message. Its actions take Back's place
+        /// (↵ runs the first, ⌘K lists them, and their shortcuts work), and ⌘⇧, opens `extensionName`'s settings.
         struct Notice: Equatable {
             var extensionName: String
             var actions: [ActionSection]
+            /// An SF Symbol.
+            var symbol = "puzzlepiece.extension"
         }
 
         /// What opening the Extension Store shows while it's off (`ExtensionStore.isOff`), in place of the store.
@@ -166,6 +168,8 @@ final class LauncherModel {
     /// Asks the user to confirm (title, message, primary, dismiss, destructive); set by the app delegate.
     /// Asks the user, for a call from `origin`; a background call gets `CallOrigin.unaskedAnswer` without an alert.
     @ObservationIgnored var confirm: (AlertRequest, CallOrigin) async -> Bool = { _, _ in false }
+    /// The system's part of the System commands. `AppDelegate` gives snapshot runs inert ones, which do nothing.
+    @ObservationIgnored var systemActions: any SystemActions = MacSystemActions()
 
     /// "Sign in to <provider>" on screen, over whatever the command shows (SPEC-056).
     private(set) var signIn: SignInPrompt?
@@ -176,6 +180,8 @@ final class LauncherModel {
     /// Each session's latest `oauth.prepare` and the one the prompt shows, with their loopback listeners, and the relay
     /// sign-ins pending (`SignInCalls.pending`).
     @ObservationIgnored private var signInRequests = SignInRequests<OAuthLoopback>()
+    /// `node --version` per binary, read off the main actor (SPEC-084).
+    @ObservationIgnored private let nodeVersions = NodeVersionCache()
     /// The user's answer to the prompt on screen: true for ↵, false for Esc or the command going away.
     @ObservationIgnored private var signInAnswer: CheckedContinuation<Bool, Never>?
 
@@ -287,6 +293,8 @@ final class LauncherModel {
             log: { [weak self] session, level, message in self?.log(session, level, message) }
         )
         reload()
+        // The extension host's first start shouldn't wait for `node --version` (SPEC-084).
+        if let node = Runtime.locateNode() { warmNodeVersion(node) }
     }
 
     /// Clear Search History: root search forgets which results were opened, in memory and in `history.json`.
@@ -1548,7 +1556,38 @@ final class LauncherModel {
             showQuicklinkForm(QuicklinkDraft(editing: quicklink))
         case .deleteQuicklink(let id):
             deleteQuicklink(id)
+        case .openSignInSettings:
+            showSettings(extension: SettingsModel.signInPage)
+        case .retryCommand(let id):
+            retryCommand(id)
         }
+    }
+
+    // MARK: - Sign-in notices
+
+    /// The notice for an error `session` reported as refused on purpose (SPEC-095), or nil for any other error.
+    private func signInNotice(_ notice: String?, message: String, session: String) -> SignInNotice? {
+        guard notice != nil else { return nil }
+        let name = sessionExtensions[session] ?? ""
+        return SignInNotice(
+            notice: notice, message: message, extensionName: name,
+            extensionTitle: extensions[name]?.manifest.title ?? "",
+            commandID: sessionCommands[session].map { FudgeSettings.commandID(extension: name, command: $0) })
+    }
+
+    /// Try Again, on a cancelled or refused sign-in's notice: runs the command again as root search would, or shows
+    /// root search with its fields when it has a required argument.
+    private func retryCommand(_ commandID: String) {
+        guard let item = items.first(where: { $0.id == "command:\(commandID)" }) else { return }
+        screen = .root
+        if item.arguments.contains(where: { $0.required == true }) {
+            rootQuery = ""
+            refreshResults()
+            selectedItem = item.id
+            arguments.focus = 0
+            return
+        }
+        open(item)
     }
 
     // MARK: - Quicklinks
@@ -2040,6 +2079,11 @@ final class LauncherModel {
             }
             return handleSettingsKey(pressed)
         case .failure:
+            // A notice's actions' shortcuts, such as ⌘⌥, on "Sign-in is off".
+            if !pressed.modifiers.isEmpty, let entry = ActionPanelReader.action(for: pressed, in: currentActions) {
+                run(entry)
+                return true
+            }
             return handleSettingsKey(pressed)
         case .command(let running):
             guard running.failure == nil else { return handleSettingsKey(pressed) }
@@ -2680,7 +2724,25 @@ final class LauncherModel {
             Task {
                 if let message = await SystemCalls.windowCommand(command) { showHUD(message) }
             }
+        } else if group == BuiltInCommandGroup.system.name, let command = SystemCommand(rawValue: command) {
+            // As the window commands do: the panel goes first, so Hide All Apps, Lock Screen and the rest act on
+            // the Mac as the user left it. A command that asks does it in an alert of its own.
+            if !fromHotkey { searchText = "" }
+            if isVisible() { hide() }
+            let runner = SystemCommandRunner(actions: systemActions, ownPid: ProcessInfo.processInfo.processIdentifier)
+            Task {
+                let message = await runner.run(command) { [weak self] confirmation in
+                    await self?.confirm(Self.alertRequest(confirmation), .userInitiated) ?? false
+                }
+                if let message { showHUD(message) }
+            }
         }
+    }
+
+    private static func alertRequest(_ confirmation: SystemConfirmation) -> AlertRequest {
+        AlertRequest(
+            title: confirmation.title, message: confirmation.message, primary: confirmation.primary,
+            dismiss: confirmation.dismiss, destructive: true)
     }
 
     private func recordLaunch(_ item: RootItem) {
@@ -3026,10 +3088,18 @@ final class LauncherModel {
                 description: "The extension host is missing from Fudge.app. Rebuild it with `make app`.")
         }
         let cli = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/fudge")
-        // Extensions trust the certificates the Mac trusts (SPEC-081), read afresh at each start.
+        // Extensions trust the certificates the Mac trusts (SPEC-081). The Node version comes from the cache, never
+        // read here (SPEC-084): while it isn't known, this start takes the NODE_EXTRA_CA_CERTS path, which works on any
+        // Node, and it's read in the background for the next.
+        let version: String?
+        if case .known(let known) = nodeVersions.cached(node) {
+            version = known
+        } else {
+            version = nil
+            warmNodeVersion(node)
+        }
         let trust = NodeTrust.launch(
-            nodeVersion: NodeTrust.version(of: node), certificates: SystemTrustSettings.certificates,
-            rootsFile: paths.trustRootsFile)
+            nodeVersion: version, certificates: SystemTrustSettings.certificates, rootsFile: paths.trustRootsFile)
         let host = try ExtensionHost(
             node: node, script: script, nodeArguments: trust.arguments,
             environment: ExtensionStore.hostEnvironment(
@@ -3037,11 +3107,28 @@ final class LauncherModel {
             ).merging([OAuthProviders.environmentKey: OAuthProviders.environmentValue]) { _, new in new }
                 .merging(trust.environment) { _, new in new })
         self.host = host
+        let startedWithFlag = trust.arguments.contains(NodeTrust.systemCAFlag)
+        let started = ContinuousClock.now
         Task { [weak self] in
-            for await message in host.messages { self?.receive(message) }
+            var heard = false
+            for await message in host.messages {
+                heard = true
+                self?.receive(message)
+            }
+            // A host that ends at once, saying nothing, on `--use-system-ca`: its Node refused the flag (a version
+            // manager's shim can change Node underneath), so the next start takes the other path.
+            if startedWithFlag, !heard, ContinuousClock.now - started < .seconds(5) {
+                self?.nodeVersions.refuseSystemCA(node)
+            }
             self?.hostStopped(host)
         }
         return host
+    }
+
+    /// Reads the Node version in the background, for the next host start.
+    private func warmNodeVersion(_ node: URL) {
+        let versions = nodeVersions
+        Task.detached(priority: .utility) { versions.load(node) }
     }
 
     private func send(_ message: AppMessage) {
@@ -3057,7 +3144,7 @@ final class LauncherModel {
             return
         }
         switch message {
-        case .pop(let session), .unload(let session), .slots(let session, _), .rpcResult(let session, _, _, _),
+        case .pop(let session), .unload(let session), .slots(let session, _), .rpcResult(let session, _, _, _, _),
             .toastAction(let session, _, _):
             if Self.builtInSessions.contains(session) { return }
         default:
@@ -3122,7 +3209,7 @@ final class LauncherModel {
             case .render, .eventSettled:
                 menuBar.handle(message)
                 return
-            case .error(_, let text, let stack, _):
+            case .error(_, let text, let stack, _, _):
                 menuBar.handle(message)
                 log(session, "error", stack ?? text)
                 return
@@ -3190,22 +3277,30 @@ final class LauncherModel {
             screen = .command(command)
             settleHeldKey()
 
-        case .error(let session, let message, let stack, let fatal):
+        case .error(let session, let message, let stack, let fatal, let notice):
+            // Refused on purpose (SPEC-095), such as signing in while sign-in is off: a notice, never a trace.
+            let signIn = signInNotice(notice, message: message, session: session)
             if var quiet = quietSessions[session] {
                 // A background launch: the panel stays as it is, and the failure shows in the HUD, once.
                 let alreadySaid = quiet.unasked.contains { message.contains($0) }
-                if !quiet.failed, !alreadySaid { showHUD("\(quiet.title) failed — \(message)") }
+                if !quiet.failed, !alreadySaid { showHUD(signIn?.hud ?? "\(quiet.title) failed — \(message)") }
                 quiet.failed = true
                 quietSessions[session] = quiet
             } else if case .command(var command) = screen, command.session == session {
-                if fatal {
+                if fatal, let signIn {
+                    // The command can't go on: the notice takes its place, as the store's "off" one does.
+                    leaveCommand()
+                    screen = .failure(Failure(signIn, extensionName: command.extensionName))
+                } else if fatal {
                     command.failure = Failure(title: "\(command.title) failed", message: message, details: stack)
                     screen = .command(command)
                 } else {
-                    status = "Error: \(message)"
+                    status = signIn?.hud ?? "Error: \(message)"
                 }
             } else if let title = background[session] {
-                screen = .failure(Failure(title: "\(title) failed", message: message, details: stack))
+                screen = .failure(
+                    signIn.map { Failure($0, extensionName: sessionExtensions[session] ?? "") }
+                        ?? Failure(title: "\(title) failed", message: message, details: stack))
             }
             log(session, "error", stack ?? message)
 
@@ -3319,7 +3414,10 @@ final class LauncherModel {
                         let result = try await signInCall(method, params, session: session, origin: origin)
                         send(.rpcResult(session: session, id: id, result: result, error: nil))
                     } catch let refusal as SignInRefusal {
-                        send(.rpcResult(session: session, id: id, result: nil, error: refusal.message))
+                        send(
+                            .rpcResult(
+                                session: session, id: id, result: nil, error: refusal.message,
+                                notice: refusal.notice?.rawValue))
                     } catch {
                         send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
                     }
@@ -3691,5 +3789,14 @@ final class LauncherModel {
             return workspace.icon(forFile: app.path)
         }
         return NSImage(systemSymbolName: "link", accessibilityDescription: nil)!
+    }
+}
+
+extension LauncherModel.Failure {
+    /// A sign-in notice (SPEC-095), drawn like the store's "off" notice: no trace, and nothing red.
+    init(_ notice: SignInNotice, extensionName: String) {
+        self.init(
+            title: notice.title, message: notice.message,
+            notice: Notice(extensionName: extensionName, actions: notice.actions, symbol: "person.badge.key"))
     }
 }
