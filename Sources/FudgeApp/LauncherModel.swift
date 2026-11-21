@@ -95,6 +95,7 @@ final class LauncherModel {
             builtInFormLeft()
             dropHeldKeyIfLeft()
             switchWindowsLeft()
+            menuItemsLeft()
         }
     }
     private(set) var results: [RootItem] = []
@@ -551,6 +552,7 @@ final class LauncherModel {
     func panelHidden() {
         hold(nil)
         switchWindowsHidden()
+        menuItemsHidden()
     }
 
     /// The panel was just shown.
@@ -563,6 +565,8 @@ final class LauncherModel {
         }
         // Switch Windows reads the windows again each time it's shown.
         if windowListStale, switchWindowsOnScreen { readWindows(selectFirst: true) }
+        // Search Menu Items reads the menus of the app the user is in now.
+        if menuItemsStale, menuItemsOnScreen { readMenuItems() }
         restoreKeyboard()
     }
 
@@ -1716,11 +1720,11 @@ final class LauncherModel {
         }
     }
 
-    /// The sessions of Fudge's own views, its forms, Search Snippets, Switch Windows and My Schedule, which never
-    /// reach the host.
+    /// The sessions of Fudge's own views, its forms, Search Snippets, Switch Windows, Search Menu Items and My
+    /// Schedule, which never reach the host.
     static let builtInSessions: Set<String> = [
         QuicklinkForm.session, SnippetForm.session, SnippetList.session, SwitchWindowsList.session, LayoutForm.session,
-        ScheduleList.session,
+        MenuItemsList.session, ScheduleList.session,
     ]
 
     @ObservationIgnored private var builtInForm: BuiltInFormState?
@@ -2484,6 +2488,205 @@ final class LauncherModel {
         }
     }
 
+    // MARK: - Search Menu Items
+
+    /// Where Search Menu Items reads menus: the system's, or a snapshot run's made-up ones (`--menu-items`). The app
+    /// delegate sets it.
+    @ObservationIgnored var menuItemsAccess: any MenuItemsAccess = NoMenuItemsAccess()
+    /// The app whose menus are on screen, and the read its rows come from, whose actions name them by place
+    /// (`MenuItemsList.target`). Both go when the list goes or the panel hides.
+    @ObservationIgnored private var menuTarget: MenuTarget?
+    @ObservationIgnored private var menuListing: MenuItemsListing?
+    /// Each app's last read, shown at once the next time and read again meanwhile. In memory for the run only.
+    @ObservationIgnored private var menuCache = MenuItemsCache<MenuItemsListing>()
+    /// Counts reads, so only the latest one is drawn.
+    @ObservationIgnored private var menuReads = 0
+    /// The panel hid with Search Menu Items on screen: the menus are read again when it shows.
+    @ObservationIgnored private var menuItemsStale = false
+    /// A row's item is being found to run: another ↵ meanwhile (a key repeat) runs nothing, so it's pressed once.
+    @ObservationIgnored private var findingMenuItem = false
+    /// Moves on when the panel hides or the list goes, so a run still finding its item then does nothing.
+    @ObservationIgnored private var menuItemsGeneration = MenuItemsGeneration()
+
+    private var menuItemsOnScreen: Bool {
+        if case .command(let command) = screen { return command.session == MenuItemsList.session }
+        return false
+    }
+
+    /// Search Menu Items from root search, or from its hotkey, which works as a view command's does: it opens it over
+    /// whatever the panel shows (after Pop to Root Search's reset, when that's due), or hides the panel when it's on
+    /// screen already. Only the command's launch is recorded, never anything about a menu item.
+    private func openMenuItems(_ item: RootItem, fromHotkey: Bool) {
+        guard fromHotkey else {
+            recordLaunch(item)
+            showMenuItems()
+            return
+        }
+        resettingFirst {
+            if isVisible(), menuItemsOnScreen {
+                hide()
+                return
+            }
+            recordLaunch(item)
+            if case .command = screen { leaveCommand() }
+            showMenuItems()
+            show()
+        }
+    }
+
+    /// Shows Search Menu Items (FUD-121) for the app the user is in.
+    private func showMenuItems() {
+        actionPanel = nil
+        dropdownPanel = nil
+        datePanel = nil
+        var command = CommandScreen(session: MenuItemsList.session, title: MenuItemsList.title)
+        command.view = MenuItemsList.loading()
+        refreshList(&command, selectFirst: true)
+        screen = .command(command)
+        readMenuItems()
+    }
+
+    /// Reads the frontmost app's menus, off the main thread, and draws them, keeping the search text. Its cached read,
+    /// if any, is drawn at once, and the new one replaces it, the selection staying on the same item. Without
+    /// Accessibility permission, the list says so instead, and the check asks for macOS's prompt or shows Fudge's
+    /// offer as it does for Paste (`AccessibilityGate`).
+    private func readMenuItems() {
+        menuItemsStale = false
+        menuReads += 1
+        let read = menuReads
+        menuListing = nil
+        guard let target = menuItemsAccess.target() else {
+            menuTarget = nil
+            drawMenuItems(MenuItemsList.noApp())
+            return
+        }
+        guard menuItemsAccess.mayRead() else {
+            menuTarget = nil
+            drawMenuItems(MenuItemsList.accessibilityNeeded())
+            return
+        }
+        menuTarget = target
+        if let cached = menuCache.value(for: target.cacheKey) {
+            drawMenuItems(cached, of: target)
+        } else {
+            drawMenuItems(MenuItemsList.loading())
+        }
+        let source = menuItemsAccess.source
+        Task {
+            let result = await Self.offMain { source.read(target, deadline: .milliseconds(1500)) }
+            guard read == menuReads, menuItemsOnScreen else { return }
+            switch result {
+            case .listing(let listing):
+                menuCache.set(listing, for: target.cacheKey)
+                drawMenuItems(listing, of: target)
+            case .noAnswer:
+                // The cached read stays, if there was one: its items are found again by their paths when run.
+                if menuListing == nil { drawMenuItems(MenuItemsList.noAnswer(app: target)) }
+            }
+        }
+    }
+
+    /// Draws a view that has no rows: the first row of whatever comes next is selected.
+    private func drawMenuItems(_ view: UINode) {
+        guard case .command(var command) = screen, command.session == MenuItemsList.session else { return }
+        command.view = view
+        refreshList(&command, selectFirst: true)
+        screen = .command(command)
+    }
+
+    /// Draws `listing`'s rows. When it replaces rows on screen, the selection stays on the same item, where it's
+    /// still there and shown.
+    private func drawMenuItems(_ listing: MenuItemsListing, of target: MenuTarget) {
+        guard case .command(var command) = screen, command.session == MenuItemsList.session else { return }
+        let previous = menuListing
+        menuListing = listing
+        if let previous, previous.rows == listing.rows, previous.complete == listing.complete { return }
+        let selected = command.selectedNode.flatMap { node in
+            command.list?.items.first { $0.id == node }?.itemId.flatMap(Int.init)
+        }
+        command.view = MenuItemsList.view(rows: listing.rows, app: target, complete: listing.complete)
+        refreshList(&command, selectFirst: previous == nil)
+        if let previous, let selected,
+            let place = MenuItemsList.place(of: selected, in: previous.rows, among: listing.rows),
+            command.list?.items.contains(where: { $0.id == MenuItemsList.itemNode(place) }) == true
+        {
+            command.selectedNode = MenuItemsList.itemNode(place)
+        }
+        screen = .command(command)
+    }
+
+    /// The panel is hiding with Search Menu Items on screen: its read goes, and the list shows as loading until the
+    /// menus are read again when the panel shows, perhaps another app's.
+    private func menuItemsHidden() {
+        guard menuItemsOnScreen else { return }
+        menuItemsGeneration.dismissed()
+        menuItemsStale = true
+        menuReads += 1
+        menuTarget = nil
+        menuListing = nil
+        drawMenuItems(MenuItemsList.loading())
+    }
+
+    /// The screen changed: once Search Menu Items is gone, its read goes too, and one still running is dropped.
+    private func menuItemsLeft() {
+        guard !menuItemsOnScreen, menuListing != nil || menuTarget != nil || menuItemsStale else { return }
+        menuItemsGeneration.dismissed()
+        menuReads += 1
+        menuTarget = nil
+        menuListing = nil
+        menuItemsStale = false
+    }
+
+    /// One of its actions, as `send` hands it over. ↵ on a row finds its item first, with the panel still up: the one
+    /// read, else the one at the same path, once (`MenuItemsListing.item`). Found, the panel hides, the app is made
+    /// active if it isn't, and the item is pressed. Nothing about the item is recorded.
+    private func menuItemsAction(node: Int) {
+        guard menuItemsOnScreen, let action = MenuItemsList.target(of: node, rows: menuListing?.rows.count ?? 0)
+        else { return }
+        switch action {
+        case .openAccessibilitySettings:
+            hide()
+            NSWorkspace.shared.open(AccessibilitySettingsAlert.paneURL)
+        case .tryAgain:
+            readMenuItems()
+        case .run(let row):
+            guard let listing = menuListing, let target = menuTarget, !findingMenuItem else { return }
+            findingMenuItem = true
+            let generation = menuItemsGeneration
+            Task {
+                let outcome = await MenuItemRun.run(
+                    find: { await Self.offMain { listing.item(row: row, in: target.pid) } },
+                    // Still the list the run came from, on screen: the panel hasn't hidden and the list hasn't gone.
+                    isCurrent: { menuItemsGeneration == generation && menuItemsOnScreen && isVisible() },
+                    hide: {
+                        hide()
+                        // A turn for the panel to be gone, so the app's own window has the keyboard back first.
+                        await withCheckedContinuation { continuation in
+                            DispatchQueue.main.async { continuation.resume() }
+                        }
+                        try? await Task.sleep(for: .milliseconds(50))
+                    },
+                    activate: { await menuItemsAccess.activate(target) },
+                    press: { press in await Self.offMain { press() } })
+                findingMenuItem = false
+                switch outcome {
+                case .pressed(.pressed), .pressed(.noAnswer), .dismissed:
+                    // No answer in time can mean the item opened a dialog, which holds the answer back.
+                    break
+                case .pressed(.gone):
+                    showHUD(MenuItemsList.gone)
+                case .pressed(.failed):
+                    showHUD("\(target.name) didn't run that menu item.")
+                case .gone:
+                    showFailureToast(MenuItemsList.gone)
+                    if menuListing === listing { readMenuItems() }
+                case .noAnswer:
+                    showFailureToast("\(target.name) didn't answer")
+                }
+            }
+        }
+    }
+
     // MARK: - Quick Look
 
     /// The view on screen, as Quick Look tells views apart: the command's session and how deep it is.
@@ -2889,6 +3092,10 @@ final class LauncherModel {
     private func runBuiltIn(_ item: RootItem, group: String, command: String, fromHotkey: Bool) {
         if group == BuiltInCommandGroup.windowManagement.name, command == SwitchWindowsList.commandName {
             openSwitchWindows(item, fromHotkey: fromHotkey)
+            return
+        }
+        if group == BuiltInCommandGroup.apps.name, command == MenuItemsList.commandName {
+            openMenuItems(item, fromHotkey: fromHotkey)
             return
         }
         recordLaunch(item)
@@ -3380,6 +3587,8 @@ final class LauncherModel {
                 snippetListAction(node: node)
             } else if session == SwitchWindowsList.session, path == ["onAction"] {
                 switchWindowsAction(node: node)
+            } else if session == MenuItemsList.session, path == ["onAction"] {
+                menuItemsAction(node: node)
             } else if session == ScheduleList.session, path == ["onAction"] {
                 scheduleListAction(node: node)
             }
