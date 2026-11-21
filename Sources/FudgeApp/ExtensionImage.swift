@@ -77,6 +77,13 @@ enum ExtensionImages {
     }
 
     private static func content(for source: String, assets: URL?, dark: Bool) -> ResolvedImage.Content? {
+        // A `data:` image, such as @raycast/utils' provider icons (SVG).
+        if source.hasPrefix("data:") {
+            if let cached = cache[source] { return .bitmap(cached) }
+            guard let (_, data) = DataURL.image(source), let image = NSImage(data: data) else { return nil }
+            cache[source] = image
+            return .bitmap(image)
+        }
         if RemoteImageURL.isURL(source) {
             // The placeholder shows while it loads; a failed one gives way to the fallback.
             let entry = RemoteImages.shared.entry(for: source)

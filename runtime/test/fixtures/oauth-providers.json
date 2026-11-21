@@ -1,0 +1,51 @@
+[
+    {
+        "authorizeURL": "https://github.oauth.raycast.com/authorize",
+        "id": "github",
+        "name": "GitHub",
+        "refreshURL": "https://github.oauth.raycast.com/refresh-token",
+        "tokenURL": "https://github.oauth.raycast.com/token"
+    },
+    {
+        "authorizeURL": "https://linear.oauth.raycast.com/authorize",
+        "id": "linear",
+        "name": "Linear",
+        "refreshURL": "https://linear.oauth.raycast.com/refresh-token",
+        "tokenURL": "https://linear.oauth.raycast.com/token"
+    },
+    {
+        "authorizeURL": "https://slack.oauth.raycast.com/authorize",
+        "id": "slack",
+        "name": "Slack",
+        "refreshURL": "https://slack.oauth.raycast.com/refresh-token",
+        "tokenURL": "https://slack.oauth.raycast.com/token"
+    },
+    {
+        "authorizeURL": "https://asana.oauth.raycast.com/authorize",
+        "id": "asana",
+        "name": "Asana",
+        "refreshURL": "https://asana.oauth.raycast.com/refresh-token",
+        "tokenURL": "https://asana.oauth.raycast.com/token"
+    },
+    {
+        "authorizeURL": "https://accounts.google.com/o/oauth2/v2/auth",
+        "id": "google",
+        "name": "Google",
+        "refreshURL": "https://oauth2.googleapis.com/token",
+        "tokenURL": "https://oauth2.googleapis.com/token"
+    },
+    {
+        "authorizeURL": "https://auth.atlassian.com/authorize",
+        "id": "jira",
+        "name": "Jira",
+        "refreshURL": "https://auth.atlassian.com/oauth/token",
+        "tokenURL": "https://auth.atlassian.com/oauth/token"
+    },
+    {
+        "authorizeURL": "https://zoom.us/oauth/authorize",
+        "id": "zoom",
+        "name": "Zoom",
+        "refreshURL": "https://zoom.us/oauth/token",
+        "tokenURL": "https://zoom.us/oauth/token"
+    }
+]
