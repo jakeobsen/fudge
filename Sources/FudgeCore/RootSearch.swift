@@ -53,6 +53,8 @@ public struct RootItem: Sendable, Equatable, Identifiable {
     public var alias: String?
     /// Matched like the subtitle, but never shown: a quicklink's link.
     public var secondaryText: String?
+    /// One of Fudge's own commands' hand-off word (`BuiltInCommand.handOffWord`).
+    public var handOffWord: String?
 
     public init(
         id: String,
@@ -62,7 +64,8 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         keywords: [String] = [],
         kind: Kind,
         iconFile: URL? = nil,
-        arguments: [ExtensionManifest.Argument] = []
+        arguments: [ExtensionManifest.Argument] = [],
+        handOffWord: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -72,6 +75,7 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         self.kind = kind
         self.iconFile = iconFile
         self.arguments = arguments
+        self.handOffWord = handOffWord
     }
 
     public static func application(at url: URL, title: String) -> RootItem {
@@ -177,7 +181,9 @@ public struct RootItem: Sendable, Equatable, Identifiable {
                 subtitle: group.title,
                 extensionTitle: group.title,
                 keywords: command.keywords,
-                kind: .builtInCommand(group: group.name, command: command.name)
+                kind: .builtInCommand(group: group.name, command: command.name),
+                arguments: command.arguments,
+                handOffWord: command.handOffWord
             )
         }
     }

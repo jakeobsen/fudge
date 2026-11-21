@@ -333,8 +333,9 @@ private actor Copies {
     #expect(BuiltInCommandGroup.all.contains(tools))
     #expect(BuiltInCommandGroup.isValidName(tools.name))
     #expect(tools.title == "Tools")
-    #expect(tools.commands.map(\.title) == ["Pick Color", "Recent Colors"])
-    #expect(tools.commands.map(tools.commandID) == [":tools/pick-color", ":tools/recent-colors"])
+    #expect(tools.commands.map(\.title) == ["Pick Color", "Recent Colors", "Define Word"])
+    #expect(
+        tools.commands.map(tools.commandID) == [":tools/pick-color", ":tools/recent-colors", ":tools/define-word"])
     #expect(BuiltInCommandGroup.command(group: ":tools", command: "pick-color")?.command.symbol == "eyedropper")
 }
 

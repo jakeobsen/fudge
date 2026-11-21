@@ -541,3 +541,22 @@ private func latest(_ tag: String) -> Result<Data?, any Error> {
     #expect(checking.details(locale: enUS, timeZone: utc).count == 1, "the old failure isn't shown while checking")
     #expect(UpdateStatus(lastCheck: now, available: release("v0.9.0")).headline == "Fudge 0.9.0 is available")
 }
+
+// MARK: - "Not Chosen" while unset (FUD-135 §3)
+
+@Test func thePopupSaysNotChosenOnlyWhileNothingIsChosen() throws {
+    let unset = UpdateCheckSetting.popupOptions(current: nil)
+    #expect(unset.map(\.1) == ["Not Chosen", "Daily", "Weekly", "Monthly", "Never"])
+    #expect(unset.first?.0 == nil, "it stands for no choice, which checks nothing, as Never does")
+    for chosen in UpdateCheckSetting.allCases {
+        let options = UpdateCheckSetting.popupOptions(current: chosen)
+        #expect(options.map(\.1) == ["Daily", "Weekly", "Monthly", "Never"], "\(chosen): can't go back to Not Chosen")
+        #expect(options.allSatisfy { $0.0 != nil })
+    }
+    // A hand-set value Fudge doesn't know reads as unset, so it shows Not Chosen too.
+    let file = try Fixtures.temporaryDirectory().appendingPathComponent("settings.json")
+    try Data(#"{"updateCheck": "hourly"}"#.utf8).write(to: file)
+    let setting = FudgeSettings.load(from: file).updateCheck
+    #expect(setting == nil)
+    #expect(UpdateCheckSetting.popupOptions(current: setting).first?.1 == "Not Chosen")
+}
