@@ -199,6 +199,22 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
         return createElement(ActionHost, { ...defaults, ...withoutOwn(props), fudgeBuiltIn: "createQuicklink", quicklink: request });
     }
 
+    /**
+     * Opens Fudge's Create Snippet form over the command's view, filled in from `snippet`: its text, its name (else
+     * the command's title) and its keyword. The app performs it itself, so nothing runs in the command; without a text
+     * it only says so when picked.
+     */
+    function CreateSnippet({ snippet, ...props }: Props) {
+        const defaults = { title: "Create Snippet", icon: Icon.Text };
+        const request = snippetRequest(snippet);
+        if (!request) {
+            return action(defaults, props, async () => {
+                await showToast({ style: Toast.Style.Failure, title: "Action.CreateSnippet needs a snippet with a text" });
+            });
+        }
+        return createElement(ActionHost, { ...defaults, ...withoutOwn(props), fudgeBuiltIn: "createSnippet", snippet: request });
+    }
+
     /** An action Fudge can't perform yet: it shows, and says so when picked. */
     const unavailable = (name: string, title: string) => {
         function Unavailable(props: Props) {
@@ -221,7 +237,7 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
         SubmitForm,
         Paste,
         CreateQuicklink,
-        CreateSnippet: unavailable("Action.CreateSnippet", "Create Snippet"),
+        CreateSnippet,
         ToggleQuickLook,
         PickDate: Object.assign(PickDate, { Type: PickDateType, isFullDay }),
         InstallMCPServer: unavailable("Action.InstallMCPServer", "Install MCP Server"),
@@ -248,6 +264,17 @@ export function quicklinkRequest(quicklink: unknown): Props | null {
         }
         request.application = app;
     }
+    return request;
+}
+
+/** What the app reads from `Action.CreateSnippet`'s `snippet`: the text, the name and the keyword. Null without a text. */
+export function snippetRequest(snippet: unknown): Props | null {
+    if (typeof snippet !== "object" || snippet === null) return null;
+    const { text, name, keyword } = snippet as Props;
+    if (typeof text !== "string") return null;
+    const request: Props = { text };
+    if (typeof name === "string") request.name = name;
+    if (typeof keyword === "string") request.keyword = keyword;
     return request;
 }
 

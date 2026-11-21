@@ -1368,6 +1368,11 @@ final class LauncherModel {
             showQuicklinkForm(
                 QuicklinkDraft(request: request, commandTitle: command.title, applications: quicklinkApplications()),
                 over: command)
+        case .createSnippet(let request):
+            guard case .command(let command) = screen, !Self.builtInSessions.contains(command.session) else {
+                return
+            }
+            showSnippetForm(SnippetDraft(request: request, commandTitle: command.title), over: command)
         case .toggleQuickLook:
             toggleQuickLook()
         }

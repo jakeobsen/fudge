@@ -67,3 +67,20 @@ private let saved = [
     #expect(filled == SnippetDraft(id: "x", name: "N", text: "T", keyword: "k"))
     #expect(SnippetForm.title(for: filled) == "Edit Snippet")
 }
+
+@Test func anActionCreateSnippetNodeRunsTheAppsForm() {
+    func node(_ props: [String: JSONValue]) -> UINode {
+        UINode(id: 7, type: "Action", props: props.merging(["title": .string("Create Snippet")]) { a, _ in a })
+    }
+    let snippet = JSONValue.object(["text": .string("Hi {cursor}"), "name": .string("Hi"), "keyword": .string(";hi")])
+    #expect(
+        ActionPanelReader.entry(node(["fudgeBuiltIn": .string("createSnippet"), "snippet": snippet]))?.target
+            == .createSnippet(SnippetRequest(text: "Hi {cursor}", name: "Hi", keyword: ";hi")))
+    #expect(
+        ActionPanelReader.entry(node(["fudgeBuiltIn": .string("createSnippet")]))?.target == .node(7),
+        "without a snippet it's the extension's own action")
+    #expect(
+        ActionPanelReader.entry(
+            node(["fudgeBuiltIn": .string("createSnippet"), "snippet": .object(["name": .string("x")])]))?.target
+            == .node(7))
+}
