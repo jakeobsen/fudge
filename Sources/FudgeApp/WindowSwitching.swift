@@ -188,11 +188,18 @@ struct SystemWindowSwitch: WindowSwitchSystem {
         guard error == .success, let button, CFGetTypeID(button) == AXUIElementGetTypeID() else {
             throw WindowManagementError.failed("This window has no close button.")
         }
-        try Self.check(AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString))
+        // The button is a new element, so it gets the same timeout as the reads: a hung app holds it 2 s, not 6.
+        let close = button as! AXUIElement
+        AXUIElementSetMessagingTimeout(close, SystemWindows.timeout)
+        try Self.check(AXUIElementPerformAction(close, kAXPressAction as CFString))
     }
 
     func terminate(pid: Int32) -> Bool {
         NSRunningApplication(processIdentifier: pid)?.terminate() ?? false
+    }
+
+    func sameWindow(_ one: AXUIElement, _ other: AXUIElement) -> Bool {
+        CFEqual(one, other)
     }
 
     private static func check(_ error: AXError) throws {

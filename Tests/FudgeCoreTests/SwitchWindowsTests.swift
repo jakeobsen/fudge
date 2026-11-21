@@ -382,6 +382,25 @@ private func titles(_ listing: SwitcherListing<Int>) -> [String] {
 
 // MARK: - Made-up windows for snapshots
 
+@Test func afterCloseWindowTheSelectionFollowsItsWindowNotItsPlace() {
+    let system = desk()
+    let before = switcher(system).listing()
+    #expect(before.rows.map(\.title) == ["Start Page", "Notes.txt", "Inbox", "Docs", "Groceries", "Recipes"])
+    // ⌃X on Inbox, then ↓ to Docs, then the re-read arrives without Inbox.
+    #expect(before.close(row: 2) == nil)
+    system.listed.removeAll { $0.number == 13 }
+    system.ax[mail] = [SwitchableWindow(handle: 7, title: "Save?", frame: inbox, standard: false)]
+    let after = switcher(system).listing()
+    #expect(after.rows.map(\.title) == ["Start Page", "Notes.txt", "Docs", "Groceries", "Recipes"])
+    #expect(after.row(sameWindowAs: 3, in: before) == 2, "Docs, not Groceries, which is in Docs' old place")
+    #expect(after.row(sameWindowAs: 4, in: before) == 3)
+    #expect(after.row(sameWindowAs: 0, in: before) == 0)
+    #expect(after.row(sameWindowAs: 2, in: before) == nil, "Inbox is gone, so the selection keeps its place")
+    #expect(after.row(sameWindowAs: 9, in: before) == nil)
+    #expect(WindowListing.empty.row(sameWindowAs: 0, in: before) == nil)
+    #expect(after.row(sameWindowAs: 0, in: .empty) == nil)
+}
+
 @Test func snapshotWindowsAreMadeUpFromTheFile() throws {
     let json = """
         [

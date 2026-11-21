@@ -97,6 +97,12 @@ public protocol WindowSwitchSystem: Sendable {
     func close(_ window: Handle) throws
     /// Asks the app to quit (`NSRunningApplication.terminate()`); false when it can't be asked.
     func terminate(pid: Int32) -> Bool
+    /// Whether two handles are the same window, in two reads (`CFEqual` for Accessibility elements).
+    func sameWindow(_ one: Handle, _ other: Handle) -> Bool
+}
+
+extension WindowSwitchSystem where Handle: Equatable {
+    public func sameWindow(_ one: Handle, _ other: Handle) -> Bool { one == other }
 }
 
 /// The apps most recently made active, the latest first, by pid: in memory, for the run, from the system's notices.
@@ -315,7 +321,12 @@ public struct WindowSwitcher<System: WindowSwitchSystem>: Sendable {
             rows: entries.map(\.row), silentApps: read.silentApps,
             switchTo: { row in entry(row).flatMap(switchTo) },
             close: { row in entry(row).flatMap(close) },
-            quit: { row in entry(row).map(quit) ?? false })
+            quit: { row in entry(row).map(quit) ?? false },
+            window: { row in entry(row).map { $0.handle as Any } },
+            row: { [system] handle in
+                guard let handle = handle as? System.Handle else { return nil }
+                return entries.firstIndex { system.sameWindow($0.handle, handle) }
+            })
     }
 
     /// Each app's answer, set from the threads reading them.
@@ -338,21 +349,35 @@ public final class WindowListing: @unchecked Sendable {
     private let switchToRow: (Int) -> String?
     private let closeRow: (Int) -> String?
     private let quitRow: (Int) -> Bool
+    /// A row's window handle, to find it in a later read; the handle's type stays the system's.
+    private let windowAt: (Int) -> Any?
+    /// The row showing a window handle from another read of the same system, if any.
+    private let rowOfWindow: (Any) -> Int?
 
     init(
         rows: [SwitchWindowsList.Row], silentApps: [String], switchTo: @escaping (Int) -> String?,
-        close: @escaping (Int) -> String?, quit: @escaping (Int) -> Bool
+        close: @escaping (Int) -> String?, quit: @escaping (Int) -> Bool, window: @escaping (Int) -> Any?,
+        row: @escaping (Any) -> Int?
     ) {
         self.rows = rows
         self.silentApps = silentApps
         switchToRow = switchTo
         closeRow = close
         quitRow = quit
+        windowAt = window
+        rowOfWindow = row
     }
 
     /// A listing with nothing in it.
     public static let empty = WindowListing(
-        rows: [], silentApps: [], switchTo: { _ in nil }, close: { _ in nil }, quit: { _ in false })
+        rows: [], silentApps: [], switchTo: { _ in nil }, close: { _ in nil }, quit: { _ in false },
+        window: { _ in nil }, row: { _ in nil })
+
+    /// The row in this read showing the window that `row` showed in `previous`, an earlier read; nil when it's gone.
+    /// After Close Window or Quit App, the list reads again and the selection follows the window it was on.
+    public func row(sameWindowAs row: Int, in previous: WindowListing) -> Int? {
+        previous.windowAt(row).flatMap(rowOfWindow)
+    }
 
     /// Switch to Window on `row`; what went wrong, if anything.
     public func switchTo(row: Int) -> String? { switchToRow(row) }

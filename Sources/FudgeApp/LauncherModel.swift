@@ -2195,8 +2195,9 @@ final class LauncherModel {
     }
 
     /// Reads the windows, off the main thread, and draws them, keeping the search text. `selectFirst` selects the
-    /// first row, for a new look at the list; otherwise the selection stays in its place (after Close Window or Quit
-    /// App). Without Accessibility permission, the list says so instead, and the check asks for macOS's prompt or
+    /// first row, for a new look at the list; otherwise (after Close Window or Quit App) the selection follows the
+    /// window it's on when the new read arrives, or stays in its place when that window is gone. Without
+    /// Accessibility permission, the list says so instead, and the check asks for macOS's prompt or
     /// shows Fudge's offer as it does for Paste (`AccessibilityGate`).
     private func readWindows(selectFirst: Bool) {
         windowListStale = false
@@ -2214,16 +2215,33 @@ final class LauncherModel {
             guard read == windowReads else { return }
             readingWindows = false
             guard switchWindowsOnScreen else { return }
+            // Read now, not when the re-read was asked for: the user may have moved the selection meanwhile.
+            var sameWindow: Int?
+            if !selectFirst, let previous = windowListing, let row = selectedWindowRow {
+                sameWindow = listing.row(sameWindowAs: row, in: previous)
+            }
             windowListing = listing
             drawWindows(
-                SwitchWindowsList.view(rows: listing.rows, silentApps: listing.silentApps), selectFirst: selectFirst)
+                SwitchWindowsList.view(rows: listing.rows, silentApps: listing.silentApps), selectFirst: selectFirst,
+                selectingRow: sameWindow)
         }
     }
 
-    private func drawWindows(_ view: UINode, selectFirst: Bool) {
+    /// The selected row's place in the read on screen.
+    private var selectedWindowRow: Int? {
+        guard case .command(let command) = screen, command.session == SwitchWindowsList.session else { return nil }
+        return command.list?.items.first { $0.id == command.selectedNode }?.itemId.flatMap { Int($0) }
+    }
+
+    /// Draws `view`; `selectingRow` selects that row when it's shown (the search may hide it), else the selection
+    /// goes as `selectFirst` says.
+    private func drawWindows(_ view: UINode, selectFirst: Bool, selectingRow row: Int? = nil) {
         guard case .command(var command) = screen, command.session == SwitchWindowsList.session else { return }
         command.view = view
         refreshList(&command, selectFirst: selectFirst)
+        if let row, let item = command.list?.items.first(where: { $0.itemId == String(row) }) {
+            command.selectedNode = item.id
+        }
         screen = .command(command)
     }
 
@@ -2294,7 +2312,7 @@ final class LauncherModel {
     }
 
     /// After Close Window or Quit App: a moment for the app to do it, then the windows read again, the selection
-    /// staying in its place, unless the list has gone or been read again meanwhile.
+    /// following its window (`readWindows`), unless the list has gone or been read again meanwhile.
     private func readWindowsAgain(after listing: WindowListing) async {
         try? await Task.sleep(for: .milliseconds(400))
         guard switchWindowsOnScreen, windowListing === listing else { return }
