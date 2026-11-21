@@ -24,6 +24,7 @@ jobs:
       contents: read
     outputs:
       signing: ${{ steps.release.outputs.signing }}
+      first: ${{ steps.notes.outputs.first }}
     env:
       TAG: ${{ github.ref_name }}
     steps:
@@ -41,6 +42,13 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+
+      # The first release gets the hand-written .github/first-release-notes.md, and each later one GitHub's generated
+      # notes; scripts/first-release.sh decides, from the whole history (a shallow checkout fails it).
+      - name: Choose the release notes
+        id: notes
+        if: github.event_name == 'push'
+        run: scripts/first-release.sh "$TAG" >> "$GITHUB_OUTPUT"
 
       # No setup-node: the Makefile downloads the Node.js Fudge bundles, checks it against its pinned checksum, and
       # runs every Node step with it, the release build's included.
@@ -82,6 +90,13 @@ jobs:
             build/Fudge-*.dmg.sha256
           if-no-files-found: error
 
+      - if: steps.notes.outputs.first == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: notes
+          path: .github/first-release-notes.md
+          if-no-files-found: error
+
   publish:
     needs: build
     if: github.event_name == 'push'
@@ -91,11 +106,18 @@ jobs:
     env:
       TAG: ${{ github.ref_name }}
       SIGNING: ${{ needs.build.outputs.signing }}
+      FIRST: ${{ needs.build.outputs.first }}
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release
           path: release
+
+      - if: needs.build.outputs.first == 'true'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: notes
+          path: notes
 
       - name: Publish the release
         env:
@@ -114,5 +136,12 @@ jobs:
           else
             notes="This build is signed ad hoc and isn't notarized, so macOS blocks it the first time: open it, then go to System Settings → Privacy & Security and click Open Anyway (on macOS 14, Control-click Fudge and choose Open instead)."
           fi
-          gh release create "$TAG" release/* --repo "$REPO" --verify-tag --title "$TAG" \
-            --notes "$notes" --generate-notes "${prerelease[@]}"
+          if [ "$FIRST" = true ]; then
+            # The first release: the signing note, then the hand-written notes.
+            { printf '%s\n\n' "$notes"; cat notes/first-release-notes.md; } > "$RUNNER_TEMP/notes.md"
+            gh release create "$TAG" release/* --repo "$REPO" --verify-tag --title "$TAG" \
+              --notes-file "$RUNNER_TEMP/notes.md" "${prerelease[@]}"
+          else
+            gh release create "$TAG" release/* --repo "$REPO" --verify-tag --title "$TAG" \
+              --notes "$notes" --generate-notes "${prerelease[@]}"
+          fi

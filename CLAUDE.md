@@ -1130,6 +1130,10 @@ Extensions run in a separate Node.js process, the extension host.
   - **`build`**, with a read-only token: the tag must be `v` and a semantic version (checked through an env var, never `${{ }}` in a script), then `make test`, `scripts/release.sh --tag <tag> --ad-hoc-without-secrets` and a `.sha256`, uploaded as an artifact.
     `--tag` hands the tag to `make app` and `make dmg-image` as `RELEASE_TAG`, never as `VERSION`, so `make release-check` refuses a tag that isn't on the commit.
   - **`publish`** runs only for a pushed tag, and has the only write token, and runs none of the repo's code: it checks the tag again, downloads the artifact and runs `gh release create` with GitHub's generated notes and one line on opening the app, which depends on how `build` signed it (its `signing` output).
+    **The first release** gets that line and the hand-written `.github/first-release-notes.md` instead of generated notes, which would list every pull request so far (SPEC-117 §5).
+    `build` decides it (its `first` output) with `scripts/first-release.sh <tag>`: a tag is the first when no full release (`v1.2.3`, no pre-release suffix) other than itself is in its history (`git tag --merged HEAD`), so `v0.1.0` gets them after a `v0.1.0-rc.1` too.
+    That needs the whole history, so a shallow checkout fails the step rather than guess; `build` then uploads the file as a second artifact, `notes`.
+    The step only runs on a real tag, so `runtime/test/first-release.test.ts` tries the script in throwaway repositories.
     A tag with a pre-release suffix (`v1.2.0-rc.1`) is a pre-release.
   - **Run by hand** (Actions → Release → Run workflow, `workflow_dispatch`), it's the dry run: no tag check, the version `git describe` gives the commit, signed, notarized and stapled, and the disk image as an artifact.
     Nothing is published.
