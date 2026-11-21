@@ -20,6 +20,8 @@ struct SystemWindows: WindowSystem, Sendable {
     /// Each screen's visible frame (no menu bar or Dock) in top-left coordinates, by display id, read with the rest
     /// on the main thread.
     let visibleFrames: [UInt32: CGRect]
+    /// Each screen's name (`NSScreen.localizedName`), by display id.
+    var screenNames: [UInt32: String] = [:]
 
     @MainActor
     static func current() -> SystemWindows {
@@ -33,15 +35,17 @@ struct SystemWindows: WindowSystem, Sendable {
         // never against the screen's own, it lines up with `CGDisplayBounds`.
         let primaryHeight = NSScreen.screens.first?.frame.maxY ?? 0
         var visibleFrames: [UInt32: CGRect] = [:]
+        var screenNames: [UInt32: String] = [:]
         for screen in NSScreen.screens {
             if let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber {
                 visibleFrames[number.uint32Value] = PanelScreen.topLeftFrame(
                     cocoa: screen.visibleFrame, primaryHeight: primaryHeight)
+                screenNames[number.uint32Value] = screen.localizedName
             }
         }
         return SystemWindows(
             frontmost: NSWorkspace.shared.frontmostApplication?.processIdentifier, applications: applications,
-            visibleFrames: visibleFrames)
+            visibleFrames: visibleFrames, screenNames: screenNames)
     }
 
     func listedWindows() -> [ListedWindow] {
@@ -70,7 +74,8 @@ struct SystemWindows: WindowSystem, Sendable {
         guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return [] }
         let main = CGMainDisplayID()
         return ids.prefix(Int(count)).sorted { $0 == main && $1 != main }.map {
-            WindowScreen(id: $0, bounds: CGDisplayBounds($0), visibleBounds: visibleFrames[$0])
+            WindowScreen(
+                id: $0, bounds: CGDisplayBounds($0), visibleBounds: visibleFrames[$0], name: screenNames[$0] ?? "")
         }
     }
 
@@ -100,7 +105,8 @@ struct SystemWindows: WindowSystem, Sendable {
                 fullScreen: (Self.value(window, Self.fullScreen) as? Bool) ?? false,
                 fullScreenSettable: Self.isSettable(window, Self.fullScreen),
                 focused: focused.map { CFEqual($0, window) } ?? false,
-                minimized: (Self.value(window, kAXMinimizedAttribute) as? Bool) ?? false)
+                minimized: (Self.value(window, kAXMinimizedAttribute) as? Bool) ?? false,
+                standard: (Self.value(window, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole)
         }
     }
 
