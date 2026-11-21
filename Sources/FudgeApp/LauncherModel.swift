@@ -2547,25 +2547,49 @@ final class LauncherModel {
     }
 
     /// ↵ runs the primary action, except in a Form, where ↵ belongs to the fields and ⌘↵ submits.
-    var primaryKey: KeyShortcut {
-        command?.form != nil
-            ? KeyShortcut(key: "return", modifiers: ["cmd"]) : KeyShortcut(key: "return", modifiers: [])
-    }
+    var primaryKey: KeyShortcut { LauncherKeys.primaryKey(form: command?.form != nil) }
 
     /// ⌘↵ runs the secondary action; ⌘⇧↵ in a Form.
-    var secondaryKey: KeyShortcut {
-        KeyShortcut(key: "return", modifiers: command?.form != nil ? ["cmd", "shift"] : ["cmd"])
+    var secondaryKey: KeyShortcut { LauncherKeys.secondaryKey(form: command?.form != nil) }
+
+    /// What the launcher shows, for `LauncherKeys`, which decides what a key runs of the view's actions.
+    private var keyState: LauncherKeys.State {
+        var overlay: LauncherKeys.State.Overlay?
+        if signIn != nil {
+            overlay = .signIn
+        } else if actionPanel?.pick != nil {
+            overlay = .datePick
+        } else if actionPanel != nil {
+            overlay = .actionPanel
+        } else if dropdownPanel != nil {
+            overlay = .dropdown
+        }
+        let place: LauncherKeys.State.Place
+        switch screen {
+        case .root: place = .root
+        case .failure: place = .failure
+        case .command(let running):
+            place =
+                running.failure != nil
+                ? .failedCommand
+                : .command(hasSearchField: running.view == nil || running.list != nil, isForm: running.form != nil)
+        }
+        let item = selectedListItem
+        return LauncherKeys.State(
+            place: place, overlay: overlay, actions: currentActions,
+            pendingShortcuts: item?.deferred.contains(.actions) == true ? item?.deferredShortcuts : nil)
     }
 
     /// Keys that the launcher handles itself: ⌘K, the primary and secondary actions' keys, and the actions'
-    /// shortcuts; in views without a search field (Detail, Form) also ↵ and Esc; in root search, the keys of the
-    /// argument fields (`ArgumentInput.handle`) and the root actions' shortcuts; everywhere, ⌘, and ⌘⇧, for the
-    /// Settings window, after the running command's own shortcuts.
+    /// shortcuts, also while the action panel is open; in views without a search field (Detail, Form) also ↵ and
+    /// Esc; in root search, the keys of the argument fields (`ArgumentInput.handle`) and the root actions' shortcuts;
+    /// everywhere, ⌘, and ⌘⇧, for the Settings window, after the running command's own shortcuts. Which action a key
+    /// runs is `LauncherKeys.outcome`'s, which a command hotkey asks too (`pressHotkey`).
     /// Returns false for everything else, which then goes to the focused field.
     func handleKey(_ pressed: KeyShortcut) -> Bool {
         if signIn != nil { return handleSignInKey(pressed) }
         if datePanel != nil, handleDatePanelKey(pressed) { return true }
-        if pressed == KeyShortcut(key: "k", modifiers: ["cmd"]) {
+        if pressed == LauncherKeys.actionPanelKey {
             if actionPanel != nil || !waitForActions(.actionPanel) { toggleActionPanel() }
             return true
         }
@@ -2576,10 +2600,8 @@ final class LauncherModel {
             closeDropdownPanel()
             return true
         }
-        guard actionPanel == nil, dropdownPanel == nil else { return false }
-        let command: CommandScreen
-        switch screen {
-        case .root:
+        let overlaid = actionPanel != nil || dropdownPanel != nil
+        if !overlaid, case .root = screen {
             switch arguments.handle(pressed) {
             case .ignored: break
             case .handled: return true
@@ -2587,49 +2609,48 @@ final class LauncherModel {
                 activate()
                 return true
             }
-            // ↵ stays with the fields, which submit on their own.
-            if !pressed.modifiers.isEmpty, let entry = ActionPanelReader.action(for: pressed, in: currentActions) {
-                run(entry)
-                return true
-            }
-            return handleSettingsKey(pressed)
-        case .failure:
-            // A notice's actions' shortcuts, such as ⌘⌥, on "Sign-in is off".
-            if !pressed.modifiers.isEmpty, let entry = ActionPanelReader.action(for: pressed, in: currentActions) {
-                run(entry)
-                return true
-            }
-            return handleSettingsKey(pressed)
-        case .command(let running):
-            guard running.failure == nil else { return handleSettingsKey(pressed) }
-            command = running
         }
-        let hasSearchField = command.view == nil || command.list != nil
-        if !hasSearchField, pressed == KeyShortcut(key: "escape", modifiers: []) {
+        if !overlaid, let command, command.failure == nil, command.view != nil, command.list == nil,
+            pressed == KeyShortcut(key: "escape", modifiers: [])
+        {
             escape()
             return true
         }
-        if pressed == secondaryKey {
-            if waitForActions(.secondary) { return true }
-            if let secondaryAction { run(secondaryAction) }
-            return true
-        }
-        if !hasSearchField, pressed == primaryKey {
-            if let primaryAction { run(primaryAction) }
-            return true
-        }
-        guard !pressed.modifiers.isEmpty else { return false }
-        // A shortcut of the selected item's actions works before they've come: it waits for them, as ↵ does.
-        if selectedListItem?.waitsForActions(pressed) == true, waitForActions(.shortcut(pressed)) { return true }
-        if let entry = ActionPanelReader.action(for: pressed, in: currentActions) {
+        // The view's actions, the open action panel's included: a notice's (⌘⌥, on "Sign-in is off"), root search's,
+        // and a command's, with a shortcut of the selected item's actions waiting for them before they've come.
+        switch LauncherKeys.outcome(of: pressed, in: keyState) {
+        case .run(let entry):
             run(entry)
             return true
+        case .wait(let key):
+            _ = waitForActions(key)
+            return true
+        case nil:
+            break
         }
+        guard !overlaid else { return false }
+        guard let command, command.failure == nil else { return handleSettingsKey(pressed) }
+        // The primary and secondary keys are the actions' even when there's no such action.
+        let hasSearchField = command.view == nil || command.list != nil
+        if pressed == secondaryKey || (!hasSearchField && pressed == primaryKey) { return true }
+        guard !pressed.modifiers.isEmpty else { return false }
         if pressed == commandP, command.list?.dropdown != nil {
             toggleDropdownPanel()
             return true
         }
         return handleSettingsKey(pressed)
+    }
+
+    /// A command hotkey pressed (SPEC-127): while the launcher holds the keyboard and an action there takes the
+    /// hotkey's keys, those keys run that action as if they'd been pressed in the launcher, and the answer is true,
+    /// so the command doesn't open. False otherwise: the hotkey opens its command as always.
+    func pressHotkey(_ spec: HotKeySpec, launcherHoldsKeyboard: Bool) -> Bool {
+        guard
+            let pressed = LauncherKeys.hotkeyPress(
+                spec, layout: KeyLayout.character(for:), launcherHoldsKeyboard: launcherHoldsKeyboard, in: keyState)
+        else { return false }
+        LauncherLog.note("hotkey \(spec.text) went to the launcher's action: \(LauncherLog.keyboard)")
+        return handleKey(pressed)
     }
 
     /// Tells the command the search text changed; with `throttle`, once typing pauses.

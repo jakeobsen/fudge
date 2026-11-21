@@ -29,6 +29,9 @@ Extensions run in a separate Node.js process, the extension host.
       `HotKeySpec` (core) is the text form (`option+s`, `f5`, `keycode:<n>` for keys with no name), and an F-key may stand alone.
       `FudgeSettings` reads `settings.json` tolerantly, and writes it atomically, keeping keys it doesn't know.
       A pressed command hotkey calls `LauncherModel.openFromHotkey`, which follows `HotKeyLaunch` (core): open it as root search would, hide the panel when it's the view command on screen, or show root search with the fields when a required argument is empty.
+      While the launcher holds the keyboard (`LauncherPanel.holdsKeyboard`), a command hotkey whose keys an action there takes runs that action as the key would, and doesn't open its command (`LauncherModel.pressHotkey`, `LauncherKeys.hotkeyPress`, SPEC-127).
+      Its key is named as a key press is, through the current keyboard layout (`KeyShortcut(hotkey:layout:)`, with `KeyLayout.character(for:)`), so the two match on any layout.
+      Fudge's own keys (⌘K, and ⌘, and ⌘⇧, unless an action has them) aren't actions', so a hotkey on one of them opens its command; outside the launcher every command hotkey does.
       A no-view command run by hotkey doesn't clear root search when it finishes (`LaunchOrigin`).
       Root-search rows show a command's hotkey as keycaps (`Keycaps`, labelled as the current keyboard layout types the key).
     - `LauncherPanel` is a non-activating `NSPanel`: it takes keys while the app you were in stays frontmost.
@@ -410,6 +413,9 @@ Extensions run in a separate Node.js process, the extension host.
       Their shortcuts work without opening the panel.
       An entry's `target` says what it runs: an extension's `Action` node (`onAction` in the running command), a `RootAction`, or `toggleQuickLook`, which the app performs itself (an `Action` with `fudgeBuiltIn: "toggleQuickLook"`, `ActionPanelReader.builtInProp`).
       An `NSEvent` local monitor in `AppDelegate` turns key presses into `KeyShortcut`s for `LauncherModel.handleKey` (⌘K, ⌘↵, actions' shortcuts) before the search field sees them.
+      Which action a key runs is `LauncherKeys.outcome` (core), which a command hotkey asks too.
+      With the action panel open, a key with a modifier runs the view's action with that shortcut, submenus included, as with the panel shut (SPEC-127 §0); plain keys go to "Search for actions…", and with a picker or a dropdown's panel open no action runs.
+      So an action on ⌘A, ⌘C, ⌘V, ⌘X or ⌘Z wins over editing in the focused field, as it does with the panel shut.
       The key is named by what it types with no modifier at all (`characters(byApplyingModifiers: [])`), so ⌘⇧, is `,` with cmd and shift, not `<`.
       It leaves every key alone while an input method is composing (marked text), so ↑↓, Esc and ↵ reach the input method.
     - **Quick Look** (`Action.ToggleQuickLook`, however it's run) previews the selected item's `quickLook` file in macOS's Quick Look panel.

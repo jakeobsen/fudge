@@ -340,6 +340,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if id == HotKeyRegistry.launcherID {
                 self.togglePanel()
             } else if let command = self.registry.command(for: id) {
+                // In the launcher, an action with the hotkey's keys runs instead (SPEC-127).
+                if let spec = self.registry.commands[command],
+                    self.model.pressHotkey(spec, launcherHoldsKeyboard: self.panel.holdsKeyboard)
+                {
+                    return
+                }
                 self.model.openFromHotkey(command)
             }
         }
