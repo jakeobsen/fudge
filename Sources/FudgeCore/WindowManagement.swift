@@ -69,13 +69,17 @@ public struct AXWindow<Handle> {
 public struct WindowScreen: Sendable, Equatable {
     public var id: UInt32
     public var bounds: CGRect
+    /// The part windows go in, without the menu bar and the Dock (`NSScreen.visibleFrame`), in the same top-left
+    /// coordinates as `bounds` (`PanelScreen.topLeftFrame`).
+    public var visibleBounds: CGRect
 
     /// The screen's desktop: one per screen, for this run.
     var desktopId: String { "screen-\(id)" }
 
-    public init(id: UInt32, bounds: CGRect) {
+    public init(id: UInt32, bounds: CGRect, visibleBounds: CGRect? = nil) {
         self.id = id
         self.bounds = bounds
+        self.visibleBounds = visibleBounds ?? bounds
     }
 }
 
@@ -84,6 +88,8 @@ public enum WindowChange: Sendable, Equatable {
     /// A new position, size or both; nil leaves that part as it is.
     case frame(position: CGPoint?, size: CGSize?)
     case fullScreen
+    /// Out of macOS full screen, for Fudge's Toggle Full Screen.
+    case exitFullScreen
 }
 
 /// What WindowManagement reads and changes. The app's reads the system off the main thread, since the Accessibility
@@ -253,8 +259,9 @@ public struct WindowManager<System: WindowSystem> {
         return (try number(keys.0), try number(keys.1))
     }
 
-    /// What one call reads from the system, each app's windows asked for at most once.
-    private final class Reading {
+    /// What one call reads from the system, each app's windows asked for at most once. Internal, so Fudge's own
+    /// window commands (`WindowManager.run`) find windows exactly as the API does.
+    final class Reading {
         let manager: WindowManager
         let screens: [WindowScreen]
         /// The windows extensions see, front to back: on screen, ordinary (layer 0), visible, and a regular app's,

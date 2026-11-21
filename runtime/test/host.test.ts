@@ -125,6 +125,58 @@ test("slots answers with the items' action panels", async () => {
     assert.equal(await host.close(), 0);
 });
 
+test("a keyed List re-ranked by a search: each row's detail and actions, inline or answered, are its own", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "k", entry: fixture("keyed-search.cjs"), mode: "view" });
+    const first = (await host.next(of("k", "render"))).view as UINode;
+    const titleOf = new Map(first.children.map((row) => [row.id, String(row.props.title)]));
+    /** The detail's markdown and the panel's action title a row's slots carry, or null when they're held back. */
+    const carried = (slots: Record<string, unknown>) => {
+        const detail = slots.detail as UINode | { $deferred: true };
+        const actions = slots.actions as UINode | { $deferred: true };
+        if (!("type" in detail) || !("type" in actions)) return null;
+        return { markdown: detail.props.markdown, action: actions.children[0]!.props.title };
+    };
+    const ownFor = (id: number) => ({ markdown: `# ${titleOf.get(id)}`, action: `Open ${titleOf.get(id)}` });
+
+    // The app asks for the window around the first row, rows 0 to 10.
+    const window = first.children.slice(0, 11).map((row) => row.id);
+    host.send({ type: "slots", session: "k", nodes: window });
+    await host.next(of("k", "slots"));
+
+    // The user types, and the extension reverses its rows.
+    host.send({ type: "event", session: "k", node: first.id, path: ["onSearchTextChange"], args: ["x"] });
+    const after = (await host.next(of("k", "render"))).view as UINode;
+    assert.deepEqual(
+        after.children.map((row) => row.props.title),
+        [...first.children].reverse().map((row) => row.props.title),
+    );
+    // Every row carried in full is its own; the others are held back.
+    let inline = 0;
+    for (const row of after.children) {
+        const slots = carried(row.props as Record<string, unknown>);
+        if (slots === null) continue;
+        inline += 1;
+        assert.deepEqual(slots, ownFor(row.id), `row ${titleOf.get(row.id)}`);
+    }
+    assert.equal(inline, 12, "the new first row and the 11 asked for");
+
+    // The selected row is file-20: neither first nor in the last request, so it's held back, and asked for.
+    const selected = after.children.find((row) => row.props.title === "file-20")!;
+    assert.equal(carried(selected.props as Record<string, unknown>), null);
+    const index = after.children.indexOf(selected);
+    const asked = after.children.slice(Math.max(0, index - 8), index + 11).map((row) => row.id);
+    host.send({ type: "slots", session: "k", nodes: asked });
+    const answer = await host.next(of("k", "slots"));
+    for (const item of answer.items as { id: number; slots: Record<string, unknown> }[]) {
+        assert.deepEqual(carried(item.slots), ownFor(item.id), `answer for ${titleOf.get(item.id)}`);
+    }
+
+    host.send({ type: "unload", session: "k" });
+    await host.next(of("k", "exit"));
+    assert.equal(await host.close(), 0);
+});
+
 test("a menu-bar command renders its MenuBarExtra, and every event is answered once its handler settles", async () => {
     const host = start();
     host.send({ type: "launch", session: "mb", entry: fixture("menu-bar.cjs"), mode: "menu-bar", launchProps: { launchType: "background" } });
@@ -179,6 +231,18 @@ test("a no-view command runs to completion and its console output arrives as log
     const log = await host.next(of("nv", "log"));
     assert.deepEqual(log, { session: "nv", type: "log", level: "info", message: 'ran with {"q":"x"}' });
     assert.equal((await host.next(of("nv", "exit"))).reason, "finished");
+    await host.close();
+});
+
+test("a command can't reach Raycast's sign-in proxy, by https kept at load or by a raw socket", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "rp", entry: fixture("raycast-proxy.cjs"), mode: "no-view" });
+    const log = await host.next(of("rp", "log"));
+    assert.equal(
+        log.message,
+        "Fudge doesn't send requests to github.oauth.raycast.com. | Fudge doesn't send requests to x.oauth.raycast.com.",
+    );
+    assert.equal((await host.next(of("rp", "exit"))).reason, "finished");
     await host.close();
 });
 

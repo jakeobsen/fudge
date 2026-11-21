@@ -13,8 +13,10 @@ struct ListScreen: View {
             HStack(spacing: 0) {
                 items(compact: true).frame(width: 300)
                 Divider()
+                let selected = model.selectedListItem
                 ListDetailPane(
-                    detail: model.selectedListItem?.detail,
+                    detail: selected?.detail,
+                    waiting: selected?.deferred.contains(.detail) == true,
                     assets: command.assets,
                     onTag: { model.call(node: $0, ["onAction"]) }
                 )
@@ -161,9 +163,11 @@ struct EmptyStateView: View {
     }
 }
 
-/// The right side of a List with `isShowingDetail`: the selected item's markdown, then its metadata.
+/// The right side of a List with `isShowingDetail`: the selected item's markdown, then its metadata. While its
+/// `detail` hasn't come (`waiting`, `ItemSlots`), it shows as loading, never another row's.
 private struct ListDetailPane: View {
     let detail: UINode?
+    let waiting: Bool
     let assets: URL?
     let onTag: (Int) -> Void
 
@@ -171,7 +175,7 @@ private struct ListDetailPane: View {
         let markdown = detail?.string("markdown") ?? ""
         let metadata = MetadataEntry.entries(of: detail?.node("metadata"))
         VStack(spacing: 0) {
-            if detail?.bool("isLoading") == true { LoadingBar() }
+            if waiting || detail?.bool("isLoading") == true { LoadingBar() }
             if !markdown.isEmpty {
                 ScrollView {
                     MarkdownView(markdown: markdown, assets: assets).padding(16)

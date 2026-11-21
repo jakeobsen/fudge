@@ -1,19 +1,23 @@
-// Sign-in end to end (SPEC-056): the real @raycast/utils' `OAuthService.github()` signs in through a fake relay to a
-// fake provider, gets its access token, refreshes it, and signs out. Everything runs on 127.0.0.1 in this process:
+// Sign-in end to end (SPEC-056, SPEC-075): the real @raycast/utils' `OAuthService.github()` signs in through a fake
+// relay to a fake provider, gets its access token, refreshes it, and signs out. It runs with 2.x, which uses the
+// global `fetch`, and with 1.18.1, whose token requests go through `cross-fetch` → `node-fetch` → `https.request`, as
+// store extensions bundle it. Everything runs on 127.0.0.1 in this process:
 // the relay and the provider are local servers, the app's side is faked (its loopback listener included), and the
 // browser is simulated by following the redirects to the loopback URL. Nothing contacts a real server.
 
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
+import http, { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import https from "node:https";
+import net, { type AddressInfo } from "node:net";
 import Module, { createRequire } from "node:module";
 import { after, before, test } from "node:test";
 import { connect, settle } from "../src/bridge.ts";
 import { placeholderEnvironment, setLaunchContext } from "../src/api/launch.ts";
 import { createApiModule } from "../src/api/module.ts";
 import { providersFromEnvironment, rewriteFetch } from "../src/api/oauth-fetch.ts";
+import { guardConnections, guardRequests } from "../src/api/oauth-http.ts";
 
 const api = createApiModule() as Record<string, any>;
 const sendFetch = globalThis.fetch;
@@ -132,17 +136,32 @@ before(async () => {
         json(response, 404, { error: "not_found" });
     });
 
-    globalThis.fetch = rewriteFetch(
-        localOnly,
-        providersFromEnvironment(readFileSync(new URL("./fixtures/oauth-providers.json", import.meta.url), "utf8")),
-        async (provider) => {
-            assert.equal(provider, "github");
-            return { server: base(relay), signedIn: false };
-        },
+    // As the worker installs them: fetch, http and https, and the connection backstop, with only 127.0.0.1 allowed
+    // under them all, so nothing in the test can leave the machine whatever client it uses.
+    const providers = providersFromEnvironment(
+        readFileSync(new URL("./fixtures/oauth-providers.json", import.meta.url), "utf8"),
     );
+    const server = async (provider: string) => {
+        assert.equal(provider, "github");
+        return { server: base(relay), signedIn: false };
+    };
+    globalThis.fetch = rewriteFetch(localOnly, providers, server);
+    const connect = net.Socket.prototype.connect;
+    net.Socket.prototype.connect = function (this: net.Socket, ...args: unknown[]) {
+        const options = (Array.isArray(args[0]) ? args[0][0] : args[0]) as { host?: string; path?: string } | number;
+        if (typeof options === "object" && options.path !== undefined) return Reflect.apply(connect, this, args);
+        const host = typeof options === "object" ? options.host : args[1];
+        if (host !== "127.0.0.1") throw new Error(`the test tried to reach ${String(host)}`);
+        return Reflect.apply(connect, this, args);
+    } as typeof connect;
+    restore.push(() => (net.Socket.prototype.connect = connect));
+    restore.push(guardConnections(), guardRequests({ http, https }, providers, server));
 });
 
+const restore: (() => void)[] = [];
+
 after(() => {
+    restore.reverse().forEach((undo) => undo());
     globalThis.fetch = sendFetch;
     provider.close();
     relay.close();
@@ -213,49 +232,57 @@ after(() => {
     internals._load = load;
 });
 
-test("OAuthService.github signs in through the relay, refreshes, and signs out", async () => {
-    connect((request) => {
-        setImmediate(async () => {
-            try {
-                settle(request.id, await app[request.method](request.params));
-            } catch (error) {
-                settle(request.id, undefined, (error as Error).message);
-            }
+for (const [version, utils] of [
+    ["2.3.3, through fetch", "@raycast/utils"],
+    ["1.18.1, through cross-fetch and https.request", "raycast-utils-1"],
+]) {
+    test(`OAuthService.github (@raycast/utils ${version}) signs in through the relay, refreshes, and signs out`, async () => {
+            relayLog.length = 0;
+        providerLog.length = 0;
+        issued = 0;
+        connect((request) => {
+            setImmediate(async () => {
+                try {
+                    settle(request.id, await app[request.method](request.params));
+                } catch (error) {
+                    settle(request.id, undefined, (error as Error).message);
+                }
+            });
         });
+        setLaunchContext({
+            preferences: {},
+            environment: { ...placeholderEnvironment, extensionName: "github", commandName: "search", commandMode: "no-view" },
+            launchProps: {},
+        });
+        const { OAuthService, withAccessToken, getAccessToken } = createRequire(import.meta.url)(utils);
+        const github = OAuthService.github({ scope: "repo" });
+
+        // Signing in: the command runs once the token is there.
+        const run = withAccessToken(github)(async () => getAccessToken());
+        assert.deepEqual(await run({}), { token: "at1", type: "oauth" });
+        assert.deepEqual(relayLog, ["GET /github/authorize", "GET /github/callback", "POST /github/token"]);
+        assert.deepEqual(providerLog, ["GET /authorize", "POST /token"]);
+        const stored = tokens.get("github/github") as Record<string, unknown>;
+        assert.equal(stored.accessToken, "at1");
+        assert.equal(stored.refreshToken, "rt");
+        assert.equal(stored.scope, "repo");
+        assert.equal(stored.providerName, "GitHub");
+        assert.equal(stored.relayProvider, "github", "the app keeps it only for a sign-in it prepared");
+
+        // Signed in: no sign-in, no request.
+        relayLog.length = 0;
+        assert.equal(await github.authorize(), "at1");
+        assert.deepEqual(relayLog, []);
+
+        // Expired: OAuthService refreshes through the relay, keeping the refresh token.
+        tokens.set("github/github", { ...stored, updatedAt: new Date(Date.now() - 3600 * 1000).toISOString() });
+        assert.equal(await github.authorize(), "at2");
+        assert.deepEqual(relayLog, ["POST /github/refresh-token"]);
+        assert.equal((tokens.get("github/github") as Record<string, unknown>).refreshToken, "rt");
+
+        // Signing out.
+        await github.client.removeTokens();
+        assert.equal(await github.client.getTokens(), undefined);
+        assert.equal(tokens.size, 0);
     });
-    setLaunchContext({
-        preferences: {},
-        environment: { ...placeholderEnvironment, extensionName: "github", commandName: "search", commandMode: "no-view" },
-        launchProps: {},
-    });
-    const { OAuthService, withAccessToken, getAccessToken } = createRequire(import.meta.url)("@raycast/utils");
-    const github = OAuthService.github({ scope: "repo" });
-
-    // Signing in: the command runs once the token is there.
-    const run = withAccessToken(github)(async () => getAccessToken());
-    assert.deepEqual(await run({}), { token: "at1", type: "oauth" });
-    assert.deepEqual(relayLog, ["GET /github/authorize", "GET /github/callback", "POST /github/token"]);
-    assert.deepEqual(providerLog, ["GET /authorize", "POST /token"]);
-    const stored = tokens.get("github/github") as Record<string, unknown>;
-    assert.equal(stored.accessToken, "at1");
-    assert.equal(stored.refreshToken, "rt");
-    assert.equal(stored.scope, "repo");
-    assert.equal(stored.providerName, "GitHub");
-    assert.equal(stored.relayProvider, "github", "the app keeps it only for a sign-in it prepared");
-
-    // Signed in: no sign-in, no request.
-    relayLog.length = 0;
-    assert.equal(await github.authorize(), "at1");
-    assert.deepEqual(relayLog, []);
-
-    // Expired: OAuthService refreshes through the relay, keeping the refresh token.
-    tokens.set("github/github", { ...stored, updatedAt: new Date(Date.now() - 3600 * 1000).toISOString() });
-    assert.equal(await github.authorize(), "at2");
-    assert.deepEqual(relayLog, ["POST /github/refresh-token"]);
-    assert.equal((tokens.get("github/github") as Record<string, unknown>).refreshToken, "rt");
-
-    // Signing out.
-    await github.client.removeTokens();
-    assert.equal(await github.client.getTokens(), undefined);
-    assert.equal(tokens.size, 0);
-});
+}

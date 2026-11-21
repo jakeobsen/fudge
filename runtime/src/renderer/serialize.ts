@@ -126,14 +126,15 @@ function shortcutSet(panel: HostNode, deferral: Deferral): number | undefined {
     return index;
 }
 
-/** The `shortcut` of every visible `Action` in a panel, its sections and submenus. Element props (`$slot`), such as
- * `Action.Push`'s target, belong to other views and aren't searched. */
+/** The `shortcut` of every visible `Action` in a panel, its sections and submenus, and of each submenu itself, which
+ * opens it (`Action.OpenWith`'s ⌘O). Element props (`$slot`), such as `Action.Push`'s target, belong to other views
+ * and aren't searched. */
 function collectShortcuts(node: HostNode, found: JsonValue[]): void {
     if (node.kind !== "instance" || node.hidden || node.type === SLOT) return;
-    if (node.type === "Action") {
+    if (node.type === "Action" || node.type === "ActionPanel.Submenu") {
         const shortcut = serializeValue(node.props.shortcut, ["shortcut"], new Set());
         if (shortcut !== undefined && shortcut !== null) found.push(shortcut);
-        return;
+        if (node.type === "Action") return;
     }
     for (const child of node.children) collectShortcuts(child, found);
 }

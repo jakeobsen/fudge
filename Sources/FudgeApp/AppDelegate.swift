@@ -34,6 +34,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = Self.mainMenu()
         model = LauncherModel(paths: paths)
+        // Snapshots never ask Spotlight: Search Files gets `--found-files`' results, or none.
+        if let snapshot = Snapshot(arguments: CommandLine.arguments) {
+            let files = snapshot.foundFiles.map { FixedFileQuery.load($0, home: FileSearchOptions.home()) } ?? []
+            model.fileSearch = FileSearch { FixedFileQuery(files) }
+        }
         panel = LauncherPanel(content: LauncherView(model: model))
         settingsModel = SettingsModel(paths: paths)
         settingsModel.launcherHotkey = FudgeSettings.load(from: paths.settingsFile).launcherHotkey
@@ -60,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onboardingWindow = OnboardingWindowController(settings: settingsModel, file: paths.onboardingFile)
         onboardingWindow.openLauncher = { [weak self] in self?.showPanel() }
         settingsModel.showOnboarding = { [weak self] in self?.onboardingWindow.showAgain() }
-        model.hide = { [weak self] in self?.hidePanel() }
+        model.hidePanel = { [weak self] caller in self?.hidePanel("model \(caller)") }
         model.panelOnScreen = { [weak self] in self?.panel?.isVisible ?? false }
         model.show = { [weak self] in self?.showPanel() }
         model.openSettings = { [weak self] name, origin in self?.settingsWindow.show(extension: name, origin: origin) }
@@ -99,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.numberFormatChanged = { [weak self] in self?.model.applySettings() }
         panel.onEscape = { [weak self] in self?.model.escape() }
         panel.onResign = { [weak self] in
+            LauncherLog.note("launcher resigned key: \(LauncherLog.keyboard)")
             // Decided a turn later, once AppKit has made the new key window key (`LauncherResign`).
             DispatchQueue.main.async { [weak self] in self?.settleResign() }
         }
@@ -146,9 +152,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // While an input method is composing (Japanese, Chinese, …), its keys are its own: ↑↓ pick a
                 // candidate, Esc cancels and ↵ confirms.
                 if (self.panel.firstResponder as? NSTextView)?.hasMarkedText() == true { return false }
-                return self.model.handleKey(pressed)
+                let handled = self.model.handleKey(pressed)
+                // Shortcuts only (⌘ or ⌃), never typing.
+                if !pressed.modifiers.isDisjoint(with: ["cmd", "ctrl"]) {
+                    let keys = (pressed.modifiers.sorted() + [pressed.key]).joined(separator: "+")
+                    LauncherLog.note("key \(keys) handled=\(handled): \(LauncherLog.keyboard)")
+                }
+                return handled
             }
             return handled ? nil : event
+        }
+
+        // For the launcher's log: Fudge becoming active, inactive or hidden, and any of its windows (the launcher's,
+        // the Quick Look preview's) taking or losing the keyboard, or coming on or off screen.
+        let center = NotificationCenter.default
+        for name in [
+            NSApplication.didBecomeActiveNotification, NSApplication.didResignActiveNotification,
+            NSApplication.didHideNotification,
+        ] {
+            _ = center.addObserver(forName: name, object: nil, queue: .main) { _ in
+                MainActor.assumeIsolated { LauncherLog.note("\(name.rawValue): \(LauncherLog.keyboard)") }
+            }
+        }
+        for name in [
+            NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification,
+            NSWindow.didChangeOcclusionStateNotification,
+        ] {
+            _ = center.addObserver(forName: name, object: nil, queue: .main) { note in
+                let window = note.object as? NSWindow
+                MainActor.assumeIsolated {
+                    LauncherLog.note(
+                        "\(name.rawValue) \(LauncherLog.name(window)) visible=\(window?.isVisible == true): "
+                            + LauncherLog.keyboard)
+                }
+            }
         }
 
         // The launcher's hotkey and every command's, through one Carbon handler.
@@ -284,7 +321,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // A sheet on the panel (a `confirm`) is waiting for an answer: hiding it, and a reset after, would
             // unload the command behind it.
             guard panel.attachedSheet == nil else { return }
-            hidePanel()
+            hidePanel("launcher hotkey")
         } else {
             model.resetIfDue()
             showPanel()
@@ -333,11 +370,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Every path that hides the panel ends here: Esc, the hotkey, the model's `hide`, and the panel resigning key.
-    private func hidePanel() {
+    /// `reason` names the path, for the log.
+    private func hidePanel(_ reason: String) {
+        LauncherLog.note("hidePanel (\(reason)) visible=\(panel.isVisible): \(LauncherLog.keyboard)")
         guard panel.isVisible else { return }
         model.closeQuickLook()
         model.panelHidden()
         LinkPointer.shared.release()
+        panel.hideReason = reason
         panel.orderOut(nil)
         model.panelReset.panelHidden()
         // A FilePicker's open panel, or a click on the Quick Look preview, made Fudge the active app. Give the
@@ -357,14 +397,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func settleResign() {
         let settled = LauncherResign.Settled(
             launcherShown: panel.isVisible, sheetAttached: panel.attachedSheet != nil, launcherIsKey: panel.isKeyWindow,
-            previewOpen: quickLook?.item != nil, previewIsKey: quickLook?.isKey == true)
-        switch LauncherResign.decide(settled) {
+            previewOpen: quickLook?.item != nil, previewIsKey: quickLook?.isKey == true,
+            previewSaysKey: quickLook?.previewKey.saysKey == true)
+        let decision = LauncherResign.decide(settled)
+        LauncherLog.note("resign settled \(settled) → \(decision): \(LauncherLog.keyboard)")
+        switch decision {
         case .stay:
             break
         case .takeKeyBack:
             takeKeyBackFromQuickLook()
         case .hide:
-            hidePanel()
+            hidePanel("resign")
         }
     }
 
@@ -565,6 +608,9 @@ struct Snapshot {
     let signIns: MemorySecretStore
     /// `--sign-in-consent`: picks Fudge's sign-in server on the Sign-in page and saves its consent sheet instead.
     let signInConsent: Bool
+    /// `--found-files <file>`: Search Files' results, a JSON array of `files.search` entries (`~/` paths are in the
+    /// home folder). Snapshots never ask Spotlight, so without it there are none.
+    let foundFiles: URL?
 
     init?(arguments: [String]) {
         guard let index = arguments.firstIndex(of: "--snapshot"), index + 1 < arguments.count else { return nil }
@@ -600,6 +646,7 @@ struct Snapshot {
             try? signIns.write(JSONEncoder().encode(tokens), account: parts[0])
         }
         signInConsent = arguments.contains("--sign-in-consent")
+        foundFiles = value("--found-files").map { URL(fileURLWithPath: $0) }
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1

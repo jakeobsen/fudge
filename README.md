@@ -11,6 +11,7 @@ Fudge is an independent project. It is not affiliated with or endorsed by Raycas
 - `Sources/FudgeCore`: code shared by the app and the tool.
 - `runtime/`: the extension host. This is the Node.js program that runs extensions. The app talks to it over stdin/stdout.
 - `runtime/store-extension/`: the Extension Store, an extension bundled with Fudge that lists and installs the extensions published in github.com/raycast/extensions.
+- `runtime/file-search-extension/`: Search Files, an extension bundled with Fudge that finds files and folders by name.
 
 ## Building
 
@@ -120,6 +121,16 @@ Numbers follow your Mac's number format, or the one you pick under **Settings…
 
 Currency conversion uses the European Central Bank's daily exchange rates. Turn it on under **Settings… → General**; until then, a currency query shows a card that takes you there.
 
+### Search Files
+
+**Search Files** finds files and folders by name with Spotlight. Type part of a name; with nothing typed, it lists the files you used in the last 30 days.
+
+- ↵ opens the file, ⌘↵ shows it in Finder, ⌘Y previews it with Quick Look, and ⌘O opens it with another app.
+- ⌘⇧C copies its path, ⌘⌥C copies the file, and ⌃X moves it to the Trash, after asking.
+- ⌘⇧D shows or hides the details.
+
+In **Settings… → Search Files**, **Search In** picks your home folder (the default) or the whole Mac, and **Leave Out** lists folders to skip, separated by commas (`~/Library` by default).
+
 ### Extension Store
 
 The Extension Store browses the extensions in Raycast's open-source repository and installs the ones you choose. It takes two steps:
@@ -145,6 +156,10 @@ An extension that takes a token in its settings (⌘⇧,) works without signing 
 ### Menu bar commands
 
 An extension's menu bar command puts its own item in the menu bar. Run it from root search to turn it on, and the item stays there, across restarts, until you select the command in root search and pick **Deactivate Menu Bar Item** from ⌘K. Running it again from root search refreshes it and opens its menu. The command refreshes itself in the background at Fudge's start and as often as its extension asks, and again each time you open its menu. When a background refresh fails, the item keeps what it showed last and its menu ends with "⚠ Last refresh failed". Fudge shows at most 50 of these items.
+
+### Window management
+
+Fudge can move and resize the window you're using: halves, quarters, thirds and two thirds, Maximize (also Almost Maximize, Maximize Width and Maximize Height), Center, Reasonable Size, Make Larger and Make Smaller, Next and Previous Display, and Toggle Full Screen. **Restore** puts a window back where it was before Fudge last moved it. Search for them, or give them hotkeys under **Settings… → Commands → Window Management**. They need Accessibility permission (**Settings… → Permissions**).
 
 ### Selected text and Finder items
 

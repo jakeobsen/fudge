@@ -214,11 +214,11 @@ func escClosesQuickLookAfterThePopoversAndDoesNothingElse(behavior: EscapeBehavi
 /// What holds the keyboard a turn after the launcher resigned.
 private func settled(
     shown: Bool = true, sheet: Bool = false, launcherKey: Bool = false, previewOpen: Bool = false,
-    previewKey: Bool = false
+    previewKey: Bool = false, previewSaysKey: Bool = false
 ) -> LauncherResign.Settled {
     LauncherResign.Settled(
         launcherShown: shown, sheetAttached: sheet, launcherIsKey: launcherKey, previewOpen: previewOpen,
-        previewIsKey: previewKey)
+        previewIsKey: previewKey, previewSaysKey: previewSaysKey)
 }
 
 @Test func theLauncherStaysWhenTheQuickLookPreviewTakesTheKeyboard() {
@@ -254,4 +254,51 @@ private func settled(
     #expect(LauncherResign.decide(settled(launcherKey: true, previewOpen: true, previewKey: true)) == .stay)
     // Still shown, and another app's window has the keyboard: it hides, a turn later.
     #expect(LauncherResign.decide(settled()) == .hide)
+}
+
+// MARK: - FUD-104: Quick Look takes the keyboard by itself after ⌘Y
+
+/// The architect's log (H-65), lines #131–#140: ⌘Y opens the preview, not key; about 200 ms later the launcher
+/// resigns key with Fudge no longer active, and the preview posts `didBecomeKey`; the resign settles 2 ms later with
+/// `isKeyWindow` false for the preview, since Fudge isn't active.
+@Test func theLoggedCommandYSequenceTakesTheKeyboardBack() {
+    var key = PreviewKey()
+    // #131–#135: opened and shown, not key; nothing for `PreviewKey` yet.
+    #expect(!key.saysKey)
+    // #137–#138: the launcher resigns key. #139: the preview says it became key.
+    key.record(.becameKey)
+    // #140, as logged except for the new input.
+    let logged = LauncherResign.Settled(
+        launcherShown: true, sheetAttached: false, launcherIsKey: false, previewOpen: true, previewIsKey: false,
+        previewSaysKey: key.saysKey)
+    #expect(LauncherResign.decide(logged) == .takeKeyBack)
+    var before = logged
+    before.previewSaysKey = false
+    #expect(LauncherResign.decide(before) == .hide, "what #140 decided before the fix")
+}
+
+@Test func thePreviewSaysItsKeyOnlyBetweenBecomingKeyAndResigningOrClosing() {
+    var key = PreviewKey()
+    key.record(.becameKey)
+    #expect(key.saysKey)
+    key.record(.resignedKey)
+    #expect(!key.saysKey, "the launcher took the keyboard back, or the user went elsewhere")
+    key.record(.becameKey)
+    key.record(.closed)
+    #expect(!key.saysKey, "a closed preview holds nothing")
+}
+
+@Test func aResignToAnotherAppStillHidesWhileThePreviewIsOpen() {
+    // The user clicks another app with the preview open: the preview never says it's key.
+    var key = PreviewKey()
+    #expect(LauncherResign.decide(settled(previewOpen: true, previewSaysKey: key.saysKey)) == .hide)
+    // Or after the launcher took the keyboard back from it once (it resigned key then).
+    key.record(.becameKey)
+    key.record(.resignedKey)
+    #expect(LauncherResign.decide(settled(previewOpen: true, previewSaysKey: key.saysKey)) == .hide)
+    // A preview that says it's key but isn't open (closed meanwhile) takes nothing back.
+    #expect(LauncherResign.decide(settled(previewOpen: false, previewSaysKey: true)) == .hide)
+    // Hidden already, or a sheet: as before.
+    #expect(LauncherResign.decide(settled(shown: false, previewOpen: true, previewSaysKey: true)) == .stay)
+    #expect(LauncherResign.decide(settled(sheet: true, previewOpen: true, previewSaysKey: true)) == .stay)
 }

@@ -50,8 +50,11 @@ final class LauncherModel {
         var reportedSelection: String??
         /// The `selectedItemId` the selection last followed.
         var followedItemId: String?
-        /// The search changed and the command filters itself: select the first item of what it sends back.
+        /// The extension set the search text (`searchText`): select the first item of what it sends back.
         var selectFirstOnRender = false
+        /// The user typed and the command filters itself: the first render of its results selects their first item
+        /// (`TypingSelection`).
+        var typing = TypingSelection()
         /// The search text as the user types it, reconciled with a `searchText` the extension sets.
         var searchField = FieldValue(.string(""))
         /// How many items the List had when it was last asked for the next page.
@@ -126,7 +129,12 @@ final class LauncherModel {
     private var rootQuery = ""
 
     /// Hides the panel; set by the app delegate.
-    @ObservationIgnored var hide: () -> Void = {}
+    /// Hides the panel (`AppDelegate.hidePanel`), told which model method asked, for the log.
+    @ObservationIgnored var hidePanel: (String) -> Void = { _ in }
+
+    func hide(_ caller: String = #function, line: Int = #line) {
+        hidePanel("\(caller):\(line)")
+    }
     /// Shows the panel; set by the app delegate.
     @ObservationIgnored var show: () -> Void = {}
     /// Opens the Settings window on an extension's preferences, or on its default page for nil; set by the app
@@ -193,6 +201,8 @@ final class LauncherModel {
     @ObservationIgnored private var host: ExtensionHost?
     /// The sessions host messages may name (SPEC-067).
     @ObservationIgnored private var hostSessions = HostSessions()
+    /// Answers Search Files' `files.search` through Spotlight. `AppDelegate` gives snapshot runs fixed results.
+    @ObservationIgnored var fileSearch = FileSearch { SpotlightFileQuery() }
     /// No-view commands still running, by session.
     @ObservationIgnored private var background: [String: String] = [:]
     /// No-view commands that `launchCommand` started in the background, by session. They leave the panel alone.
@@ -382,9 +392,14 @@ final class LauncherModel {
                 command.searchText = newValue
                 command.searchField.edit(.string(newValue))
                 // The command hears the new text first, so it works on its results while the list is filtered here.
-                commandSearchChanged(command)
+                let told = commandSearchChanged(command)
                 refreshList(&command, selectFirst: true, reread: false)
-                command.selectFirstOnRender = command.view.map { !ListContent.filtersLocally($0) } ?? false
+                // A command that filters itself sends its results later: the first render of them selects their first
+                // item too (`TypingSelection`).
+                if let view = command.view, !ListContent.filtersLocally(view) {
+                    command.typing.typed()
+                    if told { command.typing.told(items: command.list?.items.map(\.id) ?? []) }
+                }
                 screen = .command(command)
                 requestSlots()
                 reportSelection()
@@ -636,8 +651,10 @@ final class LauncherModel {
 
     /// Reads the top view's List or Grid again, after it or the search text changed, and keeps the selection on the
     /// same item where it can. Without `reread`, only the search text changed: the items read at the last render are
-    /// filtered again.
-    private func refreshList(_ command: inout CommandScreen, selectFirst: Bool, reread: Bool = true) {
+    /// filtered again. `rendered` is a render from the host, which may bring the results of the user's typing.
+    private func refreshList(
+        _ command: inout CommandScreen, selectFirst: Bool, reread: Bool = true, rendered: Bool = false
+    ) {
         guard let view = command.view, ListContent.viewTypes.contains(view.type) else {
             command.list = nil
             command.dropdown = nil
@@ -652,18 +669,12 @@ final class LauncherModel {
             list = ListContent(view, searchText: command.searchText)
         }
         command.list = list
-        let wanted = view.string("selectedItemId")
-        if let wanted, wanted != command.followedItemId,
-            let match = list.items.first(where: { $0.itemId == wanted })
-        {
-            command.selectedNode = match.id
-            command.followedItemId = wanted
-        } else if selectFirst {
-            command.selectedNode = list.items.first?.id
-        } else {
-            command.selectedNode = list.reselect(node: command.selectedNode, itemId: previous?.itemId)
-        }
-        if wanted == nil { command.followedItemId = nil }
+        let typedResults = rendered && command.typing.rendered(items: list.items.map(\.id))
+        let selection = list.selection(
+            selectedItemId: view.string("selectedItemId"), followed: command.followedItemId,
+            selectFirst: selectFirst || typedResults, node: command.selectedNode, itemId: previous?.itemId)
+        command.selectedNode = selection.node
+        command.followedItemId = selection.followed
         syncDropdown(&command, list.dropdown)
     }
 
@@ -772,6 +783,7 @@ final class LauncherModel {
     func select(node: Int) {
         guard var command, command.list?.items.contains(where: { $0.id == node }) == true else { return }
         command.selectedNode = node
+        command.typing.cancel()
         screen = .command(command)
         requestSlots()
         reportSelection()
@@ -1241,6 +1253,8 @@ final class LauncherModel {
             list.wantsMore(near: index), command.requestedMoreAt != list.items.count
         else { return }
         command.requestedMoreAt = list.items.count
+        // The next page is appended: what's selected stays.
+        command.typing.cancel()
         screen = .command(command)
         send(.event(session: command.session, node: view.id, path: ["pagination", "onLoadMore"], args: []))
     }
@@ -1318,8 +1332,9 @@ final class LauncherModel {
             return
         }
         if let submenu = entry.submenu {
+            // Picked in the panel, or run by its shortcut with the panel shut or showing another submenu.
             var state = actionPanel ?? ActionPanelState()
-            state.path.append(entry.id)
+            state.path = ActionPanelReader.path(to: entry.id, in: currentActions) ?? state.path + [entry.id]
             state.query = ""
             state.selected = ActionPanelReader.flat(submenu).first?.id
             actionPanel = state
@@ -1830,20 +1845,28 @@ final class LauncherModel {
     }
 
     /// Tells the command the search text changed; with `throttle`, once typing pauses.
-    private func commandSearchChanged(_ command: CommandScreen) {
+    /// Sends the new search text to the command's `onSearchTextChange`: at once, or 250 ms after the last change with
+    /// `throttle`. Returns whether it went at once; a throttled one tells `TypingSelection` when it goes.
+    @discardableResult
+    private func commandSearchChanged(_ command: CommandScreen) -> Bool {
         searchDebounce?.cancel()
-        guard let view = command.view, view.hasCallback("onSearchTextChange") else { return }
+        guard let view = command.view, view.hasCallback("onSearchTextChange") else { return false }
         let event = AppMessage.event(
             session: command.session, node: view.id, path: ["onSearchTextChange"], args: [.string(command.searchText)])
         guard view.bool("throttle") == true else {
             send(event)
-            return
+            return true
         }
+        let session = command.session
         searchDebounce = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(250))
-            guard !Task.isCancelled else { return }
-            self?.send(event)
+            guard !Task.isCancelled, let self else { return }
+            self.send(event)
+            guard case .command(var current) = self.screen, current.session == session else { return }
+            current.typing.told(items: current.list?.items.map(\.id) ?? [])
+            self.screen = .command(current)
         }
+        return false
     }
 
     // MARK: - Quick Look
@@ -1856,7 +1879,10 @@ final class LauncherModel {
     /// `Action.ToggleQuickLook`: the preview of the selected item's file, or closing it.
     private func toggleQuickLook() {
         reconcileQuickLook()
-        switch quickLook.toggle(selected: selectedListItem?.quickLook, in: quickLookView, exists: fileExists) {
+        let toggled = quickLook.toggle(selected: selectedListItem?.quickLook, in: quickLookView, exists: fileExists)
+        // The case only: `missing` carries a file name, which the log never holds.
+        LauncherLog.note("toggleQuickLook → \(String(describing: toggled).prefix { $0 != "(" })")
+        switch toggled {
         case .opened, .closed:
             quickLookChanged(quickLook.shown)
         case .nothingToPreview:
@@ -1958,6 +1984,8 @@ final class LauncherModel {
     private func selectListItem(at index: Int) {
         guard var command, let items = command.list?.items, items.indices.contains(index) else { return }
         command.selectedNode = items[index].id
+        // The user picked: a render of their search's results keeps it.
+        command.typing.cancel()
         screen = .command(command)
         requestSlots()
         reportSelection()
@@ -2075,7 +2103,7 @@ final class LauncherModel {
     func openFromHotkey(_ commandID: String) {
         guard let item = items.first(where: { $0.id == "command:\(commandID)" }) else { return }
         if case .builtInCommand(let group, let command) = item.kind {
-            runBuiltIn(item, group: group, command: command)
+            runBuiltIn(item, group: group, command: command, fromHotkey: true)
             return
         }
         guard case .command(let extensionName, let commandName, let mode, _) = item.kind else { return }
@@ -2197,7 +2225,7 @@ final class LauncherModel {
             recordLaunch(item)
             showQuicklinkForm(QuicklinkDraft())
         case .builtInCommand(let group, let command):
-            runBuiltIn(item, group: group, command: command)
+            runBuiltIn(item, group: group, command: command, fromHotkey: false)
         case .command(let extensionName, let commandName, _, _):
             guard let installed = extensions[extensionName],
                 let command = installed.manifest.commands.first(where: { $0.name == commandName })
@@ -2237,8 +2265,17 @@ final class LauncherModel {
     /// Records a root item's launch, unless it's one that never counts (`RootItem.recordsLaunch`: Quit).
     /// Runs one of Fudge's own commands (`BuiltInCommandGroup`), from root search or its hotkey, which goes no other
     /// way: each group's commands decide whether the panel shows.
-    private func runBuiltIn(_ item: RootItem, group: String, command: String) {
+    private func runBuiltIn(_ item: RootItem, group: String, command: String, fromHotkey: Bool) {
         recordLaunch(item)
+        if group == BuiltInCommandGroup.windowManagement.name, let command = WindowCommand(rawValue: command) {
+            // The window to move is the frontmost app's, which the panel never takes from it. A window command never
+            // shows the panel, and from root search (or with the panel up) the panel goes first.
+            if !fromHotkey { searchText = "" }
+            if isVisible() { hide() }
+            Task {
+                if let message = await SystemCalls.windowCommand(command) { showHUD(message) }
+            }
+        }
     }
 
     private func recordLaunch(_ item: RootItem) {
@@ -2253,6 +2290,15 @@ final class LauncherModel {
         dismiss: "Cancel",
         destructive: false
     )
+
+    /// The preferences of `session`'s command as they are now, resolved as a launch resolves them.
+    private func preferenceValues(of session: String) -> [String: JSONValue] {
+        guard let name = sessionExtensions[session], let installed = extensions[name],
+            let command = installed.manifest.commands.first(where: { $0.name == sessionCommands[session] })
+        else { return [:] }
+        let stored = PreferenceStore(directory: paths.preferencesDirectory).load(name)
+        return PreferenceResolver.resolve(installed.manifest, command: command, stored: stored).values
+    }
 
     /// What a command needs before it launches: its preferences (with the required ones that aren't set in
     /// `missing`) and its environment. Root search and `launchCommand` both prepare launches here, and a
@@ -2687,6 +2733,7 @@ final class LauncherModel {
                 command.reportedSelection = nil
                 command.followedItemId = nil
                 command.selectFirstOnRender = false
+                command.typing = TypingSelection()
                 command.searchField = FieldValue(.string(command.searchText))
                 command.requestedMoreAt = nil
                 command.slotRequests = SlotRequests()
@@ -2706,7 +2753,7 @@ final class LauncherModel {
                     command.selectFirstOnRender = true
                 }
             }
-            refreshList(&command, selectFirst: command.selectFirstOnRender)
+            refreshList(&command, selectFirst: command.selectFirstOnRender, rendered: true)
             // Results for a new search may come after a loading render or two.
             if command.list?.isLoading != true { command.selectFirstOnRender = false }
             refreshForm(&command)
@@ -2783,6 +2830,20 @@ final class LauncherModel {
             case "form.storeValues":
                 storeFormValues(params, session: session)
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
+            case "files.search":
+                // Search Files (SPEC-069): its own preferences say where, read now so a change applies at once.
+                let caller = sessionExtensions[session]
+                let options = FileSearchOptions(
+                    preferences: preferenceValues(of: session), home: FileSearchOptions.home())
+                Task {
+                    do {
+                        let found = try await fileSearch.search(
+                            params, options: options, session: session, caller: caller)
+                        send(.rpcResult(session: session, id: id, result: .array(found.map(\.json)), error: nil))
+                    } catch {
+                        send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
+                    }
+                }
             case "toast.show", "toast.hide", "hud.show", "window.close", "window.popToRoot", "searchBar.clear":
                 windowCall(method, params, session: session)
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
