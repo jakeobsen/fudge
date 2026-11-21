@@ -28,9 +28,13 @@ export function systemProxy(env: NodeJS.ProcessEnv = process.env): SystemProxy {
     };
 }
 
+/** Never sent through a proxy, whatever the Mac's bypass list says. */
+export const alwaysDirect = ["localhost", "127.0.0.1"];
+
 /**
  * The variables to add for npm and git: both letter cases, since curl (git) reads only `http_proxy` in lower case and
- * npm reads either. None when any proxy variable is set already.
+ * npm reads either. None when any proxy variable is set already. `NO_PROXY` is this Mac itself and its bypass list,
+ * unless the user set their own.
  */
 export function proxyVariables(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
     if (proxyKeys.some((key) => env[key])) return {};
@@ -41,6 +45,9 @@ export function proxyVariables(env: NodeJS.ProcessEnv = process.env): Record<str
     };
     set("https_proxy", proxy.https);
     set("http_proxy", proxy.http);
-    if (proxy.https || proxy.http) set("no_proxy", env.NO_PROXY || env.no_proxy ? undefined : proxy.noProxy);
+    if ((proxy.https || proxy.http) && !(env.NO_PROXY || env.no_proxy)) {
+        const bypass = (proxy.noProxy ?? "").split(",").filter((entry) => entry.length > 0);
+        set("no_proxy", [...new Set([...alwaysDirect, ...bypass])].join(","));
+    }
     return variables;
 }

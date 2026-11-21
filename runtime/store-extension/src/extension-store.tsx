@@ -42,7 +42,8 @@ import {
 import { gitAvailable, stopRunningGit, StoreRepository } from "./git.ts";
 import { maxReadmeBytes, readRegularFile } from "./files.ts";
 import { detailMarkdown } from "./readme.ts";
-import { FailureView } from "./failure-view.tsx";
+import type { FailureDetails } from "./failure.ts";
+import { FailureView, LoadFailure } from "./failure-view.tsx";
 import { failureDetails, install, oneAtATime, readInstalled, uninstall, type StoreContext } from "./store.ts";
 
 type Loaded = { entries: StoreEntry[]; installed: Installed; trees: Map<string, string>; commit: string };
@@ -78,7 +79,8 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     // Whether anything has loaded yet, for `refresh`, which mustn't change with every load.
     const hasLoaded = useRef(false);
     const [noGit, setNoGit] = useState(false);
-    const [loadError, setLoadError] = useState<string>();
+    // The list's download failing before anything has loaded: its title and what failed, for `LoadFailure`.
+    const [loadError, setLoadError] = useState<{ title: string; details: FailureDetails }>();
     const [filter, setFilter] = useState(allFilter);
     const [showingDetail, setShowingDetail] = useState(false);
     const [selected, setSelected] = useState<string | null>(null);
@@ -109,7 +111,8 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     /**
      * Clones the first time, refreshes after that; the list stays usable meanwhile. Like every git operation of the
      * store's, it waits its turn (`oneAtATime`), so it never runs during an install or a README fetch. A failure
-     * before anything has loaded shows in the load-error view, whose Refresh tries again.
+     * before anything has loaded shows in the load-error view (`LoadFailure`: its cause and Copy Error), whose Refresh
+     * tries again; one after that is a toast over the list, which stays usable.
      */
     const refresh = useCallback(
         () =>
@@ -126,10 +129,11 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                     setReadmes({});
                     await toast.hide();
                 } catch (error) {
+                    const title = first ? "Couldn't download the store's list" : "Couldn't update the store's list";
                     toast.style = Toast.Style.Failure;
-                    toast.title = first ? "Couldn't download the store's list" : "Couldn't update the store's list";
+                    toast.title = title;
                     toast.message = message(error);
-                    if (!hasLoaded.current) setLoadError(message(error));
+                    if (!hasLoaded.current) setLoadError({ title, details: failureDetails(error) });
                 }
             }),
         [repo, load],
@@ -400,20 +404,11 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
             }
         >
             {loadError && !loaded ? (
-                <List.EmptyView
-                    icon={Icon.ExclamationMark}
-                    title="Couldn't load the store"
-                    description={loadError}
-                    actions={
-                        <ActionPanel>
-                            <Action
-                                title="Refresh"
-                                icon={Icon.ArrowClockwise}
-                                shortcut={{ modifiers: ["cmd"], key: "r" }}
-                                onAction={() => void open(true)}
-                            />
-                        </ActionPanel>
-                    }
+                <LoadFailure
+                    title={loadError.title}
+                    details={loadError.details}
+                    cli={cli}
+                    refresh={() => void open(true)}
                 />
             ) : (
                 <List.EmptyView icon={Icon.MagnifyingGlass} title="No extensions found" />

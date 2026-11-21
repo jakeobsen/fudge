@@ -1,7 +1,8 @@
-// What a failed install or update shows (SPEC-116): the likely cause in plain words, the end of the failing step's
-// output, and the whole text Copy Error copies. All of the output came from npm, esbuild, git or the extension's own
-// packages, so it's untrusted: it's shown in a code block nothing in it can close, and the title and cause line are
-// escaped character by character, so no package can add an image (a remote load), a link or formatting.
+// What a failed install or update, or the store's list failing to download, shows (SPEC-116): the likely cause in plain
+// words, the end of the failing step's output, and the whole text Copy Error copies. All of the output came from npm,
+// esbuild, git or the extension's own packages, so it's untrusted: it's shown in a code block nothing in it can close,
+// and the title and cause line are escaped character by character, so no package can add an image (a remote load), a
+// link or formatting.
 
 /** How many lines of output the view shows; Copy Error copies all of it. */
 export const shownLines = 40;
@@ -45,8 +46,18 @@ export function cleanOutput(text: string, home: string): string {
         .replace(/\b((?:password|passwd|token|secret|api[_-]?key)\s*[=:]\s*)\S+/gi, "$1***")
         // Tokens by their own shape: GitHub's and npm's.
         .replace(/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|npm_[A-Za-z0-9]{30,})\b/g, "***");
-    if (home.length > 1) clean = clean.split(home.replace(/\/+$/, "")).join("~");
+    const folder = home.replace(/\/+$/, "");
+    if (folder.length > 0) clean = clean.replace(homePattern(folder), "~");
     return clean;
+}
+
+/**
+ * The home folder as a whole path component: followed by `/`, the end of a line, whitespace, a quote, punctuation that
+ * closes or separates, or a full stop that ends a sentence. So `/Users/mjx` isn't `/Users/mj`'s.
+ */
+function homePattern(folder: string): RegExp {
+    const escaped = folder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`${escaped}(?=$|[/\\s'"\`:;,)\\]}>]|\\.(?:\\s|$))`, "gm");
 }
 
 /** The last `count` lines, without trailing blank ones. */
@@ -57,6 +68,13 @@ export function lastLines(text: string, count = shownLines): string {
 
 const network =
     /\b(?:ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ECONNRESET|EHOSTUNREACH|ENETUNREACH|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_GET_ISSUER_CERT_LOCALLY|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_HAS_EXPIRED|E403|E407)\b|self[- ]signed certificate|403 Forbidden|407 Proxy|network request to https:\/\/registry\.npmjs\.org/i;
+/**
+ * npm or Node.js not there or not running. Both come with Fudge (SPEC-115): `fudge build` says its own Node.js isn't
+ * beside it, the bundled `node` can't be started, or it can't find the bundled `npm-cli.js`. The shell's words for a
+ * missing program are kept too.
+ */
+const npmMissing =
+    /Fudge's own Node\.js|couldn't run \S*\/Helpers\/node:|Cannot find module '[^'\n]*\/npm-cli\.js'|env: (?:npm|node): No such file or directory|\b(?:npm|node): command not found/;
 const gitNetwork =
     /Could not resolve (?:host|proxy)|Failed to connect to|Connection (?:timed out|refused|reset)|SSL certificate problem|unable to access 'https:\/\/github\.com|Proxy CONNECT aborted|The requested URL returned error: 40[37]|Operation timed out/i;
 
@@ -67,20 +85,19 @@ export function causeOf(failure: FailureDetails, proxy: ProxyFacts = { autoConfi
     const pac = proxy.autoConfig
         ? " Your Mac picks its proxy with an automatic configuration file, which npm and git can't read."
         : "";
-    if (/env: (?:npm|node): No such file or directory|\b(?:npm|node): command not found/.test(output) ||
-        (code === 127 && /\bnpm\b/.test(command + output))) {
+    if (npmMissing.test(output) || (code === 127 && /\bnpm\b/.test(command + output))) {
         return {
             kind: "npmMissing",
             text:
-                "Fudge couldn't find npm, which it needs to install extensions. Opened from Finder or at login, Fudge " +
-                "doesn't see your shell's PATH, so an npm from Homebrew or a version manager isn't found. Until Fudge " +
-                "brings its own npm, start it from Terminal with open -n -a Fudge.",
+                "Fudge couldn't find npm, which it needs to install extensions. npm and Node.js come with Fudge, so " +
+                "this copy of Fudge is damaged. Reinstall Fudge.",
         };
     }
     if (/invalid active developer path|no developer tools were found|xcode-select --install/i.test(output)) {
         return { kind: "gitMissing", text: "Fudge needs Git, which comes with Apple's Command Line Tools." };
     }
-    const fromNpm = /\bnpm (?:ci|install|error|ERR!)|registry\.npmjs\.org/.test(command + "\n" + output);
+    // Fudge runs its own npm as `node …/npm-cli.js ci`, which `fudge build` names that way when it fails.
+    const fromNpm = /\bnpm(?:-cli\.js)? (?:ci|install|error|ERR!)|registry\.npmjs\.org/.test(command + "\n" + output);
     if (fromNpm && network.test(output)) {
         return {
             kind: "registryUnreachable",
@@ -91,16 +108,16 @@ export function causeOf(failure: FailureDetails, proxy: ProxyFacts = { autoConfi
     if (fromGit && gitNetwork.test(output)) {
         return {
             kind: "githubUnreachable",
-            text:
-                "Fudge couldn't reach GitHub (github.com) for the extension's source. A proxy or firewall may be blocking it." +
-                pac,
+            // The store's list and every extension's source come from GitHub, so this fits a list download too.
+            text: "Fudge couldn't reach GitHub (github.com). A proxy or firewall may be blocking it." + pac,
         };
     }
     const buildError = /\[ERROR\]\s*(.+)/.exec(output);
     if (buildError) {
         return { kind: "buildFailed", text: `The extension didn't build: ${oneLine(buildError[1]).slice(0, 200)}` };
     }
-    return { kind: "other", text: "Something went wrong while installing." };
+    // The title says what failed (an install, an update, the store's list), so this fits each of them.
+    return { kind: "other", text: "Something went wrong. Copy Error copies the whole error." };
 }
 
 /** Text on one line, its runs of whitespace one space, so nothing in it can start a block of its own. */
