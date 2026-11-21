@@ -168,6 +168,27 @@ final class LauncherModel {
     }
     /// The extension each session belongs to.
     @ObservationIgnored private var sessionExtensions: [String: String] = [:]
+
+    /// Unloads every running session of `extensionName`'s commands and waits until each has exited (the host stops a
+    /// worker 1 s after `unload` at the latest), or 2 s. Turning the Extension Store off calls it before deleting the
+    /// copy the store's git works in; the store ends its git when it's unloaded. A view of it on screen goes back to
+    /// root search.
+    func unloadSessions(ofExtension extensionName: String) async {
+        let sessions = sessionExtensions.filter { $0.value == extensionName }.map(\.key)
+        guard !sessions.isEmpty else { return }
+        for session in sessions {
+            if case .command(let command) = screen, command.session == session {
+                leaveCommand()
+                refreshResults()
+            } else {
+                send(.unload(session: session))
+            }
+        }
+        let deadline = ContinuousClock.now + .seconds(2)
+        while sessions.contains(where: { sessionExtensions[$0] != nil }), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
     /// The command each session runs, by name.
     @ObservationIgnored private var sessionCommands: [String: String] = [:]
     /// The subtitles commands set for themselves (`updateCommandMetadata`).

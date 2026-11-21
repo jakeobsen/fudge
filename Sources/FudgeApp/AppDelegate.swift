@@ -77,6 +77,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.resetAfterChanged = { [weak self] setting in self?.model.panelReset.setting = setting }
         // The store stays installed either way; the launcher reads settings.json again.
         settingsModel.extensionStoreChanged = { [weak self] in self?.model.applySettings() }
+        settingsModel.stopExtensionStore = { [weak self] in
+            await self?.model.unloadSessions(ofExtension: ExtensionStore.extensionName)
+        }
         settingsModel.currencyRatesChanged = { [weak self] on in
             guard let self else { return }
             Task { await self.exchangeRates.setEnabled(on, now: Date()) }
@@ -141,11 +144,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         launcherHotkeyChanged()
         model.menuBar.start()
         applyCommandHotkeys()
-        settingsModel.registerLauncherHotkey = { [weak self] spec in
-            guard let self else { return false }
-            let registered = self.registry.setLauncher(spec)
+        settingsModel.changeLauncherHotkey = { [weak self] spec, save in
+            guard let self else { return .notSaved }
+            let result = self.registry.changeLauncher(to: spec, save: save)
             self.launcherHotkeyChanged()
-            return registered
+            return result
         }
         settingsModel.suspendHotkeys = { [weak self] in self?.registry.suspend() }
         settingsModel.resumeHotkeys = { [weak self] in

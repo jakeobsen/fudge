@@ -124,7 +124,7 @@ struct PermissionsPage: View {
             LaunchPermissionsSection(model: model)
             Section {
                 LabeledContent {
-                    Button("Show Onboarding Again") { model.showOnboarding() }
+                    Button("Show Onboarding Again") { model.showOnboardingAgain() }
                 } label: {
                     Text("Go through Fudge's first-run choices again, starting from what's set now.")
                 }

@@ -1,0 +1,16 @@
+{
+  "name": "fudge-extension-store",
+  "title": "Extension Store",
+  "description": "Browse and install extensions from the open-source repository github.com/raycast/extensions.",
+  "license": "AGPL-3.0-or-later",
+  "author": "fudge",
+  "type": "module",
+  "commands": [
+    {
+      "name": "extension-store",
+      "title": "Extension Store",
+      "description": "Browse, install, update and uninstall store extensions.",
+      "mode": "view"
+    }
+  ]
+}
