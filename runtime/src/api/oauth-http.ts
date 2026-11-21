@@ -32,7 +32,10 @@ type HttpModule = { request: RequestFunction; get: typeof Http.get };
 
 /** The URL a call to `http.request` or `https.request` asks for, read as Node reads its arguments; null for a unix
  * socket or anything that doesn't make a URL, which is left alone. */
-export function requestURL(args: unknown[], protocol: "http:" | "https:"): { url: URL; method: string } | null {
+export function requestURL(
+    args: unknown[],
+    protocol: "http:" | "https:",
+): { url: URL; method: string; options: Record<string, unknown> } | null {
     let options: Record<string, unknown> = {};
     const [first, second] = args;
     if (typeof first === "string" || first instanceof URL) {
@@ -61,7 +64,7 @@ export function requestURL(args: unknown[], protocol: "http:" | "https:"): { url
     const path = typeof options.path === "string" ? options.path : "/";
     try {
         const url = new URL(`${scheme}//${host.includes(":") ? `[${host}]` : host}${port}${path}`);
-        return { url, method: String(options.method || "GET").toUpperCase() };
+        return { url, method: String(options.method || "GET").toUpperCase(), options };
     } catch {
         return null;
     }
@@ -93,6 +96,38 @@ function dechunk(raw: Buffer): Buffer {
     return Buffer.concat(parts);
 }
 
+/** How the caller made the request: Node's own function, its `this`, its arguments, and the options they add up to. */
+type Caller = { original: RequestFunction; self: unknown; args: unknown[]; options: Record<string, unknown> };
+
+/** The TLS options a caller can give a request (or its agent), which a connection Fudge opens for it keeps. */
+const tlsKeys = [
+    "ca",
+    "cert",
+    "key",
+    "pfx",
+    "passphrase",
+    "crl",
+    "ciphers",
+    "ecdhCurve",
+    "sigalgs",
+    "minVersion",
+    "maxVersion",
+    "secureProtocol",
+    "secureOptions",
+    "honorCipherOrder",
+    "rejectUnauthorized",
+    "checkServerIdentity",
+];
+
+export function tlsOptions(options: Record<string, unknown>): Record<string, unknown> {
+    const agent = options.agent as { options?: Record<string, unknown> } | undefined;
+    const picked: Record<string, unknown> = {};
+    for (const source of [agent && typeof agent === "object" ? (agent.options ?? {}) : {}, options]) {
+        for (const key of tlsKeys) if (source[key] !== undefined) picked[key] = source[key];
+    }
+    return picked;
+}
+
 /**
  * The socket of a request that needs a decision. It holds what the `ClientRequest` writes until the request has
  * finished, then decides, and connects to the relay or the original host itself; the response comes back through it
@@ -107,17 +142,21 @@ class Gate extends Duplex {
     private timeoutMs = 0;
     private timer: NodeJS.Timeout | null = null;
     private ended = false;
+    private passed: Http.ClientRequest | null = null;
+    private answer: Http.IncomingMessage | null = null;
     private readonly url: URL;
     private readonly method: string;
     private readonly providers: OAuthProvider[];
     private readonly server: Server;
+    private readonly caller: Caller;
 
-    constructor(url: URL, method: string, providers: OAuthProvider[], server: Server) {
+    constructor(url: URL, method: string, providers: OAuthProvider[], server: Server, caller: Caller) {
         super();
         this.url = url;
         this.method = method;
         this.providers = providers;
         this.server = server;
+        this.caller = caller;
     }
 
     private finishResponse(): void {
@@ -137,9 +176,61 @@ class Gate extends Duplex {
         const chunked = head.some((line) => /^transfer-encoding:.*chunked/i.test(line));
         const body = (chunked ? dechunk(raw) : raw).toString("utf8");
         decide(this.method, this.url, body, this.providers, this.server).then(
-            (decision) => this.send(decision, head, raw),
+            (decision) =>
+                decision.kind === "untouched" ? this.passThrough(head, raw, chunked) : this.send(decision, head, raw),
             (error) => this.destroy(error instanceof Error ? error : new Error(String(error))),
         );
+    }
+
+    /**
+     * Left alone: the request goes out exactly as the caller made it, through Node's own function with the caller's
+     * arguments (its agent, a proxy's included, and its TLS options), with the headers and body it wrote. The answer
+     * comes back through this socket as the bytes it arrived as, for the caller's `ClientRequest` to read.
+     */
+    private passThrough(head: string[], raw: Buffer, chunked: boolean): void {
+        if (this.destroyed) return;
+        const headers: [string, string][] = [];
+        for (const line of head.slice(1)) {
+            const colon = line.indexOf(":");
+            if (colon <= 0) continue;
+            const name = line.slice(0, colon).trim();
+            if (/^(host|connection|keep-alive|transfer-encoding)$/i.test(name)) continue;
+            if (chunked && /^content-length$/i.test(name)) continue;
+            headers.push([name, line.slice(colon + 1).trim()]);
+        }
+        const merged: Record<string, string | string[]> = {};
+        for (const [name, value] of headers) {
+            const had = merged[name];
+            merged[name] = had === undefined ? value : [...(Array.isArray(had) ? had : [had]), value];
+        }
+        const [first, second] = this.caller.args;
+        const options = { method: this.method, headers: merged };
+        const args =
+            typeof first === "string" || first instanceof URL
+                ? [first, { ...(second && typeof second === "object" ? second : {}), ...options }]
+                : [{ ...(first as object), ...options }];
+        const sent = Reflect.apply(this.caller.original, this.caller.self, args) as Http.ClientRequest;
+        this.passed = sent;
+        if (this.timeoutMs) sent.setTimeout(this.timeoutMs, () => this.emit("timeout"));
+        sent.on("error", (error) => this.destroy(error));
+        sent.on("response", (answer) => {
+            this.answer = answer;
+            const lines = [`HTTP/1.1 ${answer.statusCode} ${answer.statusMessage ?? ""}`];
+            for (let at = 0; at + 1 < answer.rawHeaders.length; at += 2) {
+                const name = answer.rawHeaders[at];
+                if (/^(transfer-encoding|connection|keep-alive)$/i.test(name)) continue;
+                lines.push(`${name}: ${answer.rawHeaders[at + 1]}`);
+            }
+            lines.push("Connection: close");
+            this.push(Buffer.from(`${lines.join("\r\n")}\r\n\r\n`, "latin1"));
+            answer.on("data", (chunk: Buffer) => {
+                this.touch();
+                if (!this.push(chunk)) answer.pause();
+            });
+            answer.on("end", () => this.finishResponse());
+            answer.on("error", (error) => this.destroy(error));
+        });
+        sent.end(chunked ? dechunk(raw) : raw);
     }
 
     private send(decision: Decision, head: string[], raw: Buffer): void {
@@ -155,9 +246,16 @@ class Gate extends Duplex {
         ];
         const port = Number(to.port) || (to.protocol === "https:" ? 443 : 80);
         const host = to.hostname.startsWith("[") ? to.hostname.slice(1, -1) : to.hostname;
+        // The caller's TLS options go along (a custom CA, a client certificate), except the name, which is the
+        // relay's.
         const socket =
             to.protocol === "https:"
-                ? tls.connect({ host, port, servername: net.isIP(host) ? undefined : host })
+                ? tls.connect({
+                      ...tlsOptions(this.caller.options),
+                      host,
+                      port,
+                      servername: net.isIP(host) ? undefined : host,
+                  })
                 : net.connect({ host, port });
         this.upstream = socket;
         socket.on("data", (chunk: Buffer) => this.received(chunk));
@@ -197,6 +295,7 @@ class Gate extends Duplex {
 
     override _read(): void {
         this.upstream?.resume();
+        this.answer?.resume();
     }
 
     override _final(callback: (error?: Error | null) => void): void {
@@ -207,6 +306,7 @@ class Gate extends Duplex {
     override _destroy(error: Error | null, callback: (error?: Error | null) => void): void {
         if (this.timer) clearTimeout(this.timer);
         this.upstream?.destroy();
+        this.passed?.destroy();
         callback(error);
     }
 
@@ -215,6 +315,7 @@ class Gate extends Duplex {
         if (callback) this.once("timeout", callback);
         this.timeoutMs = ms;
         this.upstream?.setTimeout(ms);
+        this.passed?.setTimeout(ms);
         this.touch();
         return this;
     }
@@ -222,7 +323,9 @@ class Gate extends Duplex {
     private touch(): void {
         if (this.timer) clearTimeout(this.timer);
         this.timer = null;
-        if (this.timeoutMs > 0 && !this.upstream) this.timer = setTimeout(() => this.emit("timeout"), this.timeoutMs);
+        if (this.timeoutMs > 0 && !this.upstream && !this.passed) {
+            this.timer = setTimeout(() => this.emit("timeout"), this.timeoutMs);
+        }
     }
 
     setNoDelay(): this {
@@ -250,7 +353,8 @@ function guardModule(module: HttpModule, protocol: "http:" | "https:", providers
         if (asked === null || !needsDecision(asked.url, providers)) {
             return Reflect.apply(original, this, args) as Http.ClientRequest;
         }
-        const gate = new Gate(asked.url, asked.method, providers, server);
+        const caller = { original, self: this, args, options: asked.options };
+        const gate = new Gate(asked.url, asked.method, providers, server, caller);
         const sent = Reflect.apply(original, this, throughGate(args, () => gate)) as Http.ClientRequest;
         sent.once("finish", () => gate.requestFinished());
         return sent;
