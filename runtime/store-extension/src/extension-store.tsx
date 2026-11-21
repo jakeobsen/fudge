@@ -143,17 +143,18 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     // The README of the selected extension, fetched on demand while the detail pane is open.
     useEffect(() => {
         if (!showingDetail || !selected || !loaded || readmes[selected] !== undefined) return;
-        const name = selected;
+        // A row's id is its folder in the repository (`StoreEntry.dir`), which `readCatalog` checked.
+        const dir = selected;
         void oneAtATime(async () => {
             let readme = "";
             try {
-                await repo.add(`/extensions/${name}/README.md`);
-                readme = await readRegularFile(path.join(repo.path, "extensions", name, "README.md"), maxReadmeBytes);
+                await repo.add(`/extensions/${dir}/README.md`);
+                readme = await readRegularFile(path.join(repo.path, "extensions", dir, "README.md"), maxReadmeBytes);
             } catch {
                 // No README, one that couldn't be fetched, or one that isn't a regular file of at most 1 MB: the
                 // detail shows the manifest alone.
             }
-            setReadmes((current) => ({ ...current, [name]: readme }));
+            setReadmes((current) => ({ ...current, [dir]: readme }));
         });
     }, [showingDetail, selected, loaded, readmes, repo]);
 
@@ -218,14 +219,14 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     const { installed: installedRows, other } = sections(shown, loaded?.installed ?? {});
     // Only the selected row carries its actions (the first row until something is selected): 3,500 action panels
     // would make every render take seconds. Moving the selection renders the new row's.
-    const actionsFor = selected ?? (installedRows[0] ?? other[0])?.name;
+    const actionsFor = selected ?? (installedRows[0] ?? other[0])?.dir;
     const item = (entry: StoreEntry) => {
         const state = loaded ? status(entry, loaded.installed, loaded.trees) : "available";
         const icon = loaded ? iconURL(entry, loaded.commit) : undefined;
         return (
             <List.Item
-                key={entry.name}
-                id={entry.name}
+                key={entry.dir}
+                id={entry.dir}
                 title={entry.title}
                 subtitle={showingDetail ? undefined : entry.description}
                 icon={icon ? { source: icon, fallback: Icon.Box } : Icon.Box}
@@ -247,11 +248,11 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                 detail={
                     // Built only while the pane is open: 3,500 rows' markdown would slow every render.
                     showingDetail ? (
-                        <List.Item.Detail markdown={detailMarkdown(entry, loaded?.commit ?? "", readmes[entry.name])} />
+                        <List.Item.Detail markdown={detailMarkdown(entry, loaded?.commit ?? "", readmes[entry.dir])} />
                     ) : undefined
                 }
                 actions={
-                    entry.name !== actionsFor ? undefined : (
+                    entry.dir !== actionsFor ? undefined : (
                     <ActionPanel>
                         <ActionPanel.Section>
                             {state === "available" && (
@@ -282,7 +283,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                             )}
                         </ActionPanel.Section>
                         <ActionPanel.Section>
-                            {loaded && <Action.OpenInBrowser url={folderURL(entry.name, loaded.commit)} />}
+                            {loaded && <Action.OpenInBrowser url={folderURL(entry.dir, loaded.commit)} />}
                             <Action.CopyToClipboard title="Copy Name" content={entry.name} />
                             <Action
                                 title="Refresh"
