@@ -350,6 +350,16 @@ struct OnboardingView: View {
         case .done:
             VStack(alignment: .leading, spacing: 14) {
                 title("You're all set")
+                switch OnboardingDone.line(hotkeyRegistered: !settings.launcherHotkeyInUse) {
+                case .press(let before, let after):
+                    HStack(spacing: 5) {
+                        Text(before)
+                        Keycaps(spec: settings.launcherHotkey)
+                        Text(after)
+                    }
+                case .hotkeyTaken(let text):
+                    Text(text).fixedSize(horizontal: false, vertical: true)
+                }
                 Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
                     summary("Launcher hotkey") { Keycaps(spec: settings.launcherHotkey) }
                     summary("Accessibility") { Text(settings.accessibility.isTrusted ? "Allowed" : "Not now") }

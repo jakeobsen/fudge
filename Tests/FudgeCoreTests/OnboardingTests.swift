@@ -288,3 +288,17 @@ import Testing
     #expect(existing.pending == [.hyperkey, .done])
     #expect(existing.hasSomethingNew)
 }
+
+// MARK: - Done says where Fudge is (SPEC-114 §2)
+
+@Test func doneSaysToPressTheHotkeyAndThatFudgeStaysInTheMenuBar() {
+    #expect(
+        OnboardingDone.line(hotkeyRegistered: true)
+            == .press(before: "Press", after: "to open Fudge. It stays in the menu bar."))
+    // A hotkey another app has does nothing, so Done never says to press it.
+    guard case .hotkeyTaken(let text) = OnboardingDone.line(hotkeyRegistered: false) else {
+        Issue.record("a taken hotkey isn't offered")
+        return
+    }
+    #expect(text.contains("menu bar") && text.contains("Settings → General") && !text.hasPrefix("Press"))
+}
