@@ -468,6 +468,32 @@ test("everything in the detail goes through the filter, the manifest's text incl
     assert.match(detailMarkdown(entry, "c0ffee", undefined), /Loading the README/);
 });
 
+test("the detail lists each command with its mode", () => {
+    const entry = parseManifest(
+        "alpha",
+        manifest("alpha", {
+            commands: [
+                { name: "search", title: "Search Issues", description: "Find issues", mode: "view" },
+                { name: "create", title: "Create Issue", mode: "no-view" },
+                { name: "menu", title: "My Issues", description: "In the menu bar", mode: "menu-bar" },
+                { name: "odd", title: "Odd", mode: "something-else" },
+                { name: "none", title: "No Mode" },
+            ],
+        }),
+    )!;
+    const commands = detailMarkdown(entry, "c0ffee", undefined).split("## Commands\n\n")[1]!.split("\n\n")[0];
+    assert.equal(
+        commands,
+        [
+            "- **Search Issues** (view): Find issues",
+            "- **Create Issue** (no-view)",
+            "- **My Issues** (menu bar): In the menu bar",
+            "- **Odd**",
+            "- **No Mode**",
+        ].join("\n"),
+    );
+});
+
 test("every git operation of the store's waits its turn", async () => {
     const order: string[] = [];
     const slow = oneAtATime(async () => {
