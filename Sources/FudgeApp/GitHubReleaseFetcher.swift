@@ -1,20 +1,12 @@
 import Foundation
 import FudgeCore
 
-/// The version the Makefile wrote into `Info.plist` (`git describe --tags --always --dirty`), or
-/// `FudgeVersion.current` outside an app bundle.
-enum AppVersion {
-    static var current: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? FudgeVersion.current
-    }
-}
-
 /// Asks GitHub for Fudge's newest release: one GET of `releases/latest` with `User-Agent` and `Accept`. Its session
 /// keeps no cookies, credentials or cache, gives up after 15 s, and reads at most 1 MB. It never downloads the
 /// release itself. URLSession adds `Host`, `Connection` and `Accept-Encoding`; `Accept-Language` is set to "en",
 /// since URLSession would otherwise fill in the Mac's languages.
 struct GitHubReleaseFetcher: ReleaseFetcher {
-    let userAgent = UpdateCheck.userAgent(version: AppVersion.current)
+    let userAgent = UpdateCheck.userAgent(version: FudgeVersion.current)
 
     private let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral

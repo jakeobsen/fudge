@@ -26,11 +26,13 @@ It is not affiliated with or endorsed by Raycast.
 ## Installing
 
 Each release on GitHub has a disk image, `Fudge-<version>.dmg`: open it and drag Fudge to Applications.
+Fudge includes the Node.js that runs extensions, so there's nothing else to install.
 Fudge isn't notarized yet, so macOS blocks it the first time: open it, then go to System Settings → Privacy & Security and click Open Anyway (on macOS 14, Control-click Fudge and choose Open instead).
 
 ## Building
 
-You need macOS 14 or later, Xcode 26 or later and Node.js 22.18 or later.
+You need macOS 14 or later and Xcode 26 or later.
+The first build downloads the Node.js that Fudge includes from nodejs.org, checks it against the checksum pinned in the `Makefile`, and keeps it in `.cache/node`; every build step and test uses it.
 The app runs on macOS 14 and later.
 
 ```bash
@@ -110,6 +112,14 @@ Pressing a view command's hotkey again while it's on screen hides the window.
 Fudge refuses a shortcut that's the launcher's or another command's, and one another app has registered.
 That last check is best-effort: macOS doesn't report system shortcuts such as ⌘Space or ⌃↑, so one of those can be recorded but never fire.
 
+### Hyperkey
+
+Turn on **Hyperkey (Caps Lock)** in **Settings… → General**, and holding Caps Lock presses ⌘⌥⌃⇧ at once, called Hyper, for shortcuts like Hyper+T that no other app uses.
+Caps Lock then no longer turns caps on, unless you also turn on **Quick press toggles Caps Lock**.
+Hyper doesn't work in password fields, and it needs Accessibility permission (**Settings… → Permissions**).
+Turning it off, or quitting Fudge, gives Caps Lock back.
+If Caps Lock is already mapped to another key, Fudge leaves it alone and says so.
+
 ### Aliases and turning commands off
 
 On the same page, a command can have an **Alias**: a short word such as `sf`.
@@ -158,7 +168,7 @@ An extension running in the background, such as a menu bar refresh, never interr
 **Settings… → General → Import / Export** saves everything you've set up in Fudge to one file, and brings it back, on this Mac or another one.
 
 - **Export…** asks for a password (at least 8 characters), then where to save `fudge-backup-<date>.fudgebackup`.
-  The file holds Fudge's settings (hotkeys, aliases, which commands are on), your quicklinks and snippets, the answers about extensions opening other extensions, root search's ranking, every extension's preferences and data, and the list of installed extensions.
+  The file holds Fudge's settings (hotkeys, aliases, which commands are on), your quicklinks, snippets and recent colors, the answers about extensions opening other extensions, root search's ranking, every extension's preferences and data, and the list of installed extensions.
   It's always encrypted with your password, because extensions keep passwords and tokens in there; Fudge can't recover a forgotten one.
   The file opens only in Fudge, not with Apple's `aea` tool.
   Extension data over 100 MB in total leaves out the biggest extensions' data, and the export says which.
@@ -204,8 +214,14 @@ Extensions can offer to make one too (**Create Snippet** in their ⌘K).
 A snippet's text can fill itself in: `{clipboard}`, `{date}`, `{time}`, `{datetime}`, `{day}` and `{uuid}`, changed by `| uppercase`, `| lowercase` or `| trim`, and `{date format="yyyy-MM-dd"}` picks a date's format.
 `{cursor}` marks where the cursor ends up after pasting.
 These names are always filled in, wherever they appear, as in Raycast; any other text in braces, such as code or JSON, is pasted as it is.
+
 A snippet can also have a keyword, such as `;addr`, which Search Snippets finds it by.
-No keyword can contain another.
+Turn on **Expand Snippets as You Type** in **Settings → Snippets**, and typing a keyword in any app replaces it with its snippet.
+It needs macOS's Input Monitoring permission, which Fudge asks for when you turn it on, and Accessibility, as pasting does.
+Fudge keeps only the last few characters you typed, in memory, to spot a keyword.
+What you type isn't saved or sent anywhere, and nothing is read while macOS protects a password field.
+A keyword typed in Fudge's own windows isn't expanded, and an expansion goes only into the app the keyword was typed in.
+No keyword can contain another, so a keyword never expands inside a longer one.
 
 ### Calculator and currency
 
@@ -246,6 +262,22 @@ It shows the emoji your Mac can draw.
 
 In **Settings… → Search Emoji & Symbols**, **Skin Tone** picks the tone for the emoji that have one.
 
+### Color Picker
+
+**Pick Color** shows a magnifier: click a color anywhere on the screen to copy it, or press Esc to cancel.
+**Recent Colors** shows the last 32 colors you picked.
+↵ copies one, ⌘K copies it as HEX, RGB, HSL, a SwiftUI `Color` or a `UIColor`, ⌃X removes it, and ⌃⇧X clears them all, after asking.
+Give either one a hotkey under **Settings… → Commands → Tools**.
+
+**Settings… → Color Picker → Copy Format** sets how Pick Color and ↵ copy a color: `#3A7BD5` (HEX, the default), `rgb(58, 123, 213)`, `hsl(215, 65%, 53%)`, `Color(red: 0.227, green: 0.482, blue: 0.835)` or `UIColor(red: 0.227, green: 0.482, blue: 0.835, alpha: 1)`.
+
+### Define Word
+
+**Define Word** shows a word's definition from your Mac's own dictionaries.
+Type `define` and the word (`define serendipity`), or run it with nothing typed to look up the text selected in the app you're in.
+`define` is its alias, so you can change or clear it on the Commands page.
+↵ (or ⌘D) opens the word in Dictionary, and ⌘↵ copies the definition.
+
 ### Clipboard History
 
 **Clipboard History** keeps what you copy, so you can search it and paste it again.
@@ -272,9 +304,15 @@ Turning it off removes the store's downloaded list; the extensions you installed
 In the **Extension Store** command, search the extensions, or pick a category in the dropdown; **Installed** shows the ones you installed from it.
 
 - ↵ installs one, after saying whether Fudge supports everything it uses.
-  Fudge doesn't support Raycast AI or the Raycast Browser Extension, so an extension that uses either is marked **Not compatible**: the commands that use them won't work. ⌘U updates one marked **Update available**, and ⌃X uninstalls it, to the Trash.
+  Fudge doesn't support Raycast AI or the Raycast Browser Extension.
+  An extension where only some commands use either is marked **Partly compatible**, and its details name those commands; one where every command does is marked **Not compatible**.
+  Those commands are installed turned off, so they aren't in root search, and **Settings… → Commands** says why.
+  You can turn one on there: it then works, apart from what needs Raycast AI or the Browser Extension.
+  ⌘U updates one marked **Update available**, and ⌃X uninstalls it, to the Trash.
 - ⌘D shows an extension's details: whether it's compatible (checked once you stay on it for a moment), each command and whether it opens a view, runs without one, or sits in the menu bar, and its README. ⌘R updates the list, which otherwise happens when you open the store and the list is a day old.
   If the list couldn't be downloaded, ⌘R tries again.
+- If an install or update fails, the store shows the whole error and its likely cause, such as npm not found or the npm registry not reachable. ↵ tries again, and ⌘C copies the error, to send with an issue.
+  It uses the proxy set in **System Settings → Network** for npm and Git, unless you've set one yourself (`HTTPS_PROXY`); a proxy configuration file (PAC) can't be passed on.
 - The store needs Git.
   If it's missing, install Apple's Command Line Tools: run `xcode-select --install` in Terminal.
 - It never touches extensions you installed with `fudge build` yourself.
@@ -285,6 +323,7 @@ In the **Extension Store** command, search the extensions, or pick a category in
 Some extensions sign in to a service, such as GitHub or Linear.
 Pick a sign-in server under **Settings… → Sign-in**: **Fudge's sign-in server**, or **Your own server…**.
 A company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth).
+Extensions can sign in to GitHub, Linear, Slack, Asana, Google, Atlassian (Jira and Confluence) and Zoom, as far as the server offers them.
 When an extension needs to sign in, Fudge shows **Sign in to** the service, and ↵ continues in your browser.
 Sign-ins are kept in your Keychain, and the Sign-in page lists them, each with **Sign Out**.
 Changing the server signs you out of everything.
@@ -337,6 +376,16 @@ Lock Screen needs Accessibility permission.
 Type to find one, such as "export" or "show fonts", and press ↵ to run it.
 Give it a hotkey under **Settings… → Commands → Apps**.
 It needs Accessibility permission (**Settings… → Permissions**).
+
+### My Schedule
+
+**My Schedule** lists your events from today on, a section per day, from the calendars on your Mac.
+Each shows its time, its calendar's color, and "Now" or "in 12 min" when it's about to start; **Show Details** (⌘D) adds the place, the calendar, how many are invited and the notes.
+↵ joins the meeting when the event has a Zoom, Google Meet, Microsoft Teams, Webex, FaceTime, Whereby, Around or Jitsi link, and otherwise opens the event in Calendar (⌘O).
+⌘⇧C copies the meeting link, and Copy Details copies the event.
+
+The first time you open it, macOS asks to let Fudge see your calendars; you can change that under **Privacy & Security → Calendars**.
+**Settings → Calendar** picks which calendars it shows, and how many days ahead (1, 3, 7 or 14).
 
 ### Selected text and Finder items
 
@@ -393,6 +442,8 @@ Copyright (C) 2026 Morten Jakobsen.
 
 Licensed under the GNU Affero General Public License, version 3 or (at your option) any later version (`AGPL-3.0-or-later`).
 See [LICENSE](LICENSE).
+
+The app also ships third-party code and data, each under its own license: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) lists them, and Fudge.app carries the same as `Third-Party Notices.txt`, linked from **About Fudge**.
 
 `runtime/vendor/unicode/` holds Unicode's emoji data and CLDR's English annotations, under the Unicode License v3; see [the license next to them](runtime/vendor/unicode/LICENSE).
 

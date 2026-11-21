@@ -8,12 +8,22 @@ public struct BuiltInCommand: Sendable, Equatable {
     public var keywords: [String]
     /// The SF Symbol its rows show.
     public var symbol: String
+    /// Its arguments, entered in fields after the query as an extension command's are.
+    public var arguments: [ExtensionManifest.Argument]
+    /// Its alias until the user sets or clears one (`FudgeSettings.alias(ofCommand:)`): "define" for Define Word, so
+    /// `define serendipity` hands the word to its field.
+    public var defaultAlias: String?
 
-    public init(name: String, title: String, keywords: [String] = [], symbol: String) {
+    public init(
+        name: String, title: String, keywords: [String] = [], symbol: String,
+        arguments: [ExtensionManifest.Argument] = [], defaultAlias: String? = nil
+    ) {
         self.name = name
         self.title = title
         self.keywords = keywords
         self.symbol = symbol
+        self.arguments = arguments
+        self.defaultAlias = defaultAlias
     }
 }
 
@@ -35,7 +45,13 @@ public struct BuiltInCommandGroup: Sendable, Equatable, Identifiable {
     }
 
     /// Fudge's groups, by title, which the Commands page lists in this order above the extensions.
-    public static let all: [BuiltInCommandGroup] = [.apps, .system, .windowManagement]
+    public static let all: [BuiltInCommandGroup] = [.apps, .calendar, .system, .tools, .windowManagement]
+
+    /// The Commands page's Type column for a group's row and for its commands' rows: "Built-in" and "Command" for
+    /// Fudge's own groups, "Quicklinks" and "Quicklink" for the quicklinks.
+    public static func typeLabels(ofGroup name: String) -> (group: String, command: String) {
+        name == QuicklinkCommands.groupName ? ("Quicklinks", "Quicklink") : ("Built-in", "Command")
+    }
 
     /// Whether `name` can name a group: `:` and a valid extension name, so it's never an extension's name.
     public static func isValidName(_ name: String) -> Bool {

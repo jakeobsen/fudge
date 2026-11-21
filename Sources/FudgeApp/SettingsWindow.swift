@@ -16,8 +16,10 @@ final class SettingsModel {
     static let permissionsPage = ":permissions"
     static let quicklinksPage = ":quicklinks"
     static let snippetsPage = ":snippets"
+    static let colorPickerPage = ":color-picker"
     static let windowManagementPage = ":window-management"
     static let signInPage = ":sign-in"
+    static let calendarPage = ":calendar"
     /// Every installed extension, for the Commands page.
     private(set) var allExtensions: [InstalledExtension] = []
     /// `settings.json`, as the Commands page edits it.
@@ -69,16 +71,17 @@ final class SettingsModel {
         allExtensions = installed.sorted {
             $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending
         }
-        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        fudgeSettings = readSettings()
         settingsProblem = FudgeSettings.isWritable(paths.settingsFile) ? nil : unreadableMessage
         loadLaunchPermissions()
         loadQuicklinks()
         loadSnippets()
         loadWindowLayouts()
         loadSignIns()
+        loadCalendars()
         if selected != Self.generalPage, selected != Self.commandsPage, selected != Self.permissionsPage,
             selected != Self.quicklinksPage, selected != Self.snippetsPage, selected != Self.signInPage,
-            selected != Self.windowManagementPage,
+            selected != Self.colorPickerPage, selected != Self.windowManagementPage, selected != Self.calendarPage,
             !extensions.contains(where: { $0.manifest.name == selected })
         {
             select(Self.generalPage)
@@ -92,6 +95,7 @@ final class SettingsModel {
         if page == Self.quicklinksPage || page == Self.commandsPage { loadQuicklinks() }
         if page == Self.snippetsPage { loadSnippets() }
         if page == Self.windowManagementPage || page == Self.commandsPage { loadWindowLayouts() }
+        if page == Self.calendarPage || page == Self.permissionsPage { loadCalendars() }
     }
 
     /// Show Onboarding Again: a recording here ends first, since onboarding has its own hotkey step.
@@ -130,6 +134,67 @@ final class SettingsModel {
         guard FudgeSettings.load(from: paths.settingsFile).currencyRates != on, change({ $0.currencyRates = on })
         else { return }
         currencyRatesChanged(on)
+    }
+
+    // MARK: - Hyperkey
+
+    /// **Hyperkey (Caps Lock)** (`hyperkey` in `settings.json`, SPEC-093).
+    var hyperkey: Bool { fudgeSettings.hyperkey }
+    /// **Quick press toggles Caps Lock** (`hyperkeyQuickPress`).
+    var hyperkeyQuickPress: Bool { fudgeSettings.hyperkeyQuickPress }
+    /// What stopped Hyperkey, shown under its switch: no Accessibility, or Caps Lock mapped elsewhere.
+    var hyperkeyProblem: String?
+    /// Whether Fudge may use Accessibility, asked as a user's click is: macOS's prompt the first time, Fudge's offer of
+    /// the pane after that. Set by the app delegate.
+    @ObservationIgnored var mayUseAccessibility: () -> Bool = { false }
+    /// Starts Hyperkey and calls back with what stopped it, if anything (`HyperkeyService.turnOn`); set by the app
+    /// delegate.
+    @ObservationIgnored var turnOnHyperkey: (Bool, @escaping @MainActor (String?) -> Void) -> Void = { _, done in
+        done(nil)
+    }
+    @ObservationIgnored var turnOffHyperkey: () -> Void = {}
+    @ObservationIgnored var hyperkeyQuickPressChanged: () -> Void = {}
+
+    /// The switch, and onboarding's step. Turning it on needs Accessibility, and is saved only once Caps Lock is
+    /// remapped, so a refusal leaves it off with the reason under the switch.
+    func setHyperkey(_ on: Bool) {
+        guard FudgeSettings.load(from: paths.settingsFile).hyperkey != on else { return }
+        guard on else {
+            guard change({ $0.hyperkey = false }) else { return }
+            hyperkeyProblem = nil
+            turnOffHyperkey()
+            return
+        }
+        guard FudgeSettings.isWritable(paths.settingsFile) else {
+            settingsProblem = unreadableMessage
+            return
+        }
+        guard mayUseAccessibility() else {
+            hyperkeyProblem = HyperkeyService.needsAccessibility
+            return
+        }
+        turnOnHyperkey(hyperkeyQuickPress) { [weak self] problem in
+            guard let self else { return }
+            hyperkeyProblem = problem
+            guard problem == nil else { return }
+            // Remapped; a settings.json that can't be written now puts Caps Lock back.
+            if !change({ $0.hyperkey = true }) { turnOffHyperkey() }
+        }
+    }
+
+    func setHyperkeyQuickPress(_ on: Bool) {
+        guard hyperkeyQuickPress != on, change({ $0.hyperkeyQuickPress = on }) else { return }
+        hyperkeyQuickPressChanged()
+    }
+
+    /// The Color Picker's Copy Format (`colorFormat` in `settings.json`).
+    var colorFormat: ColorFormat { fudgeSettings.colorFormat }
+    /// Recent Colors, if it's open in the launcher, is drawn again with the new format first; set by the app delegate.
+    @ObservationIgnored var colorFormatChanged: () -> Void = {}
+
+    func setColorFormat(_ format: ColorFormat) {
+        guard format != colorFormat, change({ $0.colorFormat = format }) else { return }
+        colorFormatChanged()
     }
 
     /// How the calculator reads and shows numbers (`numberFormat` in `settings.json`).
@@ -304,14 +369,58 @@ final class SettingsModel {
             try store.save(to: file)
             // Its alias, hotkey and Enabled go with it (`QuicklinkCommands.prune`).
             var pruned = FudgeSettings.load(from: paths.settingsFile)
-            if QuicklinkCommands.prune(&pruned, keeping: store.quicklinks) {
-                change { QuicklinkCommands.prune(&$0, keeping: store.quicklinks) }
+            if QuicklinkCommands.prune(&pruned, in: store) {
+                change { QuicklinkCommands.prune(&$0, in: store) }
             }
         } catch {
             FileHandle.standardError.write(Data("fudge: couldn't delete the quicklink: \(error)\n".utf8))
         }
         loadQuicklinks()
         quicklinksChanged()
+    }
+
+    // MARK: - Calendar (SPEC-092)
+
+    /// The calendars, read only with access, which only My Schedule's own run asks for; set by the app delegate,
+    /// which shares the launcher's.
+    @ObservationIgnored var calendarSource: any CalendarSource = FixedCalendarSource(access: .notDetermined)
+    /// Tells the launcher to draw My Schedule again; set by the app delegate.
+    @ObservationIgnored var calendarChanged: () -> Void = {}
+    private(set) var calendarAccess = CalendarAuthorization.notDetermined
+    /// The Mac's calendars, by title, as the Calendar page lists them.
+    private(set) var calendars: [CalendarInfo] = []
+
+    /// Reads the access and the calendars again, without asking: when the page is shown or the window becomes key.
+    /// The calendars are read off the main thread, since EventKit waits on the calendar agent.
+    func loadCalendars() {
+        calendarAccess = calendarSource.authorization
+        let source = calendarSource
+        Task {
+            let read = await Task.detached(priority: .userInitiated) { source.calendars() }.value
+            calendars = read.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        }
+    }
+
+    var calendarDaysAhead: Int { fudgeSettings.calendarDaysAhead }
+
+    func isCalendarShown(_ id: String) -> Bool {
+        !fudgeSettings.calendarHidden.contains(id)
+    }
+
+    /// Ticks or unticks a calendar; an unticked one is kept by id, so a calendar added later shows.
+    func setCalendarShown(_ shown: Bool, id: String) {
+        guard
+            change({ settings in
+                settings.calendarHidden.removeAll { $0 == id }
+                if !shown { settings.calendarHidden.append(id) }
+            })
+        else { return }
+        calendarChanged()
+    }
+
+    func setCalendarDaysAhead(_ days: Int) {
+        guard days != calendarDaysAhead, change({ $0.calendarDaysAhead = days }) else { return }
+        calendarChanged()
     }
 
     // MARK: - Snippets
@@ -321,8 +430,32 @@ final class SettingsModel {
     private(set) var snippets: [Snippet] = []
     /// `snippets.json` holds something Fudge can't read, so the page can't change it.
     private(set) var snippetsUnreadable = false
-    /// Search Snippets, if it's open in the launcher, reads the snippets again; set by the app delegate.
+    /// Search Snippets, if it's open in the launcher, and snippet expansion read the snippets again; set by the app
+    /// delegate.
     @ObservationIgnored var snippetsChanged: () -> Void = {}
+
+    /// **Expand Snippets as You Type** (`expandSnippets` in `settings.json`, SPEC-078 §5).
+    var expandSnippets: Bool { fudgeSettings.expandSnippets }
+    /// Starts or stops snippet expansion's keyboard tap; set by the app delegate.
+    @ObservationIgnored var snippetExpansionChanged: () -> Void = {}
+    /// Input Monitoring's status for the Snippets page. Snapshot runs get a fixed one.
+    @ObservationIgnored var inputMonitoring = InputMonitoringStatus()
+
+    /// Turns expansion on, the switch's way and onboarding's: saved, then macOS is asked for Input Monitoring when
+    /// it isn't allowed (its prompt the first time, the pane after that).
+    func turnOnSnippetExpansion() {
+        // Fresh, since onboarding shows no Snippets page to keep it current.
+        inputMonitoring.refresh()
+        setExpandSnippets(true)
+        if expandSnippets, !inputMonitoring.isAllowed { InputMonitoring.request() }
+    }
+
+    func setExpandSnippets(_ on: Bool) {
+        // A settings.json that can't be written is refused, with the banner, and nothing is turned on.
+        guard FudgeSettings.load(from: paths.settingsFile).expandSnippets != on, change({ $0.expandSnippets = on })
+        else { return }
+        snippetExpansionChanged()
+    }
 
     func loadSnippets() {
         let file = paths.snippetsFile
@@ -462,7 +595,7 @@ final class SettingsModel {
     func recordLauncherHotkey(_ key: HotKeyRecording) {
         cancelRecording()
         // Check against the file as it is now, so a command hotkey added by hand meanwhile counts.
-        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        fudgeSettings = readSettings()
         switch key.launcherEdit(commands: fudgeSettings.commandHotkeys, installed: installedCommandIDs) {
         case .keep:
             return
@@ -757,12 +890,9 @@ final class SettingsModel {
         hotkeyNotes[commandID] = note(displaced)
     }
 
-    /// "Removed from <command>, which isn't installed", for the hotkeys a new one took over; nil for none.
+    /// What the hotkeys a new one took over were (`HotKeyConflict.displacedNote`), by title; nil for none.
     private func note(_ displaced: [String]) -> String? {
-        guard !displaced.isEmpty else { return nil }
-        let names = displaced.formatted(.list(type: .and))
-        return displaced.count == 1
-            ? "Removed from \(names), which isn't installed" : "Removed from \(names), which aren't installed"
+        HotKeyConflict.displacedNote(displaced, title: title(ofCommand:))
     }
 
     func clearHotkey(_ commandID: String) {
@@ -782,7 +912,7 @@ final class SettingsModel {
     /// leaving the file and `fudgeSettings` as they were, when the file can't be written.
     @discardableResult
     private func change(_ edit: (inout FudgeSettings) -> Void) -> Bool {
-        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        fudgeSettings = readSettings()
         var edited = fudgeSettings
         edit(&edited)
         do {
@@ -805,8 +935,9 @@ final class SettingsModel {
 
     // MARK: - Aliases and enabled
 
+    /// The command's alias, its default included (`FudgeSettings.alias(ofCommand:)`).
     func alias(for commandID: String) -> String? {
-        fudgeSettings.commands[commandID]?.alias
+        fudgeSettings.alias(ofCommand: commandID)
     }
 
     /// Saves `text` as the command's alias; empty removes it. Returns false, with a message, when it's refused.
@@ -814,7 +945,22 @@ final class SettingsModel {
     func setAlias(_ text: String, for commandID: String) -> Bool {
         let alias = text.trimmingCharacters(in: .whitespaces)
         // Check against the file as it is now, as `change` edits it, so an alias added by hand meanwhile counts.
-        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        fudgeSettings = readSettings()
+        // ↵ on the alias shown, a default included, changes nothing, so a default never becomes the user's choice.
+        if alias == fudgeSettings.alias(ofCommand: commandID) ?? "" {
+            aliasMessages[commandID] = nil
+            return true
+        }
+        // A quicklink removed from its file by hand can still hold the alias: its settings go first, so it's free.
+        if !alias.isEmpty,
+            case .duplicate(let other) = CommandAliases.problem(with: alias, for: commandID, in: fudgeSettings),
+            QuicklinkCommands.nameWhenGone(other) != nil
+        {
+            let store = QuicklinkStore.load(from: paths.quicklinksFile)
+            if QuicklinkStore.isWritable(paths.quicklinksFile), QuicklinkCommands.prune(&fudgeSettings, in: store) {
+                change { QuicklinkCommands.prune(&$0, in: store) }
+            }
+        }
         if !alias.isEmpty, let problem = CommandAliases.problem(with: alias, for: commandID, in: fudgeSettings) {
             aliasMessages[commandID] =
                 switch problem {
@@ -825,15 +971,32 @@ final class SettingsModel {
             return false
         }
         aliasMessages[commandID] = nil
-        guard change({ $0.commands[commandID, default: .init()].alias = alias.isEmpty ? nil : alias }) else {
+        guard change({ $0.setAlias(alias, ofCommand: commandID) }) else {
             return false
         }
         _ = applyHotkeys()
         return true
     }
 
+    /// A command's own Enabled: the user's choice, else its default (off for one that uses Raycast AI or the
+    /// Browser Extension, SPEC-109).
     func isEnabled(command commandID: String) -> Bool {
-        fudgeSettings.commands[commandID]?.enabled != false
+        fudgeSettings.isEnabledOwn(commandID: commandID)
+    }
+
+    /// Why a command is off by default, for its row on the Commands page; nil for one that isn't.
+    func offByDefaultReason(command commandID: String) -> String? {
+        guard let slash = commandID.firstIndex(of: "/") else { return nil }
+        let name = String(commandID[..<slash])
+        return allExtensions.first { $0.manifest.name == name }?.compatibility
+            .reason(for: String(commandID[commandID.index(after: slash)...]))
+    }
+
+    /// `settings.json`, with the commands that are off by default worked out from the installed extensions.
+    private func readSettings() -> FudgeSettings {
+        var settings = FudgeSettings.load(from: paths.settingsFile)
+        settings.offByDefault = InstalledExtension.offByDefault(allExtensions)
+        return settings
     }
 
     /// The Extension Store is off unless enabled (`FudgeSettings.isEnabled(extension:)`).
@@ -843,7 +1006,7 @@ final class SettingsModel {
 
     /// Enables or disables a command: a disabled one leaves root search, and its hotkey stops working.
     func setEnabled(_ enabled: Bool, command commandID: String) {
-        change { $0.commands[commandID, default: .init()].enabled = enabled ? nil : false }
+        change { $0.setEnabled(enabled, commandID: commandID) }
         _ = applyHotkeys()
     }
 
@@ -858,7 +1021,7 @@ final class SettingsModel {
         case .needsModifier: "Use ⌘, ⌥ or ⌃, or an F-key"
         case .launcher: "That's Fudge's own shortcut"
         case .command(let other):
-            "Used by \(CommandNames.name(of: other, in: allExtensions, groups: commandGroups) ?? other)"
+            "Used by \(CommandNames.name(of: other, in: allExtensions, groups: commandGroups) ?? QuicklinkCommands.nameWhenGone(other) ?? other)"
         }
     }
 
@@ -873,7 +1036,7 @@ final class SettingsModel {
                 return command.title
             }
         }
-        return commandID
+        return QuicklinkCommands.nameWhenGone(commandID) ?? commandID
     }
 
     /// The value shown for a preference: what's stored, else its default.
@@ -1117,6 +1280,8 @@ struct SettingsView: View {
                 Label("Snippets", systemImage: "doc.text").tag(SettingsModel.snippetsPage)
                 Label("Window Management", systemImage: "macwindow").tag(SettingsModel.windowManagementPage)
                 Label("Sign-in", systemImage: "person.badge.key").tag(SettingsModel.signInPage)
+                Label("Color Picker", systemImage: "eyedropper").tag(SettingsModel.colorPickerPage)
+                Label("Calendar", systemImage: "calendar").tag(SettingsModel.calendarPage)
                 Section("Extensions") {
                     ForEach(model.extensions, id: \.manifest.name) { installed in
                         Text(installed.manifest.title).tag(installed.manifest.name)
@@ -1143,6 +1308,10 @@ struct SettingsView: View {
                     WindowManagementPage(model: model)
                 } else if model.selected == SettingsModel.signInPage {
                     SignInPage(model: model)
+                } else if model.selected == SettingsModel.colorPickerPage {
+                    ColorPickerPage(model: model)
+                } else if model.selected == SettingsModel.calendarPage {
+                    CalendarPage(model: model)
                 } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {
                     ExtensionPreferencesForm(model: model, installed: installed)
                 } else {

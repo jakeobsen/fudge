@@ -120,21 +120,57 @@ public struct RecentApps: Sendable, Equatable {
     }
 }
 
-/// The apps whose windows are being read, across reads. An app that didn't answer in time and is still being read
-/// isn't asked again until that read ends, so a hung app holds one thread at most; once it ends, the next read asks
-/// again.
+/// The apps whose windows are being read, across reads. An app still being read isn't asked again until that read
+/// ends, so a hung app holds one thread at most: a read that wants it waits on the read in flight and shares its
+/// answer, if it comes within that read's deadline (SPEC-102 §1). The answer goes only to the reads that were waiting
+/// for it, and is kept no longer; once the read ends, the next read asks again.
 public final class WindowReadsInFlight: @unchecked Sendable {
     private let lock = NSLock()
-    private var pids: Set<Int32> = []
+    private var reads: [Int32: Flight] = [:]
 
     public init() {}
 
-    /// Marks `pid` as being read; false when it already is.
-    func start(_ pid: Int32) -> Bool { lock.withLock { pids.insert(pid).inserted } }
+    /// One app's read: its answer, once it comes, for the reads waiting on it.
+    final class Flight: @unchecked Sendable {
+        let done = DispatchGroup()
+        private let lock = NSLock()
+        private var stored: Any?
+        fileprivate(set) var waiting = 0
 
-    func end(_ pid: Int32) { lock.withLock { _ = pids.remove(pid) } }
+        init() { done.enter() }
 
-    var reading: Set<Int32> { lock.withLock { pids } }
+        /// The answer, type-erased since one registry serves every `WindowSwitchSystem`.
+        var answer: Any? { lock.withLock { stored } }
+
+        fileprivate func finish(_ answer: Any) {
+            lock.withLock { stored = answer }
+            done.leave()
+        }
+    }
+
+    /// `pid`'s read in flight, and whether the caller starts it (then it must `end` it) or waits on it.
+    func begin(_ pid: Int32) -> (flight: Flight, starts: Bool) {
+        lock.withLock {
+            if let flight = reads[pid] {
+                flight.waiting += 1
+                return (flight, false)
+            }
+            let flight = Flight()
+            reads[pid] = flight
+            return (flight, true)
+        }
+    }
+
+    /// Ends `pid`'s read with its answer: the reads waiting on it get it, and the next read asks again.
+    func end(_ pid: Int32, _ flight: Flight, with answer: Any) {
+        lock.withLock { if reads[pid] === flight { reads[pid] = nil } }
+        flight.finish(answer)
+    }
+
+    var reading: Set<Int32> { lock.withLock { Set(reads.keys) } }
+
+    /// How many reads are waiting on `pid`'s read, for tests.
+    func waiting(on pid: Int32) -> Int { lock.withLock { reads[pid]?.waiting ?? 0 } }
 }
 
 /// A window as Switch Windows lists it.
@@ -182,19 +218,30 @@ public struct WindowSwitcher<System: WindowSwitchSystem>: Sendable {
 
     /// Reads every app's windows at once, each on its own thread, and waits `deadline` (about a second) for them all.
     /// An app that hasn't answered by then, or said it couldn't (the Accessibility API's own timeout for each app),
-    /// is left out and named in `silentApps`; one still being read from an earlier read isn't asked again meanwhile.
-    /// Blocks: call it off the main thread.
+    /// is left out and named in `silentApps`. One an earlier read is still reading isn't asked again: this read waits
+    /// on that one's answer, without a thread of its own, and takes it if it comes in time. Blocks: call it off the
+    /// main thread.
     public func read(deadline: Duration = .seconds(1)) -> SwitcherListing<System.Handle> {
         let apps = system.apps().filter { $0.pid != ownPid }
         let answers = Answers<System.Handle>()
         let group = DispatchGroup()
-        for app in apps where inFlight.start(app.pid) {
+        for app in apps {
             let pid = app.pid
+            let (flight, starts) = inFlight.begin(pid)
             group.enter()
-            DispatchQueue.global(qos: .userInitiated).async { [system, inFlight] in
-                answers.set(system.windows(of: pid), for: pid)
-                inFlight.end(pid)
-                group.leave()
+            if starts {
+                // `answers` holds this read's titles; a hung app's thread mustn't keep them once the read is over.
+                DispatchQueue.global(qos: .userInitiated).async { [system, inFlight, weak answers] in
+                    let answer = system.windows(of: pid)
+                    answers?.set(answer, for: pid)
+                    inFlight.end(pid, flight, with: answer)
+                    group.leave()
+                }
+            } else {
+                flight.done.notify(queue: .global(qos: .userInitiated)) { [weak answers] in
+                    if let answer = flight.answer as? AppWindowsRead<System.Handle> { answers?.set(answer, for: pid) }
+                    group.leave()
+                }
             }
         }
         _ = group.wait(timeout: .now() + .milliseconds(Int(deadline / .milliseconds(1))))
@@ -414,15 +461,19 @@ public struct FixedWindowSystem: WindowSwitchSystem {
     private let screenList: [NamedScreen]
     private let frontmost: Int32?
 
-    public init(json: Data) {
+    /// `ownPid` is the run's own: no made-up app gets it, or Switch Windows would leave that app out as Fudge's.
+    public init(json: Data, ownPid: Int32 = ProcessInfo.processInfo.processIdentifier) {
         let entries = (try? JSONDecoder().decode([Entry].self, from: json)) ?? []
+        var nextPid: Int32 = 1000
         var apps: [SwitcherApp] = []
         var silent = Set<Int32>()
         var pids: [String: Int32] = [:]
         var screens: [NamedScreen] = []
         for entry in entries {
             if pids[entry.app] == nil {
-                let pid = Int32(1000 + apps.count)
+                if nextPid == ownPid { nextPid += 1 }
+                let pid = nextPid
+                nextPid += 1
                 pids[entry.app] = pid
                 apps.append(SwitcherApp(pid: pid, name: entry.app, path: entry.path))
             }
@@ -441,8 +492,9 @@ public struct FixedWindowSystem: WindowSwitchSystem {
         for (index, entry) in entries.enumerated() where entry.answers != false {
             guard let pid = pids[entry.app] else { continue }
             let screen = screens.first { $0.name == entry.screen } ?? screens[0]
-            let frame = CGRect(
-                x: screen.bounds.minX + CGFloat(40 * index), y: CGFloat(40 * index), width: 800, height: 600)
+            // Ten steps down and across, then back to the corner: every window stays on its screen, with its name.
+            let step = CGFloat(40 * (index % 10))
+            let frame = CGRect(x: screen.bounds.minX + step, y: screen.bounds.minY + step, width: 800, height: 600)
             let minimized = entry.minimized == true
             let focused = !minimized && frontmost == nil
             if focused { frontmost = pid }
@@ -460,8 +512,10 @@ public struct FixedWindowSystem: WindowSwitchSystem {
     }
 
     /// The windows in `file`; none when it can't be read.
-    public static func load(from file: URL) -> FixedWindowSystem {
-        FixedWindowSystem(json: (try? Data(contentsOf: file)) ?? Data())
+    public static func load(from file: URL, ownPid: Int32 = ProcessInfo.processInfo.processIdentifier)
+        -> FixedWindowSystem
+    {
+        FixedWindowSystem(json: (try? Data(contentsOf: file)) ?? Data(), ownPid: ownPid)
     }
 
     public func apps() -> [SwitcherApp] { appList }

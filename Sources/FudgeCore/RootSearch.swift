@@ -21,6 +21,19 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         case createSnippet
         /// Runs one of Fudge's own commands (`BuiltInCommandGroup`).
         case builtInCommand(group: String, command: String)
+
+        /// The SF Symbol of one of Fudge's own items (Reload Extensions, Quit Fudge, …); nil for the rest, whose
+        /// icons are an app's, an extension's, a quicklink's, Fudge's own or their group's command's.
+        public var symbol: String? {
+            switch self {
+            case .reloadExtensions: "arrow.clockwise"
+            case .quit: "power"
+            case .createQuicklink: "link.badge.plus"
+            case .searchSnippets: "doc.text"
+            case .createSnippet: "text.badge.plus"
+            case .application, .command, .settings, .quicklink, .builtInCommand: nil
+            }
+        }
     }
 
     public var id: String
@@ -36,7 +49,7 @@ public struct RootItem: Sendable, Equatable, Identifiable {
     public var iconFile: URL?
     /// A command's `arguments`, entered in fields after the query.
     public var arguments: [ExtensionManifest.Argument]
-    /// A command's alias, from `settings.json`.
+    /// A command's alias, from `settings.json`, or its default (`FudgeSettings.alias(ofCommand:)`).
     public var alias: String?
     /// Matched like the subtitle, but never shown: a quicklink's link.
     public var secondaryText: String?
@@ -164,7 +177,8 @@ public struct RootItem: Sendable, Equatable, Identifiable {
                 subtitle: group.title,
                 extensionTitle: group.title,
                 keywords: command.keywords,
-                kind: .builtInCommand(group: group.name, command: command.name)
+                kind: .builtInCommand(group: group.name, command: command.name),
+                arguments: command.arguments
             )
         }
     }
@@ -227,7 +241,7 @@ public enum RootSearch {
             guard let id = item.commandSettingsID else { return item }
             guard settings.isEnabled(commandID: id) else { return nil }
             var item = item
-            item.alias = settings.commands[id]?.alias
+            item.alias = settings.alias(ofCommand: id)
             return item
         }
     }

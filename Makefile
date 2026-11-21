@@ -8,6 +8,14 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 VERSION   := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# The release workflow names the tag it builds (RELEASE_TAG=v0.3.0): that's the version, and it must be on this commit.
+ifdef RELEASE_TAG
+VERSION := $(RELEASE_TAG)
+endif
+# What Fudge.app's Info.plist says: the version tag's major, minor and patch (0.3.0, as macOS expects), a build number
+# that only goes up, and VERSION itself in FudgeGitDescribe, which Fudge shows its own form of and the update check reads.
+SHORT_VERSION = $(shell '$(NODE)' runtime/scripts/bundle-version.ts '$(VERSION)')
+BUILD_NUMBER := $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
 CONFIG    ?= debug
 APP       := build/Fudge.app
 # The disk image a release ships, named after the version without its leading v (Fudge-0.3.0.dmg).
@@ -33,26 +41,68 @@ SIGN_IDENTITY ?= $(shell security find-identity -v -p codesigning 2>/dev/null | 
 # The @raycast/api release whose type definitions live in runtime/vendor/raycast-api.
 RAYCAST_API_VERSION ?= 2.13.1
 
-.PHONY: help app dmg run install-extension build runtime test test-swift test-runtime lint fmt raycast-types compat-scan clean
+# The Node.js Fudge bundles and always runs (SPEC-115), and the one every step of the build runs: an official build
+# from nodejs.org, for the architecture this Mac builds for. Each tarball's SHA-256 is copied from the release's
+# SHASUMS256.txt, and a tarball that doesn't match is deleted before anything is unpacked. It's downloaded once into
+# .cache/node, which `make clean` keeps. To update it, change the version and both checksums together.
+NODE_VERSION      := 26.13.1
+NODE_SHA256_arm64 := af6202f5370a3a5209e85dc543758dfd9f44c8726626a236730cd603a67a8559
+NODE_SHA256_x64   := 2693310b2820f9350d29524f21344e1c623875bab773457d55b2aceb9670716f
+NODE_ARCH         := $(subst x86_64,x64,$(shell uname -m))
+NODE_NAME         := node-v$(NODE_VERSION)-darwin-$(NODE_ARCH)
+NODE_CACHE        := $(CURDIR)/.cache/node
+NODE_HOME         := $(NODE_CACHE)/$(NODE_NAME)
+NODE              := $(NODE_HOME)/bin/node
+# Every recipe's node, npm and npx are that Node.js's, whatever else is on PATH.
+export PATH := $(NODE_HOME)/bin:$(PATH)
+
+.PHONY: help release-check app dmg run install-extension build runtime node test test-swift test-runtime lint fmt raycast-types compat-scan clean
 
 help:
-	@printf 'fudge — a keyboard launcher for macOS, built to run Raycast extensions\n\n'
+	@printf 'Fudge — a keyboard launcher for macOS, built to run Raycast extensions\n\n'
 	@printf 'Usage: make <target>\n\n'
 	@printf '  help           Show this help (default).\n'
 	@printf '  app            Build %s (CONFIG=debug|release, now: %s). Signs with SIGN_IDENTITY: by default\n' '$(APP)' '$(CONFIG)'
 	@printf '                 "fudge local signing", else an Apple Development identity, else ad hoc (-). See README.md.\n'
-	@printf '  dmg            Build the app, then %s: the app and a link to Applications (VERSION=<tag>).\n' '$(DMG)'
+	@printf '  dmg            Build the app, then %s: the app and a link to Applications (RELEASE_TAG=<tag> for a release).\n' '$(DMG)'
 	@printf '  run            Build the app and open it, quitting a running copy first.\n'
 	@printf '  install-extension DIR=<folder>  Build the app, then compile and install the extension in <folder>.\n'
 	@printf '  build          Build the Swift targets and the extension host.\n'
+	@printf '  node           Download and check the Node.js Fudge bundles (%s) into .cache/node.\n' '$(NODE_VERSION)'
 	@printf '  test           Run the Swift and extension host tests.\n'
 	@printf '  lint           Check Swift formatting and type-check the extension host.\n'
 	@printf '  fmt            Format all Swift code.\n'
 	@printf '  raycast-types  Copy the type definitions of @raycast/api %s into runtime/vendor and regenerate what is derived from them.\n' '$(RAYCAST_API_VERSION)'
-	@printf '  compat-scan DIR=<folder>  Report which @raycast/api uses of the extensions in <folder> fudge lacks.\n'
+	@printf '  compat-scan DIR=<folder>  Report which @raycast/api uses of the extensions in <folder> Fudge lacks.\n'
 	@printf '  clean          Remove build output.\n'
 
-runtime/node_modules: runtime/package.json runtime/package-lock.json
+# Downloads, checks and unpacks the pinned Node.js. The tarball is unpacked into a fresh folder of its own under
+# .cache/node, and moved into place only once it's whole. Each failure exits explicitly: make 3.81 ignores .SHELLFLAGS.
+$(NODE):
+	@tarball='$(NODE_CACHE)/$(NODE_NAME).tar.xz'; expected='$(NODE_SHA256_$(NODE_ARCH))'; \
+	[ -n "$$expected" ] || { printf 'make: no Node.js checksum for %s\n' '$(NODE_ARCH)'; exit 1; }; \
+	[ ! -e '$(NODE_HOME)' ] || { printf 'make: %s is there without bin/node; move it away\n' '$(NODE_HOME)'; exit 1; }; \
+	mkdir -p '$(NODE_CACHE)' || exit 1; \
+	if [ ! -f "$$tarball" ]; then \
+		printf '→ downloading Node.js %s (%s)\n' '$(NODE_VERSION)' '$(NODE_ARCH)'; \
+		curl -fsSL --proto '=https' --tlsv1.2 -o "$$tarball.part" \
+			'https://nodejs.org/dist/v$(NODE_VERSION)/$(NODE_NAME).tar.xz' \
+			|| { rm -f "$$tarball.part"; printf 'make: could not download Node.js %s\n' '$(NODE_VERSION)'; exit 1; }; \
+		mv "$$tarball.part" "$$tarball" || exit 1; \
+	fi; \
+	actual=$$(shasum -a 256 "$$tarball" | cut -d' ' -f1); \
+	[ "$$actual" = "$$expected" ] \
+		|| { rm -f "$$tarball"; printf 'make: %s.tar.xz has SHA-256 %s, not the pinned %s; deleted it\n' \
+			'$(NODE_NAME)' "$$actual" "$$expected"; exit 1; }; \
+	unpack=$$(mktemp -d '$(NODE_CACHE)/unpack.XXXXXX') || exit 1; \
+	tar -xJf "$$tarball" -C "$$unpack" && mv "$$unpack/$(NODE_NAME)" '$(NODE_HOME)'; status=$$?; \
+	case "$$unpack" in '$(NODE_CACHE)/unpack.'?*) rm -rf -- "$$unpack" ;; esac; \
+	[ "$$status" = 0 ] || { printf 'make: could not unpack %s.tar.xz\n' '$(NODE_NAME)'; exit 1; }
+	@'$(NODE)' --version >/dev/null || { printf 'make: the downloaded Node.js does not run\n'; exit 1; }
+
+node: $(NODE)
+
+runtime/node_modules: runtime/package.json runtime/package-lock.json | $(NODE)
 	@cd runtime && npm ci --no-audit --no-fund --loglevel=error
 	@touch $@
 
@@ -62,11 +112,29 @@ runtime: runtime/node_modules
 build: runtime
 	@swift build -c $(CONFIG)
 
-app: build
+# A release build stops rather than number itself wrong (SPEC-113): a shallow clone has no tags and would make the
+# build number 1, and RELEASE_TAG must be a tag on this commit. Checked before anything is built.
+release-check:
+	@if [ '$(CONFIG)' = release ] && [ "$$(git rev-parse --is-shallow-repository 2>/dev/null)" = true ]; then \
+		echo "make: a release build needs the whole history and its tags, but this is a shallow clone: check it out with fetch-depth: 0"; \
+		exit 1; \
+	fi
+	@if [ -n '$(RELEASE_TAG)' ] && ! git tag --points-at HEAD 2>/dev/null | grep -qxF '$(RELEASE_TAG)'; then \
+		echo "make: RELEASE_TAG $(RELEASE_TAG) isn't a tag on this commit"; \
+		exit 1; \
+	fi
+
+app: release-check build
 	@rm -rf '$(APP)'
 	@mkdir -p '$(APP)/Contents/MacOS' '$(APP)/Contents/Helpers' '$(APP)/Contents/Resources/runtime'
 	@cp '$(SWIFT_BIN)/FudgeApp' '$(APP)/Contents/MacOS/Fudge'
 	@cp '$(SWIFT_BIN)/fudge' '$(ESBUILD)' '$(APP)/Contents/Helpers/'
+	@# Fudge's own Node.js (SPEC-115): the binary beside the helpers, npm from its distribution, and its license,
+	@# which also covers what Node.js bundles, npm included.
+	@cp '$(NODE)' '$(APP)/Contents/Helpers/node'
+	@mkdir -p '$(APP)/Contents/Resources/node' \
+		&& cp -R '$(NODE_HOME)/lib/node_modules/npm' '$(APP)/Contents/Resources/node/npm' \
+		&& cp '$(NODE_HOME)/LICENSE' '$(APP)/Contents/Resources/node/LICENSE'
 	@cp App/Info.plist '$(APP)/Contents/Info.plist'
 	@# actool hands the work to a shared daemon, which resolves relative paths against its own working directory:
 	@# another worktree's, if one started it. Every path is absolute. actool reports on stdout, even its errors,
@@ -76,32 +144,43 @@ app: build
 		--output-format human-readable-text --output-partial-info-plist '$(CURDIR)/build/AppIcon.plist' \
 		>'$(CURDIR)/build/actool.log' && test -f '$(APP)/Contents/Resources/Assets.car' \
 		|| { cat build/actool.log; printf 'actool did not write %s (it needs Xcode 26 or later; see its output above, also in build/actool.log)\n' '$(APP)/Contents/Resources/Assets.car'; exit 1; }
-	@plutil -replace CFBundleShortVersionString -string '$(VERSION)' '$(APP)/Contents/Info.plist'
+	@plutil -replace CFBundleShortVersionString -string '$(SHORT_VERSION)' '$(APP)/Contents/Info.plist'
+	@plutil -replace CFBundleVersion -string '$(BUILD_NUMBER)' '$(APP)/Contents/Info.plist'
+	@plutil -replace FudgeGitDescribe -string '$(VERSION)' '$(APP)/Contents/Info.plist'
 	@cp runtime/dist/host.js runtime/dist/worker.js '$(APP)/Contents/Resources/runtime/'
 	@# `fudge scan`'s scanner, and Raycast's types it reads, with their MIT notice.
 	@cp runtime/dist/compat-scan.js '$(APP)/Contents/Resources/runtime/'
 	@cp runtime/vendor/raycast-api/index.d.ts '$(APP)/Contents/Resources/runtime/raycast-api.d.ts'
 	@cp runtime/vendor/raycast-api/LICENSE '$(APP)/Contents/Resources/runtime/raycast-api.LICENSE'
+	@# Fudge's own license, and the notices of the third-party code and data it ships, from their own license files.
+	@cp LICENSE '$(APP)/Contents/Resources/LICENSE.txt'
+	@cd runtime && node scripts/notices.ts --text '$(abspath $(APP))/Contents/Resources/Third-Party Notices.txt'
 	@# The bundled extensions (BundledExtensions in core), each built like any other into a scratch folder and
 	@# moved to Contents/Resources/<folder>. Their sources are runtime/<folder>; no source, no extension.
 	@for folder in $(BUNDLED_EXTENSIONS); do \
 		[ -f "runtime/$$folder/package.json" ] || continue; \
 		scratch="$(abspath build)/$$folder-build" && rm -rf "$$scratch" && mkdir -p "$$scratch" && \
-		FUDGE_ESBUILD='$(abspath $(ESBUILD))' '$(SWIFT_BIN)/fudge' build "runtime/$$folder" --into "$$scratch" \
-			>/dev/null && \
+		'$(APP)/Contents/Helpers/fudge' build "runtime/$$folder" --into "$$scratch" >/dev/null && \
 		mv "$$scratch"/* "$(APP)/Contents/Resources/$$folder" && rm -rf "$$scratch" \
 		|| { echo "make app: building runtime/$$folder failed"; exit 1; }; \
 	done
 	@# Each failure exits explicitly: make 3.81, the one macOS ships, ignores .SHELLFLAGS. No timestamp, so signing
 	@# never goes over the network. An identity's errors stay visible, and the last line names it as listed.
+	@# Node.js runs under the hardened runtime with its own entitlements (App/Node.entitlements), signed after the other
+	@# helpers so they don't replace it.
 	@identity='$(SIGN_IDENTITY)'; \
 	if [ "$$identity" = - ]; then \
-		codesign --force --sign - '$(APP)'/Contents/Helpers/* 2>/dev/null && codesign --force --sign - '$(APP)' 2>/dev/null && \
+		codesign --force --sign - '$(APP)'/Contents/Helpers/* 2>/dev/null && \
+		codesign --force --sign - --options runtime --entitlements App/Node.entitlements \
+			'$(APP)'/Contents/Helpers/node 2>/dev/null && \
+		codesign --force --sign - '$(APP)' 2>/dev/null && \
 		signed='ad hoc'; \
 	else \
 		name=$$(security find-identity -v -p codesigning 2>/dev/null | \
 			awk -F'"' -v id="$$identity" '{ split($$1, f, " ") } f[2] == id || $$2 == id { print $$2; exit }'); \
 		{ codesign --force --timestamp=none --sign "$$identity" '$(APP)'/Contents/Helpers/* && \
+			codesign --force --timestamp=none --sign "$$identity" --options runtime \
+				--entitlements App/Node.entitlements '$(APP)'/Contents/Helpers/node && \
 			codesign --force --timestamp=none --sign "$$identity" '$(APP)'; } || \
 			{ printf 'codesign could not sign with "%s" (see its error above)\n' "$${name:-$$identity}"; exit 1; }; \
 		signed="with $${name:-$$identity}"; \
@@ -151,8 +230,9 @@ install-extension: app
 
 test: test-swift test-runtime
 
+# The tests get the pinned Node.js through FUDGE_TEST_NODE, which only the test target reads.
 test-swift: runtime/node_modules
-	@swift test
+	@FUDGE_TEST_NODE='$(NODE)' swift test
 
 test-runtime: runtime/node_modules
 	@cd runtime && npm test
@@ -166,7 +246,7 @@ lint: runtime/node_modules
 fmt:
 	@swift format --in-place --recursive Package.swift Sources Tests
 
-raycast-types:
+raycast-types: | $(NODE)
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
 	(cd "$$tmp" && npm pack --silent '@raycast/api@$(RAYCAST_API_VERSION)' >/dev/null && tar -xzf raycast-api-*.tgz); \
 	test "$$(node -p "require('$$tmp/package/package.json').license")" = MIT; \

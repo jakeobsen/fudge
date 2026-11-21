@@ -74,7 +74,7 @@ private final class FakeKeys: CopyKeyPoster, PasteKeyPoster {
         log.events.append("⌘V")
     }
 
-    func postLeftArrow(_ count: Int, to pid: Int32) {}
+    func postDelete(_ count: Int, to pid: Int32) {}
 
     func postCopy(to pid: Int32) {
         log.events.append("⌘C")

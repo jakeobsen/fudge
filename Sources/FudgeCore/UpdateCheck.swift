@@ -30,6 +30,16 @@ public enum UpdateCheckSetting: String, Sendable, CaseIterable, Identifiable {
         }
     }
 
+    /// What the popup says while nothing has been chosen (FUD-135 §3). It behaves as Never until a choice is made.
+    public static let notChosenTitle = "Not Chosen"
+
+    /// The General page's popup for `current`: while it's unset (nil, or an unknown value in `settings.json`), "Not
+    /// Chosen" first, then the four; once something is chosen, only the four, so "Not Chosen" can't be picked again.
+    public static func popupOptions(current: UpdateCheckSetting?) -> [(UpdateCheckSetting?, String)] {
+        let choices = allCases.map { (Optional($0), $0.title) }
+        return current == nil ? [(nil, notChosenTitle)] + choices : choices
+    }
+
     /// Onboarding's choices: Daily, Weekly, Monthly, Off.
     public var onboardingTitle: String {
         self == .off ? "Off" : title
@@ -139,13 +149,27 @@ public enum RunningVersion: Sendable, Equatable {
 
     /// Takes off, by their exact shapes, a trailing `-dirty`, then `git describe`'s `-<commits>-g<hex>`, then a
     /// leading `v`, and parses what's left as a semantic version. So `v0.2.0-14-g51ba5a2-dirty` is 0.2.0, and
-    /// `v1.2.0-rc.1-3-gabc1234` is 1.2.0-rc.1.
+    /// `v1.2.0-rc.1-3-gabc1234` is 1.2.0-rc.1. It also reads the app's short version for a build after a tag
+    /// (`0.2.0-dev+14.51ba5a2` is 0.2.0), in case that's all an `Info.plist` has.
     public init(_ text: String) {
         var rest = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if rest.hasSuffix("-dirty") { rest.removeLast("-dirty".count) }
         if let match = rest.wholeMatch(of: /(.+)-[0-9]+-g[0-9a-f]{4,64}/) { rest = String(match.1) }
         if rest.hasPrefix("v") { rest.removeFirst() }
-        self = SemanticVersion(rest).map(Self.tagged) ?? .untagged
+        guard let version = SemanticVersion(rest) else {
+            self = .untagged
+            return
+        }
+        // `make app`'s CFBundleShortVersionString for a build after a tag: `0.3.0-dev+14.a539cdd` is 0.3.0, and
+        // `1.2.0-rc.1.dev+3.abc1234` is 1.2.0-rc.1. Only with build metadata, so a tag named `v1.0.0-dev` stays one.
+        if rest.contains("+"), version.preRelease.last == "dev" {
+            self = .tagged(
+                SemanticVersion(
+                    major: version.major, minor: version.minor, patch: version.patch,
+                    preRelease: version.preRelease.dropLast()))
+            return
+        }
+        self = .tagged(version)
     }
 
     /// Whether `release` is newer than this build: its version beats the tag's. A build after `v0.2.0` isn't older
@@ -361,17 +385,19 @@ public struct UpdateStatus: Sendable, Equatable {
         self.failure = failure
     }
 
-    /// The line beside Check Now.
-    public var headline: String {
+    /// The line beside Check Now, naming the running version (`FudgeVersion.current`), or the newer one.
+    public func headline(version: String) -> String {
         if checking { return "Checking for updates…" }
         if let available { return UpdateCheck.availableText(available) }
-        if failure != nil { return "Couldn't check for updates" }
-        return lastCheck == nil ? "Not checked yet" : "Fudge is up to date"
+        if failure != nil { return "Fudge \(version): couldn't check for updates" }
+        return lastCheck == nil ? "Fudge \(version): not checked for updates yet" : "Fudge \(version) is up to date"
     }
 
-    /// The small lines under it: why the last check failed, and when it ran.
-    public func details(locale: Locale = .current, timeZone: TimeZone = .current) -> [String] {
+    /// The small lines under it: the running version while a newer one is shown, why the last check failed, and when
+    /// it ran.
+    public func details(version: String? = nil, locale: Locale = .current, timeZone: TimeZone = .current) -> [String] {
         var lines: [String] = []
+        if available != nil, let version { lines.append("You have Fudge \(version)") }
         if !checking, let failure {
             lines.append(available == nil ? failure : "Couldn't check for updates: \(failure)")
         }

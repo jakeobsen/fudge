@@ -37,6 +37,15 @@ test("finds what a module uses from @raycast/api, however it's imported", async 
     assert.deepEqual([...found.utils].sort(), ["showFailureToast", "useFetch"]);
 });
 
+test("a destructured require inside esbuild's CommonJS wrapper is still read", async () => {
+    const code = await toJavaScript(
+        `const { AI, showHUD: hud } = require("@raycast/api");\nexports.ask = () => AI.ask("x");\nhud("y");\n`,
+        "src/ask.js",
+    );
+    assert.match(code, /__commonJS\(\{/, "esbuild wraps it");
+    assert.deepEqual([...uses(code).api].sort(), ["AI.ask", "showHUD"]);
+});
+
 test("decides whether fudge provides an API path", () => {
     assert.equal(support(api, "Clipboard.copy"), "implemented");
     assert.equal(support(api, "render", declared), "implemented", "the deprecated top-level render()");

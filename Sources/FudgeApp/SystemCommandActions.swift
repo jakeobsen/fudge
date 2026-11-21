@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import DiskArbitration
 import FudgeCore
 import IOKit.pwr_mgt
 
@@ -44,8 +45,11 @@ final class MacSystemActions: SystemActions {
         return await withCheckedContinuation { continuation in
             // Blocks while macOS shows its consent dialog, so it gets a thread of its own and no timeout.
             DispatchQueue.global(qos: .userInitiated).async {
-                let status = AEDeterminePermissionToAutomateTarget(
-                    Self.address(of: target).aeDesc, Self.code("core"), Self.code("getd"), true)
+                // `aeDesc` points into the descriptor's own storage, so the descriptor must outlive the call.
+                let address = Self.address(of: target)
+                let status = withExtendedLifetime(address) {
+                    AEDeterminePermissionToAutomateTarget(address.aeDesc, Self.code("core"), Self.code("getd"), true)
+                }
                 continuation.resume(returning: status)
             }
         }
@@ -66,7 +70,8 @@ final class MacSystemActions: SystemActions {
     func trashCount() async throws -> Int {
         try await offMain {
             let event = SystemAppleEvents.countTrash(to: Self.address(of: .finder))
-            let reply = try Self.send(event, options: [.waitForReply, .neverInteract], timeout: 15)
+            // Finder answers a count at once; a short wait keeps Empty Trash's question from hanging on a busy Finder.
+            let reply = try Self.send(event, options: [.waitForReply, .neverInteract], timeout: 3)
             return try SystemAppleEvents.count(in: reply)
         }
     }
@@ -108,12 +113,14 @@ final class MacSystemActions: SystemActions {
             let urls =
                 FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: .skipHiddenVolumes)
                 ?? []
+            let session = DASessionCreate(kCFAllocatorDefault)
             return urls.compactMap { url -> MountedVolume? in
                 guard let values = try? url.resourceValues(forKeys: Set(keys)) else { return nil }
                 return MountedVolume(
                     url: url, name: values.volumeLocalizedName ?? url.lastPathComponent,
                     isEjectable: values.volumeIsEjectable ?? false, isRemovable: values.volumeIsRemovable ?? false,
-                    isLocal: values.volumeIsLocal ?? true, isRootFileSystem: values.volumeIsRootFileSystem ?? false)
+                    isLocal: values.volumeIsLocal ?? true, isRootFileSystem: values.volumeIsRootFileSystem ?? false,
+                    wholeDisk: Self.wholeDisk(of: url, session: session))
             }
         }) ?? []
     }
@@ -124,11 +131,29 @@ final class MacSystemActions: SystemActions {
         try await offMain { try NSWorkspace.shared.unmountAndEjectDevice(at: url) }
     }
 
+    func isMounted(_ volume: MountedVolume) async -> Bool? {
+        let path = volume.url.standardizedFileURL.path
+        return try? await offMain {
+            guard let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: [])
+            else { return nil }
+            return urls.contains { $0.standardizedFileURL.path == path }
+        }
+    }
+
+    /// The BSD name of the whole disk a volume is on, through DiskArbitration (read only); nil for a network volume.
+    nonisolated private static func wholeDisk(of url: URL, session: DASession?) -> String? {
+        guard let session, let disk = DADiskCreateFromVolumePath(kCFAllocatorDefault, session, url as CFURL),
+            let whole = DADiskCopyWholeDisk(disk)
+        else { return nil }
+        // The name points into `whole`, so it's copied while `whole` is alive.
+        return withExtendedLifetime(whole) { DADiskGetBSDName(whole).map { String(cString: $0) } }
+    }
+
     func runningApps() -> [RunningApp] {
         NSWorkspace.shared.runningApplications.map {
             RunningApp(
                 pid: $0.processIdentifier, bundleIdentifier: $0.bundleIdentifier,
-                isRegular: $0.activationPolicy == .regular)
+                isRegular: $0.activationPolicy == .regular, isFinishedLaunching: $0.isFinishedLaunching)
         }
     }
 

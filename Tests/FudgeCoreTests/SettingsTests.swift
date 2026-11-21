@@ -67,7 +67,8 @@ func everyRecordableKeyRoundTrips(text: String, keyCode: UInt32) throws {
 @Test func hotkeyTextAndLabels() throws {
     let spec = try #require(HotKeySpec.parse("shift+cmd+option+ctrl+k"))
     #expect(spec.text == "ctrl+option+shift+cmd+k", "macOS's modifier order")
-    #expect(spec.modifierSymbols == ["⌃", "⌥", "⇧", "⌘"])
+    #expect(spec.modifierSymbols == ["Hyper"], "all four are Hyper (SPEC-093)")
+    #expect(try #require(HotKeySpec.parse("ctrl+option+shift+k")).modifierSymbols == ["⌃", "⌥", "⇧"])
     #expect(try #require(HotKeySpec.parse("option+s")).description == "⌥S")
     #expect(try #require(HotKeySpec.parse("f5")).description == "F5")
     #expect(try #require(HotKeySpec.parse("cmd+left")).description == "⌘←")
@@ -94,9 +95,10 @@ func everyRecordableKeyRoundTrips(text: String, keyCode: UInt32) throws {
     #expect(FudgeSettings.load(from: file) == settings)
     #expect(FudgeSettings.load(from: file).commandHotkeys == ["scratch/scratch-folders": HotKeySpec.parse("option+s")!])
 
-    // Defaults aren't written, and an entry left empty goes away.
+    // Defaults aren't written, and an entry left empty goes away. A command's Enabled is the user's choice when it's
+    // set, true included (SPEC-109), so only an unset one is a default.
     settings.commands["scratch/scratch-folders"] = .init()
-    settings.commands["scratch/create-scratch"] = .init(enabled: true)
+    settings.commands["scratch/create-scratch"] = .init()
     settings.extensions["next-task"] = .init()
     try settings.save(to: file)
     let object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])

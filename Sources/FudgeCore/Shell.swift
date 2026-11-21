@@ -4,7 +4,7 @@ import Foundation
 /// A finished child process.
 public struct ShellResult: Sendable {
     public var status: Int32
-    /// stdout and stderr, interleaved.
+    /// stdout and stderr, interleaved; stdout alone when the run discarded stderr.
     public var output: String
 }
 
@@ -21,13 +21,15 @@ public struct ShellError: Error, CustomStringConvertible {
 
 public enum Shell {
     /// Runs `executable` and waits. Throws `ShellError` when it exits non-zero. It runs in a process group of its
-    /// own (`ChildProcesses`), so a signal that ends this process ends it and what it started too.
+    /// own (`ChildProcesses`), so a signal that ends this process ends it and what it started too. With
+    /// `discardingErrors`, stderr goes to `/dev/null` and `output` is stdout alone, for output that's read as data.
     @discardableResult
     public static func run(
         _ executable: URL,
         _ arguments: [String],
         in directory: URL? = nil,
         environment: [String: String] = [:],
+        discardingErrors: Bool = false,
         children: ChildProcesses = .shared
     ) throws -> ShellResult {
         var pipe: [Int32] = [0, 0]
@@ -35,12 +37,14 @@ public enum Shell {
             throw ChildProcesses.SpawnError(description: "couldn't make a pipe: \(String(cString: strerror(errno)))")
         }
         let reading = FileHandle(fileDescriptor: pipe[0], closeOnDealloc: true)
+        let errors = discardingErrors ? open("/dev/null", O_WRONLY) : -1
+        defer { if errors >= 0 { close(errors) } }
         let pid: pid_t
         do {
             pid = try children.spawn(
                 executable, arguments,
                 environment: ProcessInfo.processInfo.environment.merging(environment) { _, new in new },
-                in: directory, output: pipe[1])
+                in: directory, output: pipe[1], errors: errors >= 0 ? errors : nil)
         } catch {
             close(pipe[1])
             throw error

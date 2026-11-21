@@ -23,6 +23,8 @@ public struct FudgeSettings: Sendable, Equatable {
     public var signInServer: String?
     /// When the user confirmed the sign-in server's consent sheet (`signInServerConsentAt`, ISO 8601).
     public var signInServerConsentAt: String?
+    /// **Expand Snippets as You Type** (`expandSnippets`, SPEC-078 §5), off by default.
+    public var expandSnippets = false
     /// Clipboard history's switch (`clipboardHistory`); it counts only with the consent date beside it.
     public var clipboardHistory = false
     /// When the user confirmed clipboard history's consent sheet (`clipboardHistoryConsentAt`, ISO 8601).
@@ -57,12 +59,24 @@ public struct FudgeSettings: Sendable, Equatable {
     /// How often Fudge checks for a new release (`updateCheck`); nil until the user chooses, and nothing is checked
     /// until then. An unknown value reads as unset.
     public var updateCheck: UpdateCheckSetting?
+    /// **Hyperkey (Caps Lock)** (`hyperkey`, SPEC-093): holding Caps Lock acts as ⌘⌥⌃⇧. Off by default.
+    public var hyperkey = false
+    /// **Quick press toggles Caps Lock** (`hyperkeyQuickPress`): a tap of Caps Lock still toggles caps. Off by default.
+    public var hyperkeyQuickPress = false
+    /// The Color Picker's **Copy Format** (`colorFormat`): HEX unless set. An unknown value reads as HEX.
+    public var colorFormat: ColorFormat = .default
+    /// The calendars My Schedule leaves out (`calendarHidden`, by EventKit's calendar id), so a new one shows.
+    public var calendarHidden: [String] = []
+    /// My Schedule's **Days Ahead** (`calendarDaysAhead`): one of `Schedule.daysAheadChoices`; anything else reads
+    /// as the default.
+    public var calendarDaysAhead = Schedule.defaultDaysAhead
 
     public struct CommandSettings: Sendable, Equatable {
         /// In `HotKeySpec` text form.
         public var hotkey: String?
         public var alias: String?
-        /// nil means enabled.
+        /// Set only by the user's own choice; nil means the default: enabled, unless the command is off by default
+        /// (`FudgeSettings.offByDefault`).
         public var enabled: Bool?
 
         public init(hotkey: String? = nil, alias: String? = nil, enabled: Bool? = nil) {
@@ -71,7 +85,26 @@ public struct FudgeSettings: Sendable, Equatable {
             self.enabled = enabled
         }
 
-        var isDefault: Bool { hotkey == nil && alias == nil && enabled != false }
+        var isDefault: Bool { hotkey == nil && alias == nil && enabled == nil }
+    }
+
+    /// A command's alias: the one in `settings.json`, else its default (`CommandAliases.defaults`, Define Word's
+    /// `define`) while the file has none for it and no other command has that alias, so the user's own wins.
+    /// An empty alias in the file is a default the user cleared, so the command has none.
+    /// The default is never written to the file, so Fudge's choice never looks like the user's.
+    public func alias(ofCommand id: String) -> String? {
+        if let alias = commands[id]?.alias { return alias.isEmpty ? nil : alias }
+        guard let fallback = CommandAliases.defaults[id] else { return nil }
+        let typed = fallback.lowercased()
+        let taken = commands.contains { $0.key != id && $0.value.alias?.lowercased() == typed }
+        return taken ? nil : fallback
+    }
+
+    /// Sets a command's alias; an empty one clears it. A cleared default is kept as an empty alias, so it stays
+    /// cleared; any other command's is removed.
+    public mutating func setAlias(_ alias: String, ofCommand id: String) {
+        let cleared: String? = CommandAliases.defaults[id] == nil ? nil : ""
+        commands[id, default: .init()].alias = alias.isEmpty ? cleared : alias
     }
 
     public struct ExtensionSettings: Sendable, Equatable {
@@ -99,10 +132,21 @@ public struct FudgeSettings: Sendable, Equatable {
         "\(extensionName)/\(command)"
     }
 
-    /// Whether a command is enabled: neither it nor its extension is disabled.
+    /// Commands that are off until the user turns them on, by id: those that use something Fudge doesn't support
+    /// (SPEC-109, `InstalledExtension.offByDefault`). Never saved: it's worked out from the installed extensions at
+    /// each load, so Fudge's default never looks like the user's choice, and follows an update either way.
+    public var offByDefault: Set<String> = []
+
+    /// Whether a command is enabled: its extension is, and the command is by the user's choice or, without one, by
+    /// default (`offByDefault`).
     public func isEnabled(extension extensionName: String, command: String) -> Bool {
         isEnabled(extension: extensionName)
-            && commands[Self.commandID(extension: extensionName, command: command)]?.enabled != false
+            && isEnabledOwn(commandID: Self.commandID(extension: extensionName, command: command))
+    }
+
+    /// A command's own Enabled, its extension's aside: the user's choice, else the default.
+    public func isEnabledOwn(commandID id: String) -> Bool {
+        commands[id]?.enabled ?? !offByDefault.contains(id)
     }
 
     /// `isEnabled` for a command id ("<extension name>/<command name>"), split at its first "/".
@@ -117,6 +161,13 @@ public struct FudgeSettings: Sendable, Equatable {
     public func isEnabled(extension name: String) -> Bool {
         if let enabled = extensions[name]?.enabled { return enabled }
         return name == ExtensionStore.extensionName ? isExtensionStoreOn : true
+    }
+
+    /// The user's Enabled toggle for a command (the Commands page's checkbox): written either way, true or false, so
+    /// Fudge's default (`offByDefault`) never overrides it: a command the user turned on stays on, and one they turned
+    /// off stays off, whatever an update finds it uses.
+    public mutating func setEnabled(_ enabled: Bool, commandID id: String) {
+        commands[id, default: .init()].enabled = enabled
     }
 
     /// Enables or disables an extension. The store's state is always written, since its default isn't on.
@@ -188,6 +239,7 @@ public struct FudgeSettings: Sendable, Equatable {
         settings.extensionStoreConsentAt = object["extensionStoreConsentAt"] as? String
         settings.signInServer = object["signInServer"] as? String
         settings.signInServerConsentAt = object["signInServerConsentAt"] as? String
+        settings.expandSnippets = object["expandSnippets"] as? Bool ?? false
         settings.clipboardHistory = object["clipboardHistory"] as? Bool ?? false
         settings.clipboardHistoryConsentAt = object["clipboardHistoryConsentAt"] as? String
         if let days = object["clipboardHistoryKeepDays"] as? Int, ClipboardHistory.keepForChoices.contains(days) {
@@ -199,6 +251,13 @@ public struct FudgeSettings: Sendable, Equatable {
         settings.showOnScreen = ShowOnScreen(settingsValue: object["showOnScreen"])
         settings.escapeBehavior = EscapeBehavior(settingsValue: object["escapeBehavior"])
         settings.updateCheck = UpdateCheckSetting(settingsValue: object["updateCheck"])
+        settings.hyperkey = object["hyperkey"] as? Bool ?? false
+        settings.hyperkeyQuickPress = object["hyperkeyQuickPress"] as? Bool ?? false
+        settings.colorFormat = (object["colorFormat"] as? String).flatMap(ColorFormat.init(rawValue:)) ?? .default
+        settings.calendarHidden = (object["calendarHidden"] as? [Any] ?? []).compactMap { $0 as? String }
+        if let days = object["calendarDaysAhead"] as? Int, Schedule.daysAheadChoices.contains(days) {
+            settings.calendarDaysAhead = days
+        }
         for case (let id, let entry as [String: Any]) in object["commands"] as? [String: Any] ?? [:] {
             settings.commands[id] = CommandSettings(
                 hotkey: entry["hotkey"] as? String, alias: entry["alias"] as? String, enabled: entry["enabled"] as? Bool
@@ -222,6 +281,7 @@ public struct FudgeSettings: Sendable, Equatable {
         object["extensionStoreConsentAt"] = extensionStoreConsentAt
         object["signInServer"] = signInServer
         object["signInServerConsentAt"] = signInServerConsentAt
+        object["expandSnippets"] = expandSnippets ? true : nil
         object["clipboardHistory"] = clipboardHistory ? true : nil
         object["clipboardHistoryConsentAt"] = clipboardHistoryConsentAt
         object["clipboardHistoryKeepDays"] =
@@ -231,6 +291,11 @@ public struct FudgeSettings: Sendable, Equatable {
         object["showOnScreen"] = showOnScreen.settingsValue
         object["escapeBehavior"] = escapeBehavior.settingsValue
         object["updateCheck"] = updateCheck?.rawValue
+        object["hyperkey"] = hyperkey ? true : nil
+        object["hyperkeyQuickPress"] = hyperkeyQuickPress ? true : nil
+        object["colorFormat"] = colorFormat == .default ? nil : colorFormat.rawValue
+        object["calendarHidden"] = calendarHidden.isEmpty ? nil : calendarHidden
+        object["calendarDaysAhead"] = calendarDaysAhead == Schedule.defaultDaysAhead ? nil : calendarDaysAhead
 
         var commandObjects = object["commands"] as? [String: Any] ?? [:]
         let commandIDs = Set(commandObjects.keys).union(commands.keys)
@@ -239,7 +304,8 @@ public struct FudgeSettings: Sendable, Equatable {
             let settings = commands[id] ?? CommandSettings()
             entry["hotkey"] = settings.hotkey
             entry["alias"] = settings.alias
-            entry["enabled"] = settings.enabled == false ? false : nil
+            // The user's choice either way, so a command off by default that they turned on stays on.
+            entry["enabled"] = settings.enabled
             commandObjects[id] = entry.isEmpty ? nil : entry
         }
         object["commands"] = commandObjects.isEmpty ? nil : commandObjects
@@ -323,9 +389,13 @@ public struct HotKeySpec: Sendable, Hashable, CustomStringConvertible {
         return (parts + [key]).joined(separator: "+")
     }
 
-    /// The modifiers as macOS shows them, in its order: ⌃ ⌥ ⇧ ⌘.
+    /// All four modifiers at once, which Hyperkey's Caps Lock presses (SPEC-093).
+    public var isHyper: Bool { command && option && control && shift }
+
+    /// The modifiers as macOS shows them, in its order: ⌃ ⌥ ⇧ ⌘, or "Hyper" for all four.
     public var modifierSymbols: [String] {
-        [(control, "⌃"), (option, "⌥"), (shift, "⇧"), (command, "⌘")].filter(\.0).map(\.1)
+        if isHyper { return ["Hyper"] }
+        return [(control, "⌃"), (option, "⌥"), (shift, "⇧"), (command, "⌘")].filter(\.0).map(\.1)
     }
 
     /// The key as shown without a keyboard layout: "S", "Space", "F5", "←", "Keypad 5", "Key 93". The app shows
@@ -338,8 +408,8 @@ public struct HotKeySpec: Sendable, Hashable, CustomStringConvertible {
         return key.capitalized
     }
 
-    /// "⌥Space", "⇧⌘K": how macOS menus show shortcuts.
-    public var description: String { modifierSymbols.joined() + keyLabel }
+    /// "⌥Space", "⇧⌘K": how macOS menus show shortcuts; "Hyper+T" for all four modifiers.
+    public var description: String { isHyper ? "Hyper+" + keyLabel : modifierSymbols.joined() + keyLabel }
 
     /// Whether `other` is the same keys, whatever the names.
     public func sameKeys(as other: HotKeySpec) -> Bool {

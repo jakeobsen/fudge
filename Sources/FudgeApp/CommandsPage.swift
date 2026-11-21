@@ -83,11 +83,11 @@ struct CommandsPage: View {
     private var rows: [GroupRow] {
         // The quicklinks' group shows once there's a quicklink.
         let groups = model.commandGroups.filter { !$0.commands.isEmpty }.map { group in
-            let type = group.name == QuicklinkCommands.groupName ? "Quicklink" : "Command"
+            let types = BuiltInCommandGroup.typeLabels(ofGroup: group.name)
             return GroupRow(
-                name: group.name, title: group.title, type: "Built-in", icon: .app,
+                name: group.name, title: group.title, type: types.group, icon: .app,
                 commands: group.commands.map {
-                    CommandRow(name: $0.name, title: $0.title, icon: .symbol($0.symbol), type: type)
+                    CommandRow(name: $0.name, title: $0.title, icon: .symbol($0.symbol), type: types.command)
                 })
         }
         let extensions = model.allExtensions.map { installed in
@@ -145,12 +145,22 @@ struct CommandsPage: View {
     private func commandRow(_ command: CommandRow, of row: GroupRow) -> some View {
         let id = FudgeSettings.commandID(extension: row.name, command: command.name)
         let enabled = model.isEnabled(command: id) && model.isEnabled(extension: row.name)
+        let reason = model.offByDefaultReason(command: id)
         return HStack(spacing: 0) {
             HStack(spacing: 6) {
                 iconView(command.icon)
-                // The extension's name gives way first when the column is narrow.
-                Text(command.title).layoutPriority(1)
-                Text(row.title).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        // The extension's name gives way first when the column is narrow.
+                        Text(command.title).layoutPriority(1)
+                        Text(row.title).foregroundStyle(.secondary)
+                    }
+                    if let reason {
+                        // Why it's off until turned on (SPEC-109), on a line of its own so it's read whole.
+                        Text(reason).font(.caption).foregroundStyle(.secondary).help(reason)
+                            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
             .lineLimit(1)
             .padding(.leading, 18)
@@ -221,6 +231,10 @@ private struct AliasCell: View {
             }
         }
         .onAppear { text = model.alias(for: commandID) ?? "" }
+        // A default alias goes when another command takes it, and comes back when that one lets it go.
+        .onChange(of: model.alias(for: commandID)) { _, alias in
+            if !editing { text = alias ?? "" }
+        }
     }
 }
 

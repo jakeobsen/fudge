@@ -44,7 +44,7 @@ const post = (grant: string, extra: Record<string, string> = {}) => ({
 test("the table reads from the app's variable, and a bad one is empty", () => {
     assert.deepEqual(
         providers.map((provider) => provider.id),
-        ["github", "linear", "slack", "asana", "google", "jira", "zoom"],
+        ["github", "linear", "slack", "asana", "google", "atlassian", "atlassian", "zoom", "zoom"],
     );
     assert.deepEqual(providersFromEnvironment("not json"), []);
     assert.deepEqual(providersFromEnvironment('{"id":"x"}'), []);
@@ -65,11 +65,16 @@ test("exactly the seven providers' token and refresh requests go to the relay", 
         ["https://slack.oauth.raycast.com/refresh-token", "slack/refresh-token", "refresh_token"],
         ["https://asana.oauth.raycast.com/token", "asana/token", "authorization_code"],
         ["https://asana.oauth.raycast.com/refresh-token", "asana/refresh-token", "refresh_token"],
+        // Raycast's Jira and Zoom proxies, as the store's Jira and Zoom extensions set them (FUD-137).
+        ["https://jira.oauth.raycast.com/token", "atlassian/token", "authorization_code"],
+        ["https://jira.oauth.raycast.com/refresh-token", "atlassian/refresh-token", "refresh_token"],
+        ["https://zoom.oauth.raycast.com/token", "zoom/token", "authorization_code"],
+        ["https://zoom.oauth.raycast.com/refresh-token", "zoom/refresh-token", "refresh_token"],
         // These refresh at their token URL: the grant decides.
         ["https://oauth2.googleapis.com/token", "google/token", "authorization_code"],
         ["https://oauth2.googleapis.com/token", "google/refresh-token", "refresh_token"],
-        ["https://auth.atlassian.com/oauth/token", "jira/token", "authorization_code"],
-        ["https://auth.atlassian.com/oauth/token", "jira/refresh-token", "refresh_token"],
+        ["https://auth.atlassian.com/oauth/token", "atlassian/token", "authorization_code"],
+        ["https://auth.atlassian.com/oauth/token", "atlassian/refresh-token", "refresh_token"],
         ["https://zoom.us/oauth/token", "zoom/token", "authorization_code"],
         ["https://zoom.us/oauth/token", "zoom/refresh-token", "refresh_token"],
     ];
@@ -99,6 +104,9 @@ test("anything else at a provider's own token URL is left alone", async () => {
         ["https://github.com/login/oauth/access_token", post("authorization_code")],
         ["https://oauth2.googleapis.com/tokeninfo", post("authorization_code")],
         ["https://relay.example/base/github/token", post("authorization_code")],
+        // Lookalikes of Raycast's Jira and Zoom proxies are other hosts.
+        ["https://jira.oauth.raycast.com.evil.test/token", post("authorization_code")],
+        ["https://zoom.oauth.raycast.com.evil.test/refresh-token", post("refresh_token")],
     ];
     for (const [url, init] of untouched) {
         await wrapped(url, init);
@@ -157,6 +165,12 @@ for (const [state, answer] of [
             ["https://github.oauth.raycast.com/token", post("client_credentials")],
             ["https://slack.oauth.raycast.com/authorize", undefined],
             ["https://notion.oauth.raycast.com/token", post("authorization_code")],
+            // Only the Jira and Zoom proxies' exact token and refresh URLs, over https, go to the relay.
+            ["https://jira.oauth.raycast.com/token/x", post("authorization_code")],
+            ["http://jira.oauth.raycast.com/token", post("authorization_code")],
+            ["https://jira.oauth.raycast.com/authorize", undefined],
+            ["https://zoom.oauth.raycast.com/token/x", post("authorization_code")],
+            ["http://zoom.oauth.raycast.com/refresh-token", post("refresh_token")],
             ["https://oauth.raycast.com/", undefined],
             // DNS ignores a trailing dot, so these are the same hosts.
             ["https://github.oauth.raycast.com./token", post("authorization_code")],

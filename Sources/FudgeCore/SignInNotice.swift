@@ -21,6 +21,11 @@ public struct SignInNotice: Equatable, Sendable {
     public var message: String
     /// ↵ runs the first; ⌘K lists them.
     public var actions: [ActionSection]
+    /// The title of the command the notice stands in for, which the bottom bar shows, as the command's own screen did.
+    public var commandTitle: String?
+
+    /// What the bottom bar says under the notice (`LauncherFooter`).
+    public var footerTitle: String { LauncherFooter.title(standingInFor: commandTitle) }
 
     /// ⌘⌥, opens Settings on the Sign-in page.
     public static let signInSettingsShortcut = KeyShortcut(key: ",", modifiers: ["cmd", "opt"])
@@ -29,10 +34,12 @@ public struct SignInNotice: Equatable, Sendable {
     /// (the failure then shows as any other). `message` is the refusal's own: a refused sign-in shows it, since it's
     /// the provider's or the relay's reason. `commandID` is `<extension>/<command>`, which Try Again runs again.
     public init?(
-        notice: String?, message: String, extensionName: String, extensionTitle: String, commandID: String?
+        notice: String?, message: String, extensionName: String, extensionTitle: String, commandID: String?,
+        commandTitle: String? = nil
     ) {
         guard let notice, let kind = Kind(rawValue: notice) else { return nil }
         self.kind = kind
+        self.commandTitle = commandTitle
         let name = extensionTitle.isEmpty ? extensionName : extensionTitle
         let settings = ("Open Extension Settings", RootAction.configureExtension(extensionName))
         let retry: [(String, KeyShortcut?, RootAction)] =
@@ -78,5 +85,16 @@ public struct SignInNotice: Equatable, Sendable {
     public var hud: String {
         let first = message.range(of: ". ").map { String(message[..<$0.lowerBound]) + "." } ?? message
         return first.isEmpty ? title : "\(title). \(first)"
+    }
+}
+
+/// What the launcher's bottom bar says beside Fudge's icon on a screen that isn't a command's own: the title of the
+/// command a failure or notice stands in for (FUD-135), else "Fudge".
+public enum LauncherFooter {
+    public static let fudge = "Fudge"
+
+    public static func title(standingInFor commandTitle: String?) -> String {
+        guard let commandTitle, !commandTitle.isEmpty else { return fudge }
+        return commandTitle
     }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import EventKit
 import FudgeCore
 import Quartz
 
@@ -15,12 +16,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotKeys = CarbonHotKeys()
     private lazy var registry = HotKeyRegistry(registrar: hotKeys)
     private var settingsModel: SettingsModel!
+    /// Expanding snippets as they're typed (SPEC-078 B). Never in snapshot runs.
+    private var snippetExpansion: SnippetExpansion?
+    /// The observer that redraws My Schedule when the calendars change.
+    private var calendarChanges: NSObjectProtocol?
     private var settingsWindow: SettingsWindowController!
     private var onboardingWindow: OnboardingWindowController!
     /// The menu bar item's "Open Fudge (⌥Space)".
     private var openItem: NSMenuItem?
     private let hud = HUDWindow()
     private var keyMonitor: Any?
+    /// The standard About panel, once About Fudge has opened it, so Esc, ⌘W and ⌘Q close it (`AboutFudge.closesPanel`).
+    private weak var aboutPanel: NSWindow?
     /// The app that was frontmost when a FilePicker's open panel activated fudge; it gets the keyboard back when the
     /// launcher hides.
     private var appToRestore: NSRunningApplication?
@@ -38,10 +45,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var extensionsWatcher: ExtensionsWatcher?
     /// The Quick Look preview (SPEC-049). Never in snapshot runs.
     private var quickLook: QuickLookPreview?
+    /// Hyperkey (SPEC-093): Caps Lock as ⌘⌥⌃⇧. Never in snapshot runs.
+    private var hyperkey: HyperkeyService?
+    /// SIGTERM quits as Quit does, so what `applicationWillTerminate` puts back (Hyperkey's mapping) goes with a kill
+    /// or a restart too. Never in snapshot runs.
+    private var terminationSignal: DispatchSourceSignal?
 
     func applicationWillTerminate(_ notification: Notification) {
         // Clipboard History's decrypted image copies don't outlive the run.
         model?.clipboardHistory.clearPreviews()
+        // Nor does Hyperkey's Caps Lock mapping.
+        hyperkey?.quit()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -56,10 +70,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model.windowSwitching = FixedWindowSwitching(file: snapshot.windows)
             // Nor do the System commands do anything: no lock, sleep, restart, Apple Event, eject, hide or quit.
             model.systemActions = InertSystemActions(trashCount: snapshot.trashCount)
+            // Nor does Pick Color show the loupe: it picks nothing, as Esc would.
+            model.colorSampler = InertColorSampler()
             // Nor the windows: Save Layout… gets `--layout-windows`' made-up ones, and nothing is moved.
             model.windowLayoutActions = .inert(windows: snapshot.layoutWindows)
             // Nor other apps' menus: Search Menu Items gets `--menu-items`' made-up app and menus.
             model.menuItemsAccess = FixedMenuItemsAccess(file: snapshot.menuItems)
+            // Define Word reads no selection and no dictionary: it gets `--definitions`' made-up ones, or none.
+            model.selectedText = { nil }
+            model.definitionLookup = snapshot.definitions.map(FixedDefinitions.load) ?? FixedDefinitions([:])
+            // Nor the calendars: My Schedule gets `--calendar-events`' made-up ones, and asks no one for access.
+            model.calendarSource =
+                snapshot.calendarEvents.map { FixedCalendarSource.load($0, now: Date()) }
+                ?? FixedCalendarSource(access: .notDetermined)
             // Nor the clipboard or the Keychain: Clipboard History gets `--clipboard-entries`' made-up entries.
             if let file = snapshot.clipboardEntries {
                 model.clipboardHistory = ClipboardHistoryService(
@@ -74,6 +97,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 settingsModel.windowPositions.first { $0.name == editing }.map(PositionDraft.init(editing:))
                 ?? PositionDraft()
         }
+        // One calendar source for both, so the Calendar and Permissions pages say what My Schedule reads.
+        settingsModel.calendarSource = model.calendarSource
+        settingsModel.loadCalendars()
+        settingsModel.calendarChanged = { [weak self] in self?.model.reloadSchedule() }
         settingsModel.launcherHotkey = FudgeSettings.load(from: paths.settingsFile).launcherHotkey
         // Snapshots and tests never register fudge as a login item; only the real app talks to the system.
         settingsModel.loginItem =
@@ -128,7 +155,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A quicklink deleted in Settings takes its hotkey with it.
         settingsModel.quicklinksChanged = { [weak self] in _ = self?.applyCommandHotkeys() }
         model.commandHotkeysChanged = { [weak self] in self?.registerCommandHotkeys() }
-        settingsModel.snippetsChanged = { [weak self] in self?.model.reloadSnippetList() }
+        settingsModel.snippetsChanged = { [weak self] in
+            self?.model.reloadSnippetList()
+            self?.snippetExpansion?.update()
+        }
+        settingsModel.snippetExpansionChanged = { [weak self] in self?.snippetExpansion?.update() }
+        model.snippetsChanged = { [weak self] in self?.snippetExpansion?.update() }
+        if Snapshot.isRequested(CommandLine.arguments) {
+            // Snapshots get a fixed Input Monitoring answer, and no keyboard tap.
+            let allowed = Snapshot(arguments: CommandLine.arguments)?.inputMonitoring ?? false
+            settingsModel.inputMonitoring = InputMonitoringStatus(read: { allowed })
+        } else {
+            let expansion = SnippetExpansion(paths: paths)
+            // Typing into the launcher (a non-activating panel) or a Fudge window never expands.
+            expansion.fudgeHasKeyboard = { [weak self] in NSApp.isActive || self?.panel?.isKeyWindow == true }
+            expansion.showHUD = { [weak self] title in self?.hud.show(title) }
+            expansion.clipboard = { [weak self] in self?.model.templateClipboard() }
+            snippetExpansion = expansion
+            expansion.update()
+        }
+        settingsModel.colorFormatChanged = { [weak self] in self?.model.reloadRecentColors() }
         model.windowLayoutsChanged = { [weak self] in self?.settingsModel.loadWindowLayouts() }
         settingsModel.clipboardHistoryChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.deleteClipboardHistory = { [weak self] in self?.model.clipboardHistory.deleteAll() }
@@ -147,7 +193,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updates = UpdateChecker(
             fetcher: snapshotRun == nil ? GitHubReleaseFetcher() : SnapshotReleaseFetcher(),
             stateFile: snapshotRun == nil ? paths.updateCheckFile : nil,
-            running: snapshotRun == nil ? RunningVersion(AppVersion.current) : .untagged,
+            running: snapshotRun == nil ? RunningVersion(FudgeVersion.describe) : .untagged,
             setting: FudgeSettings.load(from: paths.settingsFile).updateCheck)
         if let release = snapshotRun?.updateAvailable { updates.show(release, checkedAt: Date()) }
         settingsModel.updateStatus = updates.status
@@ -180,11 +226,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        // An event added, changed or removed in any app: My Schedule, if it's on screen, shows it.
+        calendarChanges = NotificationCenter.default.addObserver(
+            forName: .EKEventStoreChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.model.reloadSchedule() }
+        }
+
         SystemCalls.accessibilitySettingsOffer = AccessibilitySettingsOffer(
             panel: panel, restoreKeyboard: { [weak self] in self?.model.restoreKeyboard() })
         // Switch Windows reads the system's windows; it notes which apps become active from now on.
         model.windowSwitching = SystemWindowSwitching(accessibility: { SystemCalls.mayReadWindows() })
         model.menuItemsAccess = SystemMenuItemsAccess(mayReadMenus: { SystemCalls.mayReadMenus() })
+
+        let hyperkey = HyperkeyService(paths: paths)
+        hyperkey.problemChanged = { [weak self] problem in self?.settingsModel.hyperkeyProblem = problem }
+        settingsModel.mayUseAccessibility = { SystemCalls.mayPostKeysForUser() }
+        settingsModel.turnOnHyperkey = { [weak hyperkey] quickPress, done in
+            guard let hyperkey else { return done(nil) }
+            hyperkey.turnOn(quickPress: quickPress, done: done)
+        }
+        settingsModel.turnOffHyperkey = { [weak hyperkey] in hyperkey?.turnOff() }
+        settingsModel.hyperkeyQuickPressChanged = { [weak hyperkey] in hyperkey?.update() }
+        self.hyperkey = hyperkey
+        hyperkey.update()
+
+        signal(SIGTERM, SIG_IGN)
+        let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        termination.setEventHandler { NSApp.terminate(nil) }
+        termination.resume()
+        terminationSignal = termination
 
         let quickLook = QuickLookPreview()
         quickLook.launcherLevel = panel.level
@@ -210,7 +281,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let pressed = Self.shortcut(for: event) else { return event }
             let window = event.window
             let handled = MainActor.assumeIsolated {
-                guard let self, window === self.panel else { return false }
+                guard let self else { return false }
+                if let about = self.aboutPanel, window === about {
+                    guard AboutFudge.closesPanel(pressed) else { return false }
+                    about.close()
+                    return true
+                }
+                guard window === self.panel else { return false }
                 // While an input method is composing (Japanese, Chinese, …), its keys are its own: ↑↓ pick a
                 // candidate, Esc cancels and ↵ confirms.
                 if (self.panel.firstResponder as? NSTextView)?.hasMarkedText() == true { return false }
@@ -360,7 +437,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             withTitle: "Check for Updates…", action: #selector(checkForUpdatesFromMenu), keyEquivalent: "")
         check.target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Fudge \(AppVersion.current)", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "Fudge \(FudgeVersion.current)", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "About Fudge", action: #selector(showAbout), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Quit Fudge", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.menu = menu
         statusItem = item
@@ -380,6 +458,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Check Now, on the General page and in the menu bar item.
     private func checkForUpdatesNow() {
         Task { await updates.checkNow(now: Date()) }
+    }
+
+    /// About Fudge (SPEC-113 §3): the standard About panel with the version Fudge shows, the build number, the
+    /// copyright (`NSHumanReadableCopyright`) and `AboutFudge.credits`, linking the license and third-party notices in
+    /// the app. It's the user's own click, so Fudge comes forward first, as Settings does. Snapshot runs have no menu.
+    @objc private func showAbout() {
+        NSApp.activateFromUserAction(origin: .userInitiated)
+        let resources = Bundle.main.resourceURL
+        func file(_ name: String) -> URL? {
+            guard let url = resources?.appendingPathComponent(name),
+                FileManager.default.fileExists(atPath: url.path)
+            else { return nil }
+            return url
+        }
+        let markdown = AboutFudge.credits(
+            describe: FudgeVersion.describe, license: file("LICENSE.txt"), notices: file("Third-Party Notices.txt"))
+        let parsed =
+            (try? AttributedString(
+                markdown: markdown, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(markdown)
+        let credits = NSMutableAttributedString(parsed)
+        let centered = NSMutableParagraphStyle()
+        centered.alignment = .center
+        credits.addAttributes(
+            [
+                .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize), .foregroundColor: NSColor.labelColor,
+                .paragraphStyle: centered,
+            ], range: NSRange(location: 0, length: credits.length))
+        var options: [NSApplication.AboutPanelOptionKey: Any] = [
+            .applicationVersion: FudgeVersion.current, .credits: credits,
+        ]
+        if let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String {
+            options[.version] = build
+        }
+        let before = Set(NSApp.windows.map(ObjectIdentifier.init))
+        NSApp.orderFrontStandardAboutPanel(options: options)
+        if aboutPanel == nil { aboutPanel = NSApp.windows.first { !before.contains(ObjectIdentifier($0)) } }
+        aboutPanel?.makeKeyAndOrderFront(nil)
     }
 
     /// The menu's Check for Updates…: Settings opens on the General page, where the result shows, and it checks.
@@ -660,6 +776,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyCommandHotkeys()
         Task { await exchangeRates.setEnabled(settings.currencyRates, now: Date()) }
         Task { await updates.setSetting(settings.updateCheck, now: Date()) }
+        snippetExpansion?.update()
+        hyperkey?.update()
     }
 
     @objc private func reloadExtensions() {
@@ -710,21 +828,28 @@ struct Snapshot {
     let loginItem: LoginItemStatus
     /// `--accessibility allowed`: Accessibility shows as allowed (else not allowed).
     let accessibility: Bool
+    /// `--input-monitoring allowed`: the Snippets page shows Input Monitoring as allowed (else not allowed).
+    let inputMonitoring: Bool
     /// `--onboarding [<step>]`: the onboarding window instead, optionally on one step.
     let onboarding: Bool
     let onboardingStep: OnboardingStep?
     /// `--sign-ins <extension>/<providerId>=<Provider>,…`: sign-ins the Sign-in page lists, kept in memory.
     let signIns: MemorySecretStore
-    /// `--sign-in-consent`: picks Fudge's sign-in server on the Sign-in page and saves its consent sheet instead.
+    /// `--sign-in-consent`: picks Fudge's sign-in server on the Sign-in page and saves its consent sheet instead. It
+    /// implies `--settings`, as `--clipboard-consent` does.
     let signInConsent: Bool
     /// `--clipboard-consent`: turns on Clipboard History's switch and saves its consent sheet instead.
     let clipboardConsent: Bool
     /// `--found-files <file>`: Search Files' results, a JSON array of `files.search` entries (`~/` paths are in the
     /// home folder). Snapshots never ask Spotlight, so without it there are none.
     let foundFiles: URL?
+    /// `--calendar-events <file>`: My Schedule's made-up calendars and events (`FixedCalendarSource.load`).
+    let calendarEvents: URL?
     /// `--clipboard-entries <file>`: Clipboard History's made-up entries, a JSON array of `clipboardHistory.list`
     /// entries. Snapshots never read the clipboard.
     let clipboardEntries: URL?
+    /// Made-up definitions for Define Word (a JSON object of word to definition), so no run reads the dictionaries.
+    let definitions: URL?
     /// `--update-available <version>` (`0.9.0` or `v0.9.0`): an update check found that release.
     let updateAvailable: Release?
     /// `--trash-count <n>`: what Empty Trash's made-up count of the Trash gives (12 without it); anything but a number
@@ -764,6 +889,7 @@ struct Snapshot {
         openDate = arguments.contains("--open-date")
         loginItem = value("--login-item").flatMap(LoginItemStatus.init(rawValue:)) ?? .notRegistered
         accessibility = value("--accessibility") == "allowed"
+        inputMonitoring = value("--input-monitoring") == "allowed"
         onboarding = arguments.contains("--onboarding")
         onboardingStep = value("--onboarding").flatMap(OnboardingStep.init(rawValue:))
         signIns = MemorySecretStore()
@@ -779,8 +905,10 @@ struct Snapshot {
         signInConsent = arguments.contains("--sign-in-consent")
         clipboardConsent = arguments.contains("--clipboard-consent")
         foundFiles = value("--found-files").map { URL(fileURLWithPath: $0) }
+        calendarEvents = value("--calendar-events").map { URL(fileURLWithPath: $0) }
         clipboardEntries = value("--clipboard-entries").map { URL(fileURLWithPath: $0) }
         menuItems = value("--menu-items").map { URL(fileURLWithPath: $0) }
+        definitions = value("--definitions").map { URL(fileURLWithPath: $0) }
         updateAvailable = value("--update-available").flatMap { Release(tag: $0.hasPrefix("v") ? $0 : "v" + $0) }
         trashCount = value("--trash-count").map { Int($0) } ?? InertSystemActions.trashCount
         windows = value("--windows").map { URL(fileURLWithPath: $0) }
@@ -798,7 +926,8 @@ struct Snapshot {
             let next = settingsIndex + 1
             settingsExtension = next < arguments.count && !arguments[next].hasPrefix("--") ? arguments[next] : nil
         } else {
-            settings = false
+            // A consent sheet belongs to its Settings page, so its flag implies `--settings` (FUD-135 §4).
+            settings = signInConsent || clipboardConsent
             settingsExtension = nil
         }
     }

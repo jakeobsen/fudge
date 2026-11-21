@@ -12,6 +12,9 @@ final class LauncherModel {
         var details: String?
         /// Set when it's a notice rather than an error, like the Extension Store's "off" view.
         var notice: Notice?
+        /// The command it stands in for, whose title the bottom bar keeps (`LauncherFooter`); nil for one that
+        /// belongs to no command, which says "Fudge".
+        var commandTitle: String?
 
         /// A notice is drawn like an empty view: `symbol`, the title and the message. Its actions take Back's place
         /// (↵ runs the first, ⌘K lists them, and their shortcuts work), and ⌘⇧, opens `extensionName`'s settings.
@@ -110,6 +113,8 @@ final class LauncherModel {
     private(set) var arguments = ArgumentInput()
     /// The root item `arguments` belongs to.
     @ObservationIgnored private var argumentsItem: String?
+    /// The alias hand-off's memory of the query it last took (FUD-140).
+    @ObservationIgnored private var aliasHandOff = AliasHandOff()
     /// Counts the times `arguments` started over. Each field's edits carry the count it was drawn with, so a late
     /// write from a field that's gone can't refill the new ones.
     private(set) var argumentsGeneration = 0
@@ -153,6 +158,8 @@ final class LauncherModel {
     @ObservationIgnored var reloadAll: () -> Void = {}
     /// Shows a HUD message; set by the app delegate.
     @ObservationIgnored var showHUD: (String) -> Void = { _ in }
+    /// Snippet expansion reads `snippets.json` again after the launcher changed it; set by the app delegate.
+    @ObservationIgnored var snippetsChanged: () -> Void = {}
     /// Registers the command hotkeys again from the settings last read, after a quicklink and its hotkey went; set
     /// by the app delegate.
     @ObservationIgnored var commandHotkeysChanged: () -> Void = {}
@@ -169,11 +176,24 @@ final class LauncherModel {
     @ObservationIgnored var panelOnScreen: () -> Bool = { true }
     /// Whether the launcher panel is on screen; set by the app delegate.
     @ObservationIgnored var isVisible: () -> Bool = { false }
+    /// Pick Color's loupe. `AppDelegate` gives snapshot runs one that never shows it.
+    @ObservationIgnored var colorSampler: any ColorSampling = ScreenColorSampler()
+    /// Define Word's dictionary. `AppDelegate` gives snapshot runs `--definitions`' made-up ones.
+    @ObservationIgnored var definitionLookup: any DefinitionLookup = DictionaryServicesLookup()
+    /// The frontmost app's selected text, for Define Word with no word typed, read as the user's own call. Snapshot
+    /// runs read none.
+    @ObservationIgnored var selectedText: @MainActor () async -> String? = {
+        guard case .string(let text) = try? await SystemCalls.handle("selection.text", .null, origin: .userInitiated)
+        else { return nil }
+        return text
+    }
     /// Asks the user to confirm (title, message, primary, dismiss, destructive); set by the app delegate.
     /// Asks the user, for a call from `origin`; a background call gets `CallOrigin.unaskedAnswer` without an alert.
     @ObservationIgnored var confirm: (AlertRequest, CallOrigin) async -> Bool = { _, _ in false }
     /// The system's part of the System commands. `AppDelegate` gives snapshot runs inert ones, which do nothing.
     @ObservationIgnored var systemActions: any SystemActions = MacSystemActions()
+    /// My Schedule's calendars: EventKit's, or a snapshot run's made-up ones (`FixedCalendarSource`).
+    @ObservationIgnored var calendarSource: any CalendarSource = EventKitCalendarSource()
 
     /// "Sign in to <provider>" on screen, over whatever the command shows (SPEC-056).
     private(set) var signIn: SignInPrompt?
@@ -298,7 +318,7 @@ final class LauncherModel {
         )
         reload()
         // The extension host's first start shouldn't wait for `node --version` (SPEC-084).
-        if let node = Runtime.locateNode() { warmNodeVersion(node) }
+        if let node = Runtime.locateNode()?.node { warmNodeVersion(node) }
     }
 
     /// Clear Search History: root search forgets which results were opened, in memory and in `history.json`.
@@ -347,6 +367,7 @@ final class LauncherModel {
     /// get their aliases and hotkeys. Settings calls it after each change.
     func applySettings(keepingSelection: Bool = false) {
         settings = FudgeSettings.load(from: paths.settingsFile)
+        settings.offByDefault = InstalledExtension.offByDefault(installedExtensions)
         panelReset.setting = settings.resetAfter
         let commands = installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
         windowLayouts = WindowLayoutStore.load(from: paths.windowLayoutsFile)
@@ -362,13 +383,13 @@ final class LauncherModel {
     @ObservationIgnored private var installedExtensions: [InstalledExtension] = []
     @ObservationIgnored private var applications: [RootItem] = []
 
-    /// Reads `quicklinks.json` for root search. Their icons are looked up again, since an app may have changed.
     /// The user's custom window positions and saved layouts (SPEC-094), read again with the settings.
     @ObservationIgnored private var windowLayouts = WindowLayoutStore()
 
     /// Fudge's command groups, with the user's own window commands (`BuiltInCommandGroup.all(with:)`).
     var builtInGroups: [BuiltInCommandGroup] { BuiltInCommandGroup.all(with: windowLayouts) }
 
+    /// Reads `quicklinks.json` for root search. Their icons are looked up again, since an app may have changed.
     private func loadQuicklinks() -> [RootItem] {
         icons = icons.filter { !$0.key.hasPrefix("quicklink:") }
         quicklinks = QuicklinkStore.load(from: paths.quicklinksFile).quicklinks
@@ -444,14 +465,20 @@ final class LauncherModel {
                 reportSelection()
             case .root, .failure:
                 if case .failure = screen { screen = .root }
-                // An alias and a space hand the rest of the query to that command's first argument (as in Raycast).
-                if let handed = CommandAliases.handOff(newValue, in: items) {
+                // An alias and a space hand the rest of the query to that command's first argument (as in Raycast),
+                // once: the query coming back as the search field's write-back changes nothing.
+                switch aliasHandOff.answer(newValue, in: items, inArgument: arguments.focus != nil) {
+                case .handOff(let item, let rest):
                     rootQuery = String(newValue.prefix { $0 != " " })
                     refreshResults()
-                    selectedItem = handed.item.id
-                    arguments.set(handed.rest, at: 0)
+                    selectedItem = item.id
+                    arguments.set(rest, at: 0)
                     arguments.focus = 0
                     return
+                case .alreadyHandedOff:
+                    return
+                case .query:
+                    break
                 }
                 rootQuery = newValue
                 refreshResults()
@@ -646,9 +673,15 @@ final class LauncherModel {
         arguments.set(value, at: index)
     }
 
-    /// The user clicked into an argument field (an index) or the search field (nil).
+    /// The user picked a dropdown argument's value.
     func focusArgument(_ index: Int?) {
         if arguments.focus != index { arguments.focus = index }
+    }
+
+    /// SwiftUI says the keyboard moved to argument field `index`, or the search field (nil). Only a move the user
+    /// made counts, which needs the panel to hold the keyboard (`ArgumentInput.follows`, FUD-140).
+    func fieldTookKeyboard(_ index: Int?, panelHoldsKeyboard: Bool) {
+        if arguments.follows(index, panelHoldsKeyboard: panelHoldsKeyboard) { arguments.focus = index }
     }
 
     // MARK: - Command views
@@ -1584,13 +1617,16 @@ final class LauncherModel {
     // MARK: - Sign-in notices
 
     /// The notice for an error `session` reported as refused on purpose (SPEC-095), or nil for any other error.
-    private func signInNotice(_ notice: String?, message: String, session: String) -> SignInNotice? {
+    private func signInNotice(
+        _ notice: String?, message: String, session: String, commandTitle: String?
+    ) -> SignInNotice? {
         guard notice != nil else { return nil }
         let name = sessionExtensions[session] ?? ""
         return SignInNotice(
             notice: notice, message: message, extensionName: name,
             extensionTitle: extensions[name]?.manifest.title ?? "",
-            commandID: sessionCommands[session].map { FudgeSettings.commandID(extension: name, command: $0) })
+            commandID: sessionCommands[session].map { FudgeSettings.commandID(extension: name, command: $0) },
+            commandTitle: commandTitle)
     }
 
     /// Try Again, on a cancelled or refused sign-in's notice: runs the command again as root search would, or shows
@@ -1739,11 +1775,11 @@ final class LauncherModel {
         }
     }
 
-    /// The sessions of Fudge's own views, its forms, Search Snippets, Switch Windows and Search Menu Items, which
-    /// never reach the host.
+    /// The sessions of Fudge's own views, its forms, Search Snippets, Switch Windows, Search Menu Items, Recent Colors,
+    /// Define Word and My Schedule, which never reach the host.
     static let builtInSessions: Set<String> = [
         QuicklinkForm.session, SnippetForm.session, SnippetList.session, SwitchWindowsList.session, LayoutForm.session,
-        MenuItemsList.session,
+        MenuItemsList.session, RecentColorsGrid.session, DefineWordView.session, ScheduleList.session,
     ]
 
     @ObservationIgnored private var builtInForm: BuiltInFormState?
@@ -1865,6 +1901,7 @@ final class LauncherModel {
                 return
             }
             saved = "Snippet saved"
+            snippetsChanged()
         case .layout(let draft, _):
             let draft = LayoutForm.draft(draft, with: values)
             let file = paths.windowLayoutsFile
@@ -1924,6 +1961,167 @@ final class LauncherModel {
         for case .exit(let session, let reason) in form.deferred { handle(.exit(session: session, reason: reason)) }
         if case .command(let command) = screen, command.session == covered { return }
         send(.unload(session: covered))
+    }
+
+    /// The proxy set in System Settings → Network, for the Extension Store's npm and git (SPEC-116 §3). Snapshot runs
+    /// never read it.
+    static func systemProxy() -> SystemProxy {
+        guard !Snapshot.isRequested(CommandLine.arguments),
+            let settings = CFNetworkCopySystemProxySettings()?.takeRetainedValue() as? [String: Any]
+        else { return SystemProxy() }
+        return SystemProxy(settings: settings)
+    }
+
+    // MARK: - My Schedule
+
+    /// What My Schedule was last drawn from, which its actions' nodes are read in (`ScheduleList.target`). It's in
+    /// memory only: no event is logged or kept (SPEC-092).
+    @ObservationIgnored private var scheduleContent = ScheduleList.Content.asking
+    /// Whether My Schedule shows its detail pane (Show Details, ⌘D), for the run.
+    @ObservationIgnored private var scheduleShowsDetail = false
+    /// The read of the calendars under way, off the main thread; a newer one replaces it.
+    @ObservationIgnored private var scheduleRead: Task<Void, Never>?
+
+    /// Shows My Schedule (SPEC-092), from root search or its hotkey. Its hotkey hides it again when it's on screen,
+    /// as a view command's does. It shows as loading until the calendars are read, off the main thread. Calendar
+    /// access is asked for here, the first time, and nowhere else.
+    private func showSchedule(fromHotkey: Bool) {
+        if fromHotkey, isVisible(), case .command(let command) = screen, command.session == ScheduleList.session {
+            hide()
+            return
+        }
+        let access = calendarSource.authorization
+        scheduleContent = access.canRead || access == .notDetermined ? .asking : .refused
+        let build = {
+            if case .command = self.screen { self.leaveCommand() }
+            self.actionPanel = nil
+            self.dropdownPanel = nil
+            self.datePanel = nil
+            var command = CommandScreen(session: ScheduleList.session, title: ScheduleList.title)
+            self.renderSchedule(&command)
+            self.screen = .command(command)
+        }
+        if fromHotkey {
+            resettingFirst(build)
+            show()
+        } else {
+            build()
+        }
+        guard access == .notDetermined else {
+            if access.canRead { readSchedule() }
+            return
+        }
+        let source = calendarSource
+        Task {
+            _ = await source.requestAccess()
+            readSchedule()
+        }
+    }
+
+    /// Reads the calendars off the main thread, since every EventKit call waits on the calendar agent, then draws the
+    /// list if it's still on screen: the days from today to Days Ahead, of the calendars not unticked on the Calendar
+    /// page.
+    private func readSchedule() {
+        scheduleRead?.cancel()
+        let source = calendarSource
+        let chosen = FudgeSettings.load(from: paths.settingsFile)
+        scheduleRead = Task {
+            let content = await Task.detached(priority: .userInitiated) {
+                Self.scheduleContent(from: source, chosen: chosen, now: Date(), calendar: .current)
+            }.value
+            guard !Task.isCancelled else { return }
+            // The selection stays on the event it was on, wherever the read puts it (SPEC-110 §3).
+            let previous = scheduleContent
+            scheduleContent = content
+            drawSchedule(after: previous)
+        }
+    }
+
+    /// What My Schedule shows, read from `source`: called off the main thread.
+    nonisolated private static func scheduleContent(
+        from source: any CalendarSource, chosen: FudgeSettings, now: Date, calendar: Calendar
+    ) -> ScheduleList.Content {
+        switch source.authorization {
+        case .fullAccess:
+            let calendars = source.calendars()
+            let window = Schedule.window(now: now, daysAhead: chosen.calendarDaysAhead, calendar: calendar)
+            let events = source.events(
+                from: window.start, to: window.end,
+                calendars: Schedule.shownCalendars(calendars, hidden: chosen.calendarHidden))
+            return .days(
+                Schedule.days(
+                    events, now: now, daysAhead: chosen.calendarDaysAhead, calendar: calendar, locale: .current),
+                calendars: calendars, daysAhead: chosen.calendarDaysAhead)
+        case .notDetermined:
+            return .asking
+        default:
+            return .refused
+        }
+    }
+
+    /// Draws the list from what was last read, keeping the search text and the selection where it can.
+    private func renderSchedule(_ command: inout CommandScreen) {
+        command.view = ScheduleList.view(
+            scheduleContent, showingDetail: scheduleShowsDetail, now: Date(), calendar: .current, locale: .current)
+        refreshList(&command, selectFirst: false)
+    }
+
+    /// Draws My Schedule again from what was last read, if it's on screen. After a new read (`previous` is what was
+    /// drawn before it), the selection moves to the row with the event it was on, else the list keeps its place.
+    private func drawSchedule(after previous: ScheduleList.Content? = nil) {
+        guard case .command(var command) = screen, command.session == ScheduleList.session else { return }
+        let selected = command.list?.items.first { $0.id == command.selectedNode }?.itemId
+        renderSchedule(&command)
+        if let previous, let row = ScheduleList.row(after: previous, selected: selected, in: scheduleContent),
+            let item = command.list?.items.first(where: { $0.itemId == row })
+        {
+            command.selectedNode = item.id
+        }
+        screen = .command(command)
+    }
+
+    /// Reads and draws My Schedule again, if it's on screen: after the calendars change, or the Calendar page
+    /// changes what it shows.
+    func reloadSchedule() {
+        guard case .command(let command) = screen, command.session == ScheduleList.session else { return }
+        readSchedule()
+    }
+
+    /// One of its actions, as `send` hands it over.
+    private func scheduleListAction(node: Int) {
+        guard case .command(let list) = screen, list.session == ScheduleList.session,
+            let target = ScheduleList.target(of: node, in: scheduleContent, calendar: .current, locale: .current)
+        else { return }
+        switch target {
+        case .join(let url), .openInCalendar(let url):
+            // The user's own pick; a meeting link is one `MeetingLinks` accepted.
+            if NSWorkspace.shared.open(url) {
+                hide()
+            } else {
+                showFailureToast("Can't open it", message: "No app on this Mac opens this link.")
+            }
+        case .copyLink(let url):
+            copyScheduleText(url.absoluteString, hud: "Copied Meeting Link")
+        case .copyDetails(let text):
+            copyScheduleText(text, hud: "Copied to Clipboard")
+        case .openPrivacySettings:
+            NSWorkspace.shared.open(ScheduleList.privacySettingsURL)
+            hide()
+        case .openSettings:
+            showSettings(extension: SettingsModel.calendarPage)
+        case .toggleDetail:
+            scheduleShowsDetail.toggle()
+            drawSchedule()
+        }
+    }
+
+    private func copyScheduleText(_ text: String, hud: String) {
+        Task {
+            _ = try? await SystemCalls.handle(
+                "clipboard.copy", .object(["text": .string(text)]), origin: .userInitiated)
+        }
+        hide()
+        showHUD(hud)
     }
 
     // MARK: - Search Snippets
@@ -2003,7 +2201,8 @@ final class LauncherModel {
         Task {
             do {
                 try await SystemCalls.pasteSnippet(
-                    filled.text, leftArrows: filled.afterCursor ?? 0, hideWindow: { await self.hideForPaste() })
+                    filled.text, leftArrows: SnippetTemplate.leftArrows(afterCursor: filled.afterCursor),
+                    hideWindow: { await self.hideForPaste() })
             } catch PasteError.noTarget {
                 showHUD("There is no app to paste into")
             } catch {
@@ -2042,7 +2241,239 @@ final class LauncherModel {
                 return
             }
             reloadSnippetList()
+            snippetsChanged()
         }
+    }
+
+    // MARK: - Color Picker
+
+    /// One of the Tools group's commands (SPEC-090).
+    private func runTool(_ command: ToolCommand, item: RootItem, fromHotkey: Bool) {
+        switch command {
+        case .pickColor:
+            // The loupe needs the screen, so the panel goes first, as for window commands; it never shows.
+            if !fromHotkey { searchText = "" }
+            if isVisible() { hide() }
+            pickColor()
+        case .recentColors:
+            guard fromHotkey else {
+                showRecentColors()
+                return
+            }
+            // As a view command's hotkey does: it hides the panel when Recent Colors is already on screen.
+            resettingFirst {
+                if isVisible(), case .command(let command) = screen, command.session == RecentColorsGrid.session {
+                    hide()
+                    return
+                }
+                if case .command = screen { leaveCommand() }
+                showRecentColors()
+                show()
+            }
+        case .defineWord:
+            defineWord(item, fromHotkey: fromHotkey)
+        }
+    }
+
+    // MARK: - Define Word
+
+    /// The word Define Word shows, and its definition (nil: none), which its actions use.
+    @ObservationIgnored private var definedWord: (word: String, definition: String?)?
+
+    /// Define Word (SPEC-091): the typed word, else the selected text's first line, looked up in the Mac's
+    /// dictionaries and shown as a Detail. With neither, root search shows its Word field, with the keyboard in it.
+    private func defineWord(_ item: RootItem, fromHotkey: Bool) {
+        let typed = !fromHotkey && argumentsItem == item.id ? arguments.value(at: 0) : ""
+        let readSelection = selectedText
+        let lookup = definitionLookup
+        Task {
+            switch await DefineWord.start(argument: typed, selection: readSelection) {
+            case .lookUp(let word):
+                let definition = await lookup.definition(of: word)
+                showDefinition(word: word, definition: definition, item: item, fromHotkey: fromHotkey)
+            case .askForWord:
+                askForWord(item, fromHotkey: fromHotkey)
+            }
+        }
+    }
+
+    /// Whether root search is still where Define Word was run from: the panel up, on root search, with it selected.
+    /// The user may have moved on while the selection and the dictionary were read.
+    private func stillOnDefineWord(_ item: RootItem) -> Bool {
+        guard isVisible(), case .root = screen else { return false }
+        return selectedItem == item.id
+    }
+
+    private func showDefinition(word: String, definition: String?, item: RootItem, fromHotkey: Bool) {
+        func build() {
+            actionPanel = nil
+            dropdownPanel = nil
+            datePanel = nil
+            var command = CommandScreen(session: DefineWordView.session, title: DefineWordView.title)
+            command.view = DefineWordView.view(word: word, definition: definition)
+            definedWord = (word, definition)
+            screen = .command(command)
+            // As after a command's launch, the fields start empty for when the user comes back to root search.
+            if argumentsItem == item.id { resetArguments(for: item) }
+        }
+        if fromHotkey {
+            resettingFirst {
+                if case .command = screen { leaveCommand() }
+                build()
+                show()
+            }
+        } else if stillOnDefineWord(item) {
+            build()
+        }
+    }
+
+    /// No word and no selection: root search with Define Word selected and the keyboard in its Word field.
+    private func askForWord(_ item: RootItem, fromHotkey: Bool) {
+        if fromHotkey {
+            resettingFirst {
+                if case .command = screen { leaveCommand() }
+                screen = .root
+                rootQuery = ""
+                refreshResults()
+                selectedItem = item.id
+                arguments.focus = 0
+                show()
+            }
+        } else if stillOnDefineWord(item) {
+            arguments.focus = 0
+        }
+    }
+
+    /// One of its actions, as `send` hands it over.
+    private func defineWordAction(node: Int) {
+        guard let target = DefineWordView.target(of: node), let shown = definedWord,
+            case .command(let command) = screen, command.session == DefineWordView.session
+        else { return }
+        switch target {
+        case .lookUpInDictionary:
+            guard let url = DefineWord.dictionaryURL(for: shown.word) else { return }
+            Task {
+                do {
+                    _ = try await SystemCalls.handle(
+                        "open", .object(["target": .string(url.absoluteString)]), origin: .userInitiated)
+                    hide()
+                } catch {
+                    showFailureToast("Can't open Dictionary", message: SystemCalls.message(of: error))
+                }
+            }
+        case .copyDefinition:
+            guard let definition = shown.definition else { return }
+            Task {
+                guard await Self.copyText(definition) else {
+                    showFailureToast("Couldn't copy the definition")
+                    return
+                }
+                hide()
+                showHUD("Copied to Clipboard")
+            }
+        }
+    }
+
+    /// Whether the loupe is open: a second Pick Color meanwhile (its hotkey again) does nothing.
+    @ObservationIgnored private var pickingColor = false
+
+    /// Pick Color: macOS's loupe, then the color copied in the Copy Format, with a HUD, and added to Recent Colors.
+    /// Esc copies nothing. Recent Colors, if it's the screen under the hidden panel, is drawn again.
+    private func pickColor() {
+        guard !pickingColor else { return }
+        pickingColor = true
+        let format = FudgeSettings.load(from: paths.settingsFile).colorFormat
+        let pick = ColorPick(sampler: colorSampler, copy: { await Self.copyText($0) }, file: paths.colorsFile)
+        Task {
+            let message = await pick.run(format: format)
+            pickingColor = false
+            if let message { showHUD(message) }
+            reloadRecentColors()
+        }
+    }
+
+    /// Puts `text` on the clipboard as `Clipboard.copy` does.
+    private static func copyText(_ text: String) async -> Bool {
+        (try? await SystemCalls.handle("clipboard.copy", .object(["text": .string(text)]), origin: .userInitiated))
+            != nil
+    }
+
+    /// The colors Recent Colors was last drawn from, which its actions' nodes are read in (`RecentColorsGrid.target`).
+    @ObservationIgnored private var listedColors: [RecentColor] = []
+
+    /// Shows Recent Colors (SPEC-090), from root search or its hotkey.
+    private func showRecentColors() {
+        actionPanel = nil
+        dropdownPanel = nil
+        datePanel = nil
+        var command = CommandScreen(session: RecentColorsGrid.session, title: RecentColorsGrid.title)
+        renderRecentColors(&command)
+        screen = .command(command)
+    }
+
+    /// Reads `colors.json` and the Copy Format again and draws the grid, keeping the search text and the selection
+    /// on the same color where it can.
+    private func renderRecentColors(_ command: inout CommandScreen) {
+        let colors = RecentColorStore.load(from: paths.colorsFile).colors
+        listedColors = colors
+        command.view = RecentColorsGrid.view(
+            colors: colors, format: FudgeSettings.load(from: paths.settingsFile).colorFormat)
+        refreshList(&command, selectFirst: false)
+    }
+
+    /// Draws Recent Colors again, if it's on screen: after a pick, a removal, or a new Copy Format in Settings.
+    func reloadRecentColors() {
+        guard case .command(var command) = screen, command.session == RecentColorsGrid.session else { return }
+        renderRecentColors(&command)
+        screen = .command(command)
+    }
+
+    /// One of its actions, as `send` hands it over.
+    private func recentColorsAction(node: Int) {
+        guard let target = RecentColorsGrid.target(of: node, in: listedColors),
+            case .command(let grid) = screen, grid.session == RecentColorsGrid.session
+        else { return }
+        switch target {
+        case .copy(let id, let format):
+            guard let color = listedColors.first(where: { $0.id == id }) else { return }
+            let text = format.string(for: color.color)
+            Task {
+                guard await Self.copyText(text) else {
+                    showFailureToast("Couldn't copy \(text)")
+                    return
+                }
+                hide()
+                showHUD("Copied \(text)")
+            }
+        case .remove(let id):
+            changeRecentColors("Can't remove the color") { $0.remove(id: id) }
+        case .clear:
+            let count = listedColors.count
+            let request = AlertRequest(
+                title: "Clear Recent Colors?",
+                message: count == 1 ? "The color is removed." : "All \(count) colors are removed.", primary: "Clear",
+                dismiss: "Cancel", destructive: true)
+            Task {
+                guard await confirm(request, .userInitiated) else { return }
+                changeRecentColors("Can't clear Recent Colors") { $0.clear() }
+            }
+        case .pick:
+            hide()
+            pickColor()
+        }
+    }
+
+    /// Changes `colors.json` and draws the grid again. A file Fudge can't read stays as it is, and a toast says why.
+    private func changeRecentColors(_ failure: String, _ edit: (inout RecentColorStore) -> Void) {
+        let file = paths.colorsFile
+        var store = RecentColorStore.load(from: file)
+        edit(&store)
+        do {
+            try store.save(to: file)
+        } catch {
+            showFailureToast(failure, message: String(describing: error))
+        }
+        reloadRecentColors()
     }
 
     /// Delete Quicklink…: asks, then removes it from `quicklinks.json`. A file Fudge can't read stays as it is,
@@ -2063,7 +2494,7 @@ final class LauncherModel {
                 showFailureToast("Can't delete \(quicklink.name)", message: String(describing: error))
                 return
             }
-            pruneQuicklinkSettings(keeping: store.quicklinks)
+            pruneQuicklinkSettings(in: store)
             applySettings()
             commandHotkeysChanged()
         }
@@ -2071,9 +2502,9 @@ final class LauncherModel {
 
     /// Takes a deleted quicklink's alias, hotkey and Enabled out of `settings.json` (`QuicklinkCommands.prune`).
     /// A `settings.json` Fudge can't read stays as it is: the leftovers do no harm, since no quicklink has that id.
-    private func pruneQuicklinkSettings(keeping quicklinks: [Quicklink]) {
+    private func pruneQuicklinkSettings(in store: QuicklinkStore) {
         var pruned = FudgeSettings.load(from: paths.settingsFile)
-        guard QuicklinkCommands.prune(&pruned, keeping: quicklinks) else { return }
+        guard QuicklinkCommands.prune(&pruned, in: store) else { return }
         do {
             try pruned.save(to: paths.settingsFile)
         } catch {
@@ -2423,6 +2854,8 @@ final class LauncherModel {
     @ObservationIgnored private var menuCache = MenuItemsCache<MenuItemsListing>()
     /// Counts reads, so only the latest one is drawn.
     @ObservationIgnored private var menuReads = 0
+    /// Stops the read running for the list on screen when the list goes, so the next read of that app needn't wait.
+    @ObservationIgnored private var menuReadCancel = MenuReadCancel()
     /// The panel hid with Search Menu Items on screen: the menus are read again when it shows.
     @ObservationIgnored private var menuItemsStale = false
     /// A row's item is being found to run: another ↵ meanwhile (a key repeat) runs nothing, so it's pressed once.
@@ -2494,8 +2927,11 @@ final class LauncherModel {
             drawMenuItems(MenuItemsList.loading())
         }
         let source = menuItemsAccess.source
+        menuReadCancel.cancel()
+        let cancel = MenuReadCancel()
+        menuReadCancel = cancel
         Task {
-            let result = await Self.offMain { source.read(target, deadline: .milliseconds(1500)) }
+            let result = await Self.offMain { source.read(target, deadline: .milliseconds(1500), cancel: cancel) }
             guard read == menuReads, menuItemsOnScreen else { return }
             switch result {
             case .listing(let listing):
@@ -2542,6 +2978,7 @@ final class LauncherModel {
     private func menuItemsHidden() {
         guard menuItemsOnScreen else { return }
         menuItemsGeneration.dismissed()
+        menuReadCancel.cancel()
         menuItemsStale = true
         menuReads += 1
         menuTarget = nil
@@ -2553,6 +2990,7 @@ final class LauncherModel {
     private func menuItemsLeft() {
         guard !menuItemsOnScreen, menuListing != nil || menuTarget != nil || menuItemsStale else { return }
         menuItemsGeneration.dismissed()
+        menuReadCancel.cancel()
         menuReads += 1
         menuTarget = nil
         menuListing = nil
@@ -2599,6 +3037,8 @@ final class LauncherModel {
                     showHUD(MenuItemsList.gone)
                 case .pressed(.failed):
                     showHUD("\(target.name) didn't run that menu item.")
+                case .disabled:
+                    showFailureToast(MenuItemsList.turnedOff)
                 case .gone:
                     showFailureToast(MenuItemsList.gone)
                     if menuListing === listing { readMenuItems() }
@@ -3001,7 +3441,9 @@ final class LauncherModel {
             else {
                 recordLaunch(item.id)
                 screen = .failure(
-                    Failure(title: "Can't run \(item.title)", message: "The extension is no longer installed."))
+                    Failure(
+                        title: "Can't run \(item.title)", message: "The extension is no longer installed.",
+                        commandTitle: item.title))
                 return
             }
             let prepared = prepareLaunch(of: installed, command: command, userInitiated: true)
@@ -3068,6 +3510,10 @@ final class LauncherModel {
                 }
                 if let message { showHUD(message) }
             }
+        } else if group == BuiltInCommandGroup.tools.name, let command = ToolCommand(rawValue: command) {
+            runTool(command, item: item, fromHotkey: fromHotkey)
+        } else if group == BuiltInCommandGroup.calendar.name, command == ScheduleList.commandName {
+            showSchedule(fromHotkey: fromHotkey)
         }
     }
 
@@ -3188,7 +3634,7 @@ final class LauncherModel {
         screen = .failure(
             Failure(
                 title: "\(title) needs settings",
-                message: "Set \(names) in the Settings window, then run the command again."
+                message: "Set \(names) in the Settings window, then run the command again.", commandTitle: title
             )
         )
         openSettings(name, origin)
@@ -3248,7 +3694,10 @@ final class LauncherModel {
             sessionExtensions[session] = nil
             sessionCommands[session] = nil
             quietSessions[session] = nil
-            if !quiet { screen = .failure(Failure(title: "Can't run \(title)", message: String(describing: error))) }
+            if !quiet {
+                screen = .failure(
+                    Failure(title: "Can't run \(title)", message: String(describing: error), commandTitle: title))
+            }
             return String(describing: error)
         }
         return nil
@@ -3467,11 +3916,8 @@ final class LauncherModel {
 
     private func ensureHost() throws -> ExtensionHost {
         if let host, host.isRunning { return host }
-        guard let node = Runtime.locateNode() else {
-            throw HostUnavailable(
-                description:
-                    "Fudge needs Node.js 22.18 or later. Install it with `brew install node`, or set FUDGE_NODE."
-            )
+        guard let node = Runtime.locateNode()?.node else {
+            throw HostUnavailable(description: Runtime.nodeMissing)
         }
         guard let script = Runtime.locateHostScript() else {
             throw HostUnavailable(
@@ -3493,7 +3939,8 @@ final class LauncherModel {
         let host = try ExtensionHost(
             node: node, script: script, nodeArguments: trust.arguments,
             environment: ExtensionStore.hostEnvironment(
-                cli: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil, paths: paths
+                cli: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil, paths: paths,
+                proxy: Self.systemProxy()
             ).merging([OAuthProviders.environmentKey: OAuthProviders.environmentValue]) { _, new in new }
                 .merging(trust.environment) { _, new in new })
         self.host = host
@@ -3532,6 +3979,12 @@ final class LauncherModel {
                 switchWindowsAction(node: node)
             } else if session == MenuItemsList.session, path == ["onAction"] {
                 menuItemsAction(node: node)
+            } else if session == RecentColorsGrid.session, path == ["onAction"] {
+                recentColorsAction(node: node)
+            } else if session == DefineWordView.session, path == ["onAction"] {
+                defineWordAction(node: node)
+            } else if session == ScheduleList.session, path == ["onAction"] {
+                scheduleListAction(node: node)
             }
             return
         }
@@ -3542,11 +3995,20 @@ final class LauncherModel {
         default:
             break
         }
+        // Nothing goes to a command that has ended: a late pick or action from an overlay left open is dropped.
+        guard hostSessions.mayReceive(message) else { return }
         do {
             try host?.send(message)
         } catch {
             status = "Lost the extension host: \(error)"
         }
+    }
+
+    /// Closes every panel over the command on screen, without telling the command anything: it has ended.
+    private func closePanelsOfEndedCommand() {
+        actionPanel = nil
+        dropdownPanel = nil
+        datePanel = nil
     }
 
     private func hostStopped(_ stopped: ExtensionHost) {
@@ -3556,6 +4018,13 @@ final class LauncherModel {
         background.removeAll()
         quietSessions.removeAll()
         menuBar.hostStopped()
+        if case .command(let command) = screen,
+            EndedCommand.closesPanels(
+                screenSession: command.session, isBuiltIn: Self.builtInSessions.contains(command.session),
+                event: .hostStopped)
+        {
+            closePanelsOfEndedCommand()
+        }
         if case .command(var command) = screen, command.failure == nil,
             !Self.builtInSessions.contains(command.session)
         {
@@ -3671,7 +4140,11 @@ final class LauncherModel {
 
         case .error(let session, let message, let stack, let fatal, let notice):
             // Refused on purpose (SPEC-095), such as signing in while sign-in is off: a notice, never a trace.
-            let signIn = signInNotice(notice, message: message, session: session)
+            let commandTitle: String? =
+                if case .command(let command) = screen, command.session == session { command.title } else {
+                    background[session]
+                }
+            let signIn = signInNotice(notice, message: message, session: session, commandTitle: commandTitle)
             if var quiet = quietSessions[session] {
                 // A background launch: the panel stays as it is, and the failure shows in the HUD, once.
                 let alreadySaid = quiet.unasked.contains { message.contains($0) }
@@ -3692,7 +4165,7 @@ final class LauncherModel {
             } else if let title = background[session] {
                 screen = .failure(
                     signIn.map { Failure($0, extensionName: sessionExtensions[session] ?? "") }
-                        ?? Failure(title: "\(title) failed", message: message, details: stack))
+                        ?? Failure(title: "\(title) failed", message: message, details: stack, commandTitle: title))
             }
             log(session, "error", stack ?? message)
 
@@ -3712,9 +4185,20 @@ final class LauncherModel {
                     refreshResults()
                     hide()
                 } else if reason == "crashed", case .root = screen {
-                    screen = .failure(Failure(title: "\(title) failed", message: "The command stopped unexpectedly."))
+                    screen = .failure(
+                        Failure(
+                            title: "\(title) failed", message: "The command stopped unexpectedly.", commandTitle: title)
+                    )
                 }
             } else if case .command(var command) = screen, command.session == session, reason != "unloaded" {
+                // Its panels go with it (⌘K, a dropdown's, a form's calendar), so nothing in them can be picked for a
+                // command that ended (`EndedCommand`).
+                if EndedCommand.closesPanels(
+                    screenSession: command.session, isBuiltIn: Self.builtInSessions.contains(command.session),
+                    event: .exited(session: session, reason: reason))
+                {
+                    closePanelsOfEndedCommand()
+                }
                 if command.failure == nil {
                     command.failure = Failure(
                         title: "\(command.title) stopped", message: "The command exited (\(reason)).")
@@ -4132,16 +4616,8 @@ final class LauncherModel {
             image = NSWorkspace.shared.icon(forFile: url.path)
         case .settings:
             image = NSApp.applicationIconImage
-        case .reloadExtensions:
-            image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)!
-        case .quit:
-            image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)!
-        case .createQuicklink:
-            image = NSImage(systemSymbolName: "link.badge.plus", accessibilityDescription: nil)!
-        case .searchSnippets:
-            image = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)!
-        case .createSnippet:
-            image = NSImage(systemSymbolName: "text.badge.plus", accessibilityDescription: nil)!
+        case .reloadExtensions, .quit, .createQuicklink, .searchSnippets, .createSnippet:
+            image = NSImage(systemSymbolName: item.kind.symbol!, accessibilityDescription: nil)!
         case .builtInCommand(let group, let command):
             let symbol = BuiltInCommandGroup.command(group: group, command: command, in: builtInGroups)?.command
                 .symbol
@@ -4190,6 +4666,7 @@ extension LauncherModel.Failure {
     init(_ notice: SignInNotice, extensionName: String) {
         self.init(
             title: notice.title, message: notice.message,
-            notice: Notice(extensionName: extensionName, actions: notice.actions, symbol: "person.badge.key"))
+            notice: Notice(extensionName: extensionName, actions: notice.actions, symbol: "person.badge.key"),
+            commandTitle: notice.commandTitle)
     }
 }

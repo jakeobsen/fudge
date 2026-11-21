@@ -75,6 +75,16 @@ public struct QuicklinkStore: Sendable, Equatable {
         self.entries = entries
     }
 
+    /// The `id` of every entry in the file, the ones that aren't valid quicklinks included (a hand edit can break
+    /// one): their settings stay until the entry is gone.
+    public var entryIDs: Set<String> {
+        Set(
+            entries.compactMap { entry in
+                guard case .object(let object) = entry, case .string(let id) = object["id"] else { return nil }
+                return id
+            })
+    }
+
     /// The quicklinks, in the file's order. Of two with the same id, the first counts.
     public var quicklinks: [Quicklink] {
         EntryFile.valid(entries, Quicklink.init(json:), id: \.id)

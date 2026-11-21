@@ -10,8 +10,14 @@ import type { StoreContext } from "./store.ts";
 import { scanTimeout } from "./timeouts.ts";
 
 /** What the store needs from `fudge scan <folder> --json`. `byDesign` names the category of a gap counted apart:
- * one Fudge doesn't support (AI, Browser Extension), or signing in (OAuth). */
-export type ScanReport = { supported: boolean; gaps: { api: string; byDesign?: string }[]; unreadable: string[] };
+ * one Fudge doesn't support (AI, Browser Extension), or signing in (OAuth). `commands` says, for each command of the
+ * manifest, which of those it reaches from its own entry (SPEC-109); a scanner from before it has none. */
+export type ScanReport = {
+    supported: boolean;
+    gaps: { api: string; byDesign?: string }[];
+    unreadable: string[];
+    commands?: { name: string; unsupported: string[] }[];
+};
 
 /** Runs `$FUDGE_CLI scan <source> --json`. Undefined when it fails or says something unexpected. */
 export async function scanExtension(source: string, context: StoreContext): Promise<ScanReport | undefined> {
@@ -40,18 +46,62 @@ export const notSupportedNames: Record<string, string> = {
 /** `fudge scan`'s category for APIs that sign in, which work through a sign-in server. */
 const signInCategory = "OAuth";
 
-/** One scan's outcome, as the store keeps it. `notChecked`: the source was over the caps, so it wasn't scanned. */
+/**
+ * Which commands use something Fudge doesn't support: how many the manifest has, and the names of those that reach it
+ * (`fudge build` installs those not enabled, SPEC-109).
+ */
+export type ByCommand = { count: number; using: string[] };
+
+/** One scan's outcome, as the store keeps it. `notChecked`: the source was over the caps, so it wasn't scanned.
+ * `byCommand` is there when the scan said what each command reaches. */
 export type Compatibility =
     | { notChecked: true }
-    | { notChecked?: false; notSupported: string[]; missing: string[]; signsIn: boolean; unreadable: boolean };
+    | {
+          notChecked?: false;
+          notSupported: string[];
+          missing: string[];
+          signsIn: boolean;
+          unreadable: boolean;
+          byCommand?: ByCommand;
+      };
+
+/** A command name as the manifest rule has it (`isValidName`'s shape). */
+const isCommandName = (name: unknown): name is string => typeof name === "string" && /^[a-z0-9][a-z0-9_-]*$/.test(name);
+
+/** The report's per-command results, when they're all well formed. */
+function commandsOf(report: ScanReport): { name: string; unsupported: string[] }[] | undefined {
+    const commands = report.commands;
+    if (!Array.isArray(commands) || commands.length === 0) return undefined;
+    const valid = commands.every(
+        (command) =>
+            typeof command === "object" &&
+            command !== null &&
+            isCommandName(command.name) &&
+            Array.isArray(command.unsupported) &&
+            command.unsupported.every((category) => typeof category === "string"),
+    );
+    return valid ? commands : undefined;
+}
 
 /** The parts of a scan the store shows: categories Fudge doesn't support, APIs it lacks, signing in. */
 export function fromReport(report: ScanReport): Compatibility {
     const designed = (gap: { byDesign?: unknown }) =>
         typeof gap.byDesign === "string" && gap.byDesign !== "" ? gap.byDesign : undefined;
     const categories = new Set(report.gaps.map(designed).filter((category) => category !== undefined));
+    // With each command's result, what Fudge doesn't support counts only where a command reaches it: an AI tool's
+    // use isn't a command's.
+    const commands = commandsOf(report);
+    const reached = commands ? new Set(commands.flatMap((command) => command.unsupported)) : categories;
+    const notSupported = Object.keys(notSupportedNames).filter((category) => reached.has(category));
+    const byCommand: ByCommand | undefined = commands && {
+        count: commands.length,
+        using: commands
+            .filter((command) => command.unsupported.some((category) => category in notSupportedNames))
+            .map((command) => command.name),
+    };
     return {
-        notSupported: Object.keys(notSupportedNames).filter((category) => categories.has(category)),
+        ...(byCommand ? { byCommand } : {}),
+        notSupported,
         // A category this store doesn't know reads as the APIs it covers.
         missing: [
             ...new Set(
@@ -69,8 +119,32 @@ export function fromReport(report: ScanReport): Compatibility {
     };
 }
 
+/** Not compatible: it uses something Fudge doesn't support, in every command (or the scan didn't say which). */
 export function isNotCompatible(result: Compatibility | undefined): boolean {
-    return result !== undefined && !result.notChecked && result.notSupported.length > 0;
+    if (result === undefined || result.notChecked || result.notSupported.length === 0) return false;
+    return !result.byCommand || result.byCommand.using.length >= result.byCommand.count;
+}
+
+/** Partly compatible: some of its commands use something Fudge doesn't support, and the others don't. */
+export function isPartlyCompatible(result: Compatibility | undefined): boolean {
+    if (result === undefined || result.notChecked || result.notSupported.length === 0 || !result.byCommand) return false;
+    return result.byCommand.using.length > 0 && result.byCommand.using.length < result.byCommand.count;
+}
+
+/** The list's tag for a cached result: red Not compatible, orange Partly compatible, or none. */
+export function compatibilityTag(result: Compatibility | undefined): "Not compatible" | "Partly compatible" | undefined {
+    if (isNotCompatible(result)) return "Not compatible";
+    return isPartlyCompatible(result) ? "Partly compatible" : undefined;
+}
+
+/** A command's title from its name, for the sentences that name commands; its name when the manifest has no title. */
+export type CommandTitles = (name: string) => string;
+const byName: CommandTitles = (name) => name;
+
+/** "Raycast AI", "Raycast AI or the Raycast Browser Extension". */
+function unsupportedNames(categories: string[], join: "and" | "or"): string {
+    const names = categories.map((category) => notSupportedNames[category]!);
+    return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} ${join} ${names.at(-1)}`;
 }
 
 /** "a", "a and b", "a, b and c". */
@@ -88,10 +162,25 @@ function fewOf(names: string[], each: (name: string) => string = (name) => name)
  * The install confirmation's line about what works: from the scan, or saying it couldn't run. What Fudge doesn't
  * support comes first, as not compatible; what it doesn't have yet next; signing in last, never as not compatible.
  */
-export function compatibilityLine(result: Compatibility | undefined): string {
+export function compatibilityLine(result: Compatibility | undefined, titles: CommandTitles = byName): string {
     if (!result || result.notChecked) return "Fudge couldn't check what this extension uses.";
     const sentences: string[] = [];
-    if (result.notSupported.length > 0) {
+    const turnOn = "You can turn them on in Settings → Commands.";
+    if (isPartlyCompatible(result)) {
+        // Exactly the commands `fudge build` installs not enabled.
+        const using = result.byCommand!.using;
+        const they = using.length === 1 ? "It" : "They";
+        sentences.push(
+            `Partly compatible with Fudge: ${listed(using.map(titles))} ${using.length === 1 ? "uses" : "use"} ` +
+                `${unsupportedNames(result.notSupported, "or")}, which Fudge doesn't support. ` +
+                `${they} won't be enabled. ${turnOn.replace("them", using.length === 1 ? "it" : "them")}`,
+        );
+    } else if (result.notSupported.length > 0 && result.byCommand) {
+        sentences.push(
+            `Not compatible with Fudge: every command uses ${unsupportedNames(result.notSupported, "or")}, which ` +
+                `Fudge doesn't support, so none of them will be enabled. ${turnOn}`,
+        );
+    } else if (result.notSupported.length > 0) {
         const names = listed(result.notSupported.map((category) => notSupportedNames[category]!));
         const it = result.notSupported.length > 1 ? "them" : "it";
         sentences.push(
@@ -121,12 +210,19 @@ export function compatibilityLine(result: Compatibility | undefined): string {
 export type CheckState = Compatibility | "checking" | "failed";
 
 /** The detail pane's Compatibility line. API names are code spans; `readCompatibility` only lets identifiers in. */
-export function compatibilityText(state: CheckState): string {
+export function compatibilityText(state: CheckState, titles: CommandTitles = byName): string {
     if (state === "checking") return "Checking…";
     if (state === "failed") return "Couldn't check";
     if (state.notChecked) return "Not checked: installing checks it";
     const parts: string[] = [];
-    if (state.notSupported.length > 0) {
+    if (isPartlyCompatible(state)) {
+        const { count, using } = state.byCommand!;
+        const names = unsupportedNames(state.notSupported, "or").replace(/^the /, "");
+        parts.push(
+            `Partly compatible: ${using.length} of ${count} commands ${using.length === 1 ? "uses" : "use"} ${names}: ` +
+                fewOf(using.map(titles)),
+        );
+    } else if (state.notSupported.length > 0) {
         const names = state.notSupported.map((category) => notSupportedNames[category]!.replace(/^the /, ""));
         parts.push(`Not compatible: ${listed(names)}`);
     }
@@ -169,7 +265,12 @@ function validResult(value: unknown): Compatibility | undefined {
     if (!Array.isArray(notSupported) || !notSupported.every(known)) return undefined;
     if (!Array.isArray(missing) || missing.length > 500 || !missing.every(isAPI)) return undefined;
     if (typeof signsIn !== "boolean" || typeof unreadable !== "boolean") return undefined;
-    return { notSupported: notSupported as string[], missing: missing as string[], signsIn, unreadable };
+    const result = { notSupported: notSupported as string[], missing: missing as string[], signsIn, unreadable };
+    if (record.byCommand === undefined) return result;
+    const { count, using } = (record.byCommand ?? {}) as Record<string, unknown>;
+    if (!Number.isInteger(count) || (count as number) < 1 || (count as number) > 1000) return undefined;
+    if (!Array.isArray(using) || using.length > (count as number) || !using.every(isCommandName)) return undefined;
+    return { ...result, byCommand: { count: count as number, using: using as string[] } };
 }
 
 /**

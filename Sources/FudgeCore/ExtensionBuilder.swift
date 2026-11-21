@@ -4,10 +4,13 @@ import Foundation
 public struct InstalledExtension: Sendable, Equatable {
     public var manifest: ExtensionManifest
     public var directory: URL
+    /// Its commands that use something Fudge doesn't support (`compatibility.json`, SPEC-109).
+    public var compatibility: CommandCompatibility
 
-    public init(manifest: ExtensionManifest, directory: URL) {
+    public init(manifest: ExtensionManifest, directory: URL, compatibility: CommandCompatibility = .init()) {
         self.manifest = manifest
         self.directory = directory
+        self.compatibility = compatibility
     }
 
     /// The compiled command, a CommonJS file the extension host can load.
@@ -22,7 +25,8 @@ public struct InstalledExtension: Sendable, Equatable {
     public static func load(from directory: URL) throws -> InstalledExtension {
         InstalledExtension(
             manifest: try ExtensionManifest.load(from: directory.appendingPathComponent("package.json")),
-            directory: directory
+            directory: directory,
+            compatibility: CommandCompatibility.load(from: directory)
         )
     }
 
@@ -50,6 +54,8 @@ public enum BuildError: Error, Equatable, CustomStringConvertible {
     case sourceIsDestination(String)
     /// Something that isn't an extension fudge built is in the way.
     case notAnInstall(String)
+    /// The extension's dependencies need npm, and Fudge's own Node.js isn't beside the tool.
+    case noNode
 
     public var description: String {
         switch self {
@@ -66,6 +72,9 @@ public enum BuildError: Error, Equatable, CustomStringConvertible {
                 + "install it into another folder"
         case .notAnInstall(let path):
             "\(path) isn't an extension Fudge built, so it won't be replaced"
+        case .noNode:
+            "the extension's dependencies need npm, from Fudge's own Node.js, which isn't beside this fudge tool; "
+                + "use the fudge inside Fudge.app"
         }
     }
 }
@@ -84,11 +93,23 @@ public struct ExtensionBuilder: Sendable {
     static let sourceExtensions = ["tsx", "ts", "jsx", "js"]
 
     public var esbuild: URL
+    /// Fudge's own Node.js, whose npm installs an extension's dependencies (`Runtime.locateNode`).
+    public var node: BundledNode?
     public var log: @Sendable (String) -> Void
 
-    public init(esbuild: URL, log: @escaping @Sendable (String) -> Void = { _ in }) {
+    /// Finds which commands use something Fudge doesn't support, from the source folder (`fudge scan`, through
+    /// `CompatScanner.commands`); nil skips it. A scan that throws leaves the install without `compatibility.json`,
+    /// so every command is enabled, as before SPEC-109.
+    public var scanCommands: (@Sendable (URL) throws -> CommandCompatibility)?
+
+    public init(
+        esbuild: URL, node: BundledNode? = nil, log: @escaping @Sendable (String) -> Void = { _ in },
+        scanCommands: (@Sendable (URL) throws -> CommandCompatibility)? = nil
+    ) {
         self.esbuild = esbuild
+        self.node = node
         self.log = log
+        self.scanCommands = scanCommands
     }
 
     @discardableResult
@@ -119,7 +140,8 @@ public struct ExtensionBuilder: Sendable {
         var environment: [String: String] = [:]
         if manifest.hasDependencies, !files.fileExists(atPath: source.appendingPathComponent("node_modules").path) {
             log("installing dependencies")
-            environment["NODE_PATH"] = try Self.installDependencies(of: source, into: scratch).path
+            guard let node else { throw BuildError.noNode }
+            environment["NODE_PATH"] = try Self.installDependencies(of: source, into: scratch, with: node).path
         }
 
         try files.createDirectory(at: extensionsDirectory, withIntermediateDirectories: true)
@@ -141,6 +163,18 @@ public struct ExtensionBuilder: Sendable {
         let warnings = compiled.output.trimmingCharacters(in: .whitespacesAndNewlines)
         if !warnings.isEmpty { log(warnings) }
 
+        var compatibility = CommandCompatibility()
+        if let scanCommands {
+            log("checking which commands use Raycast AI")
+            do {
+                compatibility = try scanCommands(source)
+                try compatibility.write(to: staging)
+            } catch {
+                compatibility = CommandCompatibility()
+                log("couldn't check, so every command is enabled: \(error)")
+            }
+        }
+
         try files.copyItem(
             at: source.appendingPathComponent("package.json"),
             to: staging.appendingPathComponent("package.json")
@@ -154,7 +188,7 @@ public struct ExtensionBuilder: Sendable {
         // From here the staging folder is the install: a signal no longer deletes it.
         children.forget(staging)
         try Self.replace(destination, with: staging)
-        return InstalledExtension(manifest: manifest, directory: destination)
+        return InstalledExtension(manifest: manifest, directory: destination, compatibility: compatibility)
     }
 
     static func entry(for command: String, in source: URL) throws -> URL {
@@ -183,7 +217,7 @@ public struct ExtensionBuilder: Sendable {
     }
 
     /// Installs the extension's dependencies under `scratch` and returns the `node_modules` folder.
-    static func installDependencies(of source: URL, into scratch: URL) throws -> URL {
+    static func installDependencies(of source: URL, into scratch: URL, with node: BundledNode) throws -> URL {
         let files = FileManager.default
         let project = scratch.appendingPathComponent("dependencies", isDirectory: true)
         try files.createDirectory(at: project, withIntermediateDirectories: true)
@@ -194,18 +228,18 @@ public struct ExtensionBuilder: Sendable {
             try files.copyItem(at: file, to: project.appendingPathComponent(name))
             if name.hasSuffix(".json"), name != "package.json" { hasLockfile = true }
         }
-        // Install scripts stay off: the bundle only needs the packages' JavaScript.
-        try Shell.run(
-            URL(fileURLWithPath: "/usr/bin/env"),
-            ["npm", hasLockfile ? "ci" : "install", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"],
-            in: project
-        )
+        // Install scripts stay off: the bundle only needs the packages' JavaScript. npm is Fudge's own, run by its
+        // own Node.js.
+        let npm = node.npm(
+            [hasLockfile ? "ci" : "install", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"],
+            environment: ProcessInfo.processInfo.environment)
+        try Shell.run(npm.executable, npm.arguments, in: project, environment: npm.environment)
         return project.appendingPathComponent("node_modules", isDirectory: true)
     }
 
     /// Moves `staging` to `destination`, replacing what's there.
     /// What an install folder holds: `build` writes exactly these, and nothing else may be replaced.
-    static let installedItems: Set<String> = ["package.json", "dist", "assets"]
+    static let installedItems: Set<String> = ["package.json", "dist", "assets", CommandCompatibility.fileName]
 
     /// Refuses a destination that is the source folder, holds it or sits inside it, compared after resolving
     /// symlinks and ignoring case (the file system does), since replacing it would delete the source. Refuses

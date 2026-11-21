@@ -68,3 +68,56 @@ private struct FixedGenerator: RandomNumberGenerator {
     }
     #expect(logged.count == HostSessions.loggedLimit)
 }
+
+// MARK: - Nothing goes to a command that has ended (FUD-135 §2)
+
+@Test func aPickAfterTheCommandExitedIsNeverSent() {
+    var sessions = HostSessions()
+    let pick = AppMessage.event(session: "s-a", node: 7, path: ["onChange"], args: [.null])
+    #expect(!sessions.mayReceive(pick), "a session that never ran here")
+    sessions.started("s-a")
+    #expect(sessions.mayReceive(.launch(session: "s-a", entry: "/x.cjs", mode: "view", launchProps: .init())))
+    #expect(sessions.mayReceive(pick), "while it runs, the picker's pick goes")
+    // The command exits (or crashes) with its date picker open: the pick it was waiting for isn't sent.
+    #expect(sessions.admit(.exit(session: "s-a", reason: "crashed")) == .handle)
+    for message in [
+        pick, AppMessage.event(session: "s-a", node: 3, path: ["onAction"], args: []),
+        .slots(session: "s-a", nodes: [1]),
+        .rpcResult(session: "s-a", id: 1, result: nil, error: nil), .toastAction(session: "s-a", toast: 1, action: "x"),
+        .pop(session: "s-a"), .unload(session: "s-a"),
+    ] {
+        #expect(!sessions.mayReceive(message), "\(message)")
+    }
+    #expect(sessions.mayReceive(.ping(id: 1)), "a message for no session still goes")
+    sessions.started("s-b")
+    sessions.endAll()
+    #expect(!sessions.mayReceive(.pop(session: "s-b")), "nor after the host stopped")
+}
+
+// MARK: - Panels over a command that ended (SPEC-107 §4)
+
+@Test func theCommandOnScreenEndingClosesItsPanels() {
+    let shown = "s-shown"
+    #expect(
+        EndedCommand.closesPanels(
+            screenSession: shown, isBuiltIn: false, event: .exited(session: shown, reason: "crashed")))
+    #expect(
+        EndedCommand.closesPanels(
+            screenSession: shown, isBuiltIn: false, event: .exited(session: shown, reason: "finished")))
+    #expect(
+        !EndedCommand.closesPanels(
+            screenSession: shown, isBuiltIn: false, event: .exited(session: shown, reason: "unloaded")),
+        "Fudge unloaded it to show something else")
+    #expect(
+        !EndedCommand.closesPanels(
+            screenSession: shown, isBuiltIn: false, event: .exited(session: "s-other", reason: "crashed")),
+        "another command, a background one say, ending leaves the screen's panels alone")
+}
+
+@Test func theHostStoppingClosesTheCommandsPanelsButNotFudgesOwnViews() {
+    #expect(EndedCommand.closesPanels(screenSession: "s-shown", isBuiltIn: false, event: .hostStopped))
+    #expect(
+        !EndedCommand.closesPanels(screenSession: RecentColorsGrid.session, isBuiltIn: true, event: .hostStopped),
+        "Fudge's own views need no host")
+    #expect(!EndedCommand.closesPanels(screenSession: nil, isBuiltIn: false, event: .hostStopped), "root search")
+}

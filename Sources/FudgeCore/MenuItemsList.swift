@@ -15,6 +15,7 @@ public enum MenuItemsList {
     public static let incomplete = "Some menus didn't load"
     /// The toast when the item can't be found again.
     public static let gone = "That menu item isn't there anymore."
+    public static let turnedOff = "That menu item is turned off right now."
 
     /// One menu item's row.
     public struct Row: Sendable, Equatable {
@@ -215,6 +216,8 @@ public final class MenuItemsListing: @unchecked Sendable {
 /// A menu item found to run, or why it wasn't.
 public enum MenuItemFound: Sendable {
     case found(MenuItemPress)
+    /// It's there, but turned off now.
+    case disabled
     case gone
     case noAnswer
 }
@@ -238,6 +241,8 @@ public enum MenuItemRun {
     public enum Outcome: Sendable, Equatable {
         /// The item was pressed; `MenuPress` says how the app answered.
         case pressed(MenuPress)
+        /// The item is turned off now, so it wasn't pressed.
+        case disabled
         /// The item isn't there anymore.
         case gone
         /// The app didn't answer while the item was being found.
@@ -261,6 +266,8 @@ public enum MenuItemRun {
             await hide()
             await activate()
             return .pressed(await press(item))
+        case .disabled:
+            return .disabled
         case .gone:
             return .gone
         case .noAnswer:
@@ -289,8 +296,10 @@ public enum MenuItemsRead: Sendable {
 
 /// What Search Menu Items reads menus through: the system's, or a snapshot run's made-up ones.
 public protocol MenuItemsSource: Sendable {
-    /// Reads `target`'s menus, giving what was read by `deadline`. Blocks: call it off the main thread.
-    func read(_ target: MenuTarget, deadline: Duration) -> MenuItemsRead
+    /// Reads `target`'s menus, giving what was read by `deadline`. `cancel` stops it when its list goes. A read of the
+    /// same app that was cancelled is waited for, up to `deadline`, rather than answered as busy. Blocks: call it off
+    /// the main thread.
+    func read(_ target: MenuTarget, deadline: Duration, cancel: MenuReadCancel) -> MenuItemsRead
 }
 
 /// Search Menu Items over a `MenuSystem`.
@@ -301,16 +310,19 @@ public struct MenuItemsSearch<System: MenuSystem>: MenuItemsSource {
         self.reader = reader
     }
 
-    public func read(_ target: MenuTarget, deadline: Duration = .milliseconds(1500)) -> MenuItemsRead {
-        guard case .items(let items, let complete) = reader.start(target.pid).finish(within: deadline) else {
-            return .noAnswer
-        }
+    public func read(
+        _ target: MenuTarget, deadline: Duration = .milliseconds(1500), cancel: MenuReadCancel = MenuReadCancel()
+    ) -> MenuItemsRead {
+        let walk = reader.start(target.pid, cancel: cancel, waitingForCancelledUpTo: deadline)
+        guard case .items(let items, let complete) = walk.finish(within: deadline) else { return .noAnswer }
         let reader = reader
+        let places = menuItemPlaces(items)
         let listing = MenuItemsListing(
             rows: items.map { MenuItemsList.Row($0, appName: target.name) }, complete: complete
         ) { row, pid in
-            switch reader.current(items[row], in: pid) {
-            case .answered(let handle): .found(MenuItemPress { reader.system.press(handle) })
+            switch reader.current(items[row], place: places[row].place, count: places[row].count, in: pid) {
+            case .ready(let handle): .found(MenuItemPress { reader.system.press(handle) })
+            case .disabled: .disabled
             case .gone: .gone
             case .noAnswer: .noAnswer
             }

@@ -4,7 +4,7 @@ import Testing
 @testable import FudgeCore
 
 /// Runs the extension host from source (runtime/src/host.ts) with the Node on this machine.
-@Suite(.enabled(if: HostFixture.node != nil && HostFixture.runtimeInstalled, "needs Node 22.18+ and `make test`"))
+@Suite(.enabled(if: HostFixture.node != nil && HostFixture.runtimeInstalled, "needs Fudge's Node.js: run `make test`"))
 struct ExtensionHostTests {
     @Test func launchesAViewCommandAndRoundTripsAnEvent() async throws {
         let host = try HostFixture.start()
@@ -64,7 +64,7 @@ struct ExtensionHostTests {
 }
 
 enum HostFixture {
-    static let node = Runtime.locateNode()
+    static let node = Fixtures.node
     static let runtime = Fixtures.repository.appendingPathComponent("runtime", isDirectory: true)
     static var runtimeInstalled: Bool {
         FileManager.default.fileExists(atPath: runtime.appendingPathComponent("node_modules/react").path)
@@ -258,8 +258,31 @@ func next(
     #expect(lines.append(Data("\n\ne\nf\n".utf8)) == [Data("e".utf8), Data("f".utf8)])
 }
 
-@Test func locatesNodeAndTheHostScript() throws {
-    #expect(Runtime.locateNode(environment: ["FUDGE_NODE": "/x/node"], helpers: nil)?.path == "/x/node")
+@Test func onlyTheBundledNodeIsFound() throws {
+    let contents = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: contents) }
+    let helpers = contents.appendingPathComponent("Helpers", isDirectory: true)
+    try FileManager.default.createDirectory(at: helpers, withIntermediateDirectories: true)
+    // No Node.js beside the helpers: none, though one may be on `PATH` or in Homebrew's folder.
+    #expect(Runtime.locateNode(helpers: helpers) == nil)
+    #expect(Runtime.locateNode(helpers: nil) == nil)
+    let node = helpers.appendingPathComponent("node")
+    try "#!/bin/sh\n".write(to: node, atomically: true, encoding: .utf8)
+    #expect(Runtime.locateNode(helpers: helpers) == nil, "one that can't run counts as missing")
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
+    let found = try #require(Runtime.locateNode(helpers: helpers))
+    #expect(found.node == node)
+    #expect(found.npm == contents.appendingPathComponent("Resources/node/npm/bin/npm-cli.js"))
+
+    // npm runs through it, with the helpers first on PATH for what npm starts.
+    let npm = found.npm(["ci"], environment: ["PATH": "/opt/homebrew/bin:/usr/bin", "HOME": "/x"])
+    #expect(npm.executable == node)
+    #expect(npm.arguments == [found.npm.path, "ci"])
+    #expect(npm.environment["PATH"] == helpers.path + ":/opt/homebrew/bin:/usr/bin")
+    #expect(npm.environment["HOME"] == "/x")
+}
+
+@Test func locatesTheHostScript() throws {
     #expect(
         Runtime.locateHostScript(environment: ["FUDGE_RUNTIME": "/x/host.ts"], resources: nil)?.path == "/x/host.ts")
     #expect(Runtime.locateHostScript(environment: [:], resources: URL(fileURLWithPath: "/nonexistent")) == nil)

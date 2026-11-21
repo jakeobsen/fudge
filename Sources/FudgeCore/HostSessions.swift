@@ -52,6 +52,14 @@ public struct HostSessions: Sendable {
         live.removeAll()
     }
 
+    /// Whether `message` may go to the host: one for a session that isn't running (it has exited, or never ran in
+    /// this host) is never sent, so a pick in a date picker or a ⌘K action left open can't reach a command that has
+    /// ended (FUD-135 §2). A launch's session is started before its `launch` is sent.
+    public func mayReceive(_ message: AppMessage) -> Bool {
+        guard let session = message.session else { return true }
+        return live.contains(session)
+    }
+
     /// What to do with `message` from the host. A message naming no session (`pong`, a protocol error) is handled. A
     /// session's `exit` is handled and ends it, so a late `log` or `exit` after it is dropped.
     public mutating func admit(_ message: HostMessage) -> Verdict {
@@ -61,5 +69,27 @@ public struct HostSessions: Sendable {
         }
         if case .exit = message { live.remove(session) }
         return .handle
+    }
+}
+
+/// When the panels over a command (⌘K's action panel, a dropdown's panel, a form's calendar) close because the command
+/// ended (SPEC-107 §4), so nothing in them can be picked for a command that's gone. `send` already holds back anything
+/// for an ended session (`HostSessions.mayReceive`); this is what the user sees.
+public enum EndedCommand {
+    public enum Event: Sendable, Equatable {
+        /// A session exited, for `reason` ("unloaded" when Fudge unloaded it on purpose, to show something else).
+        case exited(session: String, reason: String)
+        /// The extension host stopped, ending every session in it.
+        case hostStopped
+    }
+
+    /// Whether the panels close: the command on screen (`screenSession`, nil for root search) exited, unless Fudge
+    /// unloaded it, or the host stopped under a command of the host's. Fudge's own views (`isBuiltIn`) need no host.
+    public static func closesPanels(screenSession: String?, isBuiltIn: Bool, event: Event) -> Bool {
+        guard let screenSession, !isBuiltIn else { return false }
+        switch event {
+        case .exited(let session, let reason): return session == screenSession && reason != "unloaded"
+        case .hostStopped: return true
+        }
     }
 }

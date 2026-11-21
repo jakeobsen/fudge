@@ -269,6 +269,17 @@ private func context(clipboard: String? = "copied text") -> QuicklinkTemplate.Co
             return nil
         } == [.dynamic(.date), .dynamic(.uuid), .dynamic(.clipboard)])
     #expect(QuicklinkTemplate("https://e.com/{Query}").arguments.map(\.name) == ["Query"], "other words stay fields")
+    // Modifiers ignore case too.
+    let shouted = QuicklinkTemplate("https://e.com/{q | UPPERCASE}/{clipboard | Raw}")
+    #expect(shouted.problem == nil)
+    #expect(
+        shouted.segments.compactMap { segment -> [QuicklinkTemplate.Modifier]? in
+            if case .placeholder(let placeholder) = segment { return placeholder.modifiers }
+            return nil
+        } == [[.uppercase], [.raw]])
+    #expect(
+        QuicklinkTemplate("https://e.com/{q | SHOUT}").problem
+            == "Fudge doesn't know the modifier “SHOUT” in “{q | SHOUT}”.", "named as written")
 }
 
 @Test func onlyALinkWithClipboardReadsIt() {

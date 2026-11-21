@@ -1,8 +1,8 @@
 import FudgeCore
 import SwiftUI
 
-/// The Settings window's General page: Open at Login, the launcher's hotkey, update checks, whether the calculator
-/// downloads exchange rates, clearing root search's history, and Import / Export.
+/// The Settings window's General page: Open at Login, the launcher's hotkey, Hyperkey, update checks, whether the
+/// calculator downloads exchange rates, clearing root search's history, and Import / Export.
 struct GeneralPage: View {
     @Bindable var model: SettingsModel
     @State private var confirmingClear = false
@@ -42,11 +42,17 @@ struct GeneralPage: View {
                         + "search next time."
                 )
             }
+            Section("Keyboard") {
+                HyperkeyControls(model: model)
+            }
             Section("Updates") {
                 SettingsPopupRow(
                     "Check for Updates",
-                    selection: Binding(get: { model.updateCheck ?? .off }, set: { model.setUpdateCheck($0) }),
-                    options: UpdateCheckSetting.allCases.map { ($0, $0.title) },
+                    // "Not Chosen" while unset: it checks nothing, as Never, and onboarding still asks.
+                    selection: Binding(
+                        get: { model.updateCheck },
+                        set: { choice in if let choice { model.setUpdateCheck(choice) } }),
+                    options: UpdateCheckSetting.popupOptions(current: model.updateCheck),
                     help: "How often Fudge asks GitHub whether there's a new version. It tells you when there is, "
                         + "and never downloads or installs anything by itself."
                 )
@@ -126,6 +132,30 @@ struct CurrencyRatesToggle: View {
     }
 }
 
+/// **Hyperkey (Caps Lock)** and **Quick press toggles Caps Lock** (SPEC-093), with what stopped it, if anything.
+struct HyperkeyControls: View {
+    let model: SettingsModel
+
+    var body: some View {
+        Toggle(isOn: Binding(get: { model.hyperkey }, set: { model.setHyperkey($0) })) {
+            Text("Hyperkey (Caps Lock)")
+            Text(Hyperkey.explanation)
+        }
+        .toggleStyle(.switch)
+        if let problem = model.hyperkeyProblem {
+            Text(problem).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+        }
+        Toggle(
+            isOn: Binding(get: { model.hyperkeyQuickPress }, set: { model.setHyperkeyQuickPress($0) })
+        ) {
+            Text("Quick press toggles Caps Lock")
+            Text("A short press of Caps Lock on its own still turns caps on and off.")
+        }
+        .toggleStyle(.switch)
+        .disabled(!model.hyperkey)
+    }
+}
+
 /// Under Check for Updates: what the last check found and when, Check Now, and Download… while a newer release is
 /// known, which opens its page in the browser.
 struct UpdateStatusRow: View {
@@ -133,7 +163,7 @@ struct UpdateStatusRow: View {
 
     var body: some View {
         let status = model.updateStatus
-        let details = status.details()
+        let details = status.details(version: FudgeVersion.current)
         LabeledContent {
             HStack(spacing: 8) {
                 if let release = status.available {
@@ -143,7 +173,7 @@ struct UpdateStatusRow: View {
                     .disabled(status.checking)
             }
         } label: {
-            Text(status.headline)
+            Text(status.headline(version: FudgeVersion.current))
             if !details.isEmpty { Text(details.joined(separator: "\n")) }
         }
     }
