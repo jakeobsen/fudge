@@ -57,6 +57,10 @@ public struct FudgeSettings: Sendable, Equatable {
     /// How often Fudge checks for a new release (`updateCheck`); nil until the user chooses, and nothing is checked
     /// until then. An unknown value reads as unset.
     public var updateCheck: UpdateCheckSetting?
+    /// **Hyperkey (Caps Lock)** (`hyperkey`, SPEC-093): holding Caps Lock acts as ⌘⌥⌃⇧. Off by default.
+    public var hyperkey = false
+    /// **Quick press toggles Caps Lock** (`hyperkeyQuickPress`): a tap of Caps Lock still toggles caps. Off by default.
+    public var hyperkeyQuickPress = false
 
     public struct CommandSettings: Sendable, Equatable {
         /// In `HotKeySpec` text form.
@@ -199,6 +203,8 @@ public struct FudgeSettings: Sendable, Equatable {
         settings.showOnScreen = ShowOnScreen(settingsValue: object["showOnScreen"])
         settings.escapeBehavior = EscapeBehavior(settingsValue: object["escapeBehavior"])
         settings.updateCheck = UpdateCheckSetting(settingsValue: object["updateCheck"])
+        settings.hyperkey = object["hyperkey"] as? Bool ?? false
+        settings.hyperkeyQuickPress = object["hyperkeyQuickPress"] as? Bool ?? false
         for case (let id, let entry as [String: Any]) in object["commands"] as? [String: Any] ?? [:] {
             settings.commands[id] = CommandSettings(
                 hotkey: entry["hotkey"] as? String, alias: entry["alias"] as? String, enabled: entry["enabled"] as? Bool
@@ -231,6 +237,8 @@ public struct FudgeSettings: Sendable, Equatable {
         object["showOnScreen"] = showOnScreen.settingsValue
         object["escapeBehavior"] = escapeBehavior.settingsValue
         object["updateCheck"] = updateCheck?.rawValue
+        object["hyperkey"] = hyperkey ? true : nil
+        object["hyperkeyQuickPress"] = hyperkeyQuickPress ? true : nil
 
         var commandObjects = object["commands"] as? [String: Any] ?? [:]
         let commandIDs = Set(commandObjects.keys).union(commands.keys)
@@ -323,9 +331,13 @@ public struct HotKeySpec: Sendable, Hashable, CustomStringConvertible {
         return (parts + [key]).joined(separator: "+")
     }
 
-    /// The modifiers as macOS shows them, in its order: ⌃ ⌥ ⇧ ⌘.
+    /// All four modifiers at once, which Hyperkey's Caps Lock presses (SPEC-093).
+    public var isHyper: Bool { command && option && control && shift }
+
+    /// The modifiers as macOS shows them, in its order: ⌃ ⌥ ⇧ ⌘, or "Hyper" for all four.
     public var modifierSymbols: [String] {
-        [(control, "⌃"), (option, "⌥"), (shift, "⇧"), (command, "⌘")].filter(\.0).map(\.1)
+        if isHyper { return ["Hyper"] }
+        return [(control, "⌃"), (option, "⌥"), (shift, "⇧"), (command, "⌘")].filter(\.0).map(\.1)
     }
 
     /// The key as shown without a keyboard layout: "S", "Space", "F5", "←", "Keypad 5", "Key 93". The app shows
@@ -338,8 +350,8 @@ public struct HotKeySpec: Sendable, Hashable, CustomStringConvertible {
         return key.capitalized
     }
 
-    /// "⌥Space", "⇧⌘K": how macOS menus show shortcuts.
-    public var description: String { modifierSymbols.joined() + keyLabel }
+    /// "⌥Space", "⇧⌘K": how macOS menus show shortcuts; "Hyper+T" for all four modifiers.
+    public var description: String { isHyper ? "Hyper+" + keyLabel : modifierSymbols.joined() + keyLabel }
 
     /// Whether `other` is the same keys, whatever the names.
     public func sameKeys(as other: HotKeySpec) -> Bool {

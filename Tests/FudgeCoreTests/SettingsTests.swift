@@ -67,7 +67,8 @@ func everyRecordableKeyRoundTrips(text: String, keyCode: UInt32) throws {
 @Test func hotkeyTextAndLabels() throws {
     let spec = try #require(HotKeySpec.parse("shift+cmd+option+ctrl+k"))
     #expect(spec.text == "ctrl+option+shift+cmd+k", "macOS's modifier order")
-    #expect(spec.modifierSymbols == ["⌃", "⌥", "⇧", "⌘"])
+    #expect(spec.modifierSymbols == ["Hyper"], "all four are Hyper (SPEC-093)")
+    #expect(try #require(HotKeySpec.parse("ctrl+option+shift+k")).modifierSymbols == ["⌃", "⌥", "⇧"])
     #expect(try #require(HotKeySpec.parse("option+s")).description == "⌥S")
     #expect(try #require(HotKeySpec.parse("f5")).description == "F5")
     #expect(try #require(HotKeySpec.parse("cmd+left")).description == "⌘←")

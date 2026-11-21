@@ -75,6 +75,10 @@ Any command can have its own hotkey. Open **Settings…** on the **Commands** pa
 
 Fudge refuses a shortcut that's the launcher's or another command's, and one another app has registered. That last check is best-effort: macOS doesn't report system shortcuts such as ⌘Space or ⌃↑, so one of those can be recorded but never fire.
 
+### Hyperkey
+
+Turn on **Hyperkey (Caps Lock)** in **Settings… → General**, and holding Caps Lock presses ⌘⌥⌃⇧ at once, called Hyper, for shortcuts like Hyper+T that no other app uses. Caps Lock then no longer turns caps on, unless you also turn on **Quick press toggles Caps Lock**. Hyper doesn't work in password fields, and it needs Accessibility permission (**Settings… → Permissions**). Turning it off, or quitting Fudge, gives Caps Lock back. If Caps Lock is already mapped to another key, Fudge leaves it alone and says so.
+
 ### Aliases and turning commands off
 
 On the same page, a command can have an **Alias**: a short word such as `sf`. Click the Alias cell, type it, and press ↵ (Esc puts back what was there, and an empty alias removes it). An alias is 1 to 32 characters with no spaces, and two commands can't share one (letter case doesn't count). Typing the alias in root search puts its command first, above a calculator result. For a command with arguments, typing the alias and a space moves to its first argument field, and the rest of what you type goes there.

@@ -14,6 +14,8 @@ public enum OnboardingStep: String, CaseIterable, Sendable {
     case signIn
     /// Whether to keep clipboard history (FUD-117): an opt-in, with the consent sheet's own words.
     case clipboardHistory
+    /// Whether Caps Lock acts as Hyper (FUD-125): an opt-in, with the General page's own switch.
+    case hyperkey
     case updates
     case done
 
@@ -25,6 +27,7 @@ public enum OnboardingStep: String, CaseIterable, Sendable {
         "extensionStore": .extensionStore,
         "signInServer": .signIn,
         "clipboardHistory": .clipboardHistory,
+        "hyperkey": .hyperkey,
         "updateCheck": .updates,
     ]
 }
