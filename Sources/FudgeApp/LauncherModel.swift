@@ -59,8 +59,8 @@ final class LauncherModel {
         /// The `actions` and `detail` the host sent for List items since the last render, by node id. A render sends
         /// them only for some items (`ItemSlots`); `requestSlots()` asks for the others.
         var slots: [Int: ItemSlots] = [:]
-        /// The items whose slots were asked for since the last render.
-        var requestedSlots: Set<Int> = []
+        /// What was asked for, and what the host carries in full in every render since (`SlotRequests`).
+        var slotRequests = SlotRequests()
         /// The Form the top view shows.
         var form: FormContent?
         /// The values of the Form's fields as the user edits them, by node id.
@@ -351,8 +351,8 @@ final class LauncherModel {
                 refreshList(&command, selectFirst: true, reread: false)
                 command.selectFirstOnRender = command.view.map { !ListContent.filtersLocally($0) } ?? false
                 screen = .command(command)
-                reportSelection()
                 requestSlots()
+                reportSelection()
             case .root, .failure:
                 if case .failure = screen { screen = .root }
                 // An alias and a space hand the rest of the query to that command's first argument (as in Raycast).
@@ -642,25 +642,19 @@ final class LauncherModel {
                 args: [id.map { .string($0) } ?? .null]))
     }
 
-    /// How many items before and after the selected one `requestSlots()` asks for, so moving the selection rarely
-    /// reaches an item whose actions haven't come. A Grid row has at most 8 cells.
-    private static let slotsBefore = 8
-    private static let slotsAfter = 10
-
-    /// Asks the host for the deferred `actions` and `detail` (`ItemSlots`) of the selected item and those around
-    /// it, unless they've come or been asked for since the last render. Renders carry the slots of the items asked
-    /// for last, so the selection keeps them.
+    /// Asks the host for the `actions` and `detail` (`ItemSlots`) of the selected item and those around it, when
+    /// `SlotRequests` says so: the selection came near the edge of the last request, or an item near it is still
+    /// held back. Renders carry the items of the last request in full, so the selection keeps its actions. Called
+    /// before `reportSelection()`, so the host takes the request before the render `onSelectionChange` may cause.
     private func requestSlots() {
-        guard var command, let items = command.list?.items, !items.isEmpty else { return }
-        let index = items.firstIndex { $0.id == command.selectedNode } ?? 0
-        let around = items[max(0, index - Self.slotsBefore)...min(items.count - 1, index + Self.slotsAfter)]
-        let deferred = around.filter { !$0.deferred.isEmpty }.map(\.id)
-        guard deferred.contains(where: { command.slots[$0] == nil && !command.requestedSlots.contains($0) }) else {
-            return
-        }
-        command.requestedSlots.formUnion(deferred)
+        guard var command, let items = command.list?.items else { return }
+        let answers = command.slots
+        guard
+            let ids = command.slotRequests.request(
+                items: items, selected: command.selectedNode, answered: { answers[$0] != nil })
+        else { return }
         screen = .command(command)
-        send(.slots(session: command.session, nodes: deferred))
+        send(.slots(session: command.session, nodes: ids))
     }
 
     /// What a key pressed before the selected item's actions came does once they come: ↵, ⌘↵ and ⌘K wait for them
@@ -705,8 +699,8 @@ final class LauncherModel {
         guard var command, command.list?.items.contains(where: { $0.id == node }) == true else { return }
         command.selectedNode = node
         screen = .command(command)
-        reportSelection()
         requestSlots()
+        reportSelection()
     }
 
     /// Calls a function prop of a node, e.g. a metadata tag's `onAction`.
@@ -1630,8 +1624,8 @@ final class LauncherModel {
         guard var command, let items = command.list?.items, items.indices.contains(index) else { return }
         command.selectedNode = items[index].id
         screen = .command(command)
-        reportSelection()
         requestSlots()
+        reportSelection()
         if let node = command.selectedNode { loadMoreIfNeeded(near: node) }
     }
 
@@ -2288,6 +2282,7 @@ final class LauncherModel {
                 command.selectFirstOnRender = false
                 command.searchField = FieldValue(.string(command.searchText))
                 command.requestedMoreAt = nil
+                command.slotRequests = SlotRequests()
                 actionPanel = nil
                 dropdownPanel = nil
                 datePanel = nil
@@ -2296,7 +2291,6 @@ final class LauncherModel {
             command.depth = depth
             // Slots that came before this render may be out of date; it carries those of the items asked for last.
             command.slots = [:]
-            command.requestedSlots = []
             // The extension can set the search text (`searchText`); echoes of what was typed don't undo typing.
             if let view, ListContent.viewTypes.contains(view.type), let controlled = view.string("searchText") {
                 command.searchField.render(controlled: .string(controlled))
@@ -2313,13 +2307,14 @@ final class LauncherModel {
             syncDropdownPanel()
             syncDatePanel()
             syncDatePick()
-            reportSelection()
             requestSlots()
+            reportSelection()
             runWaitingKey()
 
         case .slots(let session, let items):
             guard case .command(var command) = screen, command.session == session else { return }
             for item in items { command.slots[item.id] = item }
+            command.slotRequests.answered(items.map(\.id))
             screen = .command(command)
             runWaitingKey()
 
