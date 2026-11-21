@@ -11,7 +11,7 @@ VERSION   := $(shell git describe --tags --always --dirty 2>/dev/null || echo de
 CONFIG    ?= debug
 APP       := build/Fudge.app
 # The extensions bundled with the app, as BundledExtensions.folders lists them.
-BUNDLED_EXTENSIONS := store-extension file-search-extension
+BUNDLED_EXTENSIONS := store-extension file-search-extension emoji-extension
 SWIFT_BIN  =$(shell swift build -c $(CONFIG) --show-bin-path)
 # esbuild's native binary, installed with the extension host's dependencies.
 ESBUILD    = $(firstword $(wildcard runtime/node_modules/@esbuild/darwin-*/bin/esbuild))
