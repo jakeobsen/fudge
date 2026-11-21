@@ -25,11 +25,15 @@ enum SystemCalls {
         access: accessibility, offerSettings: { accessibilitySettingsOffer?.offer(origin: $0) })
     private static let keys = SystemCopyKey()
     private static let pasteboard = SystemPasteboard()
+    /// Shared by pasting and reading the selection's ⌘C fallback, so neither snapshots the pasteboard while the
+    /// other's content is on it.
+    private static let pasteboardTurns = PasteboardTurns()
     private static let selectedText = SelectedText(
         accessibility: accessibility, keys: keys, pasteboard: pasteboard,
-        ownPid: ProcessInfo.processInfo.processIdentifier, gate: gate)
+        ownPid: ProcessInfo.processInfo.processIdentifier, turns: pasteboardTurns, gate: gate)
     private static let paster = Paste(
-        gate: gate, keys: keys, pasteboard: pasteboard, ownPid: ProcessInfo.processInfo.processIdentifier)
+        gate: gate, keys: keys, pasteboard: pasteboard, ownPid: ProcessInfo.processInfo.processIdentifier,
+        turns: pasteboardTurns)
     private static let automation = SystemAutomationPermission()
     private static let finder = FinderEvents()
 

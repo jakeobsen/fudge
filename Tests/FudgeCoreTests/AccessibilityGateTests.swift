@@ -99,8 +99,10 @@ private let textEdit = FrontmostApplication(pid: 200, bundleIdentifier: "com.app
     let gate = AccessibilityGate(access: access, offerSettings: { _ in offers += 1 })
     let keys = FakeKeys()
     let pasteboard = FakePasteboard()
-    let selection = SelectedText(accessibility: access, keys: keys, pasteboard: pasteboard, ownPid: me, gate: gate)
-    let paste = Paste(gate: gate, keys: keys, pasteboard: pasteboard, ownPid: me)
+    let turns = PasteboardTurns()
+    let selection = SelectedText(
+        accessibility: access, keys: keys, pasteboard: pasteboard, ownPid: me, turns: turns, gate: gate)
+    let paste = Paste(gate: gate, keys: keys, pasteboard: pasteboard, ownPid: me, turns: turns)
     func pasteText() async throws {
         try await paste.paste(
             PasteboardContents.forPaste(text: "hi", html: nil, file: nil), closeMainWindow: true,
@@ -146,7 +148,9 @@ private let textEdit = FrontmostApplication(pid: 200, bundleIdentifier: "com.app
 
     // A background paste is refused the same way, and posts nothing.
     let keys = FakeKeys()
-    let paste = Paste(gate: AccessibilityGate(access: access), keys: keys, pasteboard: FakePasteboard(), ownPid: me)
+    let paste = Paste(
+        gate: AccessibilityGate(access: access), keys: keys, pasteboard: FakePasteboard(), ownPid: me,
+        turns: PasteboardTurns())
     await #expect(throws: PasteError.accessibilityNeeded) {
         try await paste.paste(
             PasteboardContents.forPaste(text: "hi", html: nil, file: nil), closeMainWindow: false, origin: .background,

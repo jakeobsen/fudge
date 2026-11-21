@@ -93,7 +93,7 @@ private func reader(
 ) -> SelectedText {
     SelectedText(
         accessibility: accessibility, keys: keys, pasteboard: pasteboard, ownPid: fudgePid,
-        copyTimeout: copyTimeout, pollInterval: .milliseconds(1))
+        turns: PasteboardTurns(), copyTimeout: copyTimeout, pollInterval: .milliseconds(1))
 }
 
 @Test @MainActor func selectedTextRejectsWhenFudgeIsFrontmost() async {
