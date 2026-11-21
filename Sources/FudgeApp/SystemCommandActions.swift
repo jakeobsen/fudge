@@ -44,8 +44,11 @@ final class MacSystemActions: SystemActions {
         return await withCheckedContinuation { continuation in
             // Blocks while macOS shows its consent dialog, so it gets a thread of its own and no timeout.
             DispatchQueue.global(qos: .userInitiated).async {
-                let status = AEDeterminePermissionToAutomateTarget(
-                    Self.address(of: target).aeDesc, Self.code("core"), Self.code("getd"), true)
+                // `aeDesc` points into the descriptor's own storage, so the descriptor must outlive the call.
+                let address = Self.address(of: target)
+                let status = withExtendedLifetime(address) {
+                    AEDeterminePermissionToAutomateTarget(address.aeDesc, Self.code("core"), Self.code("getd"), true)
+                }
                 continuation.resume(returning: status)
             }
         }

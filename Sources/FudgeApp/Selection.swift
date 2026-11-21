@@ -132,9 +132,12 @@ final class SystemAutomationPermission: AutomationPermission {
         await withCheckedContinuation { continuation in
             // Blocks while macOS shows its consent dialog, so it gets a thread of its own and no timeout.
             DispatchQueue.global(qos: .userInitiated).async {
+                // `aeDesc` points into the descriptor's own storage, so the descriptor must outlive the call.
                 let target = NSAppleEventDescriptor(bundleIdentifier: bundleIdentifier)
-                let status = AEDeterminePermissionToAutomateTarget(
-                    target.aeDesc, FinderEvents.code("core"), FinderEvents.code("getd"), askUserIfNeeded)
+                let status = withExtendedLifetime(target) {
+                    AEDeterminePermissionToAutomateTarget(
+                        target.aeDesc, FinderEvents.code("core"), FinderEvents.code("getd"), askUserIfNeeded)
+                }
                 continuation.resume(returning: status)
             }
         }
