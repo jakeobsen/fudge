@@ -50,6 +50,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 openPane: { _ in })
             : AccessibilityStatus(
                 access: SystemAccessibility(), promptShownElsewhere: { SystemAccessibility.promptShown })
+        // Sign-ins live in the Keychain; a snapshot run keeps them in memory, from `--sign-ins`, and never reads it.
+        let secrets: any SecretStore =
+            Snapshot.isRequested(CommandLine.arguments)
+            ? Snapshot(arguments: CommandLine.arguments)?.signIns ?? MemorySecretStore() : KeychainSecretStore()
+        model.tokenSecrets = secrets
+        settingsModel.tokenSecrets = secrets
         settingsWindow = SettingsWindowController(model: settingsModel)
         onboardingWindow = OnboardingWindowController(settings: settingsModel, file: paths.onboardingFile)
         onboardingWindow.openLauncher = { [weak self] in self?.showPanel() }
@@ -93,19 +99,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.numberFormatChanged = { [weak self] in self?.model.applySettings() }
         panel.onEscape = { [weak self] in self?.model.escape() }
         panel.onResign = { [weak self] in
-            guard let self else { return }
-            // An alert sheet takes the keyboard, and so does the Quick Look preview the user clicks; neither is the
-            // user leaving.
-            switch LauncherResign.decide(
-                sheetAttached: self.panel.attachedSheet != nil, quickLookTookKey: self.quickLook?.tookKey == true)
-            {
-            case .stay:
-                break
-            case .takeKeyBack:
-                self.takeKeyBackFromQuickLook()
-            case .hide:
-                self.hidePanel()
-            }
+            // Decided a turn later, once AppKit has made the new key window key (`LauncherResign`).
+            DispatchQueue.main.async { [weak self] in self?.settleResign() }
         }
 
         // A snapshot renders off-screen and quits. It installs no status item or hotkey, and nothing in it takes
@@ -127,7 +122,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let quickLook = QuickLookPreview()
         quickLook.launcherLevel = panel.level
-        quickLook.launcherCollectionBehavior = panel.collectionBehavior
         quickLook.closedByUser = { [weak self] in self?.model.quickLookClosedByUser() }
         quickLook.forwardKey = { [weak self] event in self?.previewKey(event) ?? false }
         model.quickLookChanged = { [weak self] item in
@@ -357,6 +351,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// The launcher stopped being the key window a turn ago. An alert sheet takes the keyboard, and so does the Quick
+    /// Look preview, when the user clicks it or Quick Look takes it as the preview opens; none of them is the user
+    /// leaving.
+    private func settleResign() {
+        let settled = LauncherResign.Settled(
+            launcherShown: panel.isVisible, sheetAttached: panel.attachedSheet != nil, launcherIsKey: panel.isKeyWindow,
+            previewOpen: quickLook?.item != nil, previewIsKey: quickLook?.isKey == true)
+        switch LauncherResign.decide(settled) {
+        case .stay:
+            break
+        case .takeKeyBack:
+            takeKeyBackFromQuickLook()
+        case .hide:
+            hidePanel()
+        }
+    }
+
     /// The app the user was in when the Quick Look preview opened. Forgotten when the panel hides, so a later
     /// session never restores it.
     private var appBeforeQuickLook: NSRunningApplication?
@@ -369,7 +380,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return app
     }
 
-    /// The user clicked the Quick Look preview, which took the keyboard (and may have made Fudge the active app):
+    /// The Quick Look preview took the keyboard (and may have made Fudge the active app), usually because the user
+    /// clicked it:
     /// the launcher takes it back, so ↑↓, Esc and ⌘Y keep working, and `hidePanel` later gives the keyboard back to
     /// the app the user was in, as after a FilePicker's open panel. That app is set whether or not
     /// `frontmostApplication` names Fudge yet, since it can lag behind the click; `hidePanel` only activates it if
@@ -549,6 +561,10 @@ struct Snapshot {
     /// `--onboarding [<step>]`: the onboarding window instead, optionally on one step.
     let onboarding: Bool
     let onboardingStep: OnboardingStep?
+    /// `--sign-ins <extension>/<providerId>=<Provider>,…`: sign-ins the Sign-in page lists, kept in memory.
+    let signIns: MemorySecretStore
+    /// `--sign-in-consent`: picks Fudge's sign-in server on the Sign-in page and saves its consent sheet instead.
+    let signInConsent: Bool
 
     init?(arguments: [String]) {
         guard let index = arguments.firstIndex(of: "--snapshot"), index + 1 < arguments.count else { return nil }
@@ -573,6 +589,17 @@ struct Snapshot {
         accessibility = value("--accessibility") == "allowed"
         onboarding = arguments.contains("--onboarding")
         onboardingStep = value("--onboarding").flatMap(OnboardingStep.init(rawValue:))
+        signIns = MemorySecretStore()
+        for entry in (value("--sign-ins") ?? "").split(separator: ",") {
+            let parts = entry.split(separator: "=", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            let tokens = StoredTokenSet(
+                accessToken: "snapshot",
+                updatedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-7200)),
+                providerName: parts[1])
+            try? signIns.write(JSONEncoder().encode(tokens), account: parts[0])
+        }
+        signInConsent = arguments.contains("--sign-in-consent")
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1
@@ -584,7 +611,15 @@ struct Snapshot {
     }
 
     func take(of controller: SettingsWindowController) {
-        controller.renderOffscreen(extension: settingsExtension)
+        controller.renderOffscreen(extension: signInConsent ? SettingsModel.signInPage : settingsExtension)
+        if signInConsent {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { controller.model.setSignInServer(.fudge) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                guard let view = controller.attachedSheet?.contentView else { exit(1) }
+                save(view)
+            }
+            return
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             guard let view = controller.contentView else { exit(1) }
             save(view)

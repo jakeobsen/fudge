@@ -18,6 +18,11 @@ public struct FudgeSettings: Sendable, Equatable {
     public var extensionStore = false
     /// When the user confirmed the Extension Store's consent sheet (`extensionStoreConsentAt`, ISO 8601).
     public var extensionStoreConsentAt: String?
+    /// The sign-in server (`signInServer`): `"fudge"` or a URL; it counts only with the consent date beside it
+    /// (`signIn`).
+    public var signInServer: String?
+    /// When the user confirmed the sign-in server's consent sheet (`signInServerConsentAt`, ISO 8601).
+    public var signInServerConsentAt: String?
 
     /// Whether the Extension Store is on: switched on through the consent sheet, which records the date.
     public var isExtensionStoreOn: Bool {
@@ -151,6 +156,8 @@ public struct FudgeSettings: Sendable, Equatable {
             numberFormat: (object["numberFormat"] as? String).flatMap(NumberFormatSetting.init(rawValue:)) ?? .system)
         settings.extensionStore = object["extensionStore"] as? Bool ?? false
         settings.extensionStoreConsentAt = object["extensionStoreConsentAt"] as? String
+        settings.signInServer = object["signInServer"] as? String
+        settings.signInServerConsentAt = object["signInServerConsentAt"] as? String
         settings.resetAfter = PanelResetSetting(settingsValue: object["resetAfterSeconds"])
         settings.showOnScreen = ShowOnScreen(settingsValue: object["showOnScreen"])
         settings.escapeBehavior = EscapeBehavior(settingsValue: object["escapeBehavior"])
@@ -175,6 +182,8 @@ public struct FudgeSettings: Sendable, Equatable {
         object["numberFormat"] = numberFormat == .system ? nil : numberFormat.rawValue
         object["extensionStore"] = extensionStore ? true : nil
         object["extensionStoreConsentAt"] = extensionStoreConsentAt
+        object["signInServer"] = signInServer
+        object["signInServerConsentAt"] = signInServerConsentAt
         object["resetAfterSeconds"] = resetAfter.settingsValue
         object["showOnScreen"] = showOnScreen.settingsValue
         object["escapeBehavior"] = escapeBehavior.settingsValue

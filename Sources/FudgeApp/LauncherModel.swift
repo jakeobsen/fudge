@@ -158,6 +158,19 @@ final class LauncherModel {
     /// Asks the user, for a call from `origin`; a background call gets `CallOrigin.unaskedAnswer` without an alert.
     @ObservationIgnored var confirm: (AlertRequest, CallOrigin) async -> Bool = { _, _ in false }
 
+    /// "Sign in to <provider>" on screen, over whatever the command shows (SPEC-056).
+    private(set) var signIn: SignInPrompt?
+    /// Where sign-ins are kept: the Keychain, set by the app delegate; memory in snapshot runs.
+    @ObservationIgnored var tokenSecrets: any SecretStore = MemorySecretStore()
+    /// Opens a sign-in's URL in the default browser; false when it couldn't.
+    @ObservationIgnored var openInBrowser: (URL) -> Bool = { NSWorkspace.shared.open($0) }
+    /// Each session's latest `oauth.prepare` and the one the prompt shows, with their loopback listeners.
+    @ObservationIgnored private var signInRequests = SignInRequests<OAuthLoopback>()
+    /// The providers each session has prepared a relay sign-in for (`SignInCalls.pending`).
+    @ObservationIgnored private var pendingRelay: [String: Set<String>] = [:]
+    /// The user's answer to the prompt on screen: true for ↵, false for Esc or the command going away.
+    @ObservationIgnored private var signInAnswer: CheckedContinuation<Bool, Never>?
+
     struct AlertRequest {
         var title: String
         var message: String?
@@ -1753,6 +1766,7 @@ final class LauncherModel {
     /// Settings window, after the running command's own shortcuts.
     /// Returns false for everything else, which then goes to the focused field.
     func handleKey(_ pressed: KeyShortcut) -> Bool {
+        if signIn != nil { return handleSignInKey(pressed) }
         if datePanel != nil, handleDatePanelKey(pressed) { return true }
         if pressed == KeyShortcut(key: "k", modifiers: ["cmd"]) {
             if actionPanel != nil || !waitForActions(.actionPanel) { toggleActionPanel() }
@@ -1983,6 +1997,10 @@ final class LauncherModel {
     func escape() {
         // A key waiting for the selected item's actions is dropped first; Esc then does what it always does.
         hold(nil)
+        if signIn != nil {
+            answerSignIn(false)
+            return
+        }
         // The DatePicker's calendar is a popover too: it closes first, whatever Esc is set to do.
         if datePanel != nil {
             closeDatePanel()
@@ -2561,7 +2579,8 @@ final class LauncherModel {
         let host = try ExtensionHost(
             node: node, script: script,
             environment: ExtensionStore.hostEnvironment(
-                cli: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil, paths: paths))
+                cli: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil, paths: paths
+            ).merging([OAuthProviders.environmentKey: OAuthProviders.environmentValue]) { _, new in new })
         self.host = host
         Task { [weak self] in
             for await message in host.messages { self?.receive(message) }
@@ -2727,6 +2746,7 @@ final class LauncherModel {
             log(session, "error", stack ?? message)
 
         case .exit(let session, let reason):
+            endSignIn(of: session)
             sessionExtensions[session] = nil
             sessionCommands[session] = nil
             if let quiet = quietSessions.removeValue(forKey: session) {
@@ -2789,6 +2809,19 @@ final class LauncherModel {
                     send(.rpcResult(session: session, id: id, result: .null, error: nil))
                 } catch {
                     send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
+                }
+            case "oauth.server", "oauth.prepare", "oauth.authorize", "oauth.tokens.get", "oauth.tokens.set",
+                "oauth.tokens.remove":
+                let origin = origin(of: session)
+                Task {
+                    do {
+                        let result = try await signInCall(method, params, session: session, origin: origin)
+                        send(.rpcResult(session: session, id: id, result: result, error: nil))
+                    } catch let refusal as SignInRefusal {
+                        send(.rpcResult(session: session, id: id, result: nil, error: refusal.message))
+                    } catch {
+                        send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
+                    }
                 }
             case "command.launch":
                 // Read now: by the time the Task runs, an `eventSettled` may have made a real pick look background.
@@ -2942,6 +2975,154 @@ final class LauncherModel {
 
     private func log(_ session: String, _ level: String, _ message: String) {
         FileHandle.standardError.write(Data("[\(session)] \(level): \(message)\n".utf8))
+    }
+
+    // MARK: - Sign-in (SPEC-056)
+
+    private func signInCall(_ method: String, _ params: JSONValue, session: String, origin: CallOrigin) async throws
+        -> JSONValue
+    {
+        let values: [String: JSONValue] = if case .object(let object) = params { object } else { [:] }
+        func string(_ key: String) -> String? { if case .string(let value) = values[key] { value } else { nil } }
+        switch method {
+        case "oauth.server":
+            let server = FudgeSettings.load(from: paths.settingsFile).signIn
+            let signedIn = try signInCalls(session).flatMap {
+                try $0.hasRelaySignIn(provider: string("provider") ?? "")
+            }
+            return .object([
+                "server": server.url.map { .string($0.absoluteString) } ?? .null, "signedIn": .bool(signedIn ?? false),
+            ])
+        case "oauth.prepare":
+            let server = FudgeSettings.load(from: paths.settingsFile).signIn
+            let (provider, authorize) = try PreparedSignIn.provider(
+                for: string("endpoint") ?? "", providerName: string("providerName") ?? "", server: server
+            ).get()
+            let loopback = try await OAuthLoopback.start()
+            let request = PreparedSignIn(provider: provider, authorizeURL: authorize, redirectURI: loopback.redirectURI)
+            // An earlier request this session never used stops listening. One the prompt shows isn't among them.
+            signInRequests.prepare((request, loopback), for: session)?.close()
+            pendingRelay[session, default: []].insert(provider.id)
+            // A request that's never used to sign in stops listening after 5 minutes.
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(300))
+                guard let self, self.signInRequests.expire(loopback, of: session) else { return }
+                loopback.close()
+            }
+            return .object([
+                "provider": .string(provider.id), "authorizeURL": .string(authorize),
+                "redirectURI": .string(loopback.redirectURI),
+            ])
+        case "oauth.authorize":
+            return .object([
+                "authorizationCode": .string(try await authorizeSignIn(values, session: session, origin: origin))
+            ])
+        default:
+            guard let calls = signInCalls(session) else { throw SignInRefusal.notPrepared }
+            return try calls.answer(method, params)
+        }
+    }
+
+    /// The token calls of `session`'s extension: the extension comes from the session, never from the call.
+    private func signInCalls(_ session: String) -> SignInCalls? {
+        guard let extensionName = sessionExtensions[session] else { return nil }
+        return SignInCalls(
+            store: OAuthTokenStore(secrets: tokenSecrets), extensionName: extensionName,
+            pending: pendingRelay[session] ?? [])
+    }
+
+    /// Signs in for `session`: shows "Sign in to <provider>", opens the browser on ↵, and waits up to 5 minutes for
+    /// the loopback callback. Brings the launcher back to the command when the browser returns.
+    private func authorizeSignIn(_ values: [String: JSONValue], session: String, origin: CallOrigin) async throws
+        -> String
+    {
+        guard origin.mayComeForward else { throw SignInRefusal.background }
+        guard signIn == nil else { throw SignInRefusal.busy }
+        let url: String = if case .string(let url) = values["url"] { url } else { "" }
+        guard let prepared = signInRequests.preparedRequest(of: session),
+            let state = prepared.request.state(ofAuthorizeURL: url), let target = URL(string: url)
+        else { throw SignInRefusal.notPrepared }
+        // The prompt takes the request: Esc and the session ending reach its listener, whatever the session prepares
+        // meanwhile.
+        guard signInRequests.show(session) != nil else { throw SignInRefusal.busy }
+        let loopback = prepared.listener
+        func text(_ key: String) -> String? {
+            if case .string(let value) = values[key], !value.isEmpty { value } else { nil }
+        }
+        signIn = SignInPrompt(
+            session: session, providerName: text("providerName") ?? prepared.request.provider.name,
+            description: text("description"), icon: values["providerIcon"].flatMap { $0 == .null ? nil : $0 })
+        actionPanel = nil
+        // Nothing reaches the command while the prompt is up, a key held for the selected item's actions included.
+        hold(nil)
+        if !isVisible() { show() }
+        let proceed = await withCheckedContinuation { signInAnswer = $0 }
+        guard proceed, signIn?.session == session else {
+            finishSignIn(loopback)
+            throw SignInRefusal.cancelled
+        }
+        guard openInBrowser(target) else {
+            finishSignIn(loopback)
+            throw SignInRefusal.browser
+        }
+        signIn?.waiting = true
+        let outcome = await loopback.wait(state: state, timeout: 300)
+        let provider = signIn?.providerName ?? prepared.request.provider.name
+        finishSignIn(loopback)
+        switch outcome {
+        case .callback(.code(let code)):
+            if !isVisible() { show() }
+            return code
+        case .callback(.error(let error, let description)):
+            throw SignInRefusal.refused(provider: provider, error: error, description: description)
+        case .timedOut:
+            throw SignInRefusal.timedOut
+        case .cancelled, .callback:
+            throw SignInRefusal.cancelled
+        }
+    }
+
+    /// ↵ continues in the browser and Esc cancels; while the prompt is up, nothing else reaches the command.
+    private func handleSignInKey(_ pressed: KeyShortcut) -> Bool {
+        if pressed == KeyShortcut(key: "escape", modifiers: []) {
+            answerSignIn(false)
+            return true
+        }
+        if pressed == KeyShortcut(key: "return", modifiers: []) || pressed == KeyShortcut(key: "enter", modifiers: []) {
+            if signIn?.waiting == false { answerSignIn(true) }
+            return true
+        }
+        return !pressed.modifiers.contains("cmd")
+    }
+
+    /// The prompt's ↵ (true) or Esc (false). Esc while the browser is open cancels the wait.
+    func answerSignIn(_ proceed: Bool) {
+        guard let prompt = signIn else { return }
+        if let answer = signInAnswer {
+            signInAnswer = nil
+            answer.resume(returning: proceed)
+        } else if !proceed, prompt.waiting {
+            signInRequests.waitedOn?.cancel()
+        }
+    }
+
+    /// The sign-in on `loopback` is over: its listener closes, and the prompt goes when it was the prompt's.
+    private func finishSignIn(_ loopback: OAuthLoopback) {
+        if signInRequests.finish(loopback) { signIn = nil }
+        loopback.close()
+    }
+
+    /// A session that exits takes its sign-in with it.
+    private func endSignIn(of session: String) {
+        pendingRelay[session] = nil
+        let (unused, waitedOn) = signInRequests.end(session)
+        unused?.close()
+        guard let waitedOn else { return }
+        if let answer = signInAnswer {
+            signInAnswer = nil
+            answer.resume(returning: false)
+        }
+        waitedOn.cancel()
     }
 
     // MARK: - Icons

@@ -1,33 +1,151 @@
-// `OAuth`, within decision D-50: Fudge doesn't sign in with OAuth. An extension can still build its client and ask
-// it for tokens (`@raycast/utils`' `OAuthService` builds one when the extension loads, even when the user has set a
-// token in its settings); only signing in fails, saying what to do.
+// `OAuth`: signing in through a fudge-oauth relay (SPEC-056, decision D-63). `@raycast/utils`' `OAuthService` builds
+// an `OAuth.PKCEClient` when the extension loads and asks it for tokens; signing in goes through the relay the user
+// chose in Settings → Sign-in, never Raycast's servers. The app opens the browser, waits for the loopback callback
+// and keeps the tokens in the Keychain, for the calling extension only.
 
+import { createHash } from "node:crypto";
+import { callApp } from "../bridge.ts";
 import { RAYCAST_ENUMS } from "./raycast-enums.generated.ts";
 import { LEFT_OUT, mark } from "./stubs.ts";
 
-/** What signing in rejects with. */
-export const signInMessage =
-    "Fudge doesn't support signing in with OAuth. If this extension takes a token in its settings (⌘⇧,), use that.";
+/** What signing in rejects with while sign-in is off (the app says so too, in `oauth.prepare`). */
+export const signInOffMessage =
+    "Sign-in is off. Turn it on in Fudge's Settings → Sign-in, or use a token in this extension's settings (⌘⇧,).";
 
-/** Whether this worker has refused a sign-in. */
-let refused = false;
-
-function refuse(): never {
-    refused = true;
-    throw new Error(signInMessage);
-}
+/** The message of the last refused sign-in in this worker, if any. */
+let refusal: string | null = null;
 
 /**
  * The error a view command's render reports, explained. `withAccessToken` suspends on its sign-in, and when that's
  * refused it forgets the failed attempt, so React retries with a new one each time until it gives up on the root
  * (React's error #482, "…is an async Client Component…"). After a refused sign-in, that error means the sign-in, so
- * the command fails with the sign-in message instead. Anything else is passed through.
+ * the command fails with the refusal's message instead, once. Anything else is passed through.
  */
 export function explainRenderError(error: unknown): unknown {
-    if (!refused || !(error instanceof Error)) return error;
+    if (refusal === null || !(error instanceof Error)) return error;
     const loop = error.message.includes("async Client Component") || /\berrors\/482\b|error #482\b/.test(error.message);
-    return loop ? new Error(signInMessage) : error;
+    if (!loop) return error;
+    // Once: a later, unrelated #482 isn't the sign-in's.
+    const message = refusal;
+    refusal = null;
+    return new Error(message);
 }
+
+/** Runs a call to the app, remembering a rejection's message for `explainRenderError`. */
+async function signInStep<T>(call: () => Promise<T>): Promise<T> {
+    try {
+        const result = await call();
+        refusal = null;
+        return result;
+    } catch (error) {
+        refusal = error instanceof Error ? error.message : String(error);
+        throw error instanceof Error ? error : new Error(refusal);
+    }
+}
+
+// MARK: - PKCE
+
+const unreserved = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+
+/** A PKCE code verifier: `length` (43–128) characters from RFC 7636's unreserved alphabet. */
+export function codeVerifier(length = 64): string {
+    if (!Number.isInteger(length) || length < 43 || length > 128) throw new RangeError("A verifier has 43–128 characters");
+    // 66 symbols: reject bytes ≥ 198 (3 × 66) so every symbol is equally likely.
+    let verifier = "";
+    while (verifier.length < length) {
+        for (const byte of crypto.getRandomValues(new Uint8Array(length * 2))) {
+            if (byte < 198 && verifier.length < length) verifier += unreserved[byte % 66];
+        }
+    }
+    return verifier;
+}
+
+/** The S256 challenge for a verifier: base64url(SHA-256(verifier)), unpadded. */
+export function codeChallenge(verifier: string): string {
+    return createHash("sha256").update(verifier, "ascii").digest("base64url");
+}
+
+/** A random `state`: 16 bytes, base64url. */
+function randomState(): string {
+    return Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("base64url");
+}
+
+// MARK: - Tokens
+
+type TokenSetOptions = {
+    accessToken?: string;
+    refreshToken?: string;
+    idToken?: string;
+    expiresIn?: number;
+    scope?: string | string[];
+    access_token?: string;
+    refresh_token?: string;
+    id_token?: string;
+    expires_in?: number;
+};
+
+/** The JSON the app keeps for a sign-in. */
+type StoredTokenSet = {
+    /** The `OAuthProviders` id of the relay sign-in that got these tokens; the app keeps it only for one it prepared. */
+    relayProvider?: string;
+    accessToken: string;
+    refreshToken?: string;
+    idToken?: string;
+    expiresIn?: number;
+    scope?: string;
+    updatedAt: string;
+    providerName?: string;
+};
+
+/** Raycast's `TokenSet`: a stored sign-in, with `isExpired()`. */
+class TokenSet {
+    accessToken: string;
+    refreshToken?: string;
+    idToken?: string;
+    expiresIn?: number;
+    scope?: string;
+    updatedAt: Date;
+
+    constructor(stored: StoredTokenSet) {
+        this.accessToken = stored.accessToken;
+        this.refreshToken = stored.refreshToken;
+        this.idToken = stored.idToken;
+        this.expiresIn = stored.expiresIn;
+        this.scope = stored.scope;
+        this.updatedAt = new Date(stored.updatedAt);
+    }
+
+    /** True from 10 seconds before the access token expires; never without `expiresIn`. */
+    isExpired(): boolean {
+        if (typeof this.expiresIn !== "number" || !Number.isFinite(this.expiresIn)) return false;
+        return Date.now() >= this.updatedAt.getTime() + (this.expiresIn - 10) * 1000;
+    }
+}
+
+/** A `TokenSetOptions` or a provider's `TokenResponse`, as the app stores it. */
+export function storedTokens(
+    options: TokenSetOptions,
+    providerName: string,
+    relayProvider?: string,
+    now = new Date(),
+): StoredTokenSet {
+    const accessToken = options.accessToken ?? options.access_token;
+    if (typeof accessToken !== "string" || accessToken === "") throw new Error("setTokens needs an access token");
+    const scope = options.scope;
+    const expiresIn = options.expiresIn ?? options.expires_in;
+    return {
+        accessToken,
+        refreshToken: options.refreshToken ?? options.refresh_token,
+        idToken: options.idToken ?? options.id_token,
+        expiresIn: typeof expiresIn === "number" && Number.isFinite(expiresIn) ? expiresIn : undefined,
+        scope: Array.isArray(scope) ? scope.join(" ") : scope,
+        updatedAt: now.toISOString(),
+        providerName,
+        relayProvider,
+    };
+}
+
+// MARK: - The client
 
 type Options = {
     redirectMethod: string;
@@ -38,7 +156,17 @@ type Options = {
     revocationEndpoint?: string;
 };
 
-/** Raycast's `OAuth.PKCEClient`, with no tokens and no sign-in. Nothing here opens a browser or contacts a provider. */
+type AuthorizationRequestOptions = {
+    endpoint: string;
+    clientId?: string;
+    scope?: string;
+    extraParameters?: Record<string, string>;
+};
+
+/** What the app answers `oauth.prepare` with. */
+type Prepared = { provider: string; authorizeURL: string; redirectURI: string };
+
+/** Raycast's `OAuth.PKCEClient`, signing in through the relay. */
 class PKCEClient {
     redirectMethod: string;
     providerName: string;
@@ -46,6 +174,8 @@ class PKCEClient {
     providerId: string;
     description?: string;
     revocationEndpoint?: string;
+    /** The provider of this client's last relay sign-in request, which marks the tokens it then stores. */
+    #relayProvider?: string;
 
     constructor(options: Options) {
         this.redirectMethod = options.redirectMethod;
@@ -56,22 +186,89 @@ class PKCEClient {
         this.revocationEndpoint = options.revocationEndpoint;
     }
 
-    async authorizationRequest(_options?: unknown): Promise<never> {
-        refuse();
+    /**
+     * A sign-in request for one of the providers Fudge knows (by `endpoint`, its default authorize URL). The app
+     * refuses while sign-in is off, and for any other endpoint.
+     */
+    async authorizationRequest(options: AuthorizationRequestOptions) {
+        const prepared = await signInStep(() =>
+            callApp<Prepared>("oauth.prepare", {
+                endpoint: String(options?.endpoint ?? ""),
+                providerName: this.providerName,
+                providerId: this.providerId,
+            }),
+        );
+        this.#relayProvider = prepared.provider;
+        const codeVerifierValue = codeVerifier();
+        const request = {
+            clientId: String(options.clientId ?? ""),
+            codeChallenge: codeChallenge(codeVerifierValue),
+            codeVerifier: codeVerifierValue,
+            state: randomState(),
+            redirectURI: prepared.redirectURI,
+            toURL(): string {
+                const url = new URL(prepared.authorizeURL);
+                const parameters: Record<string, string> = {
+                    client_id: request.clientId,
+                    redirect_uri: request.redirectURI,
+                    response_type: "code",
+                    scope: String(options.scope ?? ""),
+                    state: request.state,
+                    code_challenge: request.codeChallenge,
+                    code_challenge_method: "S256",
+                };
+                for (const [key, value] of Object.entries(parameters)) url.searchParams.set(key, value);
+                for (const [key, value] of Object.entries(options.extraParameters ?? {})) {
+                    if (!(key in parameters)) url.searchParams.set(key, String(value));
+                }
+                return url.toString();
+            },
+        };
+        return request;
     }
 
-    async authorize(_options?: unknown): Promise<never> {
-        refuse();
+    /**
+     * Signs in: the app shows "Sign in to <provider>", opens the URL in the browser on ↵, and waits for the loopback
+     * callback with this request's `state`.
+     */
+    async authorize(options: { url?: string; state?: string; toURL?: () => string }) {
+        const url = typeof options?.toURL === "function" ? options.toURL() : String(options?.url ?? "");
+        const state = options?.state ?? stateOf(url);
+        return signInStep(() =>
+            callApp<{ authorizationCode: string }>("oauth.authorize", {
+                url,
+                state,
+                providerName: this.providerName,
+                providerId: this.providerId,
+                providerIcon: this.providerIcon ?? null,
+                description: this.description ?? null,
+            }),
+        );
     }
 
-    /** Fudge never holds a token from a sign-in. */
-    async getTokens(): Promise<undefined> {
-        return undefined;
+    async getTokens(): Promise<TokenSet | undefined> {
+        const stored = await callApp<StoredTokenSet | null>("oauth.tokens.get", { providerId: this.providerId });
+        return stored && typeof stored.accessToken === "string" ? new TokenSet(stored) : undefined;
     }
 
-    async setTokens(_options?: unknown): Promise<void> {}
+    async setTokens(options: TokenSetOptions): Promise<void> {
+        await callApp("oauth.tokens.set", {
+            providerId: this.providerId,
+            tokens: storedTokens(options ?? {}, this.providerName, this.#relayProvider),
+        });
+    }
 
-    async removeTokens(): Promise<void> {}
+    async removeTokens(): Promise<void> {
+        await callApp("oauth.tokens.remove", { providerId: this.providerId });
+    }
+}
+
+function stateOf(url: string): string {
+    try {
+        return new URL(url).searchParams.get("state") ?? "";
+    } catch {
+        return "";
+    }
 }
 
 const oauth = { PKCEClient, RedirectMethod: Object.freeze({ ...RAYCAST_ENUMS.OAuthRedirectMethod }) };
