@@ -153,9 +153,12 @@ public struct FormContent: Sendable, Equatable {
     }
 
     public var fields: [Field]
+    /// The link at the right of the Form's top bar: its `searchBarAccessory`, when that's a `Form.LinkAccessory`.
+    public var linkAccessory: LinkAccessory?
 
     public init(_ view: UINode) {
         fields = view.children.compactMap(Self.field)
+        linkAccessory = view.node("searchBarAccessory").flatMap(LinkAccessory.init)
     }
 
     static func field(_ node: UINode) -> Field? {
@@ -214,7 +217,28 @@ public struct FormContent: Sendable, Equatable {
     }
 }
 
-/// A Form.DatePicker's settings.
+/// A Form's `searchBarAccessory`: a `Form.LinkAccessory`, drawn at the right of the Form's top bar. A click opens
+/// `target` as `Action.OpenInBrowser` does.
+public struct LinkAccessory: Sendable, Equatable {
+    public var text: String
+    public var target: String
+
+    public init(text: String, target: String) {
+        self.text = text
+        self.target = target
+    }
+
+    /// Only a `Form.LinkAccessory` with both a `text` and a `target`; anything else in the prop is ignored.
+    public init?(_ node: UINode) {
+        guard node.type == "Form.LinkAccessory",
+            let text = node.string("text"), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            let target = node.string("target"), !target.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return nil }
+        self.init(text: text, target: target)
+    }
+}
+
+/// A Form.DatePicker's settings, and an Action.PickDate's.
 public struct DatePickerOptions: Sendable, Equatable {
     /// Raycast's `Form.DatePicker.Type`.
     public enum Kind: String, Sendable, Equatable {
@@ -232,16 +256,23 @@ public struct DatePickerOptions: Sendable, Equatable {
         self.max = max
     }
 
-    /// An extension's `min` after its `max` allows no date at all; fudge then ignores both, rather than refuse every
-    /// pick.
+    /// A Form.DatePicker's, from its node's props.
     init(_ node: UINode) {
-        var min = FormDates.date(node.props["min"])
-        var max = FormDates.date(node.props["max"])
+        self.init(props: node.props)
+    }
+
+    /// Reads `type`, `min` and `max`. An extension's `min` after its `max` allows no date at all; fudge then ignores
+    /// both, rather than refuse every pick.
+    init(props: [String: JSONValue]) {
+        var min = FormDates.date(props["min"])
+        var max = FormDates.date(props["max"])
         if let low = min, let high = max, low > high {
             min = nil
             max = nil
         }
-        self.init(type: node.string("type").flatMap(Kind.init(rawValue:)) ?? .dateTime, min: min, max: max)
+        var type = Kind.dateTime
+        if case .string(let name) = props["type"], let kind = Kind(rawValue: name) { type = kind }
+        self.init(type: type, min: min, max: max)
     }
 
     /// The dates the picker offers: from `min` to `max`, open where either is missing. Never an inverted range,

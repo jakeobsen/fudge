@@ -1115,6 +1115,8 @@ final class LauncherModel {
         var path: [Int] = []
         var query = ""
         var selected: Int?
+        /// An `Action.PickDate`'s picker, shown in place of the action list.
+        var pick: DatePick?
     }
 
     private(set) var actionPanel: ActionPanelState?
@@ -1166,8 +1168,12 @@ final class LauncherModel {
         }
     }
 
-    /// Runs an action, or opens a submenu in the action panel.
+    /// Runs an action, or opens a submenu or an `Action.PickDate`'s picker in the action panel.
     func run(_ entry: ActionEntry) {
+        if let options = entry.pickDate {
+            openDatePick(entry, options: options)
+            return
+        }
         if let submenu = entry.submenu {
             var state = actionPanel ?? ActionPanelState()
             state.path.append(entry.id)
@@ -1188,6 +1194,122 @@ final class LauncherModel {
             }
         case .toggleQuickLook:
             toggleQuickLook()
+        }
+    }
+
+    // MARK: - Action.PickDate
+
+    /// Opens an `Action.PickDate`'s picker in the action panel overlay, in place of the action list, as a submenu
+    /// takes its place. Run without the overlay (↵, ⌘↵, its shortcut), the overlay opens straight to the picker.
+    private func openDatePick(_ entry: ActionEntry, options: DatePickerOptions) {
+        guard case .node(let node) = entry.target, case .command = screen else { return }
+        closeDropdownPanel()
+        datePanel = nil
+        var state = actionPanel ?? ActionPanelState()
+        state.pick = DatePick(node: node, title: entry.title, options: options, openedFromList: actionPanel != nil)
+        actionPanel = state
+    }
+
+    /// The open picker's keys, ahead of everything but ⌘K. False lets the time field have the key.
+    private func handleDatePickKey(_ pressed: KeyShortcut) -> Bool {
+        guard var pick = actionPanel?.pick else { return false }
+        let outcome = pick.handle(pressed)
+        actionPanel?.pick = pick
+        return finishDatePick(outcome)
+    }
+
+    /// A click on a day in the picker.
+    func clickDatePickDay(_ day: Date) {
+        guard var pick = actionPanel?.pick else { return }
+        let outcome = pick.click(day)
+        actionPanel?.pick = pick
+        _ = finishDatePick(outcome)
+    }
+
+    func moveDatePick(months: Int) {
+        actionPanel?.pick?.move(months: months)
+    }
+
+    func setDatePickTime(_ date: Date) {
+        actionPanel?.pick?.setTime(date)
+    }
+
+    func focusDatePick(_ part: DatePick.Focus) {
+        guard actionPanel?.pick?.focus != part else { return }
+        actionPanel?.pick?.focus(part)
+    }
+
+    /// Does what a key or click in the picker asked for. A pick or a clear calls the action's `onChange` once and
+    /// closes the overlay; the view stays as it is.
+    private func finishDatePick(_ outcome: DatePick.Outcome) -> Bool {
+        guard let pick = actionPanel?.pick else { return false }
+        switch outcome {
+        case .handled:
+            return true
+        case .ignored:
+            return false
+        case .pick(let date):
+            actionPanel = nil
+            sendDatePick(FormDates.json(date), to: pick.node)
+        case .clear:
+            actionPanel = nil
+            sendDatePick(.null, to: pick.node)
+        case .backToList:
+            closeDatePick()
+        case .close:
+            actionPanel = nil
+        }
+        return true
+    }
+
+    private func sendDatePick(_ value: JSONValue, to node: Int) {
+        guard case .command(let command) = screen else { return }
+        send(.event(session: command.session, node: node, path: ["onChange"], args: [value]))
+    }
+
+    /// Leaves the picker: back to the action list it was opened from, or the overlay closes.
+    private func closeDatePick() {
+        guard let pick = actionPanel?.pick else { return }
+        if pick.openedFromList {
+            actionPanel?.pick = nil
+        } else {
+            actionPanel = nil
+        }
+    }
+
+    /// After a render: the picker stays while its action is there, within any new `min` and `max`. When the action
+    /// is gone, or is no longer an `Action.PickDate`, the picker closes without calling anything.
+    private func syncDatePick() {
+        guard let pick = actionPanel?.pick else { return }
+        guard let options = ActionPanelReader.entry(id: pick.node, in: currentActions)?.pickDate else {
+            closeDatePick()
+            return
+        }
+        actionPanel?.pick?.update(options: options)
+    }
+
+    /// For snapshots: opens the picker of the `Action.PickDate` titled `title`, as ↵ on it would.
+    func openDatePick(titled title: String) {
+        if let entry = ActionPanelReader.entry(titled: title, in: currentActions, where: { $0.pickDate != nil }) {
+            run(entry)
+        }
+    }
+
+    // MARK: - Form.LinkAccessory
+
+    /// A click on the Form's link accessory opens its `target` as `Action.OpenInBrowser` does, then hides the panel
+    /// as that action does. The Form stays as it is.
+    func openLinkAccessory() {
+        guard let link = command?.form?.linkAccessory else { return }
+        Task {
+            do {
+                // The user's own click.
+                _ = try await SystemCalls.handle(
+                    "open", .object(["target": .string(link.target)]), origin: .userInitiated)
+                closeWindow(clearRootSearch: false, popToRootType: "default")
+            } catch {
+                showFailureToast("Can't open \(link.target)", message: String(describing: error))
+            }
         }
     }
 
@@ -1273,6 +1395,7 @@ final class LauncherModel {
             toggleActionPanel()
             return true
         }
+        if actionPanel?.pick != nil { return handleDatePickKey(pressed) }
         // ⌘P opens and closes the search bar dropdown, unless an action takes the shortcut.
         let commandP = KeyShortcut(key: "p", modifiers: ["cmd"])
         if pressed == commandP, dropdownPanel != nil {
@@ -1468,7 +1591,9 @@ final class LauncherModel {
             closeDropdownPanel()
         case .closeActionPanel:
             guard var panel = actionPanel else { return }
-            if panel.path.isEmpty {
+            if panel.pick != nil {
+                closeDatePick()
+            } else if panel.path.isEmpty {
                 actionPanel = nil
             } else {
                 panel.path.removeLast()
@@ -2100,6 +2225,7 @@ final class LauncherModel {
             screen = .command(command)
             syncDropdownPanel()
             syncDatePanel()
+            syncDatePick()
             reportSelection()
 
         case .error(let session, let message, let stack, let fatal):

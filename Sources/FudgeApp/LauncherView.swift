@@ -9,6 +9,8 @@ struct LauncherView: View {
     enum Field: Hashable {
         case search, actions, dropdown
         case argument(Int)
+        /// An `Action.PickDate` picker's time.
+        case pickTime
     }
 
     var body: some View {
@@ -68,7 +70,12 @@ struct LauncherView: View {
         // `.onAppear` runs once for the panel's lifetime, so each showing (and each row click) asks for the
         // keyboard back explicitly.
         .onChange(of: model.keyboardRequests) { _, _ in restoreKeyboard() }
-        .onChange(of: model.actionPanel == nil) { _, closed in focus = closed ? .search : .actions }
+        .onChange(of: model.actionPanel == nil) { _, closed in focus = closed ? .search : overlayField }
+        // An Action.PickDate picker in the overlay: its calendar takes keys through the key monitor, with no field
+        // holding the keyboard; its time field takes them while it has the keyboard (Tab).
+        .onChange(of: model.actionPanel?.pick?.focus) { _, _ in
+            if model.actionPanel != nil { focus = overlayField }
+        }
         .onChange(of: model.dropdownPanel == nil) { _, closed in focus = closed ? .search : .dropdown }
         // The model decides which argument field has the keyboard (Tab, ⇧Tab, a required one left empty); a click
         // into a field tells it.
@@ -86,9 +93,17 @@ struct LauncherView: View {
             switch field {
             case .search: model.focusArgument(nil)
             case .argument(let index): model.focusArgument(index)
+            case .pickTime: model.focusDatePick(.time)
             default: break
             }
         }
+    }
+
+    /// The field that has the keyboard while the action panel is open: its search field, or with a picker open, the
+    /// time field when it has the keyboard and otherwise none.
+    private var overlayField: Field? {
+        guard let pick = model.actionPanel?.pick else { return .actions }
+        return pick.focus == .time ? .pickTime : nil
     }
 
     /// Where the keyboard goes for an argument (nil: the search field). A dropdown argument takes no text, so no
@@ -135,7 +150,12 @@ struct LauncherView: View {
         switch model.keyboardTarget {
         case .search: (field, text) = (.search, model.searchText)
         case .argument(let index): (field, text) = (.argument(index), model.arguments.value(at: index))
-        case .actionPanel: (field, text) = (.actions, model.actionPanelQuery)
+        case .actionPanel:
+            if model.actionPanel?.pick != nil {
+                focus = overlayField
+                return
+            }
+            (field, text) = (.actions, model.actionPanelQuery)
         case .dropdownPanel: (field, text) = (.dropdown, model.dropdownPanelQuery)
         case .formField, .none: return
         }
@@ -168,10 +188,7 @@ struct LauncherView: View {
             }
             if let title = model.viewTitle {
                 // Detail and Form have no search field; their title takes its place.
-                Text(title)
-                    .font(.system(size: 15, weight: .medium))
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                ViewTitle(title: title, link: model.command?.form?.linkAccessory) { model.openLinkAccessory() }
             } else {
                 searchField
                 if showsArguments, let item = model.selectedRootItem {
@@ -663,6 +680,21 @@ private struct ActionPanelView: View {
     var focus: FocusState<LauncherView.Field?>.Binding
 
     var body: some View {
+        Group {
+            if let pick = model.actionPanel?.pick {
+                DatePickView(model: model, pick: pick, focus: focus)
+            } else {
+                actionList
+            }
+        }
+        .frame(width: 340)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.12)))
+        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+    }
+
+    private var actionList: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
                 ScrollView {
@@ -713,11 +745,117 @@ private struct ActionPanelView: View {
                 .padding(.horizontal, 12)
                 .frame(height: 36)
         }
-        .frame(width: 340)
-        .fixedSize(horizontal: false, vertical: true)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.12)))
-        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+    }
+}
+
+/// An `Action.PickDate`'s picker, in the action panel in place of the action list: the action's title, Form.DatePicker's
+/// calendar, and for `DateTime` the time, edited in place. The calendar's keys come through `LauncherModel.handleKey`
+/// (`DatePick`); the overlay's search field isn't there, so typing filters nothing.
+private struct DatePickView: View {
+    let model: LauncherModel
+    let pick: DatePick
+    var focus: FocusState<LauncherView.Field?>.Binding
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(pick.title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                MonthView(month: pick.month, move: { model.moveDatePick(months: $0) }) {
+                    model.clickDatePickDay($0)
+                }
+                .padding(8)
+                .background(
+                    Color.primary.opacity(pick.focus == .calendar ? 0.05 : 0), in: RoundedRectangle(cornerRadius: 8)
+                )
+                .simultaneousGesture(TapGesture().onEnded { model.focusDatePick(.calendar) })
+                .frame(maxWidth: .infinity)
+                if pick.options.type == .dateTime {
+                    HStack(spacing: 8) {
+                        Text("Time").foregroundStyle(.secondary)
+                        DatePicker(
+                            "",
+                            selection: Binding(get: { pick.value() }, set: { model.setDatePickTime($0) }),
+                            in: pick.options.range,
+                            displayedComponents: [.hourAndMinute]
+                        )
+                        .labelsHidden()
+                        .datePickerStyle(.stepperField)
+                        .fixedSize()
+                        .focused(focus, equals: .pickTime)
+                        Spacer()
+                    }
+                    .font(.system(size: 13))
+                }
+            }
+            .padding(12)
+            Divider()
+            HStack(spacing: 12) {
+                Spacer()
+                hint("Pick", key: "↵")
+                hint("Clear", key: "⌫")
+                if pick.options.type == .dateTime { hint("Time", key: "⇥") }
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .frame(height: 36)
+        }
+    }
+
+    private func hint(_ label: String, key: String) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+            KeyCap(key)
+        }
+    }
+}
+
+/// The title that takes the search field's place in a Detail or Form, with a Form's `Form.LinkAccessory` at the right
+/// end: a link in the accent color, underlined on hover, that a click opens. It's for the mouse, as in Raycast, so
+/// it's not in the Tab order. It truncates before the title does, and never takes more than 40% of the bar.
+private struct ViewTitle: View {
+    let title: String
+    let link: LinkAccessory?
+    let open: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        GeometryReader { proxy in
+            HStack(spacing: 12) {
+                Text(title)
+                    .font(.system(size: 15, weight: .medium))
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                Spacer(minLength: 0)
+                if let link {
+                    Text(link.text)
+                        .font(.system(size: 13))
+                        .foregroundStyle(Color.accentColor)
+                        .underline(hovering)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: proxy.size.width * 0.4, alignment: .trailing)
+                        .contentShape(Rectangle())
+                        .onTapGesture(perform: open)
+                        .onHover { inside in
+                            guard inside != hovering else { return }
+                            hovering = inside
+                            if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                        }
+                        .onDisappear {
+                            if hovering { NSCursor.pop() }
+                        }
+                        .help(link.target)
+                        .accessibilityElement()
+                        .accessibilityLabel(link.text)
+                        .accessibilityAddTraits(.isLink)
+                        .accessibilityAction { open() }
+                }
+            }
+            .frame(maxHeight: .infinity)
+        }
     }
 }
 
