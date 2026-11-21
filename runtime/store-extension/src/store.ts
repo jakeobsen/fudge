@@ -12,8 +12,10 @@ import {
     type StoreEntry,
 } from "./catalog.ts";
 import {
+    builtCompatibility,
     compatibilityLine,
     fromReport,
+    installNote,
     readCompatibility,
     rememberCompatibility,
     scanExtension,
@@ -148,12 +150,12 @@ async function compatibilityOf(
 /**
  * Installs (or updates) `entry`: fetches its source from its folder, checks where its packages come from, finds what
  * it uses (`fudge scan`, or the cached result for this version), asks, builds it with the CLI into `extensionsDir` (as
- * `<extensionsDir>/<name>`), and records it under its name with its folder. Resolves false when the user cancels;
- * throws `StoreError` when a step refuses or fails. An extension of that name that the store didn't install from this
+ * `<extensionsDir>/<name>`), and records it under its name with its folder. Resolves false when the user cancels, else
+ * with what the done message adds (`installNote`); throws `StoreError` when a step refuses or fails. An extension of that name that the store didn't install from this
  * folder is never replaced: one installed another way, one from another folder whose manifest has the same name, or one
  * Fudge bundles.
  */
-export async function install(entry: StoreEntry, context: StoreContext): Promise<boolean> {
+export async function install(entry: StoreEntry, context: StoreContext): Promise<InstallDone | false> {
     const name = checkedName(entry.name);
     const dir = checkedFolder(entry.dir);
     if (bundledNames.includes(name)) throw new StoreError(`${entry.title} can't be installed: ${name} is part of Fudge.`);
@@ -173,7 +175,8 @@ export async function install(entry: StoreEntry, context: StoreContext): Promise
     if (problem) throw new StoreError(`${entry.title} can't be installed. ${problem}.`);
 
     const tree = (await context.repo.trees()).get(dir);
-    const compatibility = compatibilityLine(await compatibilityOf(source, tree, context), commandTitles(entry));
+    const checked = await compatibilityOf(source, tree, context);
+    const compatibility = compatibilityLine(checked, commandTitles(entry));
     const commit = await context.repo.commit();
     const confirmed = await context.confirm(
         `${record ? "Update" : "Install"} ${entry.title}?`,
@@ -192,7 +195,18 @@ export async function install(entry: StoreEntry, context: StoreContext): Promise
     if (!tree) throw new StoreError(`Couldn't read ${name}'s version in the store's copy`);
     const recorded: InstallRecord = { tree, commit, installedAt: (context.now?.() ?? new Date()).toISOString(), dir };
     await writeInstalled(context.supportPath, { ...(await readInstalled(context.supportPath)), [name]: recorded });
-    return true;
+    // The build scanned the source again: what it turned off is what's true, so say so where it differs.
+    const built = await builtCompatibility(
+        path.join(context.extensionsDir, name),
+        entry.commands.map((command) => command.name),
+    );
+    const note = installNote(checked, built, commandTitles(entry));
+    return note ? { note } : {};
+}
+
+/** A finished install. `note` says which commands are on and off when that isn't what the confirmation said. */
+export interface InstallDone {
+    note?: string;
 }
 
 /**

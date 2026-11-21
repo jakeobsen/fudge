@@ -166,7 +166,8 @@ export function compatibilityLine(result: Compatibility | undefined, titles: Com
     const sentences: string[] = [];
     const turnOn = "You can turn them on in Settings → Commands.";
     if (isPartlyCompatible(result)) {
-        // Exactly the commands `fudge build` installs not enabled.
+        // The commands this scan found, which `fudge build` installs not enabled; the build scans again, and the done
+        // message says where it differs (`installNote`).
         const using = result.byCommand!.using;
         const they = using.length === 1 ? "It" : "They";
         sentences.push(
@@ -203,6 +204,65 @@ export function compatibilityLine(result: Compatibility | undefined, titles: Com
     if (sentences.length > 0) return sentences.join(" ");
     if (result.unreadable) return "Fudge couldn't read all of this extension's source, so some of it may not work.";
     return "Fudge supports everything this extension uses.";
+}
+
+/**
+ * What `fudge build` turned off, from the install's `compatibility.json` (`{ "commands": { "<command>": ["AI"] } }`):
+ * the commands of `commands` that use something Fudge doesn't support, and what. Undefined when there's no such file,
+ * or it isn't one: the build couldn't check, so every command is on, as the app reads it too.
+ */
+export async function builtCompatibility(
+    installed: string,
+    commands: string[],
+): Promise<Record<string, string[]> | undefined> {
+    let file: unknown;
+    try {
+        file = JSON.parse(await readRegularFile(path.join(installed, "compatibility.json"), maxBuiltBytes));
+    } catch {
+        return undefined;
+    }
+    const listed = (file as { commands?: unknown } | null)?.commands;
+    if (typeof listed !== "object" || listed === null || Array.isArray(listed)) return undefined;
+    const off: Record<string, string[]> = {};
+    for (const name of commands) {
+        const uses = (listed as Record<string, unknown>)[name];
+        const known = Array.isArray(uses) ? uses.filter((category) => category in notSupportedNames) : [];
+        if (known.length > 0) off[name] = known;
+    }
+    return off;
+}
+
+/** The build's own small file; anything bigger isn't one (the app's `CommandCompatibility.maxBytes`). */
+const maxBuiltBytes = 1 << 20;
+
+/**
+ * What the install's done message adds when what `fudge build` turned off (`built`) isn't what the confirmation named
+ * from the store's result (`confirmed`), so the user is never left with commands off that weren't named, or on that
+ * were (SPEC-121 §2). The build scans exactly the source it installs, so `built` is what's true. Undefined when the two
+ * agree.
+ */
+export function installNote(
+    confirmed: Compatibility | undefined,
+    built: Record<string, string[]> | undefined,
+    titles: CommandTitles = byName,
+): string | undefined {
+    const result = confirmed && !confirmed.notChecked ? confirmed : undefined;
+    const named = result?.byCommand?.using ?? [];
+    if (!built) {
+        if (!result || named.length === 0) return undefined;
+        return `Fudge couldn't check which of its commands use ${unsupportedNames(result.notSupported, "or")}, so every command is on.`;
+    }
+    const off = Object.keys(built);
+    if (off.length === named.length && off.every((name) => named.includes(name))) return undefined;
+    if (off.length === 0) return `Every command is on: none of them uses ${unsupportedNames(result!.notSupported, "or")}.`;
+    const categories = Object.keys(notSupportedNames).filter((category) =>
+        off.some((name) => built[name]!.includes(category)),
+    );
+    const one = off.length === 1;
+    return (
+        `Turned off: ${listed(off.map(titles))}, which ${one ? "uses" : "use"} ${unsupportedNames(categories, "or")}. ` +
+        `You can turn ${one ? "it" : "them"} on in Settings → Commands.`
+    );
 }
 
 /** What the detail pane is showing for a row: a result, a scan waiting or running, or one that failed. */

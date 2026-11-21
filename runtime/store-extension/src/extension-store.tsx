@@ -239,13 +239,22 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                 title: `${updating ? "Updating" : "Installing"} ${entry.title}…`,
             });
             try {
-                if (!(await install(entry, context))) {
+                const done = await install(entry, context);
+                if (!done) {
                     await toast.hide();
                     return;
                 }
                 await load();
-                await toast.hide();
-                await showHUD(`${updating ? "Updated" : "Installed"} ${entry.title}`);
+                const title = `${updating ? "Updated" : "Installed"} ${entry.title}`;
+                if (done.note) {
+                    // What's on and off isn't what the confirmation said (SPEC-121 §2): said where it stays readable.
+                    toast.style = Toast.Style.Success;
+                    toast.title = title;
+                    toast.message = done.note;
+                } else {
+                    await toast.hide();
+                    await showHUD(title);
+                }
             } catch (error) {
                 // The whole error, its likely cause, Copy Error and Try Again, in a view of its own (SPEC-116); the
                 // toast only says where to look.
