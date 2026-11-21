@@ -66,7 +66,10 @@ import {
     filterImages,
     imageSource,
     isGitHubImage,
+    readmeNotFetched,
+    refetching,
     rendererPass,
+    shownReadme,
 } from "../store-extension/src/readme.ts";
 import { RestingWork } from "../store-extension/src/resting.ts";
 import {
@@ -552,6 +555,9 @@ test("everything in the detail goes through the filter, the manifest's text incl
     assert.match(detail, /^# Alpha/);
     assert.ok(detail.includes("raw.githubusercontent.com/raycast/extensions/c0ffee/extensions/alpha/media/shot.png"));
     assert.match(detailMarkdown(entry, "c0ffee", undefined), /Loading the README/);
+    assert.match(detailMarkdown(entry, "c0ffee", readmeNotFetched), /couldn't fetch the README\. ⌘R tries again/);
+    const none = detailMarkdown(entry, "c0ffee", "");
+    assert.ok(!/README|---/.test(none), `a folder with no README shows the manifest alone: ${none}`);
 });
 
 test("the detail's Compatibility line comes first among the facts", () => {
@@ -765,7 +771,29 @@ test("without the Command Line Tools, git itself is never run", async () => {
         missing.calls.map((call) => call.program),
         ["/usr/bin/xcode-select"],
     );
-    const present = fakeRun();
+    // A developer folder `xcode-select -p` still names, whose tools are gone: `/usr/bin/git` would offer the
+    // installer, so it isn't run either.
+    const developer = await temporary();
+    const naming = (folder: string) => (program: string) => (program.endsWith("xcode-select") ? { stdout: `${folder}\n` } : {});
+    for (const [why, folder] of [
+        ["a folder without git", developer],
+        ["a folder that isn't there", path.join(developer, "gone")],
+        ["no folder", ""],
+        ["a relative path", "Developer"],
+    ] as const) {
+        const emptied = fakeRun(naming(folder));
+        assert.equal(await gitAvailable(emptied.run), false, why);
+        assert.deepEqual(emptied.calls.map((call) => call.program), ["/usr/bin/xcode-select"], `${why}: git isn't run`);
+    }
+    await mkdir(path.join(developer, "usr/bin/git"), { recursive: true });
+    const aFolder = fakeRun(naming(developer));
+    assert.equal(await gitAvailable(aFolder.run), false, "usr/bin/git must be a file");
+    assert.deepEqual(aFolder.calls.map((call) => call.program), ["/usr/bin/xcode-select"]);
+
+    const tools = await temporary();
+    await mkdir(path.join(tools, "usr/bin"), { recursive: true });
+    await writeFile(path.join(tools, "usr/bin/git"), "");
+    const present = fakeRun(naming(tools));
     assert.equal(await gitAvailable(present.run), true);
     assert.deepEqual(
         present.calls.map((call) => [call.program, ...call.args]),
@@ -774,8 +802,11 @@ test("without the Command Line Tools, git itself is never run", async () => {
             ["/usr/bin/git", "--version"],
         ],
     );
-    const broken = fakeRun((program) => (program.endsWith("git") ? { code: 1, stderr: "xcrun: error: invalid active developer path" } : {}));
+    const broken = fakeRun((program) =>
+        program.endsWith("git") ? { code: 1, stderr: "xcrun: error: invalid active developer path" } : naming(tools)(program),
+    );
     assert.equal(await gitAvailable(broken.run), false);
+    assert.equal(broken.calls.length, 2, "git ran, and said it can't");
 });
 
 // MARK: - Install, update and uninstall
@@ -1631,6 +1662,88 @@ test("a README git couldn't fetch isn't kept as missing: selecting it again wait
     await settle();
     assert.equal(adds() - before, 3, "with nothing selected, again does nothing");
     assert.equal(readmes.has("gamma"), false);
+});
+
+test("a README fetch on its way shows as loading, a failed one says so, and none shows only for a folder without one", async () => {
+    let gitFails = true;
+    const { context } = await storeContext({ folders: [{ dir: "beta", name: "beta", tree: "bbb2" }] });
+    const failing = fakeRun((_program, args) =>
+        gitFails && args[0] === "sparse-checkout" && args[1] === "add"
+            ? { code: 128, stderr: "fatal: unable to access 'https://github.com/raycast/extensions/': Could not resolve host" }
+            : {},
+    );
+    const repo = new StoreRepository(context.repo.path, { run: failing.run });
+    await writeFile(path.join(repo.path, "extensions/alpha/README.md"), "# Alpha\n");
+    const entry = parseManifest("alpha", manifest("alpha"))!;
+    const clock = manualTimers();
+    // Each fetch waits for `release`, so a test can look while it runs.
+    let release = () => {};
+    const held = () => new Promise<void>((resolve) => (release = resolve));
+    let gate = held();
+    // The store's own state and callbacks (extension-store.tsx), each key a folder's tree.
+    let readmes: Record<string, string> = {};
+    let failed: ReadonlySet<string> = new Set();
+    const scheduled: string[] = [];
+    const fetches = new RestingWork<string>({
+        timers: clock.timers,
+        done: (key) => readmes[key] !== undefined,
+        run: async (key) => {
+            await gate;
+            return fetchReadme(repo, key);
+        },
+        changed: (key, readme) => {
+            if (readme === "failed") failed = new Set(failed).add(key);
+            else readmes = { ...readmes, [key]: readme };
+        },
+        scheduled: (key) => {
+            scheduled.push(key);
+            failed = refetching(failed, key);
+        },
+    });
+    const shown = (dir = "alpha") => detailMarkdown(entry, "c0ffee", shownReadme(dir, readmes, failed));
+    const loading = /Loading the README/;
+    const notFetched = /couldn't fetch the README/;
+    /** Lets the waiting fetch start, looks while it runs, then lets it end. */
+    const fetch = async (why: string, dir = "alpha") => {
+        clock.advance(500);
+        await settle();
+        assert.match(shown(dir), loading, `${why}: loading while it runs`);
+        release();
+        await settle();
+        gate = held();
+    };
+
+    fetches.select("alpha");
+    assert.match(shown(), loading, "the first fetch, waiting");
+    await fetch("the first fetch");
+    assert.match(shown(), notFetched, "it failed, and the detail says so");
+    assert.doesNotMatch(shown(), loading);
+
+    fetches.select("alpha");
+    assert.match(shown(), notFetched, "a render selecting it again fetches nothing, so the failure stays");
+    fetches.again();
+    assert.match(shown(), loading, "⌘R: on its way, so loading, not the failure");
+    await fetch("⌘R's retry");
+    assert.match(shown(), notFetched, "the retry failed too");
+
+    fetches.select("beta");
+    fetches.select("alpha");
+    assert.match(shown(), loading, "back on the row: on its way again");
+    gitFails = false;
+    await fetch("the fetch on coming back");
+    assert.match(shown(), /# Alpha/, "fetched");
+    assert.doesNotMatch(shown(), loading);
+    assert.doesNotMatch(shown(), notFetched);
+
+    fetches.select("beta");
+    assert.match(shown("beta"), loading);
+    await fetch("beta's fetch", "beta");
+    assert.equal(readmes.beta, "", "beta has no README");
+    assert.ok(!/README|---/.test(shown("beta")), "and only that shows nothing");
+
+    fetches.select("alpha");
+    fetches.again();
+    assert.deepEqual(scheduled, ["alpha", "alpha", "beta", "alpha", "beta"], "a kept README is never on its way again");
 });
 
 test("resting work: moving on cancels and aborts, and a result that comes in after it is still kept", async () => {

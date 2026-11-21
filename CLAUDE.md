@@ -155,8 +155,8 @@ Extensions run in a separate Node.js process, the extension host.
       `HyperkeyMapping` (core) reads `hidutil`'s output (`(null)`, or CoreFoundation's description of the list), adds or removes only Fudge's entry and writes the whole list back.
       It refuses, naming the key, when Caps Lock is mapped elsewhere: in the mapping every keyboard gets, in a keyboard's own (`--matching keyboard`), or in System Settings → Keyboard → Modifier Keys (`HIDKeyboardModifierMappingPairs`, per keyboard; Caps Lock left as itself there isn't a mapping).
       It also refuses when any of them can't be read.
-      A Caps Lock → Caps Lock entry, which some tools write, isn't a mapping, but Fudge's entry takes its place rather than adding a second one for Caps Lock (`HyperkeyMapping.capsLockItself`, SPEC-118 §1).
-      Removing Fudge's entry puts it back where it was, the launch cleanup after a crash included, since `HidutilKeyMapping` remembers it in `hyperkey.json` in the support folder (written before the mapping, never in a backup).
+      A Caps Lock → Caps Lock entry, which some tools write, isn't a mapping, but Fudge's entry takes the first one's place rather than adding a second one for Caps Lock, and any others go too (`HyperkeyMapping.capsLockItself`, SPEC-118 §1, SPEC-126 §4).
+      Removing Fudge's entry puts as many back where it was, since they're alike, the launch cleanup after a crash included, because `HidutilKeyMapping` remembers how many in `hyperkey.json` in the support folder (`{"replacedCapsLock": <count>}`, written before the mapping, never in a backup; an older file's `true` counts as one).
       Turning it on needs Accessibility (`SystemCalls.mayPostKeysForUser`, the usual prompt and offer) and is saved only once the tap runs and the mapping is in; a refusal shows under the switch (`hyperkeyProblem`).
       An active `CGEventTap` at the HID level runs on a thread and run loop of its own (`HyperTapThread`), and sees only the keyboard's own events (`eventSourceStateID` is the HID system's, so keys Fudge or another app posts are left alone).
       It hands each key's code, kind, repeat flag and time to `HyperTap` (core): F18's own events are swallowed, and any other key gets ⌘⌥⌃⇧ while F18 is down in the HID system.
@@ -849,7 +849,7 @@ Extensions run in a separate Node.js process, the extension host.
     So the copy stays one commit deep and `.git/shallow` names only that commit.
     `gc` can't do this in a blobless clone: it keeps every object that came from the remote, reachable or not, and its repack asks the remote for the old commits `.git/shallow` still names.
     Every git call is an argument array with a timeout (`timeouts.ts`: the long one for anything that downloads or rewrites the copy), and runs with `GIT_TERMINAL_PROMPT=0` and without the user's git configuration (`storeEnvironment`), so an `insteadOf` rule can't redirect it.
-    Git isn't run until `xcode-select -p` succeeds, so macOS's offer to install the Command Line Tools never shows.
+    Git isn't run until `xcode-select -p` succeeds and the developer folder it names holds `usr/bin/git` (checked with `stat`, since that folder can outlive its tools), so macOS's offer to install the Command Line Tools never shows.
     Without them the store shows `NeedsGit` (`failure-view.tsx`): ↵ Install Command Line Tools runs `xcode-select --install`, macOS's own installer, only from that action (`installCommandLineTools`), and ⌘R Refresh checks again.
     A failure whose cause is Git missing has the same action.
     Unloading the store ends its running git (`stopRunningGit`, in the command's effect cleanup, which `unload` runs), and turning the store off unloads its sessions and waits for them to exit (`LauncherModel.unloadSessions(ofExtension:)`) before Part A deletes `repo/`.
@@ -882,7 +882,8 @@ Extensions run in a separate Node.js process, the extension host.
     Every other git step runs to its end, since one that writes the index holds `index.lock`, and ending it would leave that behind for every later checkout and install.
     The README waits the same way: both run through `RestingWork` (`resting.ts`), and only the resting row's README is fetched (`fetchReadme`), once per folder tree, since READMEs are kept by tree id.
     It's selected before the check, so its quick fetch goes ahead of the check's download in the git queue.
-    A README git couldn't fetch isn't kept (it shows as none), and ⌘R fetches it again (`RestingWork.again`).
+    A README git couldn't fetch isn't kept: the detail says so (`readmeNotFetched`), and ⌘R fetches it again (`RestingWork.again`), as does coming back to its row.
+    While a fetch is on its way, waiting or running, the detail shows it as loading (`RestingWork`'s `scheduled` clears the failure, `shownReadme`), so showing no README means the folder has none.
     A check (`checkFolder`) runs in the git queue, one at a time: it counts the files under the folder's `src/` from the trees (`srcFiles`), the source files (`isScanned`: what the patterns check out, a folder named like a script included) and all of them, and isn't checked past either cap (`maxScanFiles`, 300 source files; `maxSrcFiles`, 1,000 files).
     It then downloads what isn't here yet with each file's size capped (`fetchSource`), only when a source file is missing (`missingObjects`), so a folder checked before in this version downloads nothing again.
     That's the `src/` tree fetched again (`--refetch`) with a `blob:limit` of `maxScanBytes`, which the server applies to what it finds under the tree, assets included, since a filter can't pick files by name; that's why every file counts toward `maxSrcFiles`.
