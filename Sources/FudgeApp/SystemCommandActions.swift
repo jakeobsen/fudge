@@ -70,7 +70,8 @@ final class MacSystemActions: SystemActions {
     func trashCount() async throws -> Int {
         try await offMain {
             let event = SystemAppleEvents.countTrash(to: Self.address(of: .finder))
-            let reply = try Self.send(event, options: [.waitForReply, .neverInteract], timeout: 15)
+            // Finder answers a count at once; a short wait keeps Empty Trash's question from hanging on a busy Finder.
+            let reply = try Self.send(event, options: [.waitForReply, .neverInteract], timeout: 3)
             return try SystemAppleEvents.count(in: reply)
         }
     }
