@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createElement as h, useState } from "react";
-import { Action, ActionPanel, Detail, Form, List } from "../src/api/index.ts";
+import { Action, ActionPanel, Detail, Form, Grid, List } from "../src/api/index.ts";
 import { StaleCallbackError } from "../src/renderer/root.ts";
+import type { UINode } from "../src/renderer/serialize.ts";
 import { find, mount } from "./support/mount.ts";
 
 test("a List renders as a tree of host nodes, with element props as nodes", async () => {
@@ -39,6 +40,64 @@ test("a List renders as a tree of host nodes, with element props as nodes", asyn
     const panel = item.props.actions as unknown as { type: string; children: { type: string; props: object }[] };
     assert.equal(panel.type, "ActionPanel");
     assert.deepEqual(panel.children[0]!.props, { title: "Open", onAction: { $fn: ["onAction"] } });
+});
+
+test("only the first item and the ones the app asked for carry their actions and detail", async () => {
+    const item = (n: number) =>
+        h(List.Item, {
+            key: n,
+            title: `item ${n}`,
+            actions: h(ActionPanel, null, h(Action, { title: `Open ${n}`, onAction: () => {} })),
+            detail: h(List.Item.Detail, { markdown: `# ${n}` }),
+        });
+    const Nothing = () => null;
+    const mounted = await mount(
+        h(
+            List,
+            { actions: h(ActionPanel, null, h(Action, { title: "List's own", onAction: () => {} })) },
+            h(List.Section, { title: "Projects" }, item(1), item(2), item(3)),
+            h(List.Item, { title: "no actions" }),
+            h(List.Item, { title: "actions that render nothing", actions: h(Nothing) }),
+        ),
+    );
+    const items = (view: UINode | null) => [...view!.children[0]!.children, ...view!.children.slice(1)];
+    const [one, two, three, none, nothing] = items(mounted.first.view);
+
+    assert.equal(find(mounted.first.view, "ActionPanel")?.children[0]?.props.title, "List's own");
+    assert.equal((one!.props.actions as unknown as UINode).type, "ActionPanel");
+    assert.equal((one!.props.detail as unknown as UINode).type, "List.Item.Detail");
+    assert.deepEqual(two!.props.actions, { $deferred: true });
+    assert.deepEqual(two!.props.detail, { $deferred: true });
+    assert.deepEqual(three!.props.actions, { $deferred: true });
+    assert.equal("actions" in none!.props, false);
+    assert.equal(nothing!.props.actions, null);
+
+    // The app asks for item 3, an id that isn't mounted and an item without slots. It gets what a snapshot would
+    // carry, nothing for the other two, and later snapshots carry item 3's slots too.
+    const answered = mounted.root.slots([three!.id, 9999, none!.id]);
+    const later = items(mounted.root.snapshot().view);
+    assert.deepEqual(answered, [
+        { id: three!.id, slots: { actions: later[2]!.props.actions, detail: later[2]!.props.detail } },
+        { id: 9999, slots: {} },
+        { id: none!.id, slots: {} },
+    ]);
+    const panel = answered[0]!.slots.actions as unknown as UINode;
+    assert.deepEqual(panel.children[0]!.props, { title: "Open 3", onAction: { $fn: ["onAction"] } });
+    assert.equal((later[0]!.props.actions as unknown as UINode).type, "ActionPanel");
+    assert.deepEqual(later[1]!.props.actions, { $deferred: true });
+});
+
+test("a Grid's items defer their actions too", async () => {
+    const cell = (n: number) =>
+        h(Grid.Item, {
+            key: n,
+            content: "x.png",
+            actions: h(ActionPanel, null, h(Action, { title: `Open ${n}`, onAction: () => {} })),
+        });
+    const { first } = await mount(h(Grid, null, cell(1), cell(2)));
+    const [one, two] = first.view!.children;
+    assert.equal((one!.props.actions as unknown as UINode).type, "ActionPanel");
+    assert.deepEqual(two!.props.actions, { $deferred: true });
 });
 
 test("a callback makes the round trip and the new state comes back", async () => {

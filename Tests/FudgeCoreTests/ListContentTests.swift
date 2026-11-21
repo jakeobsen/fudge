@@ -135,6 +135,55 @@ private let folders = #"""
     #expect(ListContent(try node(folders), searchText: "zzz").reselect(node: 4, itemId: nil) == nil)
 }
 
+@Test func aNewSearchFiltersTheItemsAlreadyRead() throws {
+    var view = try node(folders)
+    var list = ListContent(view, searchText: "", now: now)
+    for text in ["am", "a", "zzz", " spike ", ""] {
+        list.search(text)
+        #expect(list == ListContent(view, searchText: text, now: now), "\(text)")
+    }
+    // Loading with an empty search shows no empty view, and searching shows it.
+    view.props["isLoading"] = .bool(true)
+    list = ListContent(view, searchText: "zzz", now: now)
+    #expect(list.emptyView?.title == "No scratch folders")
+    list.search("")
+    #expect(list.items.count == 3)
+    #expect(list.emptyView == nil)
+}
+
+@Test func deferredActionsAndDetailAreFilledInWhenTheyCome() throws {
+    let view = try node(
+        #"""
+        {"id":1,"type":"List","props":{},"children":[
+          {"id":2,"type":"List.Item","props":{"title":"first","actions":{"id":9,"type":"ActionPanel","props":{},"children":[]}},"children":[]},
+          {"id":3,"type":"List.Item","props":{"title":"later","actions":{"$deferred":true},"detail":{"$deferred":true}},"children":[]},
+          {"id":4,"type":"List.Item","props":{"title":"none","actions":null},"children":[]}
+        ]}
+        """#)
+    let items = ListContent(view, searchText: "").items
+    #expect(items.map(\.deferred) == [[], [.actions, .detail], []])
+    #expect(items[0].actions?.type == "ActionPanel")
+    #expect(items[1].actions == nil && items[1].detail == nil)
+
+    let panel = UINode(id: 7, type: "ActionPanel")
+    let filled = items[1].filled(with: ItemSlots(id: 3, actions: panel))
+    #expect(filled.actions == panel)
+    #expect(filled.detail == nil, "the host had no detail for it after all")
+    #expect(filled.deferred.isEmpty)
+    #expect(items[1].filled(with: nil) == items[1], "still on its way")
+    #expect(items[0].filled(with: ItemSlots(id: 2)) == items[0], "only deferred slots are filled")
+}
+
+@Test func readsDatesWithAndWithoutFractionsAndOffsets() {
+    func date(_ iso: String) -> Date? { ListContent.date(.object(["$date": .string(iso)])) }
+    #expect(date("2026-11-20T12:00:00.000Z") == Date(timeIntervalSince1970: 1_795_176_000))
+    #expect(date("2026-11-20T12:00:00.250Z") == Date(timeIntervalSince1970: 1_795_176_000.25))
+    #expect(date("2026-11-20T12:00:00Z") == Date(timeIntervalSince1970: 1_795_176_000))
+    #expect(date("2026-11-20T13:00:00+01:00") == Date(timeIntervalSince1970: 1_795_176_000))
+    #expect(date("yesterday") == nil)
+    #expect(ListContent.date(.string("2026-11-20T12:00:00.000Z")) == nil, "only the $date marker")
+}
+
 @Test func writesDatesRelatively() {
     func ago(_ seconds: Double) -> String { ListContent.relative(now.addingTimeInterval(-seconds), now: now) }
     #expect(ago(10) == "now")

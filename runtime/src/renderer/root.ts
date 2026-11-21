@@ -8,7 +8,7 @@
 import type { ReactNode } from "react";
 import { ConcurrentRoot } from "react-reconciler/constants.js";
 import { createContainer, reconciler, type HostInstance } from "./host.ts";
-import { firstVisible, type UINode } from "./serialize.ts";
+import { firstVisible, serializeSlots, type JsonValue, type UINode } from "./serialize.ts";
 
 export const VIEW = "$view";
 
@@ -24,11 +24,20 @@ export type RootOptions = {
     onError(error: unknown): void;
 };
 
+/** An item's deferred slots (`actions`, `detail`), as the app asked for them with `slots`. */
+export type ItemSlots = { id: number; slots: { [name: string]: JsonValue } };
+
 export type Root = {
     render(element: ReactNode): void;
     /** Calls the function at `path` in the props of node `id`, as a discrete user event. */
     dispatch(id: number, path: readonly string[], args: readonly unknown[]): unknown;
     snapshot(): Snapshot;
+    /**
+     * The deferred slots of the items `ids`, in that order: none for an id that's no longer mounted (ids are never
+     * reused) or isn't an item. Later snapshots carry these items' slots too, until the next call (see `Deferral` in
+     * serialize.ts).
+     */
+    slots(ids: readonly number[]): ItemSlots[];
     /** Calls back once the snapshot of work already committed has been sent, or now when none is waiting. */
     whenRendered(callback: () => void): void;
     unmount(): void;
@@ -38,6 +47,7 @@ export class StaleCallbackError extends Error {}
 
 export function createRoot(options: RootOptions): Root {
     let scheduled = false;
+    let wanted: ReadonlySet<number> = new Set();
     const afterRender: (() => void)[] = [];
     const container = createContainer(() => {
         if (scheduled) return;
@@ -68,8 +78,9 @@ export function createRoot(options: RootOptions): Root {
         const views = container.children.filter(
             (node): node is HostInstance => node.kind === "instance" && node.type === VIEW && !node.hidden,
         );
-        if (views.length === 0) return { view: firstVisible(container.children), depth: 1 };
-        return { view: firstVisible(views[views.length - 1]!.children), depth: views.length };
+        const deferral = { wanted, firstSeen: false };
+        if (views.length === 0) return { view: firstVisible(container.children, deferral), depth: 1 };
+        return { view: firstVisible(views[views.length - 1]!.children, deferral), depth: views.length };
     }
 
     return {
@@ -97,6 +108,13 @@ export function createRoot(options: RootOptions): Root {
             return result;
         },
         snapshot,
+        slots(ids) {
+            wanted = new Set(ids);
+            return ids.map((id) => {
+                const instance = container.instances.get(id);
+                return { id, slots: (instance && serializeSlots(instance)) ?? {} };
+            });
+        },
         whenRendered(callback) {
             if (scheduled) afterRender.push(callback);
             else callback();

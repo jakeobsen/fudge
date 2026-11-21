@@ -22,6 +22,25 @@ public struct ListContent: Sendable, Equatable {
         public var detail: UINode?
         /// A Grid item's cell: its `content`. A Grid item's `accessory` is its one accessory.
         public var content: GridItemContent?
+        /// The slots the host held back (`ItemSlots`): the item has them, and `filled(with:)` puts them in.
+        public var deferred: Deferred = []
+
+        public struct Deferred: OptionSet, Sendable, Equatable {
+            public let rawValue: Int
+            public init(rawValue: Int) { self.rawValue = rawValue }
+            public static let actions = Deferred(rawValue: 1)
+            public static let detail = Deferred(rawValue: 2)
+        }
+
+        /// The item with its deferred slots taken from `slots`, the host's answer for it.
+        public func filled(with slots: ItemSlots?) -> Item {
+            guard let slots, !deferred.isEmpty else { return self }
+            var item = self
+            if deferred.contains(.actions) { item.actions = slots.actions }
+            if deferred.contains(.detail) { item.detail = slots.detail }
+            item.deferred = []
+            return item
+        }
     }
 
     /// One accessory on the right of an item: text, a date or a tag, with an optional icon.
@@ -61,7 +80,11 @@ public struct ListContent: Sendable, Equatable {
 
     public var layout: Layout
     /// The sections that have items to show, in the order to show them.
-    public var sections: [Section]
+    public private(set) var sections: [Section] {
+        didSet { items = sections.flatMap(\.items) }
+    }
+    /// Every item to show, in order. Kept rather than computed: the selection reads it many times per update.
+    public private(set) var items: [Item] = []
     /// What to show instead of items, when the list has none to show.
     public var emptyView: EmptyView?
     public var isLoading: Bool
@@ -69,6 +92,12 @@ public struct ListContent: Sendable, Equatable {
     public var dropdown: SearchBarDropdown?
     /// Set when the list loads in pages (`pagination`).
     public var pagination: Pagination?
+    /// Every section as the view has it, before filtering, for `search(_:)`.
+    private var unfiltered: [Section]
+    private var filters: Bool
+    private var keepsOrder: Bool
+    /// The empty view to show when no items are left.
+    private var empty: EmptyView
 
     public struct Pagination: Sendable, Equatable {
         public var pageSize: Int
@@ -90,13 +119,29 @@ public struct ListContent: Sendable, Equatable {
         return sections.map { GridNavigation.Section(count: $0.items.count, columns: $0.grid?.columns ?? 1) }
     }
 
-    public var items: [Item] { sections.flatMap(\.items) }
-
     /// The view types read as lists.
     public static let viewTypes: Set<String> = ["List", "Grid"]
 
     /// Reads a `List` or `Grid` node, filtering it by `searchText` when Raycast would filter it itself.
     public init(_ view: UINode, searchText: String, now: Date = Date()) {
+        self.init(view, now: now)
+        search(searchText)
+    }
+
+    /// Filters the items read from the view again for a new search text, without reading the view again: typing
+    /// in a list Fudge filters rebuilt every row on each key.
+    public mutating func search(_ searchText: String) {
+        let query = searchText.trimmingCharacters(in: .whitespaces)
+        if filters, !query.isEmpty {
+            sections = Self.filter(unfiltered, query: query, keepSectionOrder: keepsOrder)
+        } else {
+            sections = unfiltered.filter { !$0.items.isEmpty }
+        }
+        // Raycast never shows the empty view while the list loads with an empty search bar.
+        emptyView = sections.isEmpty && !(isLoading && searchText.isEmpty) ? empty : nil
+    }
+
+    private init(_ view: UINode, now: Date) {
         let kind = view.type == "Grid" ? "Grid" : "List"
         let grid = kind == "Grid" ? GridSectionLayout(grid: view) : nil
         layout = grid.map(Layout.grid) ?? .list
@@ -127,14 +172,10 @@ public struct ListContent: Sendable, Equatable {
         }
         flushLoose()
 
-        let query = searchText.trimmingCharacters(in: .whitespaces)
-        if Self.filtersLocally(view), !query.isEmpty {
-            sections = Self.filter(sections, query: query, keepSectionOrder: Self.keepsSectionOrder(view))
-        } else {
-            sections.removeAll { $0.items.isEmpty }
-        }
-
-        self.sections = sections
+        unfiltered = sections
+        filters = Self.filtersLocally(view)
+        keepsOrder = Self.keepsSectionOrder(view)
+        self.sections = []
         isLoading = view.bool("isLoading") == true
         isShowingDetail = kind == "List" && view.bool("isShowingDetail") == true
         dropdown = view.node("searchBarAccessory").flatMap(SearchBarDropdown.init)
@@ -147,17 +188,13 @@ public struct ListContent: Sendable, Equatable {
             pagination = nil
         }
 
-        // Raycast never shows the empty view while the list loads with an empty search bar.
-        if sections.isEmpty, !(isLoading && searchText.isEmpty) {
-            emptyView = EmptyView(
-                title: emptyNode?.string("title") ?? (emptyNode == nil ? "No Results" : ""),
-                description: emptyNode?.string("description"),
-                icon: emptyNode?.props["icon"].flatMap(Self.present),
-                actions: emptyNode?.node("actions") ?? view.node("actions")
-            )
-        } else {
-            emptyView = nil
-        }
+        empty = EmptyView(
+            title: emptyNode?.string("title") ?? (emptyNode == nil ? "No Results" : ""),
+            description: emptyNode?.string("description"),
+            icon: emptyNode?.props["icon"].flatMap(Self.present),
+            actions: emptyNode?.node("actions") ?? view.node("actions")
+        )
+        emptyView = nil
     }
 
     /// Raycast filters a List itself unless the command handles search (`onSearchTextChange`) or says not to.
@@ -245,9 +282,20 @@ public struct ListContent: Sendable, Equatable {
             accessories: accessories,
             actions: node.node("actions"),
             detail: node.node("detail"),
-            content: GridItemContent(node.props["content"])
+            content: GridItemContent(node.props["content"]),
+            deferred: deferred(node)
         )
     }
+
+    /// Which of the item's slots hold `{ "$deferred": true }` (see `ItemSlots`).
+    static func deferred(_ node: UINode) -> Item.Deferred {
+        var deferred: Item.Deferred = []
+        if node.props["actions"] == deferredMarker { deferred.insert(.actions) }
+        if node.props["detail"] == deferredMarker { deferred.insert(.detail) }
+        return deferred
+    }
+
+    static let deferredMarker = JSONValue.object(["$deferred": .bool(true)])
 
     static func accessory(_ json: JSONValue, now: Date) -> Accessory? {
         guard case .object(let object) = json else { return nil }
@@ -294,12 +342,12 @@ public struct ListContent: Sendable, Equatable {
     /// Reads `{ "$date": iso }`, as the host sends dates.
     public static func date(_ json: JSONValue?) -> Date? {
         guard case .object(let object) = json, case .string(let iso) = object["$date"] else { return nil }
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = formatter.date(from: iso) { return date }
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter.date(from: iso)
+        return (try? withFraction.parse(iso)) ?? (try? withoutFraction.parse(iso))
     }
+
+    // Made once: a formatter made for each date took 94 ms of the 107 a 1,000-row list took to read.
+    private static let withFraction = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+    private static let withoutFraction = Date.ISO8601FormatStyle()
 
     /// `"text"` or `{ value, tooltip }`.
     static func textWithTooltip(_ json: JSONValue?) -> (text: String?, tooltip: String?) {

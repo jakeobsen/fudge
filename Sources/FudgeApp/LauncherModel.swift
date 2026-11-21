@@ -56,6 +56,11 @@ final class LauncherModel {
         var searchField = FieldValue(.string(""))
         /// How many items the List had when it was last asked for the next page.
         var requestedMoreAt: Int?
+        /// The `actions` and `detail` the host sent for List items since the last render, by node id. A render sends
+        /// them only for some items (`ItemSlots`); `requestSlots()` asks for the others.
+        var slots: [Int: ItemSlots] = [:]
+        /// The items whose slots were asked for since the last render.
+        var requestedSlots: Set<Int> = []
         /// The Form the top view shows.
         var form: FormContent?
         /// The values of the Form's fields as the user edits them, by node id.
@@ -305,11 +310,13 @@ final class LauncherModel {
             case .command(var command):
                 command.searchText = newValue
                 command.searchField.edit(.string(newValue))
-                refreshList(&command, selectFirst: true)
+                // The command hears the new text first, so it works on its results while the list is filtered here.
+                commandSearchChanged(command)
+                refreshList(&command, selectFirst: true, reread: false)
                 command.selectFirstOnRender = command.view.map { !ListContent.filtersLocally($0) } ?? false
                 screen = .command(command)
-                commandSearchChanged(command)
                 reportSelection()
+                requestSlots()
             case .root, .failure:
                 if case .failure = screen { screen = .root }
                 // An alias and a space hand the rest of the query to that command's first argument (as in Raycast).
@@ -517,10 +524,12 @@ final class LauncherModel {
         command?.view?.bool("isLoading") == true
     }
 
-    /// The selected item of the running command's List.
+    /// The selected item of the running command's List, with its deferred `actions` and `detail` once they've come.
     var selectedListItem: ListContent.Item? {
-        guard let command, let items = command.list?.items else { return nil }
-        return items.first { $0.id == command.selectedNode } ?? items.first
+        guard let command, let items = command.list?.items,
+            let item = items.first(where: { $0.id == command.selectedNode }) ?? items.first
+        else { return nil }
+        return item.filled(with: command.slots[item.id])
     }
 
     /// The actions for what's selected: in root search, fudge's own for the selected item (`RootActions`); in a
@@ -546,15 +555,22 @@ final class LauncherModel {
     }
 
     /// Reads the top view's List or Grid again, after it or the search text changed, and keeps the selection on the
-    /// same item where it can.
-    private func refreshList(_ command: inout CommandScreen, selectFirst: Bool) {
+    /// same item where it can. Without `reread`, only the search text changed: the items read at the last render are
+    /// filtered again.
+    private func refreshList(_ command: inout CommandScreen, selectFirst: Bool, reread: Bool = true) {
         guard let view = command.view, ListContent.viewTypes.contains(view.type) else {
             command.list = nil
             command.dropdown = nil
             return
         }
         let previous = command.list?.items.first { $0.id == command.selectedNode }
-        let list = ListContent(view, searchText: command.searchText)
+        var list: ListContent
+        if !reread, let read = command.list {
+            list = read
+            list.search(command.searchText)
+        } else {
+            list = ListContent(view, searchText: command.searchText)
+        }
         command.list = list
         let wanted = view.string("selectedItemId")
         if let wanted, wanted != command.followedItemId,
@@ -589,12 +605,67 @@ final class LauncherModel {
                 args: [id.map { .string($0) } ?? .null]))
     }
 
+    /// How many items before and after the selected one `requestSlots()` asks for, so moving the selection rarely
+    /// reaches an item whose actions haven't come. A Grid row has at most 8 cells.
+    private static let slotsBefore = 8
+    private static let slotsAfter = 10
+
+    /// Asks the host for the deferred `actions` and `detail` (`ItemSlots`) of the selected item and those around
+    /// it, unless they've come or been asked for since the last render. Renders carry the slots of the items asked
+    /// for last, so the selection keeps them.
+    private func requestSlots() {
+        guard var command, let items = command.list?.items, !items.isEmpty else { return }
+        let index = items.firstIndex { $0.id == command.selectedNode } ?? 0
+        let around = items[max(0, index - Self.slotsBefore)...min(items.count - 1, index + Self.slotsAfter)]
+        let deferred = around.filter { !$0.deferred.isEmpty }.map(\.id)
+        guard deferred.contains(where: { command.slots[$0] == nil && !command.requestedSlots.contains($0) }) else {
+            return
+        }
+        command.requestedSlots.formUnion(deferred)
+        screen = .command(command)
+        send(.slots(session: command.session, nodes: deferred))
+    }
+
+    /// What a key pressed before the selected item's actions came does once they come: ↵, ⌘↵ and ⌘K wait for them
+    /// rather than doing nothing. Other shortcuts don't wait: they'd hold back the search field's ⌘A or ⌘V.
+    private enum WaitingKey {
+        case primary, secondary, actionPanel
+    }
+
+    @ObservationIgnored private var waitingKey: (session: String, node: Int, key: WaitingKey)?
+
+    /// Holds `key` until the selected item's actions come, when they haven't yet; false when they're here.
+    private func waitForActions(_ key: WaitingKey) -> Bool {
+        guard let command, let item = selectedListItem, item.deferred.contains(.actions) else { return false }
+        waitingKey = (command.session, item.id, key)
+        return true
+    }
+
+    /// Runs the key waiting for the selected item's actions once they've come. It's dropped when the selection
+    /// moved or the command changed meanwhile.
+    private func runWaitingKey() {
+        guard let waiting = waitingKey else { return }
+        guard let command, command.session == waiting.session, let item = selectedListItem, item.id == waiting.node
+        else {
+            waitingKey = nil
+            return
+        }
+        guard !item.deferred.contains(.actions) else { return }
+        waitingKey = nil
+        switch waiting.key {
+        case .primary: if let primaryAction { run(primaryAction) }
+        case .secondary: if let secondaryAction { run(secondaryAction) }
+        case .actionPanel: if actionPanel == nil { toggleActionPanel() }
+        }
+    }
+
     /// Selects an item of the List (a click).
     func select(node: Int) {
         guard var command, command.list?.items.contains(where: { $0.id == node }) == true else { return }
         command.selectedNode = node
         screen = .command(command)
         reportSelection()
+        requestSlots()
     }
 
     /// Calls a function prop of a node, e.g. a metadata tag's `onAction`.
@@ -1235,7 +1306,7 @@ final class LauncherModel {
     func handleKey(_ pressed: KeyShortcut) -> Bool {
         if datePanel != nil, handleDatePanelKey(pressed) { return true }
         if pressed == KeyShortcut(key: "k", modifiers: ["cmd"]) {
-            toggleActionPanel()
+            if actionPanel != nil || !waitForActions(.actionPanel) { toggleActionPanel() }
             return true
         }
         // ⌘P opens and closes the search bar dropdown, unless an action takes the shortcut.
@@ -1273,6 +1344,7 @@ final class LauncherModel {
             return true
         }
         if pressed == secondaryKey {
+            if waitForActions(.secondary) { return true }
             if let secondaryAction { run(secondaryAction) }
             return true
         }
@@ -1352,6 +1424,7 @@ final class LauncherModel {
         command.selectedNode = items[index].id
         screen = .command(command)
         reportSelection()
+        requestSlots()
         if let node = command.selectedNode { loadMoreIfNeeded(near: node) }
     }
 
@@ -1371,6 +1444,7 @@ final class LauncherModel {
             // and the failure's search field gets the keyboard.
             if case .failure = screen { arguments.focus = nil }
         case .command:
+            if waitForActions(.primary) { return }
             if let primaryAction { run(primaryAction) }
         case .failure:
             // A notice's first action, else back to root search.
@@ -1935,7 +2009,7 @@ final class LauncherModel {
                 sessionCommands[session] = nil
                 menuBar.handle(message)
                 return
-            case .rpc, .log, .pong, .protocolError, .unknown:
+            case .slots, .rpc, .log, .pong, .protocolError, .unknown:
                 break
             }
         }
@@ -1963,6 +2037,9 @@ final class LauncherModel {
             }
             command.view = view
             command.depth = depth
+            // Slots that came before this render may be out of date; it carries those of the items asked for last.
+            command.slots = [:]
+            command.requestedSlots = []
             // The extension can set the search text (`searchText`); echoes of what was typed don't undo typing.
             if let view, ListContent.viewTypes.contains(view.type), let controlled = view.string("searchText") {
                 command.searchField.render(controlled: .string(controlled))
@@ -1979,6 +2056,14 @@ final class LauncherModel {
             syncDropdownPanel()
             syncDatePanel()
             reportSelection()
+            requestSlots()
+            runWaitingKey()
+
+        case .slots(let session, let items):
+            guard case .command(var command) = screen, command.session == session else { return }
+            for item in items { command.slots[item.id] = item }
+            screen = .command(command)
+            runWaitingKey()
 
         case .error(let session, let message, let stack, let fatal):
             if var quiet = quietSessions[session] {

@@ -109,6 +109,56 @@ func next(
     #expect(rpc.session == "s")
 }
 
+@Test func readsHostLinesAsJSONDecoderDoes() throws {
+    let lines = [
+        #"{"type":"pong","id":3}"#,
+        #"{"type":"protocolError","message":"no running session `s`"}"#,
+        #"{"type":"render","session":"s","view":null,"depth":1}"#,
+        #"{"type":"render","session":"s","depth":2,"view":{"id":9,"type":"List","props":{"isLoading":true,"#
+            + #""filtering":false,"n":1.5,"none":null,"onSearchTextChange":{"$fn":["onSearchTextChange"]}},"children":["#
+            + #"{"id":4,"type":"List.Item","props":{"title":"é 😀 \"q\" \u0001","keywords":["a",""],"#
+            + #""accessories":[{"date":{"$date":"2026-11-20T00:00:00.000Z"}},{"text":"0"}],"actions":{"$deferred":true}},"#
+            + #""children":[]}]}}"#,
+        #"{"type":"slots","session":"s","items":[{"id":4,"slots":{"actions":{"id":2,"type":"ActionPanel","props":{},"#
+            + #""children":[{"id":1,"type":"Action","props":{"title":"Open","onAction":{"$fn":["onAction"]}},"#
+            + #""children":[]}]},"detail":null}},{"id":7,"slots":{}}]}"#,
+        #"{"type":"rpc","session":"s","id":1,"method":"toast.show","params":{"title":"Hi","n":[1,0,true,false]}}"#,
+        #"{"type":"rpc","session":"s","id":2,"method":"window.close"}"#,
+        #"{"type":"error","session":"s","message":"boom","stack":"at x","fatal":true}"#,
+        #"{"type":"error","session":"s","message":"boom","fatal":false}"#,
+        #"{"type":"log","session":"s","level":"info","message":"hello"}"#,
+        #"{"type":"eventSettled","session":"s"}"#,
+        #"{"type":"exit","session":"s","reason":"finished"}"#,
+        #"{"type":"somethingNew","session":"s"}"#,
+    ]
+    for line in lines {
+        let data = Data(line.utf8)
+        #expect(try HostMessage(line: data) == JSONDecoder().decode(HostMessage.self, from: data), "\(line)")
+    }
+    // Both refuse a line that isn't a message.
+    let refused = [
+        #"{"type":"pong"}"#, #"{"id":3}"#, #"[1]"#, #"{"type":"exit","session":"s","reason":"#,
+        #"{"type":"rpc","session":"s","id":3,"method":"m","params":{"x":1e400}}"#,
+    ]
+    for line in refused {
+        #expect(throws: (any Error).self) { try HostMessage(line: Data(line.utf8)) }
+        #expect(throws: (any Error).self) { try JSONDecoder().decode(HostMessage.self, from: Data(line.utf8)) }
+    }
+    // 1 and 0 stay numbers; true and false stay Booleans.
+    #expect(
+        try HostMessage(line: Data(#"{"type":"rpc","session":"s","id":1,"method":"m","params":[1,0,true]}"#.utf8))
+            == .rpc(session: "s", id: 1, method: "m", params: .array([.number(1), .number(0), .bool(true)])))
+    let slots = try HostMessage(line: Data(lines[4].utf8))
+    guard case .slots("s", let items) = slots else {
+        Issue.record("not slots: \(slots)")
+        return
+    }
+    #expect(items.map(\.id) == [4, 7])
+    #expect(items[0].actions?.children.first?.string("title") == "Open")
+    #expect(items[0].detail == nil)
+    #expect(items[1] == ItemSlots(id: 7))
+}
+
 @Test func encodesAppMessagesInTheHostsShape() throws {
     let encode = { (message: AppMessage) in
         try JSONSerialization.jsonObject(with: JSONEncoder().encode(message)) as? NSDictionary
@@ -121,6 +171,7 @@ func next(
         try encode(.rpcResult(session: "s", id: 2, result: nil, error: "nope")) == [
             "type": "rpcResult", "session": "s", "id": 2, "error": "nope",
         ])
+    #expect(try encode(.slots(session: "s", nodes: [4, 7])) == ["type": "slots", "session": "s", "nodes": [4, 7]])
 }
 
 @Test func readsNodesHeldInProps() throws {
@@ -141,6 +192,23 @@ func next(
     let lines = LineSplitter()
     #expect(lines.append(Data("{\"a\":1}\n{\"b\"".utf8)) == [Data("{\"a\":1}".utf8)])
     #expect(lines.append(Data(":2}\n\n".utf8)) == [Data("{\"b\":2}".utf8)])
+}
+
+@Test func splitsALongLineArrivingInManyChunks() {
+    let lines = LineSplitter()
+    let long = Data(repeating: UInt8(ascii: "x"), count: 1_000_000)
+    var stream = Data("a\n".utf8) + long + Data("\nb\nc".utf8)
+    var found: [Data] = []
+    while !stream.isEmpty {
+        let chunk = stream.prefix(65_536)
+        stream.removeFirst(chunk.count)
+        found += lines.append(Data(chunk))
+    }
+    #expect(found == [Data("a".utf8), long, Data("b".utf8)])
+    // What's left waits for its newline, including one that arrives on its own.
+    #expect(lines.append(Data("d".utf8)) == [])
+    #expect(lines.append(Data("\n".utf8)) == [Data("cd".utf8)])
+    #expect(lines.append(Data("\n\ne\nf\n".utf8)) == [Data("e".utf8), Data("f".utf8)])
 }
 
 @Test func locatesNodeAndTheHostScript() throws {
