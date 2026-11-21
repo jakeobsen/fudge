@@ -31,12 +31,16 @@ export const DEFERRED = "$deferred";
 
 /** The item types whose `actions` and `detail` are deferred, and those slots' names. */
 const DEFERRING_TYPES: ReadonlySet<string> = new Set(["List.Item", "Grid.Item"]);
+/** The views holding them, whose `selectedItemId` names an item by its `id` prop. */
+const ITEM_VIEWS: ReadonlySet<string> = new Set(["List", "Grid"]);
 const DEFERRED_SLOTS: ReadonlySet<string> = new Set(["actions", "detail"]);
 
 /**
  * Which items' `actions` and `detail` a snapshot carries: the first item, which the app selects when a list
- * arrives, and the ones the app last asked for (`wanted`: the selected item and its neighbours). An action panel on
- * every row made a 1,000-row list a 2 MB message, five times what the rows themselves take.
+ * arrives, the one the List's or Grid's `selectedItemId` names, which the app selects instead (`selected`: read
+ * from the view in each snapshot, and only the first item with that `id`, never its neighbours), and the ones the
+ * app last asked for (`wanted`: the selected item and its neighbours). An action panel on every row made a
+ * 1,000-row list a 2 MB message, five times what the rows themselves take.
  *
  * The deferred panels' shortcuts are collected as it goes, each distinct set once (`shortcutSets`): rows usually
  * share one, so a row only names its set's index.
@@ -44,6 +48,7 @@ const DEFERRED_SLOTS: ReadonlySet<string> = new Set(["actions", "detail"]);
 export type Deferral = {
     wanted: ReadonlySet<number>;
     firstSeen: boolean;
+    selected?: string;
     shortcutSets: JsonValue[][];
     setIndex: Map<string, number>;
 };
@@ -60,8 +65,14 @@ export function serializeNode(node: HostNode, deferral?: Deferral): UINode | nul
     if (node.kind === "text") return { id: node.id, type: "#text", props: { text: node.text }, children: [] };
 
     let defers = false;
+    if (deferral && ITEM_VIEWS.has(node.type)) {
+        const selected = node.props.selectedItemId;
+        deferral.selected = typeof selected === "string" ? selected : undefined;
+    }
     if (deferral && DEFERRING_TYPES.has(node.type)) {
-        defers = deferral.firstSeen && !deferral.wanted.has(node.id);
+        const named = deferral.selected !== undefined && node.props.id === deferral.selected;
+        if (named) deferral.selected = undefined;
+        defers = deferral.firstSeen && !deferral.wanted.has(node.id) && !named;
         deferral.firstSeen = true;
     }
 

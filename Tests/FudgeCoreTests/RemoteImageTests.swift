@@ -504,9 +504,230 @@ func aBodyOverTheLimitIsDroppedWhateverContentLengthSays(contentLength: String?)
     for kept in [0, 2, 3] { #expect(cache.read(urls[kept]) != nil, "\(kept)") }
 }
 
+// MARK: - The store (SPEC-065)
+
+@MainActor
+@Test func oneAskOnAStaleCachedImageShowsItAndRefreshesItOnce() async throws {
+    let old = png(width: 8, height: 8)
+    let fetcher = FakeImageFetcher { request in .status(304, request.url!) }
+    let clock = TestClock(start)
+    let (store, cache) = try makeStore(fetcher, clock: clock)
+    let source = "https://example.com/a.png"
+    let stale = RemoteImageCache.Entry(fetchedAt: start - 25 * 3600, etag: "\"v1\"", lastModified: "then")
+    try cache.store(URL(string: source)!, body: old, entry: stale)
+
+    // One ask: the cached image shows, and exactly one conditional request goes out.
+    let entry = store.entry(for: source)
+    await store.loadsFinished()
+    #expect(entry.image == old)
+    #expect(!entry.failed)
+    #expect(fetcher.requests.count == 1)
+    let request = try #require(fetcher.requests.first)
+    #expect(request.value(forHTTPHeaderField: "If-None-Match") == "\"v1\"")
+    #expect(request.value(forHTTPHeaderField: "If-Modified-Since") == "then")
+
+    // The 304 made it fresh: later asks, an hour on, start nothing.
+    clock.now = start + 3600
+    for _ in 0..<5 { _ = store.entry(for: source) }
+    await store.loadsFinished()
+    #expect(fetcher.requests.count == 1)
+}
+
+@MainActor
+@Test func aStaleCachedImageWhoseRefreshFailsStaysAndIsntAskedAgainAtOnce() async throws {
+    let old = png(width: 8, height: 8)
+    let fetcher = FakeImageFetcher { request in .status(503, request.url!) }
+    let clock = TestClock(start)
+    let (store, cache) = try makeStore(fetcher, clock: clock)
+    let source = "https://example.com/a.png"
+    try cache.store(URL(string: source)!, body: old, entry: .init(fetchedAt: start - 25 * 3600, etag: "\"v1\""))
+
+    let entry = store.entry(for: source)
+    await store.loadsFinished()
+    #expect(entry.image == old, "a failed refresh keeps the image")
+    #expect(!entry.failed)
+    #expect(fetcher.requests.count == 1)
+    _ = store.entry(for: source)
+    await store.loadsFinished()
+    #expect(fetcher.requests.count == 1, "the next refresh waits another day")
+}
+
+@MainActor
+@Test func aFreshCachedImageOrANewOneStartsNoSecondRequest() async throws {
+    let image = png(width: 8, height: 8)
+    let fetcher = FakeImageFetcher { request in .ok(request.url!, image) }
+    let clock = TestClock(start)
+    let (store, cache) = try makeStore(fetcher, clock: clock)
+    try cache.store(URL(string: "https://example.com/fresh.png")!, body: image, entry: .init(fetchedAt: start - 3600))
+
+    let fresh = store.entry(for: "https://example.com/fresh.png")
+    let new = store.entry(for: "https://example.com/new.png")
+    await store.loadsFinished()
+    #expect(fresh.image == image)
+    #expect(new.image == image)
+    #expect(fetcher.requests.map(\.url?.lastPathComponent) == ["new.png"])
+    #expect(fetcher.requests.first?.value(forHTTPHeaderField: "If-None-Match") == nil)
+}
+
+@MainActor
+@Test func anEntryEvictedInBackOffStartsNoLoadBeforeItsDue() async throws {
+    let fetcher = FakeImageFetcher { request in .status(503, request.url!) }
+    let clock = TestClock(start)
+    let (store, _) = try makeStore(fetcher, clock: clock, capacity: 1)
+    let failing = "https://example.com/failing.png"
+
+    _ = store.entry(for: failing)
+    await store.loadsFinished()
+    #expect(fetcher.requests.count == 1)
+    // Another source takes its place in memory.
+    _ = store.entry(for: "https://example.com/other.png")
+    await store.loadsFinished()
+    #expect(store.keptRetries.count == 1)
+
+    // Asked again 30 s on, within its 1 min back-off: the fallback shows, and nothing loads.
+    clock.now = start + 30
+    let back = store.entry(for: failing)
+    await store.loadsFinished()
+    #expect(back.failed)
+    #expect(fetcher.requests.map(\.url?.lastPathComponent) == ["failing.png", "other.png"])
+
+    // Once it's due, it's tried again.
+    clock.now = start + 61
+    _ = store.entry(for: failing)
+    await store.loadsFinished()
+    #expect(fetcher.requests.map(\.url?.lastPathComponent) == ["failing.png", "other.png", "failing.png"])
+}
+
+@MainActor
+@Test func anEvictedFinalEntryStartsNoLoad() async throws {
+    let fetcher = FakeImageFetcher { request in .status(404, request.url!) }
+    let clock = TestClock(start)
+    let (store, _) = try makeStore(fetcher, clock: clock, capacity: 1)
+    let missing = "https://example.com/missing.png"
+
+    _ = store.entry(for: missing)
+    await store.loadsFinished()
+    _ = store.entry(for: "https://example.com/other.png")
+    await store.loadsFinished()
+    #expect(fetcher.requests.count == 2)
+
+    clock.now = start + 86400
+    let back = store.entry(for: missing)
+    await store.loadsFinished()
+    #expect(back.failed)
+    #expect(fetcher.requests.count == 2, "a final failure isn't tried again this run")
+}
+
+@MainActor
+@Test func anEntryEvictedWhileLoadingKeepsHowItsLoadEnded() async throws {
+    let fetcher = FakeImageFetcher { request in .status(503, request.url!) }
+    let clock = TestClock(start)
+    let (store, _) = try makeStore(fetcher, clock: clock, capacity: 1)
+    let failing = "https://example.com/failing.png"
+
+    // Pushed out before its load has even run.
+    _ = store.entry(for: failing)
+    _ = store.entry(for: "https://example.com/other.png")
+    await store.loadsFinished()
+    #expect(store.keptRetries.count == 1, "the evicted source, once its load failed")
+
+    clock.now = start + 30
+    _ = store.entry(for: failing)
+    await store.loadsFinished()
+    #expect(fetcher.requests.count == 2)
+}
+
+@MainActor
+@Test func aLoadedImageKeepsNothingOnceEvicted() async throws {
+    let image = png(width: 8, height: 8)
+    let fetcher = FakeImageFetcher { request in .ok(request.url!, image) }
+    let clock = TestClock(start)
+    let (store, _) = try makeStore(fetcher, clock: clock, capacity: 1)
+
+    _ = store.entry(for: "https://example.com/a.png")
+    _ = store.entry(for: "https://example.com/b.png")
+    await store.loadsFinished()
+    #expect(store.keptRetries.count == 0)
+    // Asked again, it comes from the disk cache, fresh: no request.
+    let back = store.entry(for: "https://example.com/a.png")
+    await store.loadsFinished()
+    #expect(back.image == image)
+    #expect(fetcher.requests.count == 2)
+}
+
+@Test func theKeptRetriesAreCapped() {
+    func failing(_ failure: RemoteImageFailure) -> RemoteImageRetry {
+        var retry = RemoteImageRetry()
+        retry.started()
+        retry.failed(failure, now: start)
+        return retry
+    }
+    var retries = RemoteImageRetries()
+    #expect(retries.capacity == 1000)
+    for index in 0...1000 { retries.keep("https://example.com/\(index).png", failing(.network)) }
+    #expect(retries.count == 1000)
+    #expect(retries.take("https://example.com/0.png") == RemoteImageRetry(), "the oldest went")
+    #expect(retries.take("https://example.com/1000.png") == failing(.network))
+    #expect(retries.count == 999, "taking one forgets it")
+
+    // Only back-off and final failures are kept; keeping a source again replaces what was kept.
+    var only = RemoteImageRetries(capacity: 2)
+    var loaded = RemoteImageRetry()
+    loaded.started()
+    loaded.loaded(fetchedAt: start)
+    var loading = RemoteImageRetry()
+    loading.started()
+    only.keep("loaded", loaded)
+    only.keep("loading", loading)
+    #expect(only.count == 0)
+    only.keep("final", failing(.http(404, retryAfter: nil)))
+    only.keep("back-off", failing(.network))
+    only.keep("final", failing(.refused))
+    only.keep("another", failing(.network))
+    #expect(only.count == 2)
+    #expect(only.take("back-off") == RemoteImageRetry(), "kept before the second final, so it went first")
+    #expect(only.take("final").isFinal)
+    only.keep("another", loaded)
+    #expect(only.count == 0, "a source that loaded since is forgotten")
+}
+
 // MARK: - Helpers
 
 private let start = Date(timeIntervalSince1970: 1_800_000_000)
+
+/// A clock tests move by hand.
+private final class TestClock: @unchecked Sendable {
+    // @unchecked: `current` is behind `lock`.
+    private let lock = NSLock()
+    private var current: Date
+
+    init(_ start: Date) { current = start }
+
+    var now: Date {
+        get { lock.withLock { current } }
+        set { lock.withLock { current = newValue } }
+    }
+}
+
+@MainActor
+private final class TestEntry: RemoteImageEntry {
+    var image: Data?
+    var failed = false
+
+    init() {}
+}
+
+/// A store whose loader and retries read `clock`, and whose "decoding" takes any body that isn't empty.
+@MainActor
+private func makeStore(
+    _ fetcher: FakeImageFetcher, clock: TestClock, capacity: Int = RemoteImageStore<TestEntry>.defaultCapacity
+) throws -> (RemoteImageStore<TestEntry>, RemoteImageCache) {
+    let cache = RemoteImageCache(directory: try Fixtures.temporaryDirectory().appendingPathComponent("image-cache"))
+    let loader = RemoteImageLoader(cache: cache, fetcher: fetcher, now: { clock.now }, log: { _ in })
+    let store = RemoteImageStore<TestEntry>(
+        loader: loader, capacity: capacity, now: { clock.now }, decode: { $0.isEmpty ? nil : $0 })
+    return (store, cache)
+}
 
 private func makeLoader(
     _ fetcher: FakeImageFetcher, log: LogLines = LogLines()
