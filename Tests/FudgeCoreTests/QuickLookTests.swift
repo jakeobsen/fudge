@@ -153,6 +153,45 @@ private func step<T>(_ body: () -> T) -> T { body() }
     #expect(step { state.toggle(selected: png, in: "s1/1", exists: exists) } == .opened, "the next toggle opens it")
 }
 
+@Test func aPreviewClosedWithItsOwnButtonIsClosedBeforeTheNextDecision() {
+    // The model says open, but the panel is gone and `windowWillClose` hasn't arrived: ↓ doesn't reopen it.
+    var state = QuickLookState()
+    _ = state.toggle(selected: png, in: "s1/1", exists: exists)
+    #expect(step { state.reconcile(panelVisible: false) }, "it closed")
+    state.follow(selected: pdf, in: "s1/1", exists: exists)
+    #expect(!state.isOpen, "moving the selection doesn't reopen it")
+
+    // Open, panel gone: one toggle opens it.
+    _ = state.toggle(selected: png, in: "s1/1", exists: exists)
+    #expect(step { state.reconcile(panelVisible: false) })
+    #expect(step { state.toggle(selected: png, in: "s1/1", exists: exists) } == .opened)
+    #expect(state.shown == png)
+}
+
+@Test func reconcilingLeavesAPreviewThatsOnScreenOrClosed() {
+    var state = QuickLookState()
+    #expect(!step { state.reconcile(panelVisible: false) }, "closed stays closed, with nothing to let go of")
+    #expect(!step { state.reconcile(panelVisible: true) })
+    _ = state.toggle(selected: png, in: "s1/1", exists: exists)
+    #expect(!step { state.reconcile(panelVisible: true) })
+    #expect(state.shown == png)
+    state.follow(selected: pdf, in: "s1/1", exists: exists)
+    #expect(state.shown == pdf, "it still follows the selection")
+}
+
+@Test func arrowsThePreviewGetsGoWhereTheLauncherSendsThem() {
+    for move in [GridNavigation.Move.up, .down] {
+        #expect(PreviewArrow.target(move, actionPanelOpen: false, dropdownOpen: false) == .selection)
+        #expect(PreviewArrow.target(move, actionPanelOpen: true, dropdownOpen: false) == .actionPanel)
+        #expect(PreviewArrow.target(move, actionPanelOpen: false, dropdownOpen: true) == .dropdown)
+    }
+    for move in [GridNavigation.Move.left, .right] {
+        #expect(PreviewArrow.target(move, actionPanelOpen: false, dropdownOpen: false) == .selection)
+        #expect(PreviewArrow.target(move, actionPanelOpen: true, dropdownOpen: false) == .none)
+        #expect(PreviewArrow.target(move, actionPanelOpen: false, dropdownOpen: true) == .none)
+    }
+}
+
 @Test(arguments: EscapeBehavior.allCases)
 func escClosesQuickLookAfterThePopoversAndDoesNothingElse(behavior: EscapeBehavior) {
     let screens: [EscapeAction.State.Screen] = [

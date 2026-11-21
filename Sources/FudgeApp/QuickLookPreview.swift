@@ -17,6 +17,9 @@ final class QuickLookPreview: NSObject, @preconcurrency QLPreviewPanelDataSource
     var forwardKey: (NSEvent) -> Bool = { _ in false }
     /// The launcher's level; the panel shows above it.
     var launcherLevel: NSWindow.Level = .floating
+    /// The launcher's Spaces and full-screen behaviour, which the panel takes, so ⌘Y over a full-screen app shows
+    /// the preview on that Space.
+    var launcherCollectionBehavior: NSWindow.CollectionBehavior = []
     /// Set while Fudge closes the panel itself, so that isn't taken for the user's close.
     private var closing = false
 
@@ -27,6 +30,8 @@ final class QuickLookPreview: NSObject, @preconcurrency QLPreviewPanelDataSource
         guard let panel = QLPreviewPanel.shared() else { return }
         panel.updateController()
         panel.hidesOnDeactivate = false
+        // Set each time: Quick Look may reset it as it closes.
+        panel.collectionBehavior = launcherCollectionBehavior
         if panel.isVisible {
             panel.reloadData()
         } else {
@@ -43,6 +48,12 @@ final class QuickLookPreview: NSObject, @preconcurrency QLPreviewPanelDataSource
         closing = true
         panel.orderOut(nil)
         closing = false
+    }
+
+    /// Whether macOS's panel is on screen. The model checks it before each Quick Look decision, in case the user
+    /// closed the panel with its own button and `windowWillClose` hasn't arrived.
+    var isOnScreen: Bool {
+        QLPreviewPanel.sharedPreviewPanelExists() && QLPreviewPanel.shared()?.isVisible == true
     }
 
     /// Whether the panel just took the keyboard from the launcher: the user clicked it. Read while the launcher

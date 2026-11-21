@@ -91,6 +91,37 @@ public struct QuickLookState: Sendable, Equatable {
         shown = nil
         view = nil
     }
+
+    /// Checks the state against the preview panel itself, before any decision (a toggle, Esc, the selection moving).
+    /// The panel's own close button tells the app through `windowWillClose`, which may not have arrived yet: if the
+    /// state says open while the panel isn't on screen, the user closed it, and the state closes too. Returns
+    /// whether it did, so the app can let go of the item it shows.
+    @discardableResult
+    public mutating func reconcile(panelVisible: Bool) -> Bool {
+        guard shown != nil, !panelVisible else { return false }
+        close()
+        return true
+    }
+}
+
+/// Where an arrow key goes when the Quick Look preview has the keyboard, because the user clicked it: where the
+/// launcher would have sent it. A date picker's calendar takes arrows before this, through `handleKey`.
+public enum PreviewArrow: Sendable, Equatable {
+    /// The action panel's list, for ↑↓.
+    case actionPanel
+    /// The search bar dropdown's panel, for ↑↓.
+    case dropdown
+    /// The List's or Grid's selection: ↑↓ always, ←→ in a Grid when `GridNavigation.arrowMovesSelection` says so.
+    case selection
+    /// Nothing: ←→ while a panel is open belong to its search field.
+    case none
+
+    public static func target(_ move: GridNavigation.Move, actionPanelOpen: Bool, dropdownOpen: Bool) -> PreviewArrow {
+        let vertical = move == .up || move == .down
+        if actionPanelOpen { return vertical ? .actionPanel : .none }
+        if dropdownOpen { return vertical ? .dropdown : .none }
+        return .selection
+    }
 }
 
 /// What the launcher does when it stops being the key window (`LauncherPanel.resignKey`). It hides, as when the

@@ -143,6 +143,9 @@ final class LauncherModel {
     @ObservationIgnored var fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
     /// What the Quick Look preview shows.
     @ObservationIgnored private(set) var quickLook = QuickLookState()
+    /// Whether macOS's Quick Look panel is on screen (SPEC-057); set by the app delegate. Without one (snapshot runs),
+    /// the state is taken as it is.
+    @ObservationIgnored var quickLookOnScreen: () -> Bool = { true }
     /// Whether the launcher panel is on screen; set by the app delegate.
     @ObservationIgnored var isVisible: () -> Bool = { false }
     /// Asks the user to confirm (title, message, primary, dismiss, destructive); set by the app delegate.
@@ -1631,6 +1634,7 @@ final class LauncherModel {
 
     /// `Action.ToggleQuickLook`: the preview of the selected item's file, or closing it.
     private func toggleQuickLook() {
+        reconcileQuickLook()
         switch quickLook.toggle(selected: selectedListItem?.quickLook, in: quickLookView, exists: fileExists) {
         case .opened, .closed:
             quickLookChanged(quickLook.shown)
@@ -1644,6 +1648,7 @@ final class LauncherModel {
     /// Every screen change: an open preview follows the selection, and closes for another view.
     private func followQuickLook() {
         guard quickLook.isOpen else { return }
+        reconcileQuickLook()
         let before = quickLook.shown
         quickLook.follow(selected: selectedListItem?.quickLook, in: quickLookView, exists: fileExists)
         if quickLook.shown != before { quickLookChanged(quickLook.shown) }
@@ -1659,6 +1664,36 @@ final class LauncherModel {
     /// The user closed the preview with its own button.
     func quickLookClosedByUser() {
         quickLook.close()
+    }
+
+    /// Before any Quick Look decision: a preview the user closed with its own button is closed here too, even if
+    /// `windowWillClose` hasn't arrived yet, so ↓ doesn't reopen it and one ⌘Y does.
+    private func reconcileQuickLook() {
+        if quickLook.reconcile(panelVisible: quickLookOnScreen()) { quickLookChanged(nil) }
+    }
+
+    /// An arrow key the Quick Look preview got because the user clicked it: it does what it does in the launcher,
+    /// in the action panel, the dropdown's panel, or the List or Grid. False leaves it to the preview. The caller
+    /// leaves keys alone while an input method is composing in the search field.
+    func previewArrow(
+        _ move: GridNavigation.Move, modifiers: Set<String>, textLength: Int, selection: (location: Int, length: Int)?
+    ) -> Bool {
+        let step = move == .up ? -1 : 1
+        switch PreviewArrow.target(move, actionPanelOpen: actionPanel != nil, dropdownOpen: dropdownPanel != nil) {
+        case .actionPanel:
+            moveActionSelection(by: step)
+        case .dropdown:
+            moveDropdownSelection(by: step)
+        case .selection:
+            guard move == .up || move == .down else {
+                return moveGridSelection(
+                    move, modifiers: modifiers, composing: false, textLength: textLength, selection: selection)
+            }
+            moveSelection(by: step)
+        case .none:
+            return false
+        }
+        return true
     }
 
     // MARK: - Keys
@@ -1743,6 +1778,7 @@ final class LauncherModel {
             closeDatePanel()
             return
         }
+        reconcileQuickLook()
         let state = EscapeAction.State(
             dropdownOpen: dropdownPanel != nil, actionPanelOpen: actionPanel != nil,
             quickLookOpen: quickLook.isOpen, screen: escapeScreen)
