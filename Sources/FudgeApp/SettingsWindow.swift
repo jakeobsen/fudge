@@ -659,7 +659,7 @@ final class SettingsModel {
     }
 }
 
-/// A sheet in a snapshot run, which never takes the keyboard.
+/// A snapshot run's alert, laid out but never ordered in, which never takes the keyboard.
 final class SnapshotSheet: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
@@ -674,6 +674,12 @@ final class SettingsNSWindow: NSWindow {
 
     override var canBecomeKey: Bool { !refusesKey && super.canBecomeKey }
     override var canBecomeMain: Bool { !refusesKey && super.canBecomeMain }
+
+    /// A snapshot run's window stays where it's put, off every screen: AppKit would otherwise move a titled window
+    /// back onto one when it's ordered front. It's transparent too, but nothing of a snapshot run belongs on a screen.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        refusesKey ? frameRect : super.constrainFrameRect(frameRect, to: screen)
+    }
 
     /// ⌘Q closes the window as ⌘W and its close button do, and fudge keeps running (`WindowShortcut`). The key is
     /// the one that types "q" in the current layout, as for the panel's shortcuts.
@@ -752,7 +758,7 @@ final class SettingsWindowController {
             window.contentView = NSHostingView(rootView: SettingsView(model: model))
             window.center()
             self.window = window
-            model.confirm = { [weak window] request in
+            model.confirm = { [weak self, weak window] request in
                 guard let window else { return false }
                 let alert = NSAlert()
                 alert.messageText = request.title
@@ -761,7 +767,7 @@ final class SettingsWindowController {
                 alert.addButton(withTitle: request.primary).hasDestructiveAction = request.destructive
                 alert.addButton(withTitle: request.dismiss)
                 if window.refusesKey {
-                    Self.beginSnapshotSheet(alert, on: window)
+                    self?.snapshotSheet = Self.snapshotSheet(of: alert)
                     return false
                 }
                 return await withCheckedContinuation { continuation in
@@ -793,20 +799,23 @@ final class SettingsWindowController {
     }
 
     var contentView: NSView? { window?.contentView }
-    /// A sheet on the window, for snapshot runs.
-    var attachedSheet: NSWindow? { window?.attachedSheet }
+    /// In a snapshot run, the alert a `confirm` would have shown, for the run to save.
+    private(set) var snapshotSheet: NSWindow?
 
-    /// A snapshot run's sheet: the alert laid out as the sheet it is (a sheet leaves out the app's icon), then its
-    /// content moved to a panel that can't become key, like every window in a snapshot run; an alert's own panel can.
-    /// Nobody answers it: the run saves it and quits.
-    private static func beginSnapshotSheet(_ alert: NSAlert, on window: NSWindow) {
-        alert.beginSheetModal(for: window) { _ in }
+    /// A snapshot run's alert, which no one may see: it's laid out without being shown (`layout()` never orders its
+    /// window in), and its content moves to a panel that can't become key and is never ordered in either, transparent
+    /// for good measure. It isn't begun as a sheet: the Settings window a snapshot renders is transparent, but ordering
+    /// it front puts it back on screen, and a sheet on it is a window of its own, which would show there. Nobody answers
+    /// it: the run saves it and quits.
+    private static func snapshotSheet(of alert: NSAlert) -> NSWindow {
+        alert.layout()
         let laidOut = alert.window
-        window.endSheet(laidOut)
         let sheet = SnapshotSheet(
             contentRect: laidOut.frame, styleMask: laidOut.styleMask, backing: .buffered, defer: false)
+        sheet.alphaValue = 0
+        sheet.ignoresMouseEvents = true
         sheet.contentView = laidOut.contentView
-        window.beginSheet(sheet)
+        return sheet
     }
 
     /// A sheet's last paragraph, as selectable text with a working link: an alert's own text can't hold one.

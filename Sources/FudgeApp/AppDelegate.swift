@@ -615,7 +615,7 @@ struct Snapshot {
         if signInConsent {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { controller.model.setSignInServer(.fudge) }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                guard let view = controller.attachedSheet?.contentView else { exit(1) }
+                guard let view = controller.snapshotSheet?.contentView else { exit(1) }
                 save(view)
             }
             return
