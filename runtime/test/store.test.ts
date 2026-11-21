@@ -608,7 +608,15 @@ test("every git operation of the store's waits its turn", async () => {
 
 /** A fake runner: records each call and answers from `reply`. */
 function fakeRun(reply: (program: string, args: string[]) => Partial<GitResult> = () => ({})) {
-    const calls: { program: string; args: string[]; cwd?: string; timeout: number; stoppable?: boolean; input?: string }[] = [];
+    const calls: {
+        program: string;
+        args: string[];
+        cwd?: string;
+        timeout: number;
+        stoppable?: boolean;
+        input?: string;
+        env?: NodeJS.ProcessEnv;
+    }[] = [];
     const run: Run = async (program, args, options) => {
         calls.push({ program, args, ...options });
         return { code: 0, stdout: "", stderr: "", ...reply(program, args) };
@@ -1154,7 +1162,7 @@ test("the cache lets in only valid entries, and keeps the newest", async () => {
     assert.equal([...(await readCompatibility(support, "s")).keys()].at(-1), treeOf(5), "remembering makes it the newest");
 });
 
-test("a detail scan fetches only the folder's source files, scans them, and takes the patterns out again", async () => {
+test("a detail scan fetches the folder's src/ with a per-file cap, checks out its source, scans it, and takes the patterns out again", async () => {
     const report = { extension: "alpha", supported: false, gaps: [{ api: "AI.ask", kind: "missing", byDesign: "AI" }], unreadable: [] };
     const { context, git, cli, repoPath } = await storeContext({
         sources: { alpha: ["index.ts", "lib/util.tsx", "data.json", "logo.png"] },
@@ -1165,30 +1173,54 @@ test("a detail scan fetches only the folder's source files, scans them, and take
         git.calls.map((call) => call.args),
         [
             ["ls-tree", "-r", "-z", "--name-only", "HEAD", "--", "extensions/alpha/src/"],
+            ["rev-parse", "--verify", "HEAD:extensions/alpha/src"],
+            [
+                "fetch",
+                "--refetch",
+                "--no-write-fetch-head",
+                "--no-tags",
+                "--no-auto-maintenance",
+                "--no-auto-gc",
+                `--filter=blob:limit=${maxScanBytes}`,
+                "origin",
+                "c0ffee1234",
+            ],
+            ["rev-list", "--objects", "--missing=print", "HEAD:extensions/alpha/src"],
             ["sparse-checkout", "add", ...scanPatterns("alpha")],
             ["sparse-checkout", "list"],
             ["sparse-checkout", "set", "--no-cone", "--stdin"],
         ],
     );
+    assert.deepEqual(git.calls[4]!.env, { GIT_NO_LAZY_FETCH: "1" }, "the checkout never downloads");
     assert.deepEqual(scanPatterns("alpha"), [
         "/extensions/alpha/src/**/*.ts",
         "/extensions/alpha/src/**/*.tsx",
         "/extensions/alpha/src/**/*.js",
         "/extensions/alpha/src/**/*.jsx",
     ]);
-    assert.equal(git.calls[3]!.input, "/extensions/*/package.json\n", "only the scan's own patterns go");
+    assert.equal(git.calls[6]!.input, "/extensions/*/package.json\n", "only the scan's own patterns go");
     assert.deepEqual(cli.calls.map((call) => call.args), [["scan", path.join(repoPath, "extensions/alpha"), "--json"]]);
 });
 
-test("past the caps a row isn't checked: too many source files fetches nothing, too many bytes scans nothing", async () => {
-    const many = Array.from({ length: maxScanFiles + 1 }, (_, n) => `file${n}.ts`);
-    const counted = await storeContext({ sources: { alpha: [...many, "a.png", "b.json"] } });
+test("past the caps a row isn't checked: too many files under src/ fetches nothing, too many bytes scans nothing", async () => {
+    const many = Array.from({ length: maxScanFiles }, (_, n) => `file${n}.ts`);
+    // Every file under src/ is downloaded, so every one counts, source or not.
+    const counted = await storeContext({ sources: { alpha: [...many, "a.png"] } });
     assert.deepEqual(await checkFolder("alpha", counted.context, () => false), { notChecked: true });
     assert.deepEqual(counted.git.calls.map((call) => call.args[0]), ["ls-tree"], "nothing fetched");
     assert.deepEqual(counted.cli.calls, []);
     const atCap = await storeContext({ sources: { alpha: [...many.slice(1), "a.png"] } });
     await checkFolder("alpha", atCap.context, () => false);
-    assert.equal(atCap.cli.calls.length, 1, "exactly the cap, and other files, are fine");
+    assert.equal(atCap.cli.calls.length, 1, "exactly the cap is fine");
+
+    const missing = await storeContext({ sources: { alpha: ["index.ts"] } });
+    const reply = missing.git.run;
+    const withMissing: Run = async (program, args, options) =>
+        args[0] === "rev-list" ? { code: 0, stdout: "abc1 extensions/alpha/src\n?def2\n", stderr: "" } : reply(program, args, options);
+    const overCap = { ...missing.context, repo: new StoreRepository(missing.repoPath, { run: withMissing }) };
+    assert.deepEqual(await checkFolder("alpha", overCap, () => false), { notChecked: true }, "a file over the per-file cap");
+    assert.equal(missing.git.calls.filter((call) => call.args[0] === "sparse-checkout").length, 0, "nothing checked out");
+    assert.deepEqual(missing.cli.calls, []);
 
     const big = await storeContext({ sources: { alpha: ["huge.js"] } });
     await mkdir(path.join(big.repoPath, "extensions/alpha/src"), { recursive: true });
@@ -1529,6 +1561,78 @@ test("a detail scan's patterns fetch the source files alone, from the trees' lis
     assert.match(await readFile(path.join(repo.path, "extensions/alpha/README.md"), "utf8"), /^# Alpha/);
     await repo.drop(scanPatterns("alpha"));
     assert.equal((await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean).length, 2, "dropping again changes nothing");
+});
+
+/** The files under `extensions/<dir>` whose contents aren't downloaded, asked without downloading them. */
+async function notDownloaded(repoPath: string, dir: string): Promise<string[]> {
+    const objects = await sh(repoPath, "rev-list", "--objects", "--missing=print", "HEAD", "--", `extensions/${dir}`);
+    const names = new Map(
+        (await sh(repoPath, "ls-tree", "-r", "HEAD", `extensions/${dir}`)).split("\n").filter(Boolean).map((line) => {
+            const [meta, name] = line.split("\t");
+            return [meta!.split(" ")[2]!, name!.replace(`extensions/${dir}/`, "")];
+        }),
+    );
+    return objects.split("\n").filter((line) => line.startsWith("?")).map((line) => names.get(line.slice(1))!).sort();
+}
+
+/** A partial clone, as the store makes, of a local remote that lets clients filter, as GitHub does. */
+async function partialClone(files: Record<string, string | Buffer>) {
+    const root = await temporary();
+    const source = path.join(root, "source");
+    const bare = path.join(root, "bare.git");
+    await mkdir(source);
+    await sh(source, "init", "--quiet", "-b", "main");
+    for (const [name, contents] of Object.entries(files)) {
+        await mkdir(path.dirname(path.join(source, name)), { recursive: true });
+        await writeFile(path.join(source, name), contents);
+    }
+    await sh(source, "add", "-A");
+    await sh(source, "commit", "--quiet", "-m", "one");
+    await sh(root, "clone", "--quiet", "--bare", source, bare);
+    await sh(bare, "config", "uploadpack.allowFilter", "true");
+    await sh(bare, "config", "uploadpack.allowAnySHA1InWant", "true");
+    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}` });
+    await repo.clone();
+    const { context, cli } = await storeContext();
+    return { repo, context: { ...context, repo }, cli };
+}
+
+test("a check downloads no source file over the cap: that folder isn't checked, and its blob never comes", async () => {
+    const big = Buffer.alloc(maxScanBytes + 1024, "a");
+    const { repo, context, cli } = await partialClone({
+        "extensions/big/package.json": JSON.stringify(manifest("big")),
+        "extensions/big/src/index.ts": "export {};\n",
+        "extensions/big/src/generated.ts": big,
+        "extensions/big/assets/icon.png": "not really a png\n",
+        "extensions/small/package.json": JSON.stringify(manifest("small")),
+        "extensions/small/src/index.ts": "export {};\n",
+        "extensions/small/src/data.json": "{}\n",
+        "extensions/small/README.md": "# Small\n",
+    });
+    assert.deepEqual(await notDownloaded(repo.path, "big"), ["assets/icon.png", "src/generated.ts", "src/index.ts"]);
+
+    assert.deepEqual(await checkFolder("big", context, () => false), { notChecked: true });
+    assert.deepEqual(
+        await notDownloaded(repo.path, "big"),
+        ["assets/icon.png", "src/generated.ts"],
+        "the file over the cap never came, nor anything outside src/",
+    );
+    assert.deepEqual(
+        (await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean),
+        ["/extensions/*/package.json"],
+        "nothing was checked out",
+    );
+    assert.equal(cli.calls.length, 0, "nor scanned");
+
+    assert.deepEqual(await checkFolder("small", context, () => false), fromReport(supportedScan));
+    assert.deepEqual(await notDownloaded(repo.path, "small"), ["README.md"], "only src/ came");
+    assert.deepEqual(cli.calls.map((call) => call.args[0]), ["scan"]);
+    assert.deepEqual(
+        (await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean),
+        ["/extensions/*/package.json"],
+        "the scan's patterns went again",
+    );
+    assert.deepEqual(await notDownloaded(repo.path, "big"), ["assets/icon.png", "src/generated.ts"]);
 });
 
 test("a default branch name is used only when it's a plain branch name", async () => {

@@ -717,8 +717,11 @@ Extensions run in a separate Node.js process, the extension host.
     The detail pane's first fact is **Compatibility** (`compatibilityText`): Checking…, Compatible, Not compatible: Raycast AI, Missing: the APIs, Signs in with OAuth, Couldn't check, or Not checked.
     **Browsing never turns into downloading** (`CompatibilityChecks`): only the row the selection rests on, with the detail showing, is checked, after half a second, and moving on cancels its timer, or the check itself before its fetch or its scan; selecting the same row again changes nothing, and a cached row is never fetched.
     The README waits the same way: both run through `RestingWork` (`resting.ts`), and only the resting row's README is fetched (`fetchReadme`), once per folder tree, since READMEs are kept by tree id.
-    A check (`checkFolder`) runs in the git queue, one at a time: it counts the folder's source files from the trees (more than `maxScanFiles`, 300, isn't checked;
-    no extension in the store has more than about 220), fetches only those, checks their size before scanning (more than `maxScanBytes`, 5 MiB, isn't checked), scans with `fudge scan`, caches the result, and always takes its patterns out again.
+    A check (`checkFolder`) runs in the git queue, one at a time: it counts the files under the folder's `src/` from the trees (more than `maxScanFiles`, 300, isn't checked), then downloads them with each one's size capped (`fetchSource`).
+    That's the `src/` tree fetched again (`--refetch`) with a `blob:limit` of `maxScanBytes`, which the server applies to what it finds under the tree; blobs asked for by their own ids would come whatever their size.
+    A file left out for its size means the row isn't checked (`missingSource`, `rev-list --missing=print`, which downloads nothing on any git).
+    It then checks out the source files with git's lazy fetch off (`addFetched`, `GIT_NO_LAZY_FETCH`), checks their total (more than `maxScanBytes`, 5 MiB, isn't checked), scans with `fudge scan`, caches the result, and always takes its patterns out again.
+    A server that won't send a folder's tree gets the fetch as before, with the size checked after the download.
     A blobless clone has no sizes before a download, so the first cap is on the number of files.
     Install shares the cache both ways.
   - `store.ts` installs with `$FUDGE_CLI build <source> --into $FUDGE_EXTENSIONS_DIR`.

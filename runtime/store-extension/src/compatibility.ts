@@ -257,16 +257,34 @@ async function sourceBytes(folder: string): Promise<number> {
  * when `cancelled()` turns true before the fetch or before the scan; throws when git or the scan fails. Call it in
  * the store's git queue (`oneAtATime`). `dir` is a checked folder.
  */
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
 export async function checkFolder(
     dir: string,
     context: StoreContext,
     cancelled: () => boolean,
 ): Promise<Compatibility | undefined> {
-    const files = (await context.repo.sourceFiles(dir)).filter(isFetchedSource);
+    // Every file under `src/` is downloaded (its blobs of at most `maxScanBytes` each), so the cap counts them all.
+    const files = await context.repo.sourceFiles(dir);
     if (files.length > maxScanFiles) return { notChecked: true };
     if (cancelled()) return undefined;
     const patterns = scanPatterns(dir);
-    await context.repo.add(...patterns);
+    let bounded = files.length > 0;
+    if (bounded) {
+        try {
+            await context.repo.fetchSource(dir, maxScanBytes);
+        } catch (error) {
+            if (cancelled()) return undefined;
+            // A server that won't send a folder's tree: the source comes as before, its size checked after it's here.
+            console.error(`The store's bounded fetch failed, so it fetches as before: ${errorText(error)}`);
+            bounded = false;
+        }
+        if (cancelled()) return undefined;
+        // A file over the cap wasn't downloaded, and the scan would need it.
+        if (bounded && (await context.repo.missingSource(dir)) > 0) return { notChecked: true };
+    }
+    if (bounded) await context.repo.addFetched(...patterns);
+    else await context.repo.add(...patterns);
     try {
         const source = path.join(context.repo.path, "extensions", dir);
         if ((await sourceBytes(path.join(source, "src"))) > maxScanBytes) return { notChecked: true };

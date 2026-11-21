@@ -10,13 +10,19 @@ export const refreshAge = 24 * 60 * 60 * 1000;
 
 export type GitResult = { code: number; stdout: string; stderr: string };
 /**
- * Runs a program with an argument array, never through a shell, writing `input` to its stdin when given. A
- * `stoppable` one ends with `stopRunningGit()`.
+ * Runs a program with an argument array, never through a shell, writing `input` to its stdin when given, with `env`
+ * added to `storeEnvironment()`. A `stoppable` one ends with `stopRunningGit()`.
  */
 export type Run = (
     program: string,
     args: string[],
-    options: { cwd?: string; timeout: number; stoppable?: boolean; input?: string },
+    options: {
+        cwd?: string;
+        timeout: number;
+        stoppable?: boolean;
+        input?: string;
+        env?: NodeJS.ProcessEnv;
+    },
 ) => Promise<GitResult>;
 
 /** The git processes running now, which `stopRunningGit()` ends. */
@@ -42,12 +48,12 @@ export function storeEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.
  * `spawn` with no shell, a timeout that sends SIGTERM, and `storeEnvironment()`. When the timeout fired, stderr ends
  * with "<program> stopped after N s", whatever the exit: `fudge` catches SIGTERM and exits with 143.
  */
-export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable, input }) =>
+export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable, input, env }) =>
     new Promise((resolve) => {
         const child = spawn(program, args, {
             cwd,
             stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-            env: storeEnvironment(),
+            env: { ...storeEnvironment(), ...env },
         });
         let timedOut = false;
         const timer = setTimeout(() => {
@@ -126,8 +132,14 @@ export class StoreRepository {
         return path.join(this.path, ".git", "fudge-refreshed-at");
     }
 
-    async #exec(args: string[], timeout = shortTimeout, cwd = this.path, input?: string): Promise<string> {
-        const result = await this.#run(this.#git, args, { cwd, timeout, stoppable: true, input });
+    async #exec(
+        args: string[],
+        timeout = shortTimeout,
+        cwd = this.path,
+        input?: string,
+        extra: { env?: NodeJS.ProcessEnv } = {},
+    ): Promise<string> {
+        const result = await this.#run(this.#git, args, { cwd, timeout, stoppable: true, input, ...extra });
         if (result.code !== 0) throw new GitError(result.stderr.trim() || `git ${args[0]} failed`);
         return result.stdout;
     }
@@ -226,6 +238,50 @@ export class StoreRepository {
     /** Adds patterns to the checkout, fetching their files. Each pattern is built from a checked name. */
     async add(...patterns: string[]): Promise<void> {
         await this.#exec(["sparse-checkout", "add", ...patterns], longTimeout);
+    }
+
+    /**
+     * Adds patterns whose files are already downloaded (`fetchSource`), with git's lazy fetch off
+     * (`GIT_NO_LAZY_FETCH`, git 2.44 and later), so this step only writes the checkout and never downloads.
+     */
+    async addFetched(...patterns: string[]): Promise<void> {
+        await this.#exec(["sparse-checkout", "add", ...patterns], longTimeout, this.path, undefined, {
+            env: { GIT_NO_LAZY_FETCH: "1" },
+        });
+    }
+
+    /**
+     * Downloads the files under `extensions/<dir>/src/` of at most `limit` bytes each, and nothing else: the folder's
+     * tree fetched again (`--refetch`, since the copy has every tree already) with a `blob:limit` filter, which the
+     * server applies to what it finds under the tree. Asked for by their own ids instead, git would send every blob,
+     * whatever its size. It writes only new packs, never the index, the refs or `FETCH_HEAD`, and no maintenance runs
+     * after it. `dir` is a checked folder.
+     */
+    async fetchSource(dir: string, limit: number): Promise<void> {
+        const tree = (await this.#exec(["rev-parse", "--verify", `HEAD:extensions/${dir}/src`])).trim();
+        await this.#exec(
+            [
+                "fetch",
+                "--refetch",
+                "--no-write-fetch-head",
+                "--no-tags",
+                "--no-auto-maintenance",
+                "--no-auto-gc",
+                `--filter=blob:limit=${limit}`,
+                "origin",
+                tree,
+            ],
+            longTimeout,
+        );
+    }
+
+    /**
+     * How many of the files under `extensions/<dir>/src/` aren't downloaded: after `fetchSource`, the ones over its
+     * limit. `rev-list --missing=print` names them without fetching them, on any git. `dir` is a checked folder.
+     */
+    async missingSource(dir: string): Promise<number> {
+        const output = await this.#exec(["rev-list", "--objects", "--missing=print", `HEAD:extensions/${dir}/src`]);
+        return output.split("\n").filter((line) => line.startsWith("?")).length;
     }
 
     /**
