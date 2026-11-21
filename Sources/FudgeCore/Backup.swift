@@ -25,10 +25,10 @@ public enum Backup {
     /// Single files at the top of the support folder.
     static let rootFiles = [
         "settings.json", "launch-permissions.json", "history.json", "dropdown-values.json", "command-metadata.json",
-        "quicklinks.json", "snippets.json",
+        "quicklinks.json", "snippets.json", "window-layouts.json",
     ]
     /// Root files that must be a JSON object to be imported.
-    static let objectFiles: Set<String> = ["settings.json", "quicklinks.json", "snippets.json"]
+    static let objectFiles: Set<String> = ["settings.json", "quicklinks.json", "snippets.json", "window-layouts.json"]
     /// Of those, the ones keyed by `<extension>/…`, which an import merges extension by extension.
     static let keyedFiles: Set<String> = ["dropdown-values.json", "command-metadata.json"]
     /// Folders holding one `<extension>.json` each.
@@ -73,6 +73,9 @@ public enum Backup {
         public var quicklinks = 0
         /// How many snippets `snippets.json` holds.
         public var snippets = 0
+        /// How many custom window positions and saved layouts `window-layouts.json` holds.
+        public var windowPositions = 0
+        public var windowLayouts = 0
 
         /// "Settings, 2 quicklinks, 7 extensions' preferences, 3 extensions' data, 9 installed extensions listed".
         public var text: String {
@@ -80,6 +83,10 @@ public enum Backup {
             if settings { parts.append("Settings") }
             if quicklinks > 0 { parts.append(Self.count(quicklinks, "quicklink", "quicklinks")) }
             if snippets > 0 { parts.append(Self.count(snippets, "snippet", "snippets")) }
+            if windowPositions > 0 {
+                parts.append(Self.count(windowPositions, "window position", "window positions"))
+            }
+            if windowLayouts > 0 { parts.append(Self.count(windowLayouts, "window layout", "window layouts")) }
             parts.append(Self.count(preferences.count, "extension's preferences", "extensions' preferences"))
             parts.append(Self.count(data.count, "extension's data", "extensions' data"))
             parts.append(Self.count(listed.count, "installed extension listed", "installed extensions listed"))
@@ -152,7 +159,11 @@ public enum Backup {
             settings: entries.contains { $0.path == "settings.json" }, preferences: preferences.sorted(),
             data: sizes.keys.sorted(), listed: listed,
             quicklinks: Self.quicklinkCount(entries.first { $0.path == "quicklinks.json" }?.data),
-            snippets: Self.snippetCount(entries.first { $0.path == "snippets.json" }?.data))
+            snippets: Self.snippetCount(entries.first { $0.path == "snippets.json" }?.data),
+            windowPositions: Self.windowLayoutStore(entries.first { $0.path == "window-layouts.json" }?.data)
+                .positions.count,
+            windowLayouts: Self.windowLayoutStore(entries.first { $0.path == "window-layouts.json" }?.data).layouts
+                .count)
         return Export(
             manifest: manifest, entries: entries, leftOut: leftOut, skipped: reader.skipped, summary: summary)
     }
@@ -199,7 +210,9 @@ public enum Backup {
                 settings: root["settings.json"] != nil, preferences: (perExtension["preferences"] ?? [:]).keys.sorted(),
                 data: Set(data.keys).union((perExtension["local-storage"] ?? [:]).keys).sorted(),
                 listed: manifest.extensions, quicklinks: Backup.quicklinkCount(root["quicklinks.json"]),
-                snippets: Backup.snippetCount(root["snippets.json"]))
+                snippets: Backup.snippetCount(root["snippets.json"]),
+                windowPositions: Backup.windowLayoutStore(root["window-layouts.json"]).positions.count,
+                windowLayouts: Backup.windowLayoutStore(root["window-layouts.json"]).layouts.count)
         }
     }
 
@@ -299,6 +312,19 @@ public enum Backup {
             case .array(let entries) = object["snippets"]
         else { return 0 }
         return SnippetStore(entries: entries).snippets.count
+    }
+
+    /// The positions and layouts in a `window-layouts.json`, for the summary; none when it isn't one.
+    static func windowLayoutStore(_ data: Data?) -> WindowLayoutStore {
+        guard let data, case .object(let object) = try? JSONDecoder().decode(JSONValue.self, from: data) else {
+            return WindowLayoutStore()
+        }
+        func list(_ key: String) -> [JSONValue] {
+            if case .array(let entries) = object[key] { return entries }
+            return []
+        }
+        return WindowLayoutStore(
+            positionEntries: list(WindowLayoutStore.positionsKey), layoutEntries: list(WindowLayoutStore.layoutsKey))
     }
 
     /// A path segment fudge could have written: not empty, `.` or `..`, and without a NUL.

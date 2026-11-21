@@ -56,6 +56,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model.windowSwitching = FixedWindowSwitching(file: snapshot.windows)
             // Nor do the System commands do anything: no lock, sleep, restart, Apple Event, eject, hide or quit.
             model.systemActions = InertSystemActions()
+            // Nor the windows: Save Layout… gets `--layout-windows`' made-up ones, and nothing is moved.
+            model.windowLayoutActions = .inert(windows: snapshot.layoutWindows)
             // Nor the clipboard or the Keychain: Clipboard History gets `--clipboard-entries`' made-up entries.
             if let file = snapshot.clipboardEntries {
                 model.clipboardHistory = ClipboardHistoryService(
@@ -65,6 +67,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         panel = LauncherPanel(content: LauncherView(model: model))
         settingsModel = SettingsModel(paths: paths)
+        if let editing = Snapshot(arguments: CommandLine.arguments)?.editPosition {
+            settingsModel.snapshotPositionDraft =
+                settingsModel.windowPositions.first { $0.name == editing }.map(PositionDraft.init(editing:))
+                ?? PositionDraft()
+        }
         settingsModel.launcherHotkey = FudgeSettings.load(from: paths.settingsFile).launcherHotkey
         // Snapshots and tests never register fudge as a login item; only the real app talks to the system.
         settingsModel.loginItem =
@@ -118,6 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.extensionStoreChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.quicklinksChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.snippetsChanged = { [weak self] in self?.model.reloadSnippetList() }
+        model.windowLayoutsChanged = { [weak self] in self?.settingsModel.loadWindowLayouts() }
         settingsModel.clipboardHistoryChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.deleteClipboardHistory = { [weak self] in self?.model.clipboardHistory.deleteAll() }
         settingsModel.stopExtensionStore = { [weak self] in
@@ -717,6 +725,12 @@ struct Snapshot {
     /// `--windows <file>`: Switch Windows' made-up windows (`FixedWindowSystem`). Snapshots never read the window
     /// list or the Accessibility API, so without it Switch Windows shows that it needs Accessibility.
     let windows: URL?
+    /// `--layout-windows <file>`: the windows Save Layout… reads, a JSON array of `window-layouts.json`'s window
+    /// entries. Snapshots never read or move real windows, so without it there are none.
+    let layoutWindows: [SavedWindow]
+    /// `--edit-position [<name>]`: the Window Management page shows its position sheet in place, editing that
+    /// position, or a new one.
+    let editPosition: String?
 
     init?(arguments: [String]) {
         guard let index = arguments.firstIndex(of: "--snapshot"), index + 1 < arguments.count else { return nil }
@@ -757,6 +771,15 @@ struct Snapshot {
         clipboardEntries = value("--clipboard-entries").map { URL(fileURLWithPath: $0) }
         updateAvailable = value("--update-available").flatMap { Release(tag: $0.hasPrefix("v") ? $0 : "v" + $0) }
         windows = value("--windows").map { URL(fileURLWithPath: $0) }
+        layoutWindows =
+            value("--layout-windows").flatMap { try? Data(contentsOf: URL(fileURLWithPath: $0)) }
+            .flatMap { try? JSONDecoder().decode(JSONValue.self, from: $0) }.map(SavedWindow.list(from:)) ?? []
+        if let index = arguments.firstIndex(of: "--edit-position") {
+            let next = index + 1
+            editPosition = next < arguments.count && !arguments[next].hasPrefix("--") ? arguments[next] : ""
+        } else {
+            editPosition = nil
+        }
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1
