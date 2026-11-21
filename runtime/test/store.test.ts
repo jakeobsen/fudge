@@ -2149,7 +2149,7 @@ test("cancelling a check at each step ends only the download, leaves no lock, an
     }
 
     assert.deepEqual(await checkFolder("small", context, () => false), fromReport(supportedScan), "the next check works");
-    assert.equal(await install(parseManifest("small", manifest("small"))!, context), true, "and an install");
+    assert.deepEqual(await install(parseManifest("small", manifest("small"))!, context), {}, "and an install");
     assert.deepEqual(await locks(repo.path), []);
 });
 
