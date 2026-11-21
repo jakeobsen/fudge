@@ -21,6 +21,19 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         case createSnippet
         /// Runs one of Fudge's own commands (`BuiltInCommandGroup`).
         case builtInCommand(group: String, command: String)
+
+        /// The SF Symbol of one of Fudge's own items (Reload Extensions, Quit Fudge, …); nil for the rest, whose
+        /// icons are an app's, an extension's, a quicklink's, Fudge's own or their group's command's.
+        public var symbol: String? {
+            switch self {
+            case .reloadExtensions: "arrow.clockwise"
+            case .quit: "power"
+            case .createQuicklink: "link.badge.plus"
+            case .searchSnippets: "doc.text"
+            case .createSnippet: "text.badge.plus"
+            case .application, .command, .settings, .quicklink, .builtInCommand: nil
+            }
+        }
     }
 
     public var id: String
@@ -134,15 +147,25 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         "command:\(extensionName)/\(command)"
     }
 
-    /// The `settings.json` id of a command's item, an extension's or one of Fudge's own: its alias, hotkey and
-    /// Enabled are kept under it. Nil for other items.
+    /// The `settings.json` id of a command's item, an extension's or one of Fudge's own, or of a quicklink's
+    /// (`QuicklinkCommands`): its alias, hotkey and Enabled are kept under it. Nil for other items, and for a
+    /// quicklink whose id can't be part of a key.
     public var commandSettingsID: String? {
         switch kind {
         case .command(let extensionName, let command, _, _), .builtInCommand(let extensionName, let command):
             FudgeSettings.commandID(extension: extensionName, command: command)
+        case .quicklink(let quicklink):
+            QuicklinkCommands.commandID(ofQuicklink: quicklink.id)
         default:
             nil
         }
+    }
+
+    /// The id of the root item a `settings.json` command id belongs to: a quicklink's (`quicklink:<id>`) or a
+    /// command's (`command:<id>`). A pressed hotkey finds its item by it, and a row shows its hotkey by it.
+    public static func id(forCommandSettingsID commandID: String) -> String {
+        if let quicklink = QuicklinkCommands.quicklinkID(inCommandID: commandID) { return "quicklink:\(quicklink)" }
+        return "command:\(commandID)"
     }
 
     /// One item per command of a group of Fudge's own, with the group's title as its subtitle.

@@ -31,7 +31,7 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>Fudge asks Finder for its selection when an extension needs it, and Finder, System Events and the login window for its System commands, such as Empty Trash.</string>
+	<string>Fudge asks Finder, System Events and the login window to carry out commands such as Empty Trash, and Finder for its selection when an extension needs it.</string>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

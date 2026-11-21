@@ -85,6 +85,11 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("snippets.json")
     }
 
+    /// Recent Colors (`RecentColorStore`).
+    public var colorsFile: URL {
+        supportDirectory.appendingPathComponent("colors.json")
+    }
+
     /// The user's custom window positions and saved layouts (`WindowLayoutStore`).
     public var windowLayoutsFile: URL {
         supportDirectory.appendingPathComponent("window-layouts.json")

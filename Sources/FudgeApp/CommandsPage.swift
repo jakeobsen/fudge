@@ -3,9 +3,9 @@ import Carbon.HIToolbox
 import FudgeCore
 import SwiftUI
 
-/// The Settings window's Commands page: Fudge's own command groups, then every installed extension, each expanded to
-/// its commands, with each command's alias, hotkey and enabled state. Clicking "Record Hotkey" records the next key
-/// press.
+/// The Settings window's Commands page: Fudge's own command groups, then the quicklinks, then every installed
+/// extension, each expanded to its commands, with each command's alias, hotkey and enabled state. Clicking "Record
+/// Hotkey" records the next key press.
 struct CommandsPage: View {
     @Bindable var model: SettingsModel
     @State private var search = ""
@@ -50,6 +50,7 @@ struct CommandsPage: View {
                 .padding(.vertical, 4)
             }
         }
+        .onAppear { if let start = model.commandsSearch { search = start } }
     }
 
     /// One group of rows: a group of Fudge's own commands, or an installed extension. `name` keys its Enabled.
@@ -65,6 +66,8 @@ struct CommandsPage: View {
         var name: String
         var title: String
         var icon: RowIcon
+        /// The Type column: "Command", or "Quicklink" in the quicklinks' group.
+        var type = "Command"
     }
 
     /// Read only when the row is drawn, so the search doesn't load every extension's icon on each keystroke.
@@ -74,13 +77,18 @@ struct CommandsPage: View {
         case asset(String?, InstalledExtension)
     }
 
-    /// Fudge's own groups first, then the extensions, as far as they match the search. A group or extension that
-    /// matches keeps all its commands.
+    /// Fudge's own groups first (with the saved window positions and layouts), then the quicklinks
+    /// (`SettingsModel.commandGroups`), then the extensions, as far as they match the search. A group or extension
+    /// that matches keeps all its commands.
     private var rows: [GroupRow] {
-        let groups = model.builtInGroups.map { group in
-            GroupRow(
+        // The quicklinks' group shows once there's a quicklink.
+        let groups = model.commandGroups.filter { !$0.commands.isEmpty }.map { group in
+            let type = group.name == QuicklinkCommands.groupName ? "Quicklink" : "Command"
+            return GroupRow(
                 name: group.name, title: group.title, type: "Built-in", icon: .app,
-                commands: group.commands.map { CommandRow(name: $0.name, title: $0.title, icon: .symbol($0.symbol)) })
+                commands: group.commands.map {
+                    CommandRow(name: $0.name, title: $0.title, icon: .symbol($0.symbol), type: type)
+                })
         }
         let extensions = model.allExtensions.map { installed in
             GroupRow(
@@ -147,7 +155,7 @@ struct CommandsPage: View {
             .lineLimit(1)
             .padding(.leading, 18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text("Command").foregroundStyle(.secondary).frame(width: 80, alignment: .leading)
+            Text(command.type).foregroundStyle(.secondary).frame(width: 80, alignment: .leading)
             AliasCell(model: model, commandID: id, dimmed: !enabled).frame(width: 110, alignment: .leading)
             HotkeyCell(model: model, commandID: id).frame(width: 150, alignment: .leading)
             Toggle(
