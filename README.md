@@ -161,8 +161,8 @@ In the **Extension Store** command, search the extensions, or pick a category in
 - If an install or update fails, the store shows the whole error and its likely cause, such as npm not found or the npm registry not reachable. ↵ tries again, and ⌘C copies the error, to send with an issue.
   It uses the proxy set in **System Settings → Network** for npm and Git, unless you've set one yourself (`HTTPS_PROXY`); a proxy configuration file (PAC) can't be passed on.
   After you change the proxy settings, quit and reopen Fudge for the store to use them.
-- The store needs Git.
-  If it's missing, install Apple's Command Line Tools: run `xcode-select --install` in Terminal.
+- The store needs Git, which comes with Apple's Command Line Tools.
+  Without them, the store offers **Install Command Line Tools** (↵), macOS's own installer, and ⌘R checks again once they're in.
 - It never touches extensions you installed with `fudge build` yourself.
   An extension installs under its own name, so it can't be installed while another extension of that name is: uninstall that one first.
 
