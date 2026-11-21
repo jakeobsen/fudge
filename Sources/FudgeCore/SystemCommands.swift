@@ -152,11 +152,13 @@ public protocol SystemActions: AnyObject {
     /// `AEDeterminePermissionToAutomateTarget`, 0 when it may.
     func automation(of target: AutomationTarget) async -> Int32
     func send(_ event: LoginWindowEvent) async throws
-    /// Finder's `count items of trash`. Throws `AppleEventError`.
+    /// Finder's `count items of trash` (`SystemAppleEvents.countTrash`). Throws `AppleEventError`, also for a reply
+    /// that isn't a number.
     func trashCount() async throws -> Int
     /// Finder's `empty trash`. Throws `AppleEventError`.
     func emptyTrash() async throws
-    /// System Events' `dark mode of appearance preferences`. Throws `AppleEventError`.
+    /// System Events' `dark mode of appearance preferences`. Throws `AppleEventError`, also for a reply that isn't a
+    /// yes or no.
     func darkMode() async throws -> Bool
     func setDarkMode(_ on: Bool) async throws
     func mountedVolumes() async -> [MountedVolume]
@@ -171,17 +173,24 @@ public protocol SystemActions: AnyObject {
 /// logs out, empties the Trash, ejects, changes the appearance, hides or quits anything, and sends no Apple Event.
 @MainActor
 public final class InertSystemActions: SystemActions {
-    /// The made-up Trash count the Empty Trash confirmation shows.
+    /// The made-up Trash count the Empty Trash confirmation shows, unless the run gives another.
     public static let trashCount = 12
+    /// The count `trashCount()` gives; nil throws, as a count Finder couldn't give does.
+    let madeUpTrashCount: Int?
 
-    public init() {}
+    public init(trashCount: Int? = InertSystemActions.trashCount) {
+        madeUpTrashCount = trashCount
+    }
 
     public func mayPostKeys() -> Bool { false }
     public func lockScreen() async throws {}
     public func sleep() async throws {}
     public func automation(of target: AutomationTarget) async -> Int32 { 0 }
     public func send(_ event: LoginWindowEvent) async throws {}
-    public func trashCount() async throws -> Int { Self.trashCount }
+    public func trashCount() async throws -> Int {
+        guard let madeUpTrashCount else { throw AppleEventError(status: SystemAppleEvents.coercionFailed) }
+        return madeUpTrashCount
+    }
     public func emptyTrash() async throws {}
     public func darkMode() async throws -> Bool { false }
     public func setDarkMode(_ on: Bool) async throws {}
@@ -207,11 +216,15 @@ public struct SystemConfirmation: Sendable, Equatable {
     public static let logOut = SystemConfirmation(
         title: "Log out?", message: "Open apps quit first, and ask about unsaved work.", primary: "Log Out")
 
-    public static func emptyTrash(items: Int) -> SystemConfirmation {
-        SystemConfirmation(
-            title: "Empty the Trash?",
-            message: "\(items) \(items == 1 ? "item" : "items") will be deleted permanently.",
-            primary: "Empty Trash")
+    /// Empty Trash's question, with the number of items when Finder counted some, else without one.
+    public static func emptyTrash(items: Int?) -> SystemConfirmation {
+        let message =
+            if let items, items > 0 {
+                "\(items) \(items == 1 ? "item" : "items") will be deleted permanently."
+            } else {
+                "The items in the Trash will be deleted permanently."
+            }
+        return SystemConfirmation(title: "Empty the Trash?", message: message, primary: "Empty Trash")
     }
 
     public static func quitAllApps(_ apps: Int) -> SystemConfirmation {
@@ -225,7 +238,6 @@ public struct SystemConfirmation: Sendable, Equatable {
 /// What the HUD says after a System command, when it says anything.
 public enum SystemCommandMessage {
     public static let lockNeedsAccessibility = "Fudge needs Accessibility permission to lock the screen."
-    public static let trashIsEmpty = "The Trash is empty."
     public static let nothingToEject = "There's nothing to eject."
     public static let noAppsToQuit = "There are no apps to quit."
 
@@ -327,17 +339,13 @@ public struct SystemCommandRunner {
         return await appleEvent(.loginWindow, doing: doing) { try await actions.send(event) }
     }
 
-    /// Counts through Finder, never by listing `~/.Trash` (TCC-protected, and without the volumes' `.Trashes`), so
-    /// one Automation answer covers counting and emptying. A refusal or a failed count says so: it's never "empty".
+    /// Always asks first, as in Raycast, whatever the count says: with the number of items when Finder counted some,
+    /// else without a number, so a count Fudge couldn't get or read never turns into "empty". It counts through
+    /// Finder, never by listing `~/.Trash` (TCC-protected, and without the volumes' `.Trashes`), so one Automation
+    /// answer covers counting and emptying; a refusal says so, and asks nothing.
     private func emptyTrash(confirm: (SystemConfirmation) async -> Bool) async -> String? {
-        if let refusal = await automationRefusal(.finder, doing: "count the Trash") { return refusal }
-        let count: Int
-        do {
-            count = try await actions.trashCount()
-        } catch {
-            return failure(error, target: .finder, doing: "count the Trash")
-        }
-        guard count > 0 else { return SystemCommandMessage.trashIsEmpty }
+        if let refusal = await automationRefusal(.finder, doing: "empty the Trash") { return refusal }
+        let count = try? await actions.trashCount()
         guard await confirm(.emptyTrash(items: count)) else { return nil }
         return await appleEvent(.finder, doing: "empty the Trash") { try await actions.emptyTrash() }
     }
