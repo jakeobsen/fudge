@@ -77,7 +77,7 @@ struct CommandsPage: View {
     /// Fudge's own groups first, then the extensions, as far as they match the search. A group or extension that
     /// matches keeps all its commands.
     private var rows: [GroupRow] {
-        let groups = BuiltInCommandGroup.all.map { group in
+        let groups = model.builtInGroups.map { group in
             GroupRow(
                 name: group.name, title: group.title, type: "Built-in", icon: .app,
                 commands: group.commands.map { CommandRow(name: $0.name, title: $0.title, icon: .symbol($0.symbol)) })
