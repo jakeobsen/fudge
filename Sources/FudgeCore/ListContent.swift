@@ -64,6 +64,9 @@ public struct ListContent: Sendable, Equatable {
         public var color: JSONValue?
         public var icon: JSONValue?
         public var tooltip: String?
+        /// Keys drawn as keycaps (`{ "keycaps": ["⇧", "⌘", "N"] }`), Fudge's own accessory, which Search Menu Items
+        /// uses for an item's shortcut; empty for Raycast's kinds.
+        public var keycaps: [String] = []
     }
 
     public struct Section: Sendable, Equatable, Identifiable {
@@ -354,6 +357,10 @@ public struct ListContent: Sendable, Equatable {
 
     static func accessory(_ json: JSONValue, now: Date) -> Accessory? {
         guard case .object(let object) = json else { return nil }
+        let keycaps = strings(object["keycaps"]).filter { !$0.isEmpty }
+        if !keycaps.isEmpty {
+            return Accessory(text: nil, isTag: false, color: nil, icon: nil, tooltip: nil, keycaps: keycaps)
+        }
         let icon = object["icon"].flatMap(present)
         let tooltip: String? = if case .string(let tooltip) = object["tooltip"] { tooltip } else { nil }
         var text: String?
