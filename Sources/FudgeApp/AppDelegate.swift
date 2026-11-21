@@ -1,5 +1,6 @@
 import AppKit
 import FudgeCore
+import Quartz
 
 /// fudge runs as an accessory app: no Dock icon, one menu bar item, and a launcher panel
 /// that a global hotkey shows and hides.
@@ -27,6 +28,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let exchangeRateSchedule = ExchangeRateSchedule()
     /// Not in snapshot runs, which install nothing that outlives them.
     private var extensionsWatcher: ExtensionsWatcher?
+    /// The Quick Look preview (SPEC-049). Never in snapshot runs.
+    private var quickLook: QuickLookPreview?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = Self.mainMenu()
@@ -88,9 +91,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.numberFormatChanged = { [weak self] in self?.model.applySettings() }
         panel.onEscape = { [weak self] in self?.model.escape() }
         panel.onResign = { [weak self] in
-            // An alert sheet takes the keyboard; that's not the user leaving.
-            guard let self, self.panel.attachedSheet == nil else { return }
-            self.hidePanel()
+            guard let self else { return }
+            // An alert sheet takes the keyboard, and so does the Quick Look preview the user clicks; neither is the
+            // user leaving.
+            switch LauncherResign.decide(
+                sheetAttached: self.panel.attachedSheet != nil, quickLookTookKey: self.quickLook?.tookKey == true)
+            {
+            case .stay:
+                break
+            case .takeKeyBack:
+                self.takeKeyBackFromQuickLook()
+            case .hide:
+                self.hidePanel()
+            }
         }
 
         // A snapshot renders off-screen and quits. It installs no status item or hotkey, and nothing in it takes
@@ -109,6 +122,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         SystemCalls.accessibilitySettingsOffer = AccessibilitySettingsOffer(
             panel: panel, restoreKeyboard: { [weak self] in self?.model.restoreKeyboard() })
+
+        let quickLook = QuickLookPreview()
+        quickLook.launcherLevel = panel.level
+        quickLook.closedByUser = { [weak self] in self?.model.quickLookClosedByUser() }
+        quickLook.forwardKey = { [weak self] event in self?.previewKey(event) ?? false }
+        model.quickLookChanged = { [weak self] item in
+            guard let self, let quickLook = self.quickLook else { return }
+            // Remember the app the user is in, for when a click on the preview makes Fudge the active app.
+            if item != nil, quickLook.item == nil { self.appBeforeQuickLook = Self.otherFrontmostApp() }
+            quickLook.show(item)
+        }
+        self.quickLook = quickLook
 
         // Snapshots never download; the app checks the rates now and every hour.
         exchangeRateSchedule.start(exchangeRates)
@@ -311,6 +336,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Every path that hides the panel ends here: Esc, the hotkey, the model's `hide`, and the panel resigning key.
     private func hidePanel() {
         guard panel.isVisible else { return }
+        model.closeQuickLook()
         panel.orderOut(nil)
         model.panelReset.panelHidden()
         // A FilePicker's open panel made fudge the active app. Give the keyboard back to the app that had it, unless
@@ -321,6 +347,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 app.activate()
             }
         }
+    }
+
+    /// The app the user was in when the Quick Look preview opened.
+    private var appBeforeQuickLook: NSRunningApplication?
+
+    /// The frontmost app, unless it's Fudge.
+    private static func otherFrontmostApp() -> NSRunningApplication? {
+        guard let app = NSWorkspace.shared.frontmostApplication,
+            app.processIdentifier != ProcessInfo.processInfo.processIdentifier
+        else { return nil }
+        return app
+    }
+
+    /// The user clicked the Quick Look preview, which took the keyboard (and may have made Fudge the active app):
+    /// the launcher takes it back, so ↑↓, Esc and ⌘Y keep working, and `hidePanel` later gives the keyboard back to
+    /// the app the user was in, as after a FilePicker's open panel.
+    private func takeKeyBackFromQuickLook() {
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier,
+            appToRestore == nil
+        {
+            appToRestore = appBeforeQuickLook
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.panel.isVisible else { return }
+            self.panel.makeKey()
+        }
+    }
+
+    /// A key the Quick Look preview got: ↑↓ move the selection, Esc does what it does in the launcher, and the
+    /// launcher's shortcuts (⌘Y, ⌘K, …) work as there.
+    private func previewKey(_ event: NSEvent) -> Bool {
+        guard panel.isVisible else { return false }
+        switch event.keyCode {
+        case 126:
+            model.moveSelection(by: -1)
+            return true
+        case 125:
+            model.moveSelection(by: 1)
+            return true
+        case 53:
+            model.escape()
+            return true
+        default:
+            guard let pressed = Self.shortcut(for: event) else { return false }
+            return model.handleKey(pressed)
+        }
+    }
+
+    // MARK: - Quick Look control
+
+    // The preview panel looks for its controller along the responder chain, which ends with the app delegate, so
+    // this works whether or not Fudge is active and whichever window is key.
+
+    override func acceptsPreviewPanelControl(_ panel: QLPreviewPanel!) -> Bool {
+        quickLook?.acceptsControl == true
+    }
+
+    override func beginPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        quickLook?.begin(panel)
+    }
+
+    override func endPreviewPanelControl(_ panel: QLPreviewPanel!) {
+        quickLook?.end(panel)
     }
 
     /// A FilePicker's open panel, as a sheet on the launcher, so the launcher doesn't hide (`onResign` ignores
@@ -410,8 +499,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// `--snapshot <file.png> [--query <text>] [--activate]`: renders the panel, saves a picture of it and quits.
 /// `--activate` presses ↵ after typing the query, then waits for the result. In the command that opened,
 /// `--search <text>` types into its search field, `--dropdown <value>` picks a value in its search bar dropdown,
-/// `--actions` presses ⌘K, and `--open-dropdown` presses ⌘P, or in a Form opens its first Dropdown (`--open-tags`: its
-/// first TagPicker; `--open-date`: its first DatePicker's calendar).
+/// `--actions` presses ⌘K, `--pick-date <title>` runs the Action.PickDate titled so (after ⌘K with `--actions`, else
+/// straight), and `--open-dropdown` presses ⌘P, or in a Form opens its first Dropdown (`--open-tags`: its first
+/// TagPicker; `--open-date`: its first DatePicker's calendar).
 /// `--snapshot <file.png> --settings [<extension>]` renders the Settings window instead, with a fake login item
 /// whose status `--login-item <status>` sets (`enabled`, `requiresApproval`, `notRegistered`, `notFound`), and a fake
 /// Accessibility answer that `--accessibility allowed|missing` sets (`missing` by default). `--settings :permissions`
@@ -427,6 +517,8 @@ struct Snapshot {
     let search: String?
     let dropdown: String?
     let actions: Bool
+    /// `--pick-date <title>`: the Action.PickDate to open the picker of.
+    let pickDate: String?
     let openDropdown: Bool
     let openTags: Bool
     let openDate: Bool
@@ -452,6 +544,7 @@ struct Snapshot {
         dropdown = value("--dropdown")
         activate = arguments.contains("--activate")
         actions = arguments.contains("--actions")
+        pickDate = value("--pick-date")
         openDropdown = arguments.contains("--open-dropdown")
         openTags = arguments.contains("--open-tags")
         openDate = arguments.contains("--open-date")
@@ -526,6 +619,9 @@ struct Snapshot {
         if actions {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { model.toggleActionPanel() }
         }
+        if let pickDate {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.8) { model.openDatePick(titled: pickDate) }
+        }
         if openDropdown {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 if !model.openFirstFormPicker(.dropdown) { model.toggleDropdownPanel() }
@@ -537,7 +633,7 @@ struct Snapshot {
         if openDate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { _ = model.openFirstFormPicker(.datePicker) }
         }
-        let waits = actions || openDropdown || openTags || openDate || inCommand
+        let waits = actions || pickDate != nil || openDropdown || openTags || openDate || inCommand
         DispatchQueue.main.asyncAfter(deadline: .now() + (waits ? 3.5 : activate ? 3 : 1)) {
             guard let view = panel.contentView else { exit(1) }
             save(view)

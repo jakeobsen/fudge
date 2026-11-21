@@ -4,6 +4,7 @@ import * as implementation from "../src/api/index.ts";
 import { createApiModule } from "../src/api/module.ts";
 import { mark, NOT_DRAWN, notAvailable, UNAVAILABLE } from "../src/api/stubs.ts";
 import { RAYCAST_UTILS_PATHS } from "../scripts/compat/raycast-utils.generated.ts";
+import { category } from "../scripts/compat/extension.ts";
 import { apiName, gaps, isExtensionSource, support, toJavaScript, uses } from "../scripts/compat/scan.ts";
 import { raycastDeclarations, vendoredTypes } from "../scripts/raycast-types.ts";
 
@@ -63,17 +64,27 @@ test("a stub is missing wherever the path reaches it, lowercase members included
     assert.equal(support(api, "environment.commandName"), "implemented", "a getter that needs a running command");
 });
 
+test("OAuth stays left out by design, though its client can be built (D-50)", () => {
+    for (const path of ["OAuth", "OAuth.PKCEClient", "OAuth.RedirectMethod.Web", "OAuth.RedirectMethod.AppURI"]) {
+        assert.equal(support(api, path, declared), "missing", path);
+        assert.equal(category({ api: apiName(path), kind: "missing" }), "OAuth", path);
+    }
+});
+
 test("an action that renders but fails when used is render-but-fail", () => {
-    for (const path of ["Action.CreateQuicklink", "Action.CreateSnippet", "Action.ToggleQuickLook", "Action.PickDate"]) {
+    for (const path of ["Action.CreateQuicklink", "Action.CreateSnippet"]) {
         assert.equal(support(api, path, declared), "render-but-fail", path);
     }
     assert.equal(support(api, "Action.CopyToClipboard", declared), "implemented");
+    assert.equal(support(api, "Action.ToggleQuickLook", declared), "implemented", "the app performs Quick Look");
     assert.equal(support(api, "Action.Paste", declared), "implemented", "Paste works now");
+    for (const path of ["Action.PickDate", "Action.PickDate.Type.DateTime", "Action.PickDate.isFullDay"]) {
+        assert.equal(support(api, path, declared), "implemented", `${path} works now`);
+    }
 });
 
 test("a component the app doesn't draw, and any member of one, is not-drawn", () => {
-    assert.equal(support(api, "Form.LinkAccessory", declared), "not-drawn");
-    // LinkAccessory has no members, so a small marked component stands in for one that does.
+    // The app draws every component now, so a small marked component stands in for one it doesn't.
     const Thing = Object.assign(() => null, { Item: Object.assign(() => null, { Kind: { Big: "big" } }) });
     mark(Thing, NOT_DRAWN, "Thing");
     for (const path of ["Thing", "Thing.Item", "Thing.Item.Kind.Big"]) {
@@ -84,7 +95,7 @@ test("a component the app doesn't draw, and any member of one, is not-drawn", ()
         ...["Form", "Form.TextField", "Form.Checkbox", "List.Item", "Detail.Metadata.Label"],
         ...["Grid", "Grid.Item", "Grid.Dropdown.Item", "Grid.Inset.Small"],
         ...["Form.Dropdown", "Form.Dropdown.Item", "Form.DropdownItem", "FormDropdownItem", "Form.TagPicker.Item"],
-        ...["Form.DatePicker", "Form.DatePicker.Type.Date", "Form.FilePicker"],
+        ...["Form.DatePicker", "Form.DatePicker.Type.Date", "Form.FilePicker", "Form.LinkAccessory"],
     ];
     for (const path of drawn) {
         assert.equal(support(api, path, declared), "implemented", path);

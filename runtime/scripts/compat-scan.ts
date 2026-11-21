@@ -87,7 +87,7 @@ for (const result of all) {
 }
 
 const kinds: Record<GapKind, string> = {
-    missing: "fudge doesn't provide it",
+    missing: "Fudge doesn't provide it",
     "render-but-fail": "it renders, and fails when used",
     "not-drawn": "the extension host renders it, but the app can't draw it",
     "via @raycast/utils": "only needed through a @raycast/utils export the extension uses",

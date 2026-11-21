@@ -6,7 +6,7 @@
 // what's left is what runs. JSX stays as written, so `<Action.CopyToClipboard>`
 // counts like `Action.CopyToClipboard`.
 
-import { isNotAvailable, NOT_DRAWN, NotAvailableError, UNAVAILABLE } from "../../src/api/stubs.ts";
+import { isNotAvailable, LEFT_OUT, NOT_DRAWN, NotAvailableError, UNAVAILABLE } from "../../src/api/stubs.ts";
 
 /** What one source file uses: API paths such as `Clipboard.copy`, and the names it imports from @raycast/utils. */
 export interface Uses {
@@ -104,6 +104,7 @@ function isObjectLike(value: unknown): value is object {
 function gapOf(value: unknown): Support | undefined {
     if (isNotAvailable(value)) return "missing";
     if (!isObjectLike(value)) return undefined;
+    if (Reflect.get(value, LEFT_OUT) !== undefined) return "missing";
     if (Reflect.get(value, NOT_DRAWN) !== undefined) return "not-drawn";
     if (Reflect.get(value, UNAVAILABLE) !== undefined) return "render-but-fail";
     return undefined;

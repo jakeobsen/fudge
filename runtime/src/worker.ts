@@ -12,6 +12,7 @@ import * as jsxRuntime from "react/jsx-runtime";
 import { placeholderEnvironment, setLaunchContext, type LaunchEnvironment } from "./api/launch.ts";
 import { Toast } from "./api/feedback.ts";
 import { createApiModule } from "./api/module.ts";
+import { explainRenderError } from "./api/oauth.ts";
 import { NavigationRoot, type NavigationHandle } from "./api/navigation.ts";
 import { connect, settle } from "./bridge.ts";
 import { revive, type CommandMode, type HostToWorker, type LaunchProps, type WorkerMessage } from "./protocol.ts";
@@ -134,7 +135,7 @@ try {
     if (mode === "view" || mode === "menu-bar") {
         root = createRoot({
             onRender: (snapshot) => post({ type: "render", ...snapshot }),
-            onError: (error) => report(error, true),
+            onError: (error) => report(explainRenderError(error), true),
         });
         const view = createElement(command as FunctionComponent<LaunchProps>, launchProps);
         root.render(createElement(NavigationRoot, { root: view, handle: navigation }));
