@@ -171,6 +171,15 @@ final class LauncherModel {
     @ObservationIgnored var isVisible: () -> Bool = { false }
     /// Pick Color's loupe. `AppDelegate` gives snapshot runs one that never shows it.
     @ObservationIgnored var colorSampler: any ColorSampling = ScreenColorSampler()
+    /// Define Word's dictionary. `AppDelegate` gives snapshot runs `--definitions`' made-up ones.
+    @ObservationIgnored var definitionLookup: any DefinitionLookup = DictionaryServicesLookup()
+    /// The frontmost app's selected text, for Define Word with no word typed, read as the user's own call. Snapshot
+    /// runs read none.
+    @ObservationIgnored var selectedText: @MainActor () async -> String? = {
+        guard case .string(let text) = try? await SystemCalls.handle("selection.text", .null, origin: .userInitiated)
+        else { return nil }
+        return text
+    }
     /// Asks the user to confirm (title, message, primary, dismiss, destructive); set by the app delegate.
     /// Asks the user, for a call from `origin`; a background call gets `CallOrigin.unaskedAnswer` without an alert.
     @ObservationIgnored var confirm: (AlertRequest, CallOrigin) async -> Bool = { _, _ in false }
@@ -1741,11 +1750,11 @@ final class LauncherModel {
         }
     }
 
-    /// The sessions of Fudge's own views, its forms, Search Snippets, Switch Windows, Search Menu Items and Recent Colors,
-    /// which never reach the host.
+    /// The sessions of Fudge's own views, its forms, Search Snippets, Switch Windows, Search Menu Items, Recent Colors and
+    /// Define Word, which never reach the host.
     static let builtInSessions: Set<String> = [
         QuicklinkForm.session, SnippetForm.session, SnippetList.session, SwitchWindowsList.session, LayoutForm.session,
-        MenuItemsList.session, RecentColorsGrid.session,
+        MenuItemsList.session, RecentColorsGrid.session, DefineWordView.session,
     ]
 
     @ObservationIgnored private var builtInForm: BuiltInFormState?
@@ -2050,7 +2059,7 @@ final class LauncherModel {
     // MARK: - Color Picker
 
     /// One of the Tools group's commands (SPEC-090).
-    private func runTool(_ command: ToolCommand, fromHotkey: Bool) {
+    private func runTool(_ command: ToolCommand, item: RootItem, fromHotkey: Bool) {
         switch command {
         case .pickColor:
             // The loupe needs the screen, so the panel goes first, as for window commands; it never shows.
@@ -2071,6 +2080,107 @@ final class LauncherModel {
                 if case .command = screen { leaveCommand() }
                 showRecentColors()
                 show()
+            }
+        case .defineWord:
+            defineWord(item, fromHotkey: fromHotkey)
+        }
+    }
+
+    // MARK: - Define Word
+
+    /// The word Define Word shows, and its definition (nil: none), which its actions use.
+    @ObservationIgnored private var definedWord: (word: String, definition: String?)?
+
+    /// Define Word (SPEC-091): the typed word, else the selected text's first line, looked up in the Mac's
+    /// dictionaries and shown as a Detail. With neither, root search shows its Word field, with the keyboard in it.
+    private func defineWord(_ item: RootItem, fromHotkey: Bool) {
+        let typed = !fromHotkey && argumentsItem == item.id ? arguments.value(at: 0) : ""
+        let readSelection = selectedText
+        let lookup = definitionLookup
+        Task {
+            switch await DefineWord.start(argument: typed, selection: readSelection) {
+            case .lookUp(let word):
+                let definition = await lookup.definition(of: word)
+                showDefinition(word: word, definition: definition, item: item, fromHotkey: fromHotkey)
+            case .askForWord:
+                askForWord(item, fromHotkey: fromHotkey)
+            }
+        }
+    }
+
+    /// Whether root search is still where Define Word was run from: the panel up, on root search, with it selected.
+    /// The user may have moved on while the selection and the dictionary were read.
+    private func stillOnDefineWord(_ item: RootItem) -> Bool {
+        guard isVisible(), case .root = screen else { return false }
+        return selectedItem == item.id
+    }
+
+    private func showDefinition(word: String, definition: String?, item: RootItem, fromHotkey: Bool) {
+        func build() {
+            actionPanel = nil
+            dropdownPanel = nil
+            datePanel = nil
+            var command = CommandScreen(session: DefineWordView.session, title: DefineWordView.title)
+            command.view = DefineWordView.view(word: word, definition: definition)
+            definedWord = (word, definition)
+            screen = .command(command)
+            // As after a command's launch, the fields start empty for when the user comes back to root search.
+            if argumentsItem == item.id { resetArguments(for: item) }
+        }
+        if fromHotkey {
+            resettingFirst {
+                if case .command = screen { leaveCommand() }
+                build()
+                show()
+            }
+        } else if stillOnDefineWord(item) {
+            build()
+        }
+    }
+
+    /// No word and no selection: root search with Define Word selected and the keyboard in its Word field.
+    private func askForWord(_ item: RootItem, fromHotkey: Bool) {
+        if fromHotkey {
+            resettingFirst {
+                if case .command = screen { leaveCommand() }
+                screen = .root
+                rootQuery = ""
+                refreshResults()
+                selectedItem = item.id
+                arguments.focus = 0
+                show()
+            }
+        } else if stillOnDefineWord(item) {
+            arguments.focus = 0
+        }
+    }
+
+    /// One of its actions, as `send` hands it over.
+    private func defineWordAction(node: Int) {
+        guard let target = DefineWordView.target(of: node), let shown = definedWord,
+            case .command(let command) = screen, command.session == DefineWordView.session
+        else { return }
+        switch target {
+        case .lookUpInDictionary:
+            guard let url = DefineWord.dictionaryURL(for: shown.word) else { return }
+            Task {
+                do {
+                    _ = try await SystemCalls.handle(
+                        "open", .object(["target": .string(url.absoluteString)]), origin: .userInitiated)
+                    hide()
+                } catch {
+                    showFailureToast("Can't open Dictionary", message: SystemCalls.message(of: error))
+                }
+            }
+        case .copyDefinition:
+            guard let definition = shown.definition else { return }
+            Task {
+                guard await Self.copyText(definition) else {
+                    showFailureToast("Couldn't copy the definition")
+                    return
+                }
+                hide()
+                showHUD("Copied to Clipboard")
             }
         }
     }
@@ -3201,7 +3311,7 @@ final class LauncherModel {
                 if let message { showHUD(message) }
             }
         } else if group == BuiltInCommandGroup.tools.name, let command = ToolCommand(rawValue: command) {
-            runTool(command, fromHotkey: fromHotkey)
+            runTool(command, item: item, fromHotkey: fromHotkey)
         }
     }
 
@@ -3668,6 +3778,8 @@ final class LauncherModel {
                 menuItemsAction(node: node)
             } else if session == RecentColorsGrid.session, path == ["onAction"] {
                 recentColorsAction(node: node)
+            } else if session == DefineWordView.session, path == ["onAction"] {
+                defineWordAction(node: node)
             }
             return
         }

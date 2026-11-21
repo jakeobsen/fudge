@@ -194,14 +194,20 @@ public struct ColorPick: Sendable {
 public enum ToolCommand: String, CaseIterable, Sendable {
     case pickColor = "pick-color"
     case recentColors = "recent-colors"
+    case defineWord = "define-word"
 
     /// The command's title, extra search words and SF Symbol.
     var presentation: (String, [String], String) {
         switch self {
         case .pickColor: ("Pick Color", ["color", "colour", "picker", "eyedropper", "hex"], "eyedropper")
         case .recentColors: ("Recent Colors", ["color", "colour", "picker", "history", "hex"], "swatchpalette")
+        case .defineWord: ("Define Word", ["dictionary", "definition", "meaning", "look up"], "character.book.closed")
         }
     }
+
+    /// Define Word's Word argument, and "define" as its hand-off word, so `define serendipity` works.
+    var arguments: [ExtensionManifest.Argument] { self == .defineWord ? [DefineWord.argument] : [] }
+    var handOffWord: String? { self == .defineWord ? "define" : nil }
 }
 
 extension BuiltInCommandGroup {
@@ -210,6 +216,8 @@ extension BuiltInCommandGroup {
         name: ":tools", title: "Tools",
         commands: ToolCommand.allCases.map { command in
             let (title, keywords, symbol) = command.presentation
-            return BuiltInCommand(name: command.rawValue, title: title, keywords: keywords, symbol: symbol)
+            return BuiltInCommand(
+                name: command.rawValue, title: title, keywords: keywords, symbol: symbol,
+                arguments: command.arguments, handOffWord: command.handOffWord)
         })
 }

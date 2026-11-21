@@ -255,6 +255,12 @@ Give either one a hotkey under **Settings… → Commands → Tools**.
 
 **Settings… → Color Picker → Copy Format** sets how Pick Color and ↵ copy a color: `#3A7BD5` (HEX, the default), `rgb(58, 123, 213)`, `hsl(215, 65%, 53%)`, `Color(red: 0.227, green: 0.482, blue: 0.835)` or `UIColor(red: 0.227, green: 0.482, blue: 0.835, alpha: 1)`.
 
+### Define Word
+
+**Define Word** shows a word's definition from your Mac's own dictionaries.
+Type `define` and the word (`define serendipity`), or run it with nothing typed to look up the text selected in the app you're in.
+↵ (or ⌘D) opens the word in Dictionary, and ⌘↵ copies the definition.
+
 ### Clipboard History
 
 **Clipboard History** keeps what you copy, so you can search it and paste it again.
