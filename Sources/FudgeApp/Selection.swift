@@ -47,20 +47,28 @@ final class SystemAccessibility: AccessibilityAccess {
 @MainActor
 final class SystemCopyKey: CopyKeyPoster, PasteKeyPoster {
     func postCopy(to pid: Int32) {
-        post(CGKeyCode(CopyKey.keyCode(translate: Self.charactersWithCommand)), to: pid)
+        post(CGKeyCode(CopyKey.keyCode(translate: Self.charactersWithCommand)), flags: .maskCommand, to: pid)
     }
 
     func postPaste(to pid: Int32) {
-        post(CGKeyCode(PasteKey.keyCode(translate: Self.charactersWithCommand)), to: pid)
+        post(CGKeyCode(PasteKey.keyCode(translate: Self.charactersWithCommand)), flags: .maskCommand, to: pid)
     }
 
-    private func post(_ key: CGKeyCode, to pid: Int32) {
+    func postLeftArrow(_ count: Int, to pid: Int32) {
+        // ← is the same key in every layout (kVK_LeftArrow). An arrow key carries the function-key and numeric-pad
+        // flags, as a typed one does.
+        for _ in 0..<count {
+            post(CGKeyCode(kVK_LeftArrow), flags: [.maskSecondaryFn, .maskNumericPad], to: pid)
+        }
+    }
+
+    private func post(_ key: CGKeyCode, flags: CGEventFlags, to pid: Int32) {
         // A private source with explicit flags: modifiers the user is still holding (⌥ from ⌥Space, ⇧ from a ⌘⇧
-        // shortcut) don't merge in and turn it into ⌥⌘C or ⇧⌘V.
+        // shortcut) don't merge in and turn it into ⌥⌘C or ⇧⌘V, or ← into ⇧← selecting text.
         let source = CGEventSource(stateID: .privateState)
         for down in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down) else { continue }
-            event.flags = .maskCommand
+            event.flags = flags
             event.postToPid(pid)
         }
     }

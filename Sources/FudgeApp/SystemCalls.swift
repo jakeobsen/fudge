@@ -111,6 +111,14 @@ enum SystemCalls {
             hideWindow: hideWindow, frontmost: frontmost)
     }
 
+    /// Pastes a snippet's filled-in text into the frontmost app as `Clipboard.paste` does, in its turn, then puts the
+    /// caret where its `{cursor}` was with `leftArrows` ← presses. Run from Search Snippets, by the user.
+    static func pasteSnippet(_ text: String, leftArrows: Int, hideWindow: () async -> Void) async throws {
+        try await paster.paste(
+            PasteboardContents.forPaste(text: text, html: nil, file: nil), closeMainWindow: true,
+            origin: .userInitiated, leftArrows: leftArrows, hideWindow: hideWindow, frontmost: frontmost)
+    }
+
     /// `WindowManagement` (`windows.*`). It needs Accessibility permission, checked as Paste checks it, and runs off
     /// the main thread, since the Accessibility API waits on other apps.
     private static func windows(_ method: String, _ params: [String: JSONValue], origin: CallOrigin) async throws

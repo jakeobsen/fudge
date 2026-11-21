@@ -38,6 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let snapshot = Snapshot(arguments: CommandLine.arguments) {
             let files = snapshot.foundFiles.map { FixedFileQuery.load($0, home: FileSearchOptions.home()) } ?? []
             model.fileSearch = FileSearch { FixedFileQuery(files) }
+            model.templateClipboard = { nil }
         }
         panel = LauncherPanel(content: LauncherView(model: model))
         settingsModel = SettingsModel(paths: paths)

@@ -203,6 +203,13 @@ final class LauncherModel {
     @ObservationIgnored private var hostSessions = HostSessions()
     /// Answers Search Files' `files.search` through Spotlight. `AppDelegate` gives snapshot runs fixed results.
     @ObservationIgnored var fileSearch = FileSearch { SpotlightFileQuery() }
+    /// The clipboard's text for a quicklink's or snippet's `{clipboard}`: none when it's concealed or transient
+    /// (`QuicklinkTemplate.clipboardText`). In snapshot runs it's always none, so no snapshot shows the user's clipboard.
+    @ObservationIgnored var templateClipboard: @MainActor () -> String? = {
+        let pasteboard = NSPasteboard.general
+        return QuicklinkTemplate.clipboardText(
+            pasteboard.string(forType: .string), types: (pasteboard.types ?? []).map(\.rawValue))
+    }
     /// No-view commands still running, by session.
     @ObservationIgnored private var background: [String: String] = [:]
     /// No-view commands that `launchCommand` started in the background, by session. They leave the panel alone.
@@ -1355,7 +1362,7 @@ final class LauncherModel {
             case .command: return
             }
         case .createQuicklink(let request):
-            guard case .command(let command) = screen, !Self.builtInFormSessions.contains(command.session) else {
+            guard case .command(let command) = screen, !Self.builtInSessions.contains(command.session) else {
                 return
             }
             showQuicklinkForm(
@@ -1535,12 +1542,7 @@ final class LauncherModel {
     private func openQuicklink(_ quicklink: Quicklink, item: RootItem) {
         let entered = argumentsItem == item.id ? arguments : ArgumentInput(arguments: item.arguments)
         let template = QuicklinkTemplate(quicklink.link)
-        var clipboard: String?
-        if template.usesClipboard {
-            let pasteboard = NSPasteboard.general
-            clipboard = QuicklinkTemplate.clipboardText(
-                pasteboard.string(forType: .string), types: (pasteboard.types ?? []).map(\.rawValue))
-        }
+        let clipboard = template.usesClipboard ? templateClipboard() : nil
         let filled = template.fill(arguments: entered.launchArguments, context: .init(clipboard: clipboard))
         let target: QuicklinkOpening.Target
         switch QuicklinkOpening.target(for: template, filled: filled) {
@@ -1633,8 +1635,8 @@ final class LauncherModel {
         }
     }
 
-    /// The sessions of Fudge's own forms, which never reach the host.
-    static let builtInFormSessions: Set<String> = [QuicklinkForm.session, SnippetForm.session]
+    /// The sessions of Fudge's own views, its forms and Search Snippets, which never reach the host.
+    static let builtInSessions: Set<String> = [QuicklinkForm.session, SnippetForm.session, SnippetList.session]
 
     @ObservationIgnored private var builtInForm: BuiltInFormState?
     @ObservationIgnored private var quicklinkApplicationList: [QuicklinkApplication]?
@@ -1774,7 +1776,8 @@ final class LauncherModel {
         actionPanel = nil
         dropdownPanel = nil
         datePanel = nil
-        if let returnTo = form.returnTo {
+        if var returnTo = form.returnTo {
+            if returnTo.session == SnippetList.session { renderSnippetList(&returnTo) }
             screen = .command(returnTo)
             for message in form.deferred { handle(message) }
         } else {
@@ -1794,6 +1797,125 @@ final class LauncherModel {
         for case .exit(let session, let reason) in form.deferred { handle(.exit(session: session, reason: reason)) }
         if case .command(let command) = screen, command.session == covered { return }
         send(.unload(session: covered))
+    }
+
+    // MARK: - Search Snippets
+
+    /// The snippets Search Snippets was last drawn from, which its actions' nodes are read in (`SnippetList.target`).
+    @ObservationIgnored private var listedSnippets: [Snippet] = []
+
+    /// Shows Search Snippets (SPEC-078 §3), from root search.
+    private func showSnippetList() {
+        actionPanel = nil
+        dropdownPanel = nil
+        datePanel = nil
+        var command = CommandScreen(session: SnippetList.session, title: SnippetList.title)
+        renderSnippetList(&command)
+        screen = .command(command)
+    }
+
+    /// Reads `snippets.json` again and draws the list, keeping the search text and the selection on the same
+    /// snippet where it can. The detail's preview fills `{clipboard}` only when a snippet uses it.
+    private func renderSnippetList(_ command: inout CommandScreen) {
+        let snippets = SnippetStore.load(from: paths.snippetsFile).snippets
+        listedSnippets = snippets
+        let usesClipboard = snippets.contains { SnippetTemplate($0.text).usesClipboard }
+        command.view = SnippetList.view(
+            snippets: snippets, context: .init(clipboard: usesClipboard ? templateClipboard() : nil))
+        refreshList(&command, selectFirst: false)
+    }
+
+    /// Draws Search Snippets again, if it's on screen.
+    private func reloadSnippetList() {
+        guard case .command(var command) = screen, command.session == SnippetList.session else { return }
+        renderSnippetList(&command)
+        screen = .command(command)
+    }
+
+    /// One of its actions, as `send` hands it over.
+    private func snippetListAction(node: Int) {
+        guard let target = SnippetList.target(of: node, in: listedSnippets),
+            case .command(let list) = screen, list.session == SnippetList.session
+        else { return }
+        let file = paths.snippetsFile
+        func saved(_ id: String) -> Snippet? {
+            if let snippet = SnippetStore.load(from: file).snippet(id: id) { return snippet }
+            showFailureToast("The snippet is gone", message: "It was deleted outside Search Snippets.")
+            reloadSnippetList()
+            return nil
+        }
+        switch target {
+        case .paste(let id):
+            if let snippet = saved(id) { pasteSnippet(snippet) }
+        case .copy(let id):
+            if let snippet = saved(id) { copySnippet(snippet) }
+        case .edit(let id):
+            if let snippet = saved(id) { showSnippetForm(SnippetDraft(editing: snippet), over: list) }
+        case .delete(let id):
+            if let snippet = saved(id) { deleteSnippet(snippet) }
+        case .create:
+            showSnippetForm(SnippetDraft(), over: list)
+        }
+    }
+
+    /// The snippet's text with its placeholders filled in, and how far from its end `{cursor}` was; nil, with a
+    /// toast, when its text has a problem (only a hand-edited file can hold one).
+    private func filledSnippet(_ snippet: Snippet) -> (text: String, afterCursor: Int?)? {
+        let template = SnippetTemplate(snippet.text)
+        if let problem = template.problem {
+            showFailureToast("Can't use \(snippet.name)", message: problem)
+            return nil
+        }
+        return template.fill(context: .init(clipboard: template.usesClipboard ? templateClipboard() : nil))
+    }
+
+    /// ↵ Paste Snippet: pastes it into the app the user was in through `Clipboard.paste`'s path and turn (the panel
+    /// hides first, and the clipboard is put back), then puts the caret where `{cursor}` was with ← presses.
+    private func pasteSnippet(_ snippet: Snippet) {
+        guard let filled = filledSnippet(snippet) else { return }
+        Task {
+            do {
+                try await SystemCalls.pasteSnippet(
+                    filled.text, leftArrows: filled.afterCursor ?? 0, hideWindow: { await self.hideForPaste() })
+            } catch PasteError.noTarget {
+                showHUD("There is no app to paste into")
+            } catch {
+                // Without Accessibility permission, the panel is still up, and the text is on the clipboard.
+                showFailureToast("Can't paste \(snippet.name)", message: SystemCalls.message(of: error))
+            }
+        }
+    }
+
+    /// ⌘↵ Copy to Clipboard: the filled-in text, then the panel hides with a HUD, as Raycast's Copy does.
+    private func copySnippet(_ snippet: Snippet) {
+        guard let filled = filledSnippet(snippet) else { return }
+        Task {
+            _ = try? await SystemCalls.handle(
+                "clipboard.copy", .object(["text": .string(filled.text)]), origin: .userInitiated)
+        }
+        hide()
+        showHUD("Copied to Clipboard")
+    }
+
+    /// ⌃X Delete Snippet…: asks, then removes it from `snippets.json` and draws the list again. A file Fudge can't
+    /// read stays as it is, and a toast says why.
+    private func deleteSnippet(_ snippet: Snippet) {
+        let file = paths.snippetsFile
+        let request = AlertRequest(
+            title: "Delete “\(snippet.name)”?", message: "It's removed from Search Snippets.", primary: "Delete",
+            dismiss: "Cancel", destructive: true)
+        Task {
+            guard await confirm(request, .userInitiated) else { return }
+            var store = SnippetStore.load(from: file)
+            store.remove(id: snippet.id)
+            do {
+                try store.save(to: file)
+            } catch {
+                showFailureToast("Can't delete \(snippet.name)", message: String(describing: error))
+                return
+            }
+            reloadSnippetList()
+        }
     }
 
     /// Delete Quicklink…: asks, then removes it from `quicklinks.json`. A file Fudge can't read stays as it is,
@@ -2312,6 +2434,12 @@ final class LauncherModel {
         case .createQuicklink:
             recordLaunch(item)
             showQuicklinkForm(QuicklinkDraft())
+        case .searchSnippets:
+            recordLaunch(item)
+            showSnippetList()
+        case .createSnippet:
+            recordLaunch(item)
+            showSnippetForm(SnippetDraft())
         case .builtInCommand(let group, let command):
             runBuiltIn(item, group: group, command: command, fromHotkey: false)
         case .command(let extensionName, let commandName, _, _):
@@ -2728,14 +2856,19 @@ final class LauncherModel {
     }
 
     private func send(_ message: AppMessage) {
-        // Fudge's own forms answer their events themselves, and nothing of theirs reaches the host.
-        if case .event(let session, let node, let path, _) = message, Self.builtInFormSessions.contains(session) {
-            if session == builtInForm?.session { builtInFormEvent(node: node, path: path) }
+        // Fudge's own views answer their events themselves, and nothing of theirs reaches the host.
+        if case .event(let session, let node, let path, _) = message, Self.builtInSessions.contains(session) {
+            if session == builtInForm?.session {
+                builtInFormEvent(node: node, path: path)
+            } else if session == SnippetList.session, path == ["onAction"] {
+                snippetListAction(node: node)
+            }
             return
         }
         switch message {
-        case .pop(let session), .unload(let session), .rpcResult(let session, _, _, _), .toastAction(let session, _, _):
-            if Self.builtInFormSessions.contains(session) { return }
+        case .pop(let session), .unload(let session), .slots(let session, _), .rpcResult(let session, _, _, _),
+            .toastAction(let session, _, _):
+            if Self.builtInSessions.contains(session) { return }
         default:
             break
         }
@@ -2754,7 +2887,7 @@ final class LauncherModel {
         quietSessions.removeAll()
         menuBar.hostStopped()
         if case .command(var command) = screen, command.failure == nil,
-            !Self.builtInFormSessions.contains(command.session)
+            !Self.builtInSessions.contains(command.session)
         {
             command.failure = Failure(title: "\(command.title) stopped", message: "The extension host exited.")
             screen = .command(command)
@@ -3301,6 +3434,10 @@ final class LauncherModel {
             image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)!
         case .createQuicklink:
             image = NSImage(systemSymbolName: "link.badge.plus", accessibilityDescription: nil)!
+        case .searchSnippets:
+            image = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)!
+        case .createSnippet:
+            image = NSImage(systemSymbolName: "text.badge.plus", accessibilityDescription: nil)!
         case .builtInCommand(let group, let command):
             let symbol = BuiltInCommandGroup.command(group: group, command: command)?.command.symbol
             image =
