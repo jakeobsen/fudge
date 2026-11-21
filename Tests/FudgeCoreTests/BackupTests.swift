@@ -691,6 +691,26 @@ private func storeFolder(_ trees: [String: String]) throws -> Folder {
     #expect(!settings.isEnabled(extension: ":test-tools"))
 }
 
+@Test func recentColorsGoIntoABackup() throws {
+    let source = try Folder()
+    try source.write("colors.json", #"{"colors":[{"id":"a","red":0.2,"green":0.4,"blue":0.8,"alpha":1}]}"#)
+    let export = Backup.collect(from: source.paths, installed: [], fudgeVersion: "1.0", now: now)
+    #expect(export.entries.contains { $0.path == "colors.json" })
+    let file = source.url.appendingPathComponent("b.fudgebackup")
+    try BackupArchive.write(export.entries, to: file, password: password)
+    let target = try Folder()
+    _ = try Backup.apply(
+        try Backup.open(file, password: password), to: target.paths, installed: [], fudgeVersion: "1.0", now: now)
+    #expect(RecentColorStore.load(from: target.paths.colorsFile).colors.map(\.id) == ["a"])
+    let manifest = #"{"format":1,"fudgeVersion":"1","created":"2026-01-01T00:00:00Z","extensions":[]}"#
+    #expect(throws: BackupError.self, "a colors.json that isn't an object is refused") {
+        try Backup.contents(of: [
+            BackupEntry(path: "manifest.json", data: Data(manifest.utf8)),
+            BackupEntry(path: "colors.json", data: Data("[1]".utf8)),
+        ])
+    }
+}
+
 @Test func snippetsGoIntoABackupAndAreCounted() throws {
     let source = try Folder()
     try source.write(

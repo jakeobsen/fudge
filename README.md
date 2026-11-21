@@ -105,7 +105,7 @@ An extension running in the background, such as a menu bar refresh, never interr
 
 **Settings… → General → Import / Export** saves everything you've set up in Fudge to one file, and brings it back, on this Mac or another one.
 
-- **Export…** asks for a password (at least 8 characters), then where to save `fudge-backup-<date>.fudgebackup`. The file holds Fudge's settings (hotkeys, aliases, which commands are on), your quicklinks and snippets, the answers about extensions opening other extensions, root search's ranking, every extension's preferences and data, and the list of installed extensions. It's always encrypted with your password, because extensions keep passwords and tokens in there; Fudge can't recover a forgotten one. The file opens only in Fudge, not with Apple's `aea` tool. Extension data over 100 MB in total leaves out the biggest extensions' data, and the export says which.
+- **Export…** asks for a password (at least 8 characters), then where to save `fudge-backup-<date>.fudgebackup`. The file holds Fudge's settings (hotkeys, aliases, which commands are on), your quicklinks, snippets and recent colors, the answers about extensions opening other extensions, root search's ranking, every extension's preferences and data, and the list of installed extensions. It's always encrypted with your password, because extensions keep passwords and tokens in there; Fudge can't recover a forgotten one. The file opens only in Fudge, not with Apple's `aea` tool. Extension data over 100 MB in total leaves out the biggest extensions' data, and the export says which.
 - **Import…** (also **Restore from a Backup…** on the Welcome screen Fudge shows the first time) asks for the file and its password, shows what's in it, and replaces your settings and the data of the extensions in the backup; other extensions keep theirs. The summary also lists the backup's extensions that changed since it was made (a new version, an update from the Extension Store, or installed another way); they're imported all the same. It then lists the extensions in the backup that aren't installed here, so you can reinstall them. It installs nothing itself.
 - **The extensions themselves aren't in a backup**, only the list, and neither are caches, the exchange rates, your sign-ins, the sign-in server or the Extension Store's switch (set these again yourself).
 - Before importing, Fudge saves what it's about to replace in `backups/` in its support folder (`~/Library/Application Support/fudge/backups`), readable by you only. It keeps the last 3. You can import one of those with **Import…**; it needs no password.
@@ -157,6 +157,12 @@ In **Settings… → Search Files**, **Search In** picks your home folder (the d
 **Search Emoji & Symbols** finds an emoji by its name or a keyword ("thumbs", "+1", "heart"). ↵ pastes it into the app you were in, ⌘↵ copies it, and ⌘⇧C copies its name. The ones you use most recently come first, under **Recently Used**. It shows the emoji your Mac can draw.
 
 In **Settings… → Search Emoji & Symbols**, **Skin Tone** picks the tone for the emoji that have one.
+
+### Color Picker
+
+**Pick Color** shows a magnifier: click a color anywhere on the screen to copy it, or press Esc to cancel. **Recent Colors** shows the last 32 colors you picked. ↵ copies one, ⌘K copies it as HEX, RGB, HSL, a SwiftUI `Color` or a `UIColor`, ⌃X removes it, and ⌃⇧X clears them all, after asking. Give either one a hotkey under **Settings… → Commands → Tools**.
+
+**Settings… → Color Picker → Copy Format** sets how Pick Color and ↵ copy a color: `#3A7BD5` (HEX, the default), `rgb(58, 123, 213)`, `hsl(215, 65%, 53%)`, `Color(red: 0.227, green: 0.482, blue: 0.835)` or `UIColor(red: 0.227, green: 0.482, blue: 0.835, alpha: 1)`.
 
 ### Clipboard History
 
