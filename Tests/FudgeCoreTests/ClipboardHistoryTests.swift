@@ -233,7 +233,7 @@ private func store() throws -> (ClipboardHistoryStore, MemorySecretStore, FudgeP
     try store.save(history)
     try store.writeImage(png(9), file: image.imageFile!)
 
-    #expect(store.load() == history)
+    #expect(try store.load() == history)
     #expect(try store.readImage(file: image.imageFile!) == png(9))
     #expect(try secrets.read(account: ClipboardHistoryStore.keyAccount)?.count == 32)
 
@@ -259,7 +259,7 @@ private func store() throws -> (ClipboardHistoryStore, MemorySecretStore, FudgeP
     try store.save(history)
 
     try secrets.delete(account: ClipboardHistoryStore.keyAccount)
-    #expect(store.load(now: start).entries.isEmpty)
+    #expect(try store.load(now: start).entries.isEmpty)
     let names = try FileManager.default.contentsOfDirectory(atPath: store.folder.path)
     #expect(names.contains { $0.hasPrefix("\(ClipboardHistoryStore.historyFile).unreadable-") })
     #expect(!names.contains(ClipboardHistoryStore.historyFile))
@@ -269,7 +269,7 @@ private func store() throws -> (ClipboardHistoryStore, MemorySecretStore, FudgeP
     var damaged = try Data(contentsOf: file)
     damaged[damaged.count - 1] ^= 0xFF
     try damaged.write(to: file)
-    #expect(store.load(now: start + 1).entries.isEmpty)
+    #expect(try store.load(now: start + 1).entries.isEmpty)
     #expect(
         try FileManager.default.contentsOfDirectory(atPath: store.folder.path).filter { $0.contains(".unreadable-") }
             .count == 2)
@@ -416,13 +416,13 @@ private final class FailingSecretStore: SecretStore, @unchecked Sendable {
     try store.save(history)
 
     secrets.failing = true
-    #expect(store.load().entries.isEmpty)
+    #expect(throws: ClipboardStoreError.self) { try store.load() }
     #expect(throws: (any Error).self) { try store.save(ClipboardHistory()) }
     let names = try FileManager.default.contentsOfDirectory(atPath: store.folder.path)
     #expect(names.contains(ClipboardHistoryStore.historyFile) && !names.contains { $0.contains(".unreadable-") })
 
     secrets.failing = false
-    #expect(store.load() == history, "readable again once the Keychain is")
+    #expect(try store.load() == history, "readable again once the Keychain is")
 }
 
 @Test func anImageFilesNameSaysNothingAboutTheImage() {
@@ -431,4 +431,33 @@ private final class FailingSecretStore: SecretStore, @unchecked Sendable {
     let digest = ClipboardHistoryStore.digest(png(8))
     #expect(entry.imageDigest == digest)
     #expect(!(entry.imageFile ?? "").contains(digest))
+}
+
+@Test func whileTheKeychainDoesntAnswerNothingReplacesTheHistory() throws {
+    // The review's sequence: a pinned entry saved, the Keychain failing, a copy, the Keychain back, another copy.
+    let paths = FudgePaths(supportDirectory: try Fixtures.temporaryDirectory())
+    let secrets = FailingSecretStore()
+    let store = ClipboardHistoryStore(paths: paths, secrets: secrets)
+    var saved = ClipboardHistory()
+    _ = saved.record(.text("pinned"), source: nil, now: start, id: "pinned")
+    _ = saved.setPinned(true, id: "pinned")
+    try store.save(saved)
+
+    var keeper = ClipboardHistoryKeeper()
+    secrets.failing = true
+    #expect(!step { keeper.ensureLoaded(from: store) })
+    let locked = step { keeper.change(from: store) { $0.record(.text("while locked"), source: nil, now: start + 1) } }
+    #expect(locked == nil)
+    #expect(!keeper.loaded && keeper.history.entries.isEmpty, "nothing recorded, so nothing to save over the file")
+
+    secrets.failing = false
+    let change = step { keeper.change(from: store) { $0.record(.text("after"), source: nil, now: start + 2) } }
+    #expect(change?.recorded?.text == "after")
+    try store.save(keeper.history)
+    #expect(try store.load().entries.map(\.id).contains("pinned"), "the old pinned entry survives")
+    #expect(keeper.history.entries.map(\.text) == ["after", "pinned"])
+
+    keeper.reset()
+    #expect(keeper.loaded && keeper.history.entries.isEmpty)
+    #expect(ClipboardHistoryKeeper(fixed: saved).loaded)
 }

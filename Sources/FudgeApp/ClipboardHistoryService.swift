@@ -10,8 +10,8 @@ final class ClipboardHistoryService {
     private let paths: FudgePaths
     private let store: ClipboardHistoryStore
     private let turns: PasteboardTurns
-    private var history = ClipboardHistory()
-    private var loaded = false
+    /// The history, changed only once it has been read (`ClipboardHistoryKeeper`).
+    private var keeper: ClipboardHistoryKeeper
     private var settings = FudgeSettings()
     private var watching: Task<Void, Never>?
     private var pruning: Timer?
@@ -31,10 +31,7 @@ final class ClipboardHistoryService {
         self.store = ClipboardHistoryStore(paths: paths, secrets: secrets)
         self.turns = turns
         self.fixed = fixed != nil
-        if let fixed {
-            history = fixed
-            loaded = true
-        }
+        self.keeper = ClipboardHistoryKeeper(fixed: fixed)
     }
 
     var isOn: Bool { fixed || settings.isClipboardHistoryOn }
@@ -86,11 +83,13 @@ final class ClipboardHistoryService {
         await Task.detached(priority: .utility) { NSPasteboard.general.changeCount }.value
     }
 
-    private func loadIfNeeded() {
-        guard !loaded else { return }
-        history = store.load()
-        loaded = true
-    }
+    /// Reads the history if it hasn't been read. False while the Keychain doesn't answer: then nothing is recorded,
+    /// changed or saved, and the read is tried again next time.
+    @discardableResult
+    private func loadIfNeeded() -> Bool { keeper.ensureLoaded(from: store) }
+
+    private static let unreadable = ClipboardHistoryError(
+        "The clipboard history can't be read until the Keychain answers. Try again in a moment.")
 
     // MARK: - Recording
 
@@ -114,8 +113,7 @@ final class ClipboardHistoryService {
     }
 
     private func record(_ copy: ClipboardCopy, source: ClipboardSource?) {
-        loadIfNeeded()
-        let change = history.record(copy, source: source, now: Date())
+        guard let change = keeper.change(from: store, { $0.record(copy, source: source, now: Date()) }) else { return }
         if case .image(let png, _, _) = copy, let entry = change.recorded, let file = entry.imageFile {
             let store = store
             saving.async {
@@ -130,7 +128,7 @@ final class ClipboardHistoryService {
     /// Deletes what a change dropped and saves the history.
     private func settle(_ change: ClipboardHistory.Change) {
         guard !fixed else { return }
-        let (store, history, removed) = (store, history, change.removedImages)
+        let (store, history, removed) = (store, keeper.history, change.removedImages)
         saving.async {
             store.deleteImages(removed)
             do {
@@ -156,10 +154,11 @@ final class ClipboardHistoryService {
     private static let previewPrefix = "fudge-clipboard-"
 
     private func prune() {
-        guard loaded else { return }
-        let before = history.entries.count
-        let change = history.prune(now: Date(), keepForDays: settings.clipboardHistoryKeepDays)
-        if history.entries.count != before { settle(change) }
+        guard keeper.loaded else { return }
+        let before = keeper.history.entries.count
+        let days = settings.clipboardHistoryKeepDays
+        guard let change = keeper.change(from: store, { $0.prune(now: Date(), keepForDays: days) }) else { return }
+        if keeper.history.entries.count != before { settle(change) }
     }
 
     /// Reads a copy: files first (Finder's copies also carry their names and icons), then text (an app's copy of
@@ -202,17 +201,17 @@ final class ClipboardHistoryService {
             throw ClipboardHistoryError(ClipboardHistory.notClipboardHistory)
         }
         if method == "clipboardHistory.list" {
-            if isOn { loadIfNeeded() }
-            return history.listJSON(on: isOn)
+            if isOn, !loadIfNeeded() { throw Self.unreadable }
+            return keeper.history.listJSON(on: isOn)
         }
         guard isOn else { throw ClipboardHistoryError("Clipboard history is off.") }
-        loadIfNeeded()
+        guard loadIfNeeded() else { throw Self.unreadable }
         let values: [String: JSONValue] = if case .object(let object) = params { object } else { [:] }
         if method == "clipboardHistory.clear" {
-            settle(history.clear())
+            if let change = keeper.change(from: store, { $0.clear() }) { settle(change) }
             return .null
         }
-        guard case .string(let id) = values["id"], let entry = history.entry(id: id) else {
+        guard case .string(let id) = values["id"], let entry = keeper.history.entry(id: id) else {
             throw ClipboardHistoryError("That copy isn't in the history any more.")
         }
         switch method {
@@ -223,10 +222,18 @@ final class ClipboardHistoryService {
         case "clipboardHistory.copy":
             SystemCalls.write(try contents(of: entry, forPaste: false))
         case "clipboardHistory.pin":
-            _ = history.setPinned(values["pinned"] != .bool(false), id: id)
-            settle(ClipboardHistory.Change())
+            let pinned = values["pinned"] != .bool(false)
+            if let change = keeper.change(
+                from: store,
+                { history in
+                    _ = history.setPinned(pinned, id: id)
+                    return ClipboardHistory.Change()
+                })
+            {
+                settle(change)
+            }
         case "clipboardHistory.delete":
-            settle(history.delete(id: id))
+            if let change = keeper.change(from: store, { $0.delete(id: id) }) { settle(change) }
         default:
             throw ClipboardHistoryError("Unknown call \(method)")
         }
@@ -236,9 +243,7 @@ final class ClipboardHistoryService {
     /// `Clipboard.read({ offset })` and `readText` for an offset above 0: the nth previous copy, as `clipboard.read`
     /// answers the current one, or null while history is off or there's no such copy.
     func read(offset: Int) -> JSONValue {
-        guard isOn else { return .null }
-        loadIfNeeded()
-        guard let entry = history.entry(offset: offset) else { return .null }
+        guard isOn, loadIfNeeded(), let entry = keeper.history.entry(offset: offset) else { return .null }
         switch entry.kind {
         case .text, .link: return .object(["text": .string(entry.text ?? "")])
         case .files:
@@ -289,7 +294,7 @@ final class ClipboardHistoryService {
 
     /// **Clear History…** and **Delete History**: every entry, pinned ones too, and the key.
     func deleteAll() {
-        history = ClipboardHistory()
+        keeper.reset()
         clearPreviews()
         let store = store
         // After any save still waiting, so nothing writes the folder again.

@@ -28,9 +28,10 @@ public final class ClipboardHistoryStore: @unchecked Sendable {
     }
 
     /// Reads the history. A missing file is an empty history; one whose key is gone, or that won't open, is set aside,
-    /// and the history starts empty. A Keychain error leaves the file alone. Never throws.
-    public func load(now: Date = Date()) -> ClipboardHistory {
-        lock.withLock {
+    /// and the history starts empty. A Keychain error (a locked Keychain) throws and leaves the file alone, so it can
+    /// be read once the Keychain answers (`ClipboardHistoryKeeper`).
+    public func load(now: Date = Date()) throws -> ClipboardHistory {
+        try lock.withLock {
             let file = folder.appendingPathComponent(Self.historyFile)
             guard let sealed = try? Data(contentsOf: file) else { return ClipboardHistory() }
             // The Keychain failing (locked, say) isn't the key being gone: the file stays where it is for the next
@@ -39,7 +40,7 @@ public final class ClipboardHistoryStore: @unchecked Sendable {
             do {
                 key = try existingKey()
             } catch {
-                return ClipboardHistory()
+                throw ClipboardStoreError.keychain(String(describing: error))
             }
             guard let key,
                 let data = try? open(sealed, name: Self.historyFile, key: key),
@@ -139,14 +140,57 @@ public final class ClipboardHistoryStore: @unchecked Sendable {
 
 public enum ClipboardStoreError: Error, Equatable, CustomStringConvertible {
     case noKey
+    /// The Keychain didn't answer, so the history can't be read yet.
+    case keychain(String)
     case sealing
     case writing(String)
 
     public var description: String {
         switch self {
         case .noKey: "The clipboard history's key isn't in the Keychain."
+        case .keychain(let why): "The clipboard history can't be read until the Keychain answers (\(why))."
         case .sealing: "The clipboard history couldn't be encrypted."
         case .writing(let name): "Couldn't save the clipboard history (\(name))."
         }
+    }
+}
+
+/// The history as the app holds it (SPEC-077 §3): read once from the store, and changed only after that read has
+/// worked. While the Keychain doesn't answer, the read fails, nothing is recorded or changed, and the read is tried
+/// again at the next use, so a history that couldn't be read is never replaced by a new one.
+public struct ClipboardHistoryKeeper: Sendable {
+    public private(set) var history = ClipboardHistory()
+    public private(set) var loaded = false
+
+    /// `fixed`: a snapshot run's made-up history, counted as read.
+    public init(fixed: ClipboardHistory? = nil) {
+        if let fixed {
+            history = fixed
+            loaded = true
+        }
+    }
+
+    /// Reads the history if it hasn't been read yet. False while it can't be.
+    public mutating func ensureLoaded(from store: ClipboardHistoryStore, now: Date = Date()) -> Bool {
+        if loaded { return true }
+        guard let read = try? store.load(now: now) else { return false }
+        history = read
+        loaded = true
+        return true
+    }
+
+    /// Applies `edit` once the history has been read; nil, changing nothing, while it can't be.
+    public mutating func change(
+        from store: ClipboardHistoryStore, now: Date = Date(),
+        _ edit: (inout ClipboardHistory) -> ClipboardHistory.Change
+    ) -> ClipboardHistory.Change? {
+        guard ensureLoaded(from: store, now: now) else { return nil }
+        return edit(&history)
+    }
+
+    /// After **Delete History**: the folder and the key are gone, so an empty history is the whole truth.
+    public mutating func reset() {
+        history = ClipboardHistory()
+        loaded = true
     }
 }
