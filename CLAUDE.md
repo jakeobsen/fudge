@@ -882,7 +882,8 @@ Extensions run in a separate Node.js process, the extension host.
     Every other git step runs to its end, since one that writes the index holds `index.lock`, and ending it would leave that behind for every later checkout and install.
     The README waits the same way: both run through `RestingWork` (`resting.ts`), and only the resting row's README is fetched (`fetchReadme`), once per folder tree, since READMEs are kept by tree id.
     It's selected before the check, so its quick fetch goes ahead of the check's download in the git queue.
-    A README git couldn't fetch isn't kept (it shows as none), and ⌘R fetches it again (`RestingWork.again`).
+    A README git couldn't fetch isn't kept: the detail says so (`readmeNotFetched`), and ⌘R fetches it again (`RestingWork.again`), as does coming back to its row.
+    While a fetch is on its way, waiting or running, the detail shows it as loading (`RestingWork`'s `scheduled` clears the failure, `shownReadme`), so showing no README means the folder has none.
     A check (`checkFolder`) runs in the git queue, one at a time: it counts the files under the folder's `src/` from the trees (`srcFiles`), the source files (`isScanned`: what the patterns check out, a folder named like a script included) and all of them, and isn't checked past either cap (`maxScanFiles`, 300 source files; `maxSrcFiles`, 1,000 files).
     It then downloads what isn't here yet with each file's size capped (`fetchSource`), only when a source file is missing (`missingObjects`), so a folder checked before in this version downloads nothing again.
     That's the `src/` tree fetched again (`--refetch`) with a `blob:limit` of `maxScanBytes`, which the server applies to what it finds under the tree, assets included, since a filter can't pick files by name; that's why every file counts toward `maxSrcFiles`.

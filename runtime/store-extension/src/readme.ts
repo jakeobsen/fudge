@@ -103,18 +103,42 @@ export function rendererPass(markdown: string): string {
         .join("\n");
 }
 
+/** A README whose last fetch failed, with none on its way: the detail says so, since "" means the folder has none. */
+export const readmeNotFetched = Symbol("the README couldn't be fetched");
+
+/**
+ * What the detail shows for a folder's tree, as the store keeps its READMEs: the text fetched ("" for none), else
+ * `readmeNotFetched` when its last fetch failed, else undefined, loading: a fetch is waiting or running.
+ */
+export function shownReadme(
+    tree: string,
+    readmes: Readonly<Record<string, string>>,
+    failed: ReadonlySet<string>,
+): string | typeof readmeNotFetched | undefined {
+    return readmes[tree] ?? (failed.has(tree) ? readmeNotFetched : undefined);
+}
+
+/** The failed trees once a fetch for `tree` is on its way again (⌘R, or the selection back on its row). */
+export function refetching(failed: ReadonlySet<string>, tree: string): ReadonlySet<string> {
+    if (!failed.has(tree)) return failed;
+    const kept = new Set(failed);
+    kept.delete(tree);
+    return kept;
+}
+
 /** How the detail pane names a command's manifest `mode`; an unknown mode isn't shown. */
 const modeNames: Record<string, string> = { view: "view", "no-view": "no-view", "menu-bar": "menu bar" };
 
 /**
  * The detail pane: the manifest's facts, with the Compatibility line first when there is one (`compatibilityText`),
- * each command with its mode, then the README once it's fetched. Everything in it, the manifest's own text included,
- * goes through `filterImages`.
+ * each command with its mode, then the README: loading while it's `undefined` (a fetch waiting or running), its text
+ * once fetched, nothing when the folder has none (""), or a line saying it couldn't be fetched (`readmeNotFetched`).
+ * Everything in it, the manifest's own text included, goes through `filterImages`.
  */
 export function detailMarkdown(
     entry: StoreEntry,
     commit: string,
-    readme: string | undefined,
+    readme: string | typeof readmeNotFetched | undefined,
     compatibility?: string,
 ): string {
     const commands = entry.commands
@@ -138,7 +162,11 @@ export function detailMarkdown(
         entry.description,
         `## Commands\n\n${commands}`,
         facts.join("  \n"),
-        readme === undefined ? "_Loading the README…_" : readme && `---\n\n${readme}`,
+        readme === undefined
+            ? "_Loading the README…_"
+            : readme === readmeNotFetched
+              ? "_Fudge couldn't fetch the README. ⌘R tries again._"
+              : readme && `---\n\n${readme}`,
     ]
         .filter(Boolean)
         .join("\n\n");

@@ -41,7 +41,7 @@ import {
     type Compatibility,
 } from "./compatibility.ts";
 import { gitAvailable, stopRunningGit, StoreRepository } from "./git.ts";
-import { detailMarkdown, fetchReadme } from "./readme.ts";
+import { detailMarkdown, fetchReadme, refetching, shownReadme } from "./readme.ts";
 import { RestingWork } from "./resting.ts";
 import type { FailureDetails } from "./failure.ts";
 import { FailureView, LoadFailure, NeedsGit } from "./failure-view.tsx";
@@ -93,7 +93,8 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     const [readmes, setReadmes] = useState<Record<string, string>>({});
     const readmesNow = useRef(readmes);
     readmesNow.current = readmes;
-    // The trees whose README couldn't be fetched (git failed): shown as none, and fetched again by ⌘R, never kept.
+    // The trees whose README couldn't be fetched (git failed), with no fetch waiting or running: the detail says so, and
+    // ⌘R or coming back to the row fetches it again, showing it as loading meanwhile. Never kept.
     const [readmeFailed, setReadmeFailed] = useState<ReadonlySet<string>>(new Set());
     const [checked, setChecked] = useState<Checked>({ scanner: "", results: new Map(), failed: new Set() });
     // The latest, for the checks' callbacks, which outlive a render.
@@ -196,6 +197,8 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                     if (readme === "failed") setReadmeFailed((current) => new Set(current).add(tree));
                     else setReadmes((current) => ({ ...current, [tree]: readme }));
                 },
+                // A fetch on its way (⌘R, or the selection back on the row) shows as loading, not as the failure.
+                scheduled: (key) => setReadmeFailed((current) => refetching(current, key.split("\0")[1]!)),
             }),
         [repo],
     );
@@ -353,7 +356,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                             markdown={detailMarkdown(
                                 entry,
                                 loaded?.commit ?? "",
-                                tree === undefined ? undefined : (readmes[tree] ?? (readmeFailed.has(tree) ? "" : undefined)),
+                                tree === undefined ? undefined : shownReadme(tree, readmes, readmeFailed),
                                 compatibilityFor(entry, tree),
                             )}
                         />
