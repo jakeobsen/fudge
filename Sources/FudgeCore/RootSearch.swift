@@ -15,6 +15,8 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         case quicklink(Quicklink)
         /// Opens the Create Quicklink form.
         case createQuicklink
+        /// Runs one of Fudge's own commands (`BuiltInCommandGroup`).
+        case builtInCommand(group: String, command: String)
     }
 
     public var id: String
@@ -112,6 +114,31 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         "command:\(extensionName)/\(command)"
     }
 
+    /// The `settings.json` id of a command's item, an extension's or one of Fudge's own: its alias, hotkey and
+    /// Enabled are kept under it. Nil for other items.
+    public var commandSettingsID: String? {
+        switch kind {
+        case .command(let extensionName, let command, _, _), .builtInCommand(let extensionName, let command):
+            FudgeSettings.commandID(extension: extensionName, command: command)
+        default:
+            nil
+        }
+    }
+
+    /// One item per command of a group of Fudge's own, with the group's title as its subtitle.
+    public static func builtInCommands(of group: BuiltInCommandGroup) -> [RootItem] {
+        group.commands.map { command in
+            RootItem(
+                id: commandID(extension: group.name, command: command.name),
+                title: command.title,
+                subtitle: group.title,
+                extensionTitle: group.title,
+                keywords: command.keywords,
+                kind: .builtInCommand(group: group.name, command: command.name)
+            )
+        }
+    }
+
     /// One item per command of the extension (view, no-view and menu-bar), with the subtitles commands set for
     /// themselves.
     public static func commands(of installed: InstalledExtension, metadata: CommandMetadata = CommandMetadata())
@@ -161,16 +188,14 @@ public enum RootSearch {
     /// fudge's own items, searched alongside applications and commands.
     public static let builtInItems: [RootItem] = [.settings, .createQuicklink, .reloadExtensions, .quit]
 
-    /// Applies `settings` to command items: disabled commands (or commands of disabled extensions) are left out,
-    /// and each command gets its alias.
+    /// Applies `settings` to command items, an extension's or one of Fudge's own: disabled commands (or commands of
+    /// disabled extensions or groups) are left out, and each command gets its alias.
     public static func applying(_ settings: FudgeSettings, to items: [RootItem]) -> [RootItem] {
         items.compactMap { item in
-            guard case .command(let extensionName, let commandName, _, _) = item.kind else { return item }
-            guard settings.isEnabled(extension: extensionName, command: commandName) else { return nil }
+            guard let id = item.commandSettingsID else { return item }
+            guard settings.isEnabled(commandID: id) else { return nil }
             var item = item
-            item.alias =
-                settings.commands[FudgeSettings.commandID(extension: extensionName, command: commandName)]?
-                .alias
+            item.alias = settings.commands[id]?.alias
             return item
         }
     }

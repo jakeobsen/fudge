@@ -190,6 +190,8 @@ public enum RootActions {
                 [("Quit Fudge", enter, .open)]
             case .createQuicklink:
                 [("Create Quicklink", enter, .open)]
+            case .builtInCommand:
+                [("Open Command", enter, .open)]
             case .quicklink(let quicklink):
                 [
                     ("Open Quicklink", enter, .open),

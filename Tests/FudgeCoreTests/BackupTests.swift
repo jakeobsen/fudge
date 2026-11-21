@@ -639,3 +639,22 @@ private func storeFolder(_ trees: [String: String]) throws -> Folder {
         changed == [Backup.Changed(name: "alpha", title: "Alpha Now", reason: .storeUpdated)],
         "not-installed ones are the import's other list; the bundled store is never flagged; a name counts once")
 }
+
+@Test func aBuiltInCommandsHotkeyAliasAndEnabledSurviveABackup() throws {
+    let source = try Folder()
+    try source.write(
+        "settings.json",
+        #"{"commands":{":test-tools/first":{"hotkey":"option+l","alias":"tf"}},"extensions":{":test-tools":{"enabled":false}}}"#
+    )
+    let file = source.url.appendingPathComponent("b.fudgebackup")
+    try BackupArchive.write(
+        Backup.collect(from: source.paths, installed: [], fudgeVersion: "1.0", now: now).entries, to: file,
+        password: password)
+    let target = try Folder()
+    _ = try Backup.apply(
+        try Backup.open(file, password: password), to: target.paths, installed: [], fudgeVersion: "1.0", now: now)
+    let settings = FudgeSettings.load(from: target.paths.settingsFile)
+    #expect(settings.commands[":test-tools/first"]?.hotkey == "option+l")
+    #expect(settings.commands[":test-tools/first"]?.alias == "tf")
+    #expect(!settings.isEnabled(extension: ":test-tools"))
+}
