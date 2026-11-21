@@ -11,7 +11,8 @@
     "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true,
     "isolatedModules": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "paths": { "fudge:app": ["./src/fudge-app.ts"] }
   },
   "include": ["src", "test", "scripts"],
   "exclude": ["test/fixtures"]

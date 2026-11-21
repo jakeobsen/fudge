@@ -1,9 +1,9 @@
 // One running command. The host starts a worker thread per launch (see
 // host.ts) and talks to it with the messages in protocol.ts.
 //
-// The command's compiled CommonJS file gets fudge's own @raycast/api and the
-// same React the renderer uses: `require` is intercepted for those names in
-// this thread only.
+// The command's compiled CommonJS file gets fudge's own @raycast/api (and
+// `fudge:app`, for the bundled extensions) and the same React the renderer
+// uses: `require` is intercepted for those names in this thread only.
 
 import Module from "node:module";
 import path from "node:path";
@@ -18,6 +18,7 @@ import { providersFromEnvironment, rewriteFetch } from "./api/oauth-fetch.ts";
 import { NavigationRoot, type NavigationHandle } from "./api/navigation.ts";
 import { recordRender } from "./api/render.ts";
 import { callApp, connect, holdWhilePending, settle } from "./bridge.ts";
+import { createFudgeAppModule } from "./fudge-app.ts";
 import { revive, type CommandMode, type HostToWorker, type LaunchProps, type WorkerMessage } from "./protocol.ts";
 import { createRoot, StaleCallbackError, type Root } from "./renderer/root.ts";
 
@@ -35,6 +36,8 @@ const post = (message: WorkerMessage) => port.postMessage(message);
 
 const provided: Record<string, unknown> = {
     "@raycast/api": createApiModule(),
+    // Fudge's own module for its bundled extensions (src/fudge-app.ts).
+    "fudge:app": createFudgeAppModule(),
     react: React,
     "react/jsx-runtime": jsxRuntime,
     // Bundles built for development call jsxDEV; production React has none.
