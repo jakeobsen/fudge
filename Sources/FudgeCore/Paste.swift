@@ -7,6 +7,8 @@ import Foundation
 public enum PasteError: Error, Equatable, Sendable, CustomStringConvertible {
     case accessibilityNeeded
     case noTarget
+    /// A protected password field (secure input) had the keyboard when an expansion's turn came: nothing was posted.
+    case secureInput
 
     public var description: String {
         switch self {
@@ -15,6 +17,8 @@ public enum PasteError: Error, Equatable, Sendable, CustomStringConvertible {
                 + "Settings → Privacy & Security → Accessibility."
         case .noTarget:
             "There is no app to paste into"
+        case .secureInput:
+            "A protected password field has the keyboard, so nothing was pasted"
         }
     }
 }
@@ -25,6 +29,8 @@ public enum PasteError: Error, Equatable, Sendable, CustomStringConvertible {
 public protocol PasteKeyPoster: AnyObject {
     /// Posts ⌘V, key down then key up, to the application `pid`.
     func postPaste(to pid: Int32)
+    /// Posts ⌫, key down then key up, `count` times, to the application `pid`: an expanded keyword's characters.
+    func postDelete(_ count: Int, to pid: Int32)
 }
 
 extension PasteboardContents {
@@ -97,22 +103,46 @@ public final class Paste {
     /// Pastes `content`. With `closeMainWindow`, `hideWindow` hides fudge's panel and returns once it's really gone,
     /// so key status is back with the target app. `frontmost` is read after that. Resolves once ⌘V is posted; the
     /// restore follows on its own. A paste that starts while another paste or a ⌘C fallback is running waits for it.
-    /// It doesn't wait for a pending restore: it keeps that restore's snapshot instead. With `leftArrows`, the grapheme
-    /// clusters after a snippet's `{cursor}`, it resolves only once the caret is there (`CaretPlacer`): the paste is
-    /// seen to land, then the caret is set through Accessibility or with paced ← presses. The restore waits for the
-    /// paste to land too, or its own delay, whichever is later.
+    /// It doesn't wait for a pending restore: it keeps that restore's snapshot instead. `backspaces` ⌫ presses go to
+    /// the same app just before ⌘V, deleting an expanded keyword. With `leftArrows`, the grapheme clusters after a
+    /// snippet's `{cursor}`, it resolves only once the caret is there (`CaretPlacer`): the paste is seen to land, then
+    /// the caret is set through Accessibility or with paced ← presses. The restore waits for the paste to land too,
+    /// or its own delay, whichever is later.
     public func paste(
         _ content: PasteboardContents,
         closeMainWindow: Bool,
         origin: CallOrigin,
+        backspaces: Int = 0,
         leftArrows: Int = 0,
         hideWindow: () async -> Void,
         frontmost: () -> FrontmostApplication?
     ) async throws {
         try await turns.run {
             try await pasteNow(
-                content, closeMainWindow: closeMainWindow, origin: origin, leftArrows: leftArrows,
-                hideWindow: hideWindow, frontmost: frontmost)
+                content, closeMainWindow: closeMainWindow, origin: origin, backspaces: backspaces,
+                leftArrows: leftArrows, hideWindow: hideWindow, secureInput: { false }, frontmost: frontmost)
+        }
+    }
+
+    /// Expands a snippet's keyword (SPEC-078 B): `backspaces` ⌫ presses, ⌘V and `leftArrows` ← presses go only to
+    /// `target`, the app the keyword was typed in (its key event's target), never to the frontmost app when that's
+    /// another one, such as the app under Spotlight's or another launcher's panel. Nothing is posted when the target
+    /// is unknown or Fudge itself, or when `secureInput` says a protected password field has the keyboard by the time the
+    /// paste's turn comes (it may wait on a ⌘C fallback); the clipboard is put back then. `deletedUTF16` is the
+    /// keyword's length in UTF-16 units, which the ⌫s delete and the caret's placement counts (`PastedText`).
+    public func expand(
+        _ content: PasteboardContents,
+        target: Int32?,
+        backspaces: Int,
+        deletedUTF16: Int,
+        leftArrows: Int,
+        secureInput: () -> Bool
+    ) async throws {
+        try await turns.run {
+            try await pasteNow(
+                content, closeMainWindow: false, origin: .background, backspaces: backspaces,
+                deletedBefore: deletedUTF16, leftArrows: leftArrows, hideWindow: {}, secureInput: secureInput,
+                frontmost: { target.map { FrontmostApplication(pid: $0, bundleIdentifier: nil) } })
         }
     }
 
@@ -120,8 +150,11 @@ public final class Paste {
         _ content: PasteboardContents,
         closeMainWindow: Bool,
         origin: CallOrigin,
+        backspaces: Int,
+        deletedBefore: Int = 0,
         leftArrows: Int,
         hideWindow: () async -> Void,
+        secureInput: () -> Bool,
         frontmost: () -> FrontmostApplication?
     ) async throws {
         // While a restore is pending and the pasteboard still holds fudge's own last write, keep the snapshot from
@@ -142,7 +175,20 @@ public final class Paste {
             restore(snapshot, ifStill: written)
             throw PasteError.noTarget
         }
-        let landing = await postPaste(content, to: target.pid, leftArrows: leftArrows)
+        guard !secureInput() else {
+            restore(snapshot, ifStill: written)
+            throw PasteError.secureInput
+        }
+        let landing: PasteWatch
+        do {
+            landing = try await postPaste(
+                content, to: target.pid, backspaces: backspaces, deletedBefore: deletedBefore, leftArrows: leftArrows,
+                secureInput: secureInput)
+        } catch {
+            // Secure input came on while the field was being read: nothing was posted.
+            restore(snapshot, ifStill: written)
+            throw error
+        }
         let task = Task { [weak self] in
             await landing.wait()
             guard !Task.isCancelled, let self else { return }
@@ -153,12 +199,22 @@ public final class Paste {
     }
 
     /// Posts ⌘V to `pid`, reading the focused field before it, and, for a `{cursor}`, places the caret once the paste
-    /// has landed. The field is watched off the main actor, and the result is what the restore waits for.
-    private func postPaste(_ content: PasteboardContents, to pid: Int32, leftArrows: Int) async -> PasteWatch {
-        let pasted = Self.plainText(of: content).map { PastedText(text: $0, afterCursor: leftArrows) }
+    /// has landed. The field is watched off the main actor, and the result is what the restore waits for. Secure input
+    /// is checked again right before the first key, since the read can take seconds: then nothing is posted and it
+    /// throws `PasteError.secureInput`.
+    private func postPaste(
+        _ content: PasteboardContents, to pid: Int32, backspaces: Int, deletedBefore: Int, leftArrows: Int,
+        secureInput: () -> Bool
+    ) async throws -> PasteWatch {
+        let pasted = Self.plainText(of: content).map {
+            PastedText(text: $0, afterCursor: leftArrows, deletedBefore: deletedBefore)
+        }
         let placer = caret
+        // The field is read before any key goes out, so before an expansion's ⌫s, which `deletedBefore` counts.
         let before = pasted == nil ? nil : await placer.read(pid)
+        guard !secureInput() else { throw PasteError.secureInput }
         let posted = placer.now()
+        if backspaces > 0 { keys.postDelete(backspaces, to: pid) }
         keys.postPaste(to: pid)
         let watch = PasteWatch(posted: .now, delay: restoreDelay) {
             guard let pasted else { return (nil, 0) }

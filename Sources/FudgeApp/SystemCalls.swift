@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import FudgeCore
 
 /// Answers the extension API calls that need the system: clipboard, opening, the Trash, Finder, applications, the
@@ -125,6 +126,19 @@ enum SystemCalls {
         try await paster.paste(
             PasteboardContents.forPaste(text: text, html: nil, file: nil), closeMainWindow: true,
             origin: .userInitiated, leftArrows: leftArrows, hideWindow: hideWindow, frontmost: frontmost)
+    }
+
+    /// Expands a snippet's keyword (SPEC-078 §6): `keywordLength` ⌫ presses delete the keyword just typed, then the
+    /// text is pasted as `Clipboard.paste` does, in its turn, the clipboard put back, and `leftArrows` ← presses place
+    /// `{cursor}`. Accessibility is checked first, without a prompt, since typing isn't a request to show one: without
+    /// it, nothing is deleted and the clipboard isn't touched.
+    static func expandSnippet(
+        _ text: String, into target: Int32?, keyword: String, leftArrows: Int
+    ) async throws {
+        guard gate.isTrusted(origin: .background) else { throw PasteError.accessibilityNeeded }
+        try await paster.expand(
+            PasteboardContents.forPaste(text: text, html: nil, file: nil), target: target, backspaces: keyword.count,
+            deletedUTF16: keyword.utf16.count, leftArrows: leftArrows, secureInput: { IsSecureEventInputEnabled() })
     }
 
     /// Pastes `contents` into the frontmost app as `clipboard.paste` does: clipboard history's Paste.

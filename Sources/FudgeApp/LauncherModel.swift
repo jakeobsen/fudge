@@ -158,6 +158,8 @@ final class LauncherModel {
     @ObservationIgnored var reloadAll: () -> Void = {}
     /// Shows a HUD message; set by the app delegate.
     @ObservationIgnored var showHUD: (String) -> Void = { _ in }
+    /// Snippet expansion reads `snippets.json` again after the launcher changed it; set by the app delegate.
+    @ObservationIgnored var snippetsChanged: () -> Void = {}
     /// Registers the command hotkeys again from the settings last read, after a quicklink and its hotkey went; set
     /// by the app delegate.
     @ObservationIgnored var commandHotkeysChanged: () -> Void = {}
@@ -1896,6 +1898,7 @@ final class LauncherModel {
                 return
             }
             saved = "Snippet saved"
+            snippetsChanged()
         case .layout(let draft, _):
             let draft = LayoutForm.draft(draft, with: values)
             let file = paths.windowLayoutsFile
@@ -2034,7 +2037,8 @@ final class LauncherModel {
         Task {
             do {
                 try await SystemCalls.pasteSnippet(
-                    filled.text, leftArrows: filled.afterCursor ?? 0, hideWindow: { await self.hideForPaste() })
+                    filled.text, leftArrows: SnippetTemplate.leftArrows(afterCursor: filled.afterCursor),
+                    hideWindow: { await self.hideForPaste() })
             } catch PasteError.noTarget {
                 showHUD("There is no app to paste into")
             } catch {
@@ -2073,6 +2077,7 @@ final class LauncherModel {
                 return
             }
             reloadSnippetList()
+            snippetsChanged()
         }
     }
 
