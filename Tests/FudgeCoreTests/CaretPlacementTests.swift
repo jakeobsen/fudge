@@ -234,8 +234,10 @@ private func field(count: Int, _ location: Int, _ length: Int = 0) -> TextFieldS
     let posted = ContinuousClock.now
     let (landed, polls) = await placer.waitForLanding(pasted, before: before, pid: pid, since: posted)
     let waited = posted.duration(to: .now)
+    // The poll count proves the wait goes by the clock (counting polls took 66). The upper bound only catches a wait
+    // that never ends, so it leaves room for a CI runner that stalls for seconds (5.85 s seen on #129).
     #expect(landed == nil && polls <= 5, "\(polls) polls")
-    #expect(waited >= .seconds(1) && waited < .seconds(4), "\(waited)")
+    #expect(waited >= .seconds(1) && waited < .seconds(30), "\(waited)")
 }
 
 @Test func aReadThatFailsEndsTheWaitAtOnce() async {
