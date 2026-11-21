@@ -364,13 +364,13 @@ final class LauncherModel {
     @ObservationIgnored private var installedExtensions: [InstalledExtension] = []
     @ObservationIgnored private var applications: [RootItem] = []
 
-    /// Reads `quicklinks.json` for root search. Their icons are looked up again, since an app may have changed.
     /// The user's custom window positions and saved layouts (SPEC-094), read again with the settings.
     @ObservationIgnored private var windowLayouts = WindowLayoutStore()
 
     /// Fudge's command groups, with the user's own window commands (`BuiltInCommandGroup.all(with:)`).
     var builtInGroups: [BuiltInCommandGroup] { BuiltInCommandGroup.all(with: windowLayouts) }
 
+    /// Reads `quicklinks.json` for root search. Their icons are looked up again, since an app may have changed.
     private func loadQuicklinks() -> [RootItem] {
         icons = icons.filter { !$0.key.hasPrefix("quicklink:") }
         quicklinks = QuicklinkStore.load(from: paths.quicklinksFile).quicklinks

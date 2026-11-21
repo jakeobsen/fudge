@@ -71,7 +71,8 @@ final class FixedWindowSwitching: WindowSwitching {
     func read() async -> WindowListing {
         guard let file else { return .empty }
         let switcher = WindowSwitcher(
-            system: FixedWindowSystem.load(from: file), ownPid: ProcessInfo.processInfo.processIdentifier,
+            system: FixedWindowSystem.load(from: file, ownPid: ProcessInfo.processInfo.processIdentifier),
+            ownPid: ProcessInfo.processInfo.processIdentifier,
             inFlight: WindowReadsInFlight())
         return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async { continuation.resume(returning: switcher.listing()) }
