@@ -1,0 +1,34 @@
+{
+  "name": "fudge-emoji",
+  "title": "Search Emoji & Symbols",
+  "description": "Search emoji by name or keyword, and paste them.",
+  "license": "AGPL-3.0-or-later",
+  "author": "fudge",
+  "type": "module",
+  "commands": [
+    {
+      "name": "search-emoji",
+      "title": "Search Emoji & Symbols",
+      "description": "Search emoji by name or keyword, and paste or copy one.",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "skinTone",
+      "title": "Skin Tone",
+      "description": "The skin tone of emoji that have one.",
+      "type": "dropdown",
+      "required": false,
+      "default": "default",
+      "data": [
+        { "title": "Default", "value": "default" },
+        { "title": "Light", "value": "light" },
+        { "title": "Medium-Light", "value": "medium-light" },
+        { "title": "Medium", "value": "medium" },
+        { "title": "Medium-Dark", "value": "medium-dark" },
+        { "title": "Dark", "value": "dark" }
+      ]
+    }
+  ]
+}

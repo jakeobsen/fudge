@@ -12,6 +12,7 @@
     "erasableSyntaxOnly": true,
     "isolatedModules": true,
     "skipLibCheck": true,
+    "resolveJsonModule": true,
     "paths": { "fudge:app": ["./src/fudge-app.ts"] }
   },
   "include": ["src", "test", "scripts"],

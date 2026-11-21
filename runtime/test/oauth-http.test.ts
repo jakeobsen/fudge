@@ -3,6 +3,7 @@
 // lookup or socket.
 
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import http, { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import http2 from "node:http2";
@@ -21,7 +22,7 @@ import {
     type OAuthProvider,
     type ServerAnswer,
 } from "../src/api/oauth-fetch.ts";
-import { guardConnections, guardRequests, requestURL } from "../src/api/oauth-http.ts";
+import { guardConnections, guardRequests, relayTLSOptions, requestURL } from "../src/api/oauth-http.ts";
 import { signInOffMessage } from "../src/api/oauth.ts";
 
 const table = providersFromEnvironment(readFileSync(new URL("./fixtures/oauth-providers.json", import.meta.url), "utf8"));
@@ -36,6 +37,19 @@ let own: Server;
 let elsewhere: Server;
 let elsewhereHits = 0;
 let answer: ServerAnswer = { server: null, signedIn: false };
+
+// A server with a self-signed certificate for 127.0.0.1, made for this run: reached only with its `ca`. It stands for
+// a provider's own token URL (as Google's is) and for a relay.
+const certs = mkdtempSync(path.join(tmpdir(), "fudge-tls-"));
+execFileSync("openssl", [
+    "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=127.0.0.1",
+    "-addext", "subjectAltName=IP:127.0.0.1",
+    "-keyout", path.join(certs, "key.pem"), "-out", path.join(certs, "cert.pem"),
+], { stdio: "ignore" });
+const ca = readFileSync(path.join(certs, "cert.pem"));
+const secureSeen: Seen[] = [];
+let secure: https.Server;
+const secureBase = () => `https://127.0.0.1:${(secure.address() as AddressInfo).port}`;
 
 async function listen(handler: (request: IncomingMessage, response: ServerResponse) => void): Promise<Server> {
     const server = createServer(handler);
@@ -72,6 +86,11 @@ before(async () => {
         elsewhereHits++;
         response.end("stolen");
     });
+    secure = https.createServer({ key: readFileSync(path.join(certs, "key.pem")), cert: ca }, async (request, response) => {
+        await record(secureSeen, request);
+        response.writeHead(200, { "Content-Type": "application/json" }).end('{"secure":true}');
+    });
+    await new Promise<void>((resolve) => secure.listen(0, "127.0.0.1", resolve));
     providers = [
         ...table,
         {
@@ -80,6 +99,13 @@ before(async () => {
             authorizeURL: `${base(own)}/authorize`,
             tokenURL: `${base(own)}/token`,
             refreshURL: `${base(own)}/token`,
+        },
+        {
+            id: "secureco",
+            name: "SecureCo",
+            authorizeURL: `${secureBase()}/authorize`,
+            tokenURL: `${secureBase()}/token`,
+            refreshURL: `${secureBase()}/token`,
         },
     ];
     restore.push(
@@ -95,6 +121,7 @@ after(() => {
     relay.close();
     own.close();
     elsewhere.close();
+    secure.close();
 });
 
 /** A request through `send`, resolved with the status and body, or rejected with the request's error. */
@@ -269,4 +296,98 @@ test("no connection reaches Raycast's proxy hosts, whatever the client, before a
         /Fudge doesn't send/.test(String((error.cause as Error)?.message)),
     );
     assert.deepEqual(lookups, []);
+});
+
+test("a held request passed through goes out as the caller made it: its CA, its agent, and still the backstop", async () => {
+    answer = { server: base(relay), signedIn: false };
+    secureSeen.length = 0;
+    const token = () => `${secureBase()}/token`;
+
+    // The caller's own CA reaches the connection; without it, the certificate isn't trusted.
+    const got = await exchange(() => https.request(token(), { ...post, ca }), codeGrant);
+    assert.equal(got.body, '{"secure":true}');
+    assert.deepEqual(secureSeen, [{ method: "POST", path: "/token", host: `127.0.0.1:${port(secure)}`, body: codeGrant }]);
+    await assert.rejects(exchange(() => https.request(token(), post), codeGrant), /self[- ]signed/);
+
+    // The caller's agent makes the connection, with its own options.
+    const agent = new https.Agent({ ca });
+    let made = 0;
+    const create = agent.createConnection.bind(agent) as (...args: unknown[]) => net.Socket;
+    agent.createConnection = ((...args: unknown[]) => {
+        made++;
+        return create(...args);
+    }) as typeof agent.createConnection;
+    const viaAgent = await exchange(() => https.request(token(), { ...post, agent }), codeGrant);
+    assert.equal(viaAgent.body, '{"secure":true}');
+    assert.equal(made, 1, "the caller's agent opened the connection");
+    agent.destroy();
+
+    // The backstop still sees the connection it opens.
+    await assert.rejects(
+        exchange(() => https.request(token(), { ...post, ca, servername: "x.oauth.raycast.com" }), codeGrant),
+        /Fudge doesn't send requests to x\.oauth\.raycast\.com\./,
+    );
+});
+
+test("a request rewritten to the relay keeps the caller's TLS options, but not its server name", async () => {
+    answer = { server: secureBase(), signedIn: false };
+    secureSeen.length = 0;
+    const options = { ...post, ca, servername: "github.oauth.raycast.com" };
+    const got = await exchange(() => https.request("https://github.oauth.raycast.com/token", options), codeGrant);
+    assert.equal(got.body, '{"secure":true}');
+    assert.deepEqual(secureSeen.map((seen) => seen.path), ["/github/token"]);
+    await assert.rejects(
+        exchange(() => https.request("https://github.oauth.raycast.com/token", post), codeGrant),
+        /self[- ]signed/,
+        "the relay's certificate is checked with the caller's CA, or the system's",
+    );
+});
+
+test("a request rewritten to the relay never takes an option that weakens verification", async () => {
+    // Only trust and identity go along, and a minimum version no lower than Node's.
+    const agent = new https.Agent({ ca: "agent-ca", rejectUnauthorized: false });
+    const kept = relayTLSOptions({
+        agent,
+        cert: "c",
+        key: "k",
+        crl: "r",
+        rejectUnauthorized: false,
+        checkServerIdentity: () => undefined,
+        ciphers: "NULL",
+        secureOptions: 4,
+        minVersion: "TLSv1",
+        maxVersion: "TLSv1",
+        secureProtocol: "TLSv1_method",
+        servername: "elsewhere.example",
+    });
+    assert.deepEqual(kept, { ca: "agent-ca", cert: "c", key: "k", crl: "r" });
+    assert.deepEqual(relayTLSOptions({ minVersion: "TLSv1.3" }), { minVersion: "TLSv1.3" });
+    agent.destroy();
+
+    // End to end: with the relay's certificate unknown to the system, each weakening option on its own still
+    // leaves the request refused by verification, and the caller's checkServerIdentity is never asked.
+    answer = { server: secureBase(), signedIn: false };
+    secureSeen.length = 0;
+    let asked = 0;
+    const weakening: Record<string, unknown>[] = [
+        { rejectUnauthorized: false },
+        { checkServerIdentity: () => void asked++ },
+        { minVersion: "TLSv1" },
+        { secureOptions: 0 },
+        { ciphers: "ALL" },
+        { agent: new https.Agent({ rejectUnauthorized: false }) },
+    ];
+    for (const option of weakening) {
+        await assert.rejects(
+            exchange(() => https.request("https://github.oauth.raycast.com/token", { ...post, ...option }), codeGrant),
+            /self[- ]signed/,
+            Object.keys(option).join(),
+        );
+    }
+    assert.equal(asked, 0);
+    assert.equal(secureSeen.length, 0, "nothing reached the relay unverified");
+
+    // A request passed through unchanged keeps them: it goes where the caller sent it.
+    const passed = await exchange(() => https.request(`${secureBase()}/token`, { ...post, rejectUnauthorized: false }), codeGrant);
+    assert.equal(passed.body, '{"secure":true}');
 });

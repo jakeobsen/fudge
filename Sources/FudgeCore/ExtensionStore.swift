@@ -78,12 +78,14 @@ public enum ExtensionStore {
     }
 }
 
-/// The extensions bundled with Fudge (SPEC-069 §1): the Extension Store, Search Files and Clipboard History. `make app` builds each from
+/// The extensions bundled with Fudge (SPEC-069 §1): the Extension Store, Search Files, Search Emoji & Symbols and Clipboard History. `make app` builds each from
 /// `runtime/<folder>` into the app's resources, under the same folder name. They're always installed. The store keeps
 /// its own off-by-default rule and switch (`ExtensionStore`); the others are enabled by default, like any extension.
 public enum BundledExtensions {
     /// Their folders, in `runtime/` and in the app's resources.
-    public static let folders = ["store-extension", "file-search-extension", "clipboard-history-extension"]
+    public static let folders = [
+        "store-extension", "file-search-extension", "emoji-extension", "clipboard-history-extension",
+    ]
 
     /// The bundled extension in `folder` of the app's resources, when it's there.
     public static func directory(_ folder: String, resources: URL?) -> URL? {

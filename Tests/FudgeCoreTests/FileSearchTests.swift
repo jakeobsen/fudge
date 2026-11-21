@@ -346,16 +346,22 @@ private let homeOptions = FileSearchOptions(scope: .home, leaveOut: [home + "/Li
         ExtensionStore.extensionName, title: "Extension Store", in: resources.appendingPathComponent("store-extension"))
     try write(
         FileSearch.extensionName, title: "Search Files", in: resources.appendingPathComponent("file-search-extension"))
+    try write("fudge-emoji", title: "Search Emoji & Symbols", in: resources.appendingPathComponent("emoji-extension"))
     try write(
         FileSearch.extensionName, title: "Impostor", in: paths.extensionsDirectory.appendingPathComponent("impostor"))
     try write("weather", title: "Weather", in: paths.extensionsDirectory.appendingPathComponent("weather"))
 
-    #expect(BundledExtensions.folders == ["store-extension", "file-search-extension", "clipboard-history-extension"])
+    #expect(
+        BundledExtensions.folders == [
+            "store-extension", "file-search-extension", "emoji-extension", "clipboard-history-extension",
+        ])
     let installed = InstalledExtension.all(paths: paths, resources: resources)
     #expect(
-        installed.map(\.manifest.title) == ["Extension Store", "Search Files", "Weather"], "the impostor gives way")
+        installed.map(\.manifest.title) == ["Extension Store", "Search Emoji & Symbols", "Search Files", "Weather"],
+        "the impostor gives way")
     let settings = FudgeSettings()
     #expect(settings.isEnabled(extension: FileSearch.extensionName), "unlike the store")
+    #expect(settings.isEnabled(extension: "fudge-emoji"))
     #expect(!settings.isEnabled(extension: ExtensionStore.extensionName))
 }
 
