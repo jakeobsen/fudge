@@ -41,7 +41,9 @@ jobs:
           cache: npm
           cache-dependency-path: runtime/package-lock.json
 
+      # Well above a normal run (4 to 5 minutes), so a hang fails the job instead of holding a runner (FUD-153).
       - name: Test
+        timeout-minutes: 20
         run: make test
 
       # A tag's build names it, and the Makefile checks it's on this commit; a run by hand takes the version

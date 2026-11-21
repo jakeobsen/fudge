@@ -1087,6 +1087,7 @@ Extensions run in a separate Node.js process, the extension host.
 ## CI and releases
 
 - **CI** (`.github/workflows/ci.yml`) runs `make lint` and `make test` on pull requests and pushes to `mainline`.
+  The test step, here and in the release workflow, stops after 20 minutes (`timeout-minutes`), so a hang fails the job instead of holding a runner.
   `swift test` compiles every target, so the app's code is checked, but the app bundle is not assembled.
 - **The release workflow** (`.github/workflows/release.yml`) is the only place a release is built, and it runs on a pushed `v*` tag.
   Tags are pushed only with the maintainer's explicit permission, never by an agent.
