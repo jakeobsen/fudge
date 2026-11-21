@@ -30,6 +30,18 @@ public struct ArgumentInput: Sendable, Equatable {
         if missing == index, !value.isEmpty { missing = nil }
     }
 
+    /// Whether the model takes the keyboard's move to the search field (nil) or argument field `index` that SwiftUI
+    /// reports (FUD-140). The model decides where the keyboard goes, and the view tells it only of a move the user
+    /// made, which needs the panel to hold the keyboard (`panelHoldsKeyboard`): a click makes the panel key first, and
+    /// Tab, ⇧Tab, Esc and ⌫ come through `handle`.
+    /// In a panel that doesn't hold the keyboard, a field can't take it, so SwiftUI answers the model's request by
+    /// falling back to the search field, then makes the request again; taken as moves, each answer undid the request
+    /// and set off the next, without end.
+    public func follows(_ index: Int?, panelHoldsKeyboard: Bool) -> Bool {
+        guard panelHoldsKeyboard, index != focus else { return false }
+        return index.map { arguments.indices.contains($0) } ?? true
+    }
+
     /// Tab: from the search field to the first argument, on to each next one, then back to the search field.
     public mutating func focusNext() {
         guard !arguments.isEmpty else { return }

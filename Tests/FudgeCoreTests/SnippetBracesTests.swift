@@ -114,11 +114,22 @@ func otherTextInBracesIsTheSnippetsOwn(text: String) {
     #expect(filled(#"{time format="HH:mm"}"#) == "10:00")
     #expect(filled(#"{datetime format="EEE d MMM" | uppercase}"#) == "SAT 21 NOV")
     #expect(filled("{clipboard | uppercase}") == "COPIED")
+    #expect(filled("{CLIPBOARD | UPPERCASE}") == "COPIED", "modifiers ignore case, as names do")
+    #expect(filled(#"{DATE format="yyyy-MM-dd" | Trim}"#) == "2026-11-21")
     // An exact name is a placeholder wherever it sits, as in Raycast: the braces around it are text.
     #expect(filled(#"{{date format="yyyy"}}"#) == "{2026}")
     #expect(filled(#"{ {date format="yyyy"} }"#) == "{ 2026 }")
     let cursor = SnippetTemplate("x = {{cursor}}").fill(context: context)
     #expect(cursor.text == "x = {}" && cursor.afterCursor == 1)
+}
+
+@Test func aSingleQuotedFormatIsText() {
+    // Attributes take double quotes, as Raycast's do, so single quotes don't make one, and the braces are text.
+    for text in ["{date format='yyyy'}", "{time format='HH:mm' | uppercase}"] {
+        let template = SnippetTemplate(text)
+        #expect(template.problem == nil, "\(text)")
+        #expect(template.fill(context: context).text == text, "\(text) pastes as it is")
+    }
 }
 
 @Test func aKnownNameUsedWronglyIsStillAProblem() {

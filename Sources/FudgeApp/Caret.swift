@@ -37,7 +37,9 @@ struct SystemCaret: CaretSystem {
         // ← is the same key in every layout (kVK_LeftArrow), and carries the function-key and numeric-pad flags, as
         // a typed one does. A private source with only those flags: modifiers the user is still holding don't merge
         // in and turn ← into ⇧← selecting text.
+        // Each carries Fudge's marker, as every key Fudge posts does, so snippet expansion never reads it as typing.
         let source = CGEventSource(stateID: .privateState)
+        source?.userData = SnippetExpander.marker
         for _ in 0..<count {
             for down in [true, false] {
                 guard
@@ -45,6 +47,7 @@ struct SystemCaret: CaretSystem {
                         keyboardEventSource: source, virtualKey: CGKeyCode(kVK_LeftArrow), keyDown: down)
                 else { continue }
                 event.flags = [.maskSecondaryFn, .maskNumericPad]
+                event.setIntegerValueField(.eventSourceUserData, value: SnippetExpander.marker)
                 event.postToPid(pid)
             }
         }
