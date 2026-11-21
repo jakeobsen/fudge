@@ -17,6 +17,13 @@ import Testing
     #expect(Fuzzy.match("fle", in: "ﬁle")?.positions == [0, 1, 2])
     #expect(Fuzzy.match("f", in: "ﬁle")?.positions == [0])
     #expect(Fuzzy.match("le", in: "Ünïcödé ﬁle")?.positions == [9, 10])
+    // And all of what it folds into matches: "strasse" finds "Straße" again, highlighting each of its letters once.
+    #expect(Fuzzy.match("strasse", in: "Straße")?.positions == [0, 1, 2, 3, 4, 5])
+    #expect(Fuzzy.match("sß", in: "Straße")?.positions == [0, 4])
+    #expect(Fuzzy.match("ess", in: "Eßlingen")?.positions == [0, 1])
+    #expect(Fuzzy.match("file", in: "ﬁle")?.positions == [0, 1, 2])
+    #expect(Fuzzy.match("strasse", in: "Straße")?.score == Fuzzy.match("strase", in: "Strase")?.score)
+    #expect(Fuzzy.match("strassen", in: "Straße") == nil)
 }
 
 @Test func fuzzyPrefersWordStartsAndPrefixes() throws {
