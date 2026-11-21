@@ -197,9 +197,9 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
         () =>
             new CompatibilityChecks({
                 cached: (tree) => checkedNow.current.results.get(tree),
-                check: (dir, tree, cancelled) =>
+                check: (dir, tree, cancelled, signal) =>
                     oneAtATime(async () => {
-                        const result = await checkFolder(dir, context, cancelled);
+                        const result = await checkFolder(dir, context, cancelled, signal);
                         if (!result) return undefined;
                         await rememberCompatibility(environment.supportPath, checkedNow.current.scanner, tree, result);
                         return result;

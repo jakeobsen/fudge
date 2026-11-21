@@ -263,6 +263,7 @@ export async function checkFolder(
     dir: string,
     context: StoreContext,
     cancelled: () => boolean,
+    signal?: AbortSignal,
 ): Promise<Compatibility | undefined> {
     // Every file under `src/` is downloaded (its blobs of at most `maxScanBytes` each), so the cap counts them all.
     const files = await context.repo.sourceFiles(dir);
@@ -272,7 +273,9 @@ export async function checkFolder(
     let bounded = files.length > 0;
     if (bounded) {
         try {
-            await context.repo.fetchSource(dir, maxScanBytes);
+            // The one step a cancel ends (`signal`), since it writes nothing but new packs; every other step runs to
+            // its end, and the check stops between steps.
+            await context.repo.fetchSource(dir, maxScanBytes, signal);
         } catch (error) {
             if (cancelled()) return undefined;
             // A server that won't send a folder's tree: the source comes as before, its size checked after it's here.

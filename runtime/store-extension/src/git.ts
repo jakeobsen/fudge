@@ -9,9 +9,15 @@ export const repositoryURL = "https://github.com/raycast/extensions.git";
 export const refreshAge = 24 * 60 * 60 * 1000;
 
 export type GitResult = { code: number; stdout: string; stderr: string };
+/** How long a cancelled program has to end after SIGTERM before it gets SIGKILL. */
+export const cancelGrace = 1000;
 /**
  * Runs a program with an argument array, never through a shell, writing `input` to its stdin when given, with `env`
- * added to `storeEnvironment()`. A `stoppable` one ends with `stopRunningGit()`.
+ * added to `storeEnvironment()`. A `stoppable` one ends with `stopRunningGit()`. One given a `signal` runs in a process
+ * group of its own and ends when it aborts, with everything it started (git's `git-remote-https`, say): SIGTERM to
+ * the group, then SIGKILL if it's still running a second later. Only a step that writes nothing but new packs
+ * is given one (`fetchSource`): a git that's writing the index holds `index.lock`, and ending it would leave that
+ * behind, so every later checkout and install would fail.
  */
 export type Run = (
     program: string,
@@ -22,6 +28,7 @@ export type Run = (
         stoppable?: boolean;
         input?: string;
         env?: NodeJS.ProcessEnv;
+        signal?: AbortSignal;
     },
 ) => Promise<GitResult>;
 
@@ -48,20 +55,46 @@ export function storeEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.
  * `spawn` with no shell, a timeout that sends SIGTERM, and `storeEnvironment()`. When the timeout fired, stderr ends
  * with "<program> stopped after N s", whatever the exit: `fudge` catches SIGTERM and exits with 143.
  */
-export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable, input, env }) =>
+export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable, input, env, signal }) =>
     new Promise((resolve) => {
+        if (signal?.aborted) {
+            resolve({ code: -1, stdout: "", stderr: `${path.basename(program)} cancelled` });
+            return;
+        }
         const child = spawn(program, args, {
             cwd,
             stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
             env: { ...storeEnvironment(), ...env },
+            detached: signal !== undefined,
         });
+        const group = (signal: NodeJS.Signals) => {
+            try {
+                if (child.pid !== undefined) process.kill(-child.pid, signal);
+            } catch {
+                // The group has ended already.
+            }
+        };
         let timedOut = false;
         const timer = setTimeout(() => {
             timedOut = true;
-            // SIGTERM, not SIGKILL: `fudge scan` and `fudge build` pass it on to everything they started.
-            child.kill("SIGTERM");
+            // SIGTERM, not SIGKILL: `fudge scan` and `fudge build` pass it on to everything they started. A program in
+            // a group of its own gets it with everything it started.
+            if (signal) group("SIGTERM");
+            else child.kill("SIGTERM");
         }, timeout);
         if (stoppable) running.add(child);
+        let killTimer: NodeJS.Timeout | undefined;
+        const cancel = () => {
+            group("SIGTERM");
+            killTimer = setTimeout(() => group("SIGKILL"), cancelGrace);
+        };
+        signal?.addEventListener("abort", cancel, { once: true });
+        const finished = () => {
+            clearTimeout(timer);
+            clearTimeout(killTimer);
+            signal?.removeEventListener("abort", cancel);
+            running.delete(child);
+        };
         if (input !== undefined && child.stdin) {
             // A program that exits early closes its stdin; its exit status says what went wrong.
             child.stdin.on("error", () => undefined);
@@ -72,13 +105,11 @@ export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable, inpu
         child.stdout?.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
         child.stderr?.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
         child.on("error", (error) => {
-            clearTimeout(timer);
-            running.delete(child);
+            finished();
             resolve({ code: -1, stdout, stderr: error.message });
         });
         child.on("close", (code, signal) => {
-            clearTimeout(timer);
-            running.delete(child);
+            finished();
             if (timedOut) stderr += `\n${path.basename(program)} stopped after ${timeout / 1000} s`;
             else if (code === null) stderr += `\n${path.basename(program)} stopped (${signal ?? "killed"})`;
             resolve({ code: code ?? -1, stdout, stderr });
@@ -137,7 +168,7 @@ export class StoreRepository {
         timeout = shortTimeout,
         cwd = this.path,
         input?: string,
-        extra: { env?: NodeJS.ProcessEnv } = {},
+        extra: { env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
     ): Promise<string> {
         const result = await this.#run(this.#git, args, { cwd, timeout, stoppable: true, input, ...extra });
         if (result.code !== 0) throw new GitError(result.stderr.trim() || `git ${args[0]} failed`);
@@ -255,9 +286,9 @@ export class StoreRepository {
      * tree fetched again (`--refetch`, since the copy has every tree already) with a `blob:limit` filter, which the
      * server applies to what it finds under the tree. Asked for by their own ids instead, git would send every blob,
      * whatever its size. It writes only new packs, never the index, the refs or `FETCH_HEAD`, and no maintenance runs
-     * after it. `dir` is a checked folder.
+     * after it, so it's the one step a cancel ends (`signal`): that only stops a download. `dir` is a checked folder.
      */
-    async fetchSource(dir: string, limit: number): Promise<void> {
+    async fetchSource(dir: string, limit: number, signal?: AbortSignal): Promise<void> {
         const tree = (await this.#exec(["rev-parse", "--verify", `HEAD:extensions/${dir}/src`])).trim();
         await this.#exec(
             [
@@ -272,6 +303,9 @@ export class StoreRepository {
                 tree,
             ],
             longTimeout,
+            this.path,
+            undefined,
+            { signal },
         );
     }
 

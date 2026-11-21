@@ -43,6 +43,7 @@ import { maxReadmeBytes, readRegularFile } from "../store-extension/src/files.ts
 import {
     gitAvailable,
     isValidBranch,
+    cancelGrace,
     spawnProgram,
     stopRunningGit,
     storeEnvironment,
@@ -1633,6 +1634,61 @@ test("a check downloads no source file over the cap: that folder isn't checked, 
         "the scan's patterns went again",
     );
     assert.deepEqual(await notDownloaded(repo.path, "big"), ["assets/icon.png", "src/generated.ts"]);
+});
+
+/** Every `*.lock` file under the copy's `.git`: a git ended while writing leaves one, and later git calls then fail. */
+async function locks(repoPath: string): Promise<string[]> {
+    const found: string[] = [];
+    const walk = async (folder: string) => {
+        for (const entry of await readdir(folder, { withFileTypes: true })) {
+            const target = path.join(folder, entry.name);
+            if (entry.isDirectory()) await walk(target);
+            else if (entry.name.endsWith(".lock")) found.push(path.relative(repoPath, target));
+        }
+    };
+    await walk(path.join(repoPath, ".git"));
+    return found;
+}
+
+test("cancelling a check at each step ends only the download, leaves no lock, and the next check and an install work", async () => {
+    const { repo, context, cli } = await partialClone({
+        "extensions/small/package.json": JSON.stringify(manifest("small")),
+        "extensions/small/src/index.ts": "export {};\n",
+    });
+    const patterns = async () => (await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean);
+    const settledState = async (step: string) => {
+        assert.deepEqual(await locks(repo.path), [], `${step}: no lock left`);
+        assert.deepEqual(await patterns(), ["/extensions/*/package.json"], `${step}: nothing stays checked out`);
+        assert.equal(cli.calls.length, 0, `${step}: nothing scanned`);
+    };
+
+    // During the download: a remote that takes 30 s to answer, and a cancel after half a second.
+    await sh(repo.path, "config", "remote.origin.uploadpack", "sleep 30; git-upload-pack");
+    const controller = new AbortController();
+    const started = Date.now();
+    const during = checkFolder("small", context, () => controller.signal.aborted, controller.signal);
+    setTimeout(() => controller.abort(), 500);
+    assert.equal(await during, undefined);
+    assert.ok(Date.now() - started < 500 + cancelGrace + 2000, `the fetch ended within the grace period (${Date.now() - started} ms)`);
+    await settledState("during the fetch");
+    await sh(repo.path, "config", "--unset", "remote.origin.uploadpack");
+
+    // After the download, before the checkout; and after the checkout, before the scan. Neither git is ended.
+    for (const after of ["fetch", "sparse-checkout"]) {
+        let cancelled = false;
+        const run: Run = async (program, args, options) => {
+            const result = await spawnProgram(program, args, options);
+            if (args[0] === after) cancelled = true;
+            return result;
+        };
+        const stepped = new StoreRepository(repo.path, { run });
+        assert.equal(await checkFolder("small", { ...context, repo: stepped }, () => cancelled), undefined);
+        await settledState(`after ${after}`);
+    }
+
+    assert.deepEqual(await checkFolder("small", context, () => false), fromReport(supportedScan), "the next check works");
+    assert.equal(await install(parseManifest("small", manifest("small"))!, context), true, "and an install");
+    assert.deepEqual(await locks(repo.path), []);
 });
 
 test("a default branch name is used only when it's a plain branch name", async () => {
