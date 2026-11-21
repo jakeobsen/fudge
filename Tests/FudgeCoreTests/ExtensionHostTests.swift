@@ -124,6 +124,9 @@ func next(
             + #""children":[]}]},"detail":null}},{"id":7,"slots":{}}]}"#,
         #"{"type":"rpc","session":"s","id":1,"method":"toast.show","params":{"title":"Hi","n":[1,0,true,false]}}"#,
         #"{"type":"rpc","session":"s","id":2,"method":"window.close"}"#,
+        #"{"type":"rpc","session":"s","id":4,"method":"m","params":{"big":12345678901234567890,"#
+            + #""exact":9007199254740993,"negative":-42,"zero":0,"minusZero":-0,"small":1e-7,"huge":1e300,"#
+            + #""escaped":"é😀\n\t\\\/","nested":[[1,[true,[false,null]]],{"a":{"b":"c"}}]}}"#,
         #"{"type":"error","session":"s","message":"boom","stack":"at x","fatal":true}"#,
         #"{"type":"error","session":"s","message":"boom","fatal":false}"#,
         #"{"type":"log","session":"s","level":"info","message":"hello"}"#,

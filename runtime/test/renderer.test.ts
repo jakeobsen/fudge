@@ -87,6 +87,37 @@ test("only the first item and the ones the app asked for carry their actions and
     assert.deepEqual(later[1]!.props.actions, { $deferred: true });
 });
 
+test("the items a render carries in full match what a full render sends", async () => {
+    const item = (n: number) =>
+        h(List.Item, {
+            key: n,
+            title: `item ${n}`,
+            actions: h(
+                ActionPanel,
+                null,
+                h(ActionPanel.Section, null, h(Action, { title: `Open ${n}`, shortcut: { modifiers: ["cmd"], key: "o" }, onAction: () => {} })),
+                h(ActionPanel.Submenu, { title: "More" }, h(Action, { title: `Copy ${n}`, onAction: () => {} })),
+            ),
+            detail: h(List.Item.Detail, { markdown: `# ${n}`, metadata: h(List.Item.Detail.Metadata, null, h(List.Item.Detail.Metadata.Label, { title: "n", text: String(n) })) }),
+        });
+    const mounted = await mount(h(List, { isShowingDetail: true }, item(1), item(2), item(3), item(4)));
+    const ids = mounted.first.view!.children.map((child) => child.id);
+
+    // Asking for every item makes a render carry them all, as a render did before items were deferred.
+    mounted.root.slots(ids);
+    const full = mounted.root.snapshot().view!.children;
+    assert.ok(full.every((child) => (child.props.actions as unknown as UINode).type === "ActionPanel"));
+
+    // The first item, in a render that defers, and the selected one (asked for) match the full render exactly.
+    mounted.root.slots([ids[2]!]);
+    const deferred = mounted.root.snapshot().view!.children;
+    assert.deepEqual(deferred[0], full[0]);
+    assert.deepEqual(deferred[2], full[2]);
+    assert.deepEqual(deferred[1]!.props.actions, { $deferred: true });
+    assert.deepEqual({ ...deferred[1]!.props, actions: full[1]!.props.actions, detail: full[1]!.props.detail }, full[1]!.props);
+    assert.deepEqual(mounted.root.slots([ids[1]!]), [{ id: ids[1], slots: { actions: full[1]!.props.actions, detail: full[1]!.props.detail } }]);
+});
+
 test("a Grid's items defer their actions too", async () => {
     const cell = (n: number) =>
         h(Grid.Item, {
