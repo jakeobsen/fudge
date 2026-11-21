@@ -60,18 +60,14 @@ final class MacSystemActions: SystemActions {
         }
     }
 
-    /// Finder's `count every item of trash`: every volume's Trash, which listing `~/.Trash` would miss, and without
-    /// Full Disk Access, which listing it would need.
+    /// Finder's `count items of trash`, built as AppleScript sends it (`SystemAppleEvents.countTrash`): every
+    /// volume's Trash, which listing `~/.Trash` would miss, and without Full Disk Access, which listing it would
+    /// need. A reply that isn't a number throws, never reads as 0.
     func trashCount() async throws -> Int {
         try await offMain {
-            let event = Self.event("core", "cnte", to: .finder)
-            event.setParam(Self.every("cobj", of: Self.property("trsh", of: .null())), forKeyword: Self.code("----"))
-            event.setParam(NSAppleEventDescriptor(typeCode: Self.code("cobj")), forKeyword: Self.code("kocl"))
+            let event = SystemAppleEvents.countTrash(to: Self.address(of: .finder))
             let reply = try Self.send(event, options: [.waitForReply, .neverInteract], timeout: 15)
-            guard let count = reply.paramDescriptor(forKeyword: Self.code("----")) else {
-                throw AppleEventError(status: Int(errAECoercionFail))
-            }
-            return Int(count.int32Value)
+            return try SystemAppleEvents.count(in: reply)
         }
     }
 
@@ -90,10 +86,7 @@ final class MacSystemActions: SystemActions {
             let event = Self.event("core", "getd", to: .systemEvents)
             event.setParam(Self.darkModeProperty(), forKeyword: Self.code("----"))
             let reply = try Self.send(event, options: [.waitForReply, .neverInteract], timeout: 10)
-            guard let value = reply.paramDescriptor(forKeyword: Self.code("----")) else {
-                throw AppleEventError(status: Int(errAECoercionFail))
-            }
-            return value.booleanValue
+            return try SystemAppleEvents.boolean(in: reply)
         }
     }
 
@@ -207,36 +200,12 @@ final class MacSystemActions: SystemActions {
     nonisolated private static func property(_ name: String, of container: NSAppleEventDescriptor)
         -> NSAppleEventDescriptor
     {
-        specifier(
-            want: "prop", form: NSAppleEventDescriptor(enumCode: code("prop")),
-            key: NSAppleEventDescriptor(typeCode: code(name)), from: container)
-    }
-
-    /// Every element of class `elementClass` in `container`.
-    nonisolated private static func every(_ elementClass: String, of container: NSAppleEventDescriptor)
-        -> NSAppleEventDescriptor
-    {
-        var all = code("all ")
-        let ordinal = NSAppleEventDescriptor(
-            descriptorType: code("abso"), bytes: &all, length: MemoryLayout<FourCharCode>.size)!
-        return specifier(
-            want: elementClass, form: NSAppleEventDescriptor(enumCode: code("indx")), key: ordinal, from: container)
+        SystemAppleEvents.property(name, of: container)
     }
 
     /// System Events' `dark mode` (`thme`) of its `appearance preferences` (`aprp`).
     nonisolated private static func darkModeProperty() -> NSAppleEventDescriptor {
         property("thme", of: property("aprp", of: .null()))
-    }
-
-    nonisolated private static func specifier(
-        want: String, form: NSAppleEventDescriptor, key: NSAppleEventDescriptor, from container: NSAppleEventDescriptor
-    ) -> NSAppleEventDescriptor {
-        let specifier = NSAppleEventDescriptor.record().coerce(toDescriptorType: code("obj "))!
-        specifier.setDescriptor(NSAppleEventDescriptor(typeCode: code(want)), forKeyword: code("want"))
-        specifier.setDescriptor(form, forKeyword: code("form"))
-        specifier.setDescriptor(key, forKeyword: code("seld"))
-        specifier.setDescriptor(container, forKeyword: code("from"))
-        return specifier
     }
 
     nonisolated private static func code(_ text: String) -> FourCharCode {
