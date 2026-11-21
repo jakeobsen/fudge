@@ -108,6 +108,15 @@ public final class FixedMenuSystem: MenuSystem, @unchecked Sendable {
         }
     }
 
+    /// Turns one element on or off, or makes its state unknown (nil), as `setEnabled(_:titled:)` does for every item
+    /// with a title.
+    public func setEnabled(_ enabled: Bool?, element: FixedMenuHandle) {
+        lock.withLock {
+            guard element.build == build, elements.indices.contains(element.index) else { return }
+            elements[element.index].node.enabled = enabled
+        }
+    }
+
     /// How many times an element was read.
     public var reads: Int { lock.withLock { asked } }
 

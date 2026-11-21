@@ -160,19 +160,6 @@ public enum MenuLookup<Handle> {
     case noAnswer
 }
 
-/// The place of each item among the items with the same path and title, and how many there are: what
-/// `MenuReader.current` tells alike items apart by.
-public func menuItemPlaces<Handle>(_ items: [FoundMenuItem<Handle>]) -> [(place: Int, count: Int)] {
-    var counts: [[String]: Int] = [:]
-    var places: [Int] = []
-    for item in items {
-        let key = item.path + [item.title]
-        places.append(counts[key, default: 0])
-        counts[key, default: 0] += 1
-    }
-    return zip(items, places).map { item, place in (place, counts[item.path + [item.title]]!) }
-}
-
 /// What pressing a menu item gave.
 public enum MenuPress: Sendable, Equatable {
     case pressed
@@ -205,6 +192,11 @@ public struct FoundMenuItem<Handle> {
     /// Whether it's in the app's own menu (the menu bar's second item), which the list names by the app's name.
     public var inAppMenu: Bool
     public var shortcut: MenuShortcut?
+    /// Its place among the leaves with the same path and title, and how many the read saw: what
+    /// `MenuReader.current` tells alike items apart by. Every twin counts, whatever its enabled state, as `locate`
+    /// counts them, so a twin turned on or off since the read doesn't change the count (SPEC-118 §2).
+    public var place = 0
+    public var count = 1
 }
 
 /// What reading an app's menus gave.
@@ -285,6 +277,8 @@ public final class MenuWalk<Handle>: @unchecked Sendable {
     private let lock = NSLock()
     private let ended = DispatchSemaphore(value: 0)
     private var items: [FoundMenuItem<Handle>] = []
+    /// How many leaves the read saw with each path and title, listed or not.
+    private var twins: [[String]: Int] = [:]
     private var answered = false
     private var complete = true
     private var stopped = false
@@ -306,7 +300,12 @@ public final class MenuWalk<Handle>: @unchecked Sendable {
         return lock.withLock {
             stopped = true
             guard answered else { return .noAnswer }
-            return .items(items, complete: done && complete)
+            let counted = items.map { item in
+                var item = item
+                item.count = twins[item.path + [item.title]] ?? 1
+                return item
+            }
+            return .items(counted, complete: done && complete)
         }
     }
 
@@ -321,9 +320,15 @@ public final class MenuWalk<Handle>: @unchecked Sendable {
     func menuBarAnswered() { lock.withLock { answered = true } }
 
     /// Adds an item; false once the read should stop.
-    func add(_ item: FoundMenuItem<Handle>, limit: Int) -> Bool {
+    /// A leaf the read saw: counted among its twins, and listed when `listed` (it isn't turned off).
+    func add(_ item: FoundMenuItem<Handle>, listed: Bool = true, limit: Int) -> Bool {
         lock.withLock {
             guard !stopped else { return false }
+            let key = item.path + [item.title]
+            var item = item
+            item.place = twins[key, default: 0]
+            twins[key, default: 0] += 1
+            guard listed else { return true }
             items.append(item)
             if items.count >= limit {
                 complete = false
@@ -362,8 +367,8 @@ public struct MenuReader<System: MenuSystem>: Sendable {
 
     /// Starts reading `pid`'s menus on a thread of its own: every enabled leaf item with a title, in menu order, but
     /// none of the Apple menu's (the menu bar's first item). An item with a submenu isn't one itself: its submenu's
-    /// items are. A disabled item, or one without a title (a separator), is left out with what's under it. Call
-    /// `finish(within:)` for the result.
+    /// items are. A disabled item, or one without a title (a separator), is left out with what's under it, though a
+    /// disabled leaf still counts among its twins (`FoundMenuItem.count`). Call `finish(within:)` for the result.
     public func start(
         _ pid: Int32, cancel: MenuReadCancel = MenuReadCancel(), waitingForCancelledUpTo wait: Duration = .zero
     ) -> MenuWalk<System.Handle> {
@@ -425,12 +430,13 @@ public struct MenuReader<System: MenuSystem>: Sendable {
                     walk.missed()
                     continue
                 }
-                guard item.role == .item, item.enabled != false, let title = Self.title(item) else { continue }
+                guard item.role == .item, let title = Self.title(item) else { continue }
                 if item.children.isEmpty {
+                    // Counted whatever its state, listed only when it isn't turned off.
                     let found = FoundMenuItem(
                         handle: entry, title: title, path: top.path, inAppMenu: top.inAppMenu, shortcut: item.shortcut)
-                    guard walk.add(found, limit: itemLimit) else { return false }
-                } else if depth < depthLimit {
+                    guard walk.add(found, listed: item.enabled != false, limit: itemLimit) else { return false }
+                } else if item.enabled != false, depth < depthLimit {
                     let below = Top(path: top.path + [title], inAppMenu: top.inAppMenu)
                     guard read(below: item, top: below, depth: depth + 1, system: system, into: walk) else {
                         return false
@@ -466,7 +472,8 @@ public struct MenuReader<System: MenuSystem>: Sendable {
     }
 
     /// Finds the leaf item titled `title` under the menus titled `path`, walking down from the menu bar, every title
-    /// matching exactly, as the `place`th of the items found so (menus with the same title are each searched). Items
+    /// matching exactly, as the `place`th of the items found so (menus with the same title are each searched, except
+    /// those turned off, which the read doesn't enter either; every leaf counts, whatever its state). Items
     /// alike are told apart only by their place, so when the number found isn't `count`, the number the read saw (one
     /// of two alike windows closed, say), the item is `.gone`, never pressed by a place that now means another. Any
     /// menu that doesn't answer makes it `.noAnswer`, since the number can't be known.
@@ -479,7 +486,7 @@ public struct MenuReader<System: MenuSystem>: Sendable {
         var silent = false
         for item in bar.dropFirst() {
             switch system.node(item) {
-            case .answered(let node) where node.title == first:
+            case .answered(let node) where node.title == first && node.enabled != false:
                 if !collect(Array(path.dropFirst()), title: title, below: node, into: &matches) { silent = true }
             case .noAnswer: silent = true
             default: continue
@@ -516,7 +523,7 @@ public struct MenuReader<System: MenuSystem>: Sendable {
                 case .answered(let item) where item.role == .item:
                     if path.isEmpty {
                         if item.title == title, item.children.isEmpty { matches.append((entry, item.enabled)) }
-                    } else if item.title == path[0], !item.children.isEmpty {
+                    } else if item.title == path[0], !item.children.isEmpty, item.enabled != false {
                         if !collect(Array(path.dropFirst()), title: title, below: item, into: &matches) {
                             answered = false
                         }

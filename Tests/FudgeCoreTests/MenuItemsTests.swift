@@ -642,3 +642,102 @@ private let alike: [FixedMenu] = [
     }
     #expect(listing.rows.map(\.title).contains("As PDF…"))
 }
+
+// MARK: - Twins in another state at the read than at the press (SPEC-118 §2)
+
+/// Three windows titled alike under Window, the first one's item turned on or off.
+private func threeAlike(firstEnabled: Bool) -> [FixedMenu] {
+    [
+        alike[0],
+        FixedMenu(
+            "Window",
+            items: [FixedMenu("Minimize")] + [firstEnabled, true, true].map { FixedMenu("bash", enabled: $0) }),
+    ]
+}
+
+/// What the read found, with each item's place among its twins and their number.
+private func found(_ system: FixedMenuSystem) throws -> [FoundMenuItem<FixedMenuHandle>] {
+    guard case .items(let items, _) = MenuReader(system: system).start(app.pid).finish(within: .seconds(30)) else {
+        throw MenuTestError.noAnswer
+    }
+    return items
+}
+
+@Test func everyTwinCountsWhateverItsStateButOnlyTheOnesNotOffAreListed() throws {
+    let system = FixedMenuSystem(menus: threeAlike(firstEnabled: false))
+    // The second's state is unknown (the app didn't say): listed, and counted.
+    system.setEnabled(nil, element: system.items(titled: "bash")[1])
+    let twins = try found(system).filter { $0.title == "bash" }
+    #expect(twins.map(\.place) == [1, 2], "the first is off: not listed, but it holds place 0")
+    #expect(twins.map(\.count) == [3, 3])
+}
+
+@MainActor
+@Test func aTwinOffAtTheReadAndOnAtThePressLeavesTheOthersPressedByTheirPlace() async throws {
+    let system = FixedMenuSystem(menus: threeAlike(firstEnabled: false))
+    let listing = try read(system)
+    let rows = listing.rows.indices.filter { listing.rows[$0].title == "bash" }
+    try #require(rows.count == 2)
+    // The first window's item comes on, and the app rebuilds its menus: each row still presses its own window.
+    system.rebuild(threeAlike(firstEnabled: true))
+    #expect(await runItem(rows[0], of: listing, probe: RunProbe()) == .pressed(.pressed))
+    #expect(system.pressedElements == [system.items(titled: "bash")[1]])
+    system.rebuild(threeAlike(firstEnabled: true))
+    #expect(await runItem(rows[1], of: listing, probe: RunProbe()) == .pressed(.pressed))
+    #expect(system.pressedElements.last == system.items(titled: "bash")[2])
+}
+
+@MainActor
+@Test func aTwinOnAtTheReadAndOffAtThePressIsntPressedAndTheOthersAre() async throws {
+    let system = FixedMenuSystem(menus: threeAlike(firstEnabled: true))
+    let listing = try read(system)
+    let rows = listing.rows.indices.filter { listing.rows[$0].title == "bash" }
+    try #require(rows.count == 3)
+    system.rebuild(threeAlike(firstEnabled: false))
+    #expect(await runItem(rows[0], of: listing, probe: RunProbe()) == .disabled)
+    #expect(await runItem(rows[1], of: listing, probe: RunProbe()) == .pressed(.pressed))
+    #expect(system.pressedElements == [system.items(titled: "bash")[1]])
+}
+
+@MainActor
+@Test func aTwinWhoseStateIsUnknownAtTheReadCountsAsATwin() async throws {
+    let system = FixedMenuSystem(menus: alike)
+    system.setEnabled(nil, element: system.items(titled: "bash")[0])
+    let listing = try read(system)
+    let rows = listing.rows.indices.filter { listing.rows[$0].title == "bash" }
+    try #require(rows.count == 2, "an unknown state is listed")
+    system.rebuild(alike)
+    #expect(await runItem(rows[1], of: listing, probe: RunProbe()) == .pressed(.pressed))
+    #expect(system.pressedElements == [system.items(titled: "bash")[1]])
+}
+
+@MainActor
+@Test func whenATwinThatWasOffGoesTheNumberChangedAndNoneIsPressed() async throws {
+    let system = FixedMenuSystem(menus: threeAlike(firstEnabled: false))
+    let listing = try read(system)
+    let rows = listing.rows.indices.filter { listing.rows[$0].title == "bash" }
+    // The window whose item was off closed: two are left of the three the read counted, so each row's place may now
+    // mean another window.
+    system.rebuild([
+        alike[0], FixedMenu("Window", items: [FixedMenu("Minimize"), FixedMenu("bash"), FixedMenu("bash")]),
+    ])
+    #expect(await runItem(rows[0], of: listing, probe: RunProbe()) == .gone)
+    #expect(await runItem(rows[1], of: listing, probe: RunProbe()) == .gone)
+    #expect(system.pressed.isEmpty)
+}
+
+@MainActor
+@Test func aTwinInAMenuTurnedOffIsntCountedAtTheReadOrThePress() async throws {
+    // Two Window menus, the second turned off: the read doesn't enter it, and neither does the press.
+    let menus: [FixedMenu] = [
+        alike[0], FixedMenu("Window", items: [FixedMenu("bash"), FixedMenu("bash")]),
+        FixedMenu("Window", enabled: false, items: [FixedMenu("bash")]),
+    ]
+    let system = FixedMenuSystem(menus: menus)
+    let listing = try read(system)
+    let rows = listing.rows.indices.filter { listing.rows[$0].title == "bash" }
+    try #require(rows.count == 2)
+    system.rebuild(menus)
+    #expect(await runItem(rows[1], of: listing, probe: RunProbe()) == .pressed(.pressed))
+    #expect(system.pressedElements == [system.items(titled: "bash")[1]])
+}

@@ -42,11 +42,18 @@ public protocol KeyMappingSystem: Sendable {
     func readModifierKeys() throws -> String
     /// `hidutil property --set <argument>`.
     func writeMapping(_ argument: String) throws
+    /// Whether Fudge's entry took the place of a Caps Lock → Caps Lock one, which removing it puts back. Kept across
+    /// launches (the app's is `hyperkey.json` in the support folder), so the cleanup after a crash puts it back too.
+    func replacedCapsLock() -> Bool
+    func setReplacedCapsLock(_ replaced: Bool) throws
 }
 
 /// Fudge's entry in `UserKeyMapping`, Caps Lock → F18, added and removed without touching the others (SPEC-093).
 public enum HyperkeyMapping {
     public static let entry = KeyRemap(source: Hyperkey.capsLockUsage, destination: Hyperkey.f18Usage)
+    /// Caps Lock → Caps Lock, which some tools write. It isn't a mapping, but two entries for Caps Lock would be, so
+    /// Fudge's takes its place, and removing Fudge's puts it back where it was (SPEC-118 §1).
+    public static let capsLockItself = KeyRemap(source: Hyperkey.capsLockUsage, destination: Hyperkey.capsLockUsage)
 
     public enum Problem: Error, Equatable {
         /// Caps Lock is already mapped to another key, by the user or another app: Fudge doesn't take it.
@@ -84,15 +91,30 @@ public enum HyperkeyMapping {
         }
         let merged = try adding(to: current, keyboards: keyboards)
         guard merged != current else { return }
+        // Remembered before the write, so a crash right after it still puts the user's entry back.
+        if replacesCapsLockItself(current) {
+            do {
+                try system.setReplacedCapsLock(true)
+            } catch {
+                throw .failed("Fudge couldn't remember the Caps Lock → Caps Lock entry it would replace")
+            }
+        }
         try write(merged, to: system)
     }
 
-    /// Removes Fudge's entry only, keeping every other one.
+    /// Removes Fudge's entry only, keeping every other one, and puts back a Caps Lock → Caps Lock entry it took the
+    /// place of. What it remembered is forgotten once the mapping no longer holds Fudge's entry.
     public static func remove(_ system: any KeyMappingSystem) throws(Problem) {
         let current = try read(system)
-        let kept = removing(from: current)
-        guard kept != current else { return }
-        try write(kept, to: system)
+        let restoring = system.replacedCapsLock()
+        let kept = removing(from: current, restoringCapsLockItself: restoring)
+        if kept != current { try write(kept, to: system) }
+        if restoring { try? system.setReplacedCapsLock(false) }
+    }
+
+    /// Whether adding Fudge's entry to `current` takes a Caps Lock → Caps Lock entry's place.
+    static func replacesCapsLockItself(_ current: [KeyRemap]) -> Bool {
+        !current.contains(entry) && current.contains(capsLockItself)
     }
 
     public static func adding(to current: [KeyRemap], keyboards: [[KeyRemap]] = []) throws(Problem) -> [KeyRemap] {
@@ -101,11 +123,21 @@ public enum HyperkeyMapping {
         where remap.source == Hyperkey.capsLockUsage && remap.destination != remap.source {
             guard remap == entry else { throw .capsLockTaken(destination: remap.destination) }
         }
-        return current.contains(entry) ? current : current + [entry]
+        if current.contains(entry) { return current }
+        guard let index = current.firstIndex(of: capsLockItself) else { return current + [entry] }
+        var merged = current
+        merged[index] = entry
+        return merged
     }
 
-    public static func removing(from current: [KeyRemap]) -> [KeyRemap] {
-        current.filter { $0 != entry }
+    /// `current` without Fudge's entry. When it took a Caps Lock → Caps Lock entry's place (and the user hasn't
+    /// written one since), that entry goes back exactly where Fudge's was.
+    public static func removing(from current: [KeyRemap], restoringCapsLockItself: Bool = false) -> [KeyRemap] {
+        guard restoringCapsLockItself, !current.contains(capsLockItself), let index = current.firstIndex(of: entry)
+        else { return current.filter { $0 != entry } }
+        return current.enumerated().compactMap { offset, remap in
+            offset == index ? capsLockItself : (remap == entry ? nil : remap)
+        }
     }
 
     /// The argument for `hidutil property --set`: the whole list, since setting it replaces it.
