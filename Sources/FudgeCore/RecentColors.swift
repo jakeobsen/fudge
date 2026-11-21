@@ -63,12 +63,18 @@ public struct RecentColorStore: Sendable, Equatable {
     }
 
     /// Puts `color` first. The same color picked before (the same in every format, `isSame(as:)`) moves up rather
-    /// than showing twice, and past `limit` the oldest entries go.
+    /// than showing twice, and past `limit` valid colors the oldest go. Entries that aren't valid colors (a hand edit)
+    /// don't count toward the limit and stay in the file.
     public mutating func add(_ color: PickedColor, id: String = UUID().uuidString, now: Date) {
         entries.removeAll { RecentColor(json: $0)?.color.isSame(as: color) == true }
         let pickedAt = ISO8601DateFormatter().string(from: now)
         entries.insert(RecentColor(id: id, color: color, pickedAt: pickedAt).json(), at: 0)
-        if entries.count > Self.limit { entries.removeLast(entries.count - Self.limit) }
+        var valid = 0
+        entries.removeAll { entry in
+            guard RecentColor(json: entry) != nil else { return false }
+            valid += 1
+            return valid > Self.limit
+        }
     }
 
     @discardableResult

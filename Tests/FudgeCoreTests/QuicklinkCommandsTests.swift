@@ -217,6 +217,42 @@ private func items(_ quicklinks: [Quicklink], _ settings: FudgeSettings) -> [Roo
     #expect(!QuicklinkCommands.prune(&settings, keeping: [docs]), "nothing left to take out")
 }
 
+@Test func aQuicklinkStillInTheFileKeepsItsSettingsEvenWhenItIsNotValid() throws {
+    let file = FileManager.default.temporaryDirectory.appendingPathComponent(
+        "fudge-quicklinks-\(UUID().uuidString).json")
+    defer { try? FileManager.default.removeItem(at: file) }
+    // A hand edit broke the second one (no link), and the third was removed by hand.
+    let broken = UUID().uuidString
+    let removed = UUID().uuidString
+    try """
+    {"quicklinks":[{"id":"\(docs.id)","name":"Docs","link":"https://docs.example.com"},{"id":"\(broken)","name":"Broken"}]}
+    """.write(to: file, atomically: true, encoding: .utf8)
+    let store = QuicklinkStore.load(from: file)
+    #expect(store.quicklinks.map(\.id) == [docs.id])
+    #expect(store.entryIDs == [docs.id, broken], "every entry's id, valid or not")
+    var settings = FudgeSettings()
+    settings.commands[":quicklinks/\(docs.id)"] = .init(alias: "docs")
+    settings.commands[":quicklinks/\(broken)"] = .init(hotkey: "option+b")
+    settings.commands[":quicklinks/\(removed)"] = .init(alias: "gone")
+    #expect(QuicklinkCommands.prune(&settings, in: store))
+    #expect(
+        Set(settings.commands.keys) == [":quicklinks/\(docs.id)", ":quicklinks/\(broken)"],
+        "only the removed one's settings go; fixing the broken one brings its hotkey back")
+}
+
+@Test func aGoneQuicklinkIsNamedAsDeleted() {
+    #expect(QuicklinkCommands.nameWhenGone(":quicklinks/\(UUID().uuidString)") == "a deleted quicklink")
+    #expect(QuicklinkCommands.nameWhenGone("scratch/create") == nil)
+    #expect(QuicklinkCommands.nameWhenGone(":window-management/left-half") == nil)
+}
+
+@Test func theQuicklinksGroupIsTypedQuicklinksOnTheCommandsPage() {
+    #expect(BuiltInCommandGroup.typeLabels(ofGroup: QuicklinkCommands.groupName) == ("Quicklinks", "Quicklink"))
+    for group in BuiltInCommandGroup.all {
+        #expect(BuiltInCommandGroup.typeLabels(ofGroup: group.name) == ("Built-in", "Command"))
+    }
+}
+
 @Test func aQuicklinksAliasAndHotkeySurviveABackupRoundTrip() throws {
     let source = FileManager.default.temporaryDirectory.appendingPathComponent(
         "fudge-backup-\(UUID().uuidString)", isDirectory: true)

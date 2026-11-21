@@ -5,12 +5,12 @@ import Foundation
 // decision lives here; the app only shows macOS's loupe (`ColorSampling`), copies and shows the HUD, and tests and
 // snapshot runs use samplers that never open the loupe.
 
-/// A color as Fudge keeps it: sRGB components from 0 to 1.
+/// A color as Fudge keeps it: sRGB components from 0 to 1. They're read-only, so a color stays in 0…1 once made.
 public struct PickedColor: Sendable, Equatable {
-    public var red: Double
-    public var green: Double
-    public var blue: Double
-    public var alpha: Double
+    public let red: Double
+    public let green: Double
+    public let blue: Double
+    public let alpha: Double
 
     /// Each component is clamped to 0…1, and a component that isn't a number counts as 0, so an out-of-gamut value
     /// (extended sRGB's below 0 or above 1) is the nearest color sRGB has.
