@@ -107,6 +107,13 @@ func next(
     let rpc = try decode(#"{"type":"rpc","session":"s","id":1,"method":"toast.show","params":{"title":"Hi"}}"#)
     #expect(rpc == .rpc(session: "s", id: 1, method: "toast.show", params: .object(["title": .string("Hi")])))
     #expect(rpc.session == "s")
+    // A refusal on purpose carries its notice (SPEC-095); any other error has none.
+    #expect(
+        try decode(#"{"type":"error","session":"s","message":"Sign-in is off.","fatal":true,"notice":"signInOff"}"#)
+            == .error(session: "s", message: "Sign-in is off.", stack: nil, fatal: true, notice: "signInOff"))
+    #expect(
+        try decode(#"{"type":"error","session":"s","message":"boom","fatal":true}"#)
+            == .error(session: "s", message: "boom", stack: nil, fatal: true, notice: nil))
 }
 
 @Test func readsHostLinesAsJSONDecoderDoes() throws {
@@ -129,6 +136,8 @@ func next(
             + #""escaped":"é😀\n\t\\\/","nested":[[1,[true,[false,null]]],{"a":{"b":"c"}}]}}"#,
         #"{"type":"error","session":"s","message":"boom","stack":"at x","fatal":true}"#,
         #"{"type":"error","session":"s","message":"boom","fatal":false}"#,
+        #"{"type":"error","session":"s","message":"Sign-in is off.","stack":"at x","fatal":true,"notice":"signInOff"}"#,
+        #"{"type":"error","session":"s","message":"boom","fatal":true,"notice":null}"#,
         #"{"type":"log","session":"s","level":"info","message":"hello"}"#,
         #"{"type":"eventSettled","session":"s"}"#,
         #"{"type":"exit","session":"s","reason":"finished"}"#,
@@ -142,6 +151,7 @@ func next(
     let refused = [
         #"{"type":"pong"}"#, #"{"id":3}"#, #"[1]"#, #"{"type":"exit","session":"s","reason":"#,
         #"{"type":"rpc","session":"s","id":3,"method":"m","params":{"x":1e400}}"#,
+        #"{"type":"error","session":"s","message":"boom","fatal":true,"notice":7}"#,
     ]
     for line in refused {
         #expect(throws: (any Error).self) { try HostMessage(line: Data(line.utf8)) }
@@ -203,6 +213,10 @@ func next(
     #expect(
         try encode(.rpcResult(session: "s", id: 2, result: nil, error: "nope")) == [
             "type": "rpcResult", "session": "s", "id": 2, "error": "nope",
+        ])
+    #expect(
+        try encode(.rpcResult(session: "s", id: 3, result: nil, error: "Sign-in is off.", notice: "signInOff")) == [
+            "type": "rpcResult", "session": "s", "id": 3, "error": "Sign-in is off.", "notice": "signInOff",
         ])
     #expect(try encode(.slots(session: "s", nodes: [4, 7])) == ["type": "slots", "session": "s", "nodes": [4, 7]])
 }

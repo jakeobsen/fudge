@@ -1,0 +1,4 @@
+{
+    "signInOffMessage": "Sign-in is off. This extension needs to sign in with OAuth to work. Turn on sign-in in Fudge's settings, or, if it takes a token, set it in its settings.",
+    "kinds": ["signInOff", "signInCancelled", "signInTimedOut", "signInRefused"]
+}

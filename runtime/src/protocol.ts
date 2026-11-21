@@ -40,7 +40,8 @@ export type AppMessage =
     | { type: "slots"; session: string; nodes: number[] }
     | { type: "pop"; session: string }
     | { type: "unload"; session: string }
-    | { type: "rpcResult"; session: string; id: number; result?: unknown; error?: string }
+    /** `notice`: the app refused on purpose, and why (SPEC-095, `notice.ts`), e.g. `signInOff`. */
+    | { type: "rpcResult"; session: string; id: number; result?: unknown; error?: string; notice?: string }
     | { type: "toastAction"; session: string; toast: number; action: "primary" | "secondary" };
 
 /** Worker → host; the host forwards these to the app with the session added. */
@@ -49,7 +50,8 @@ export type WorkerMessage =
     /** Answers `slots`, with an entry for every node asked for. */
     | { type: "slots"; items: ItemSlots[] }
     | RpcRequest
-    | { type: "error"; message: string; stack?: string; fatal: boolean }
+    /** `notice`: the error was a refusal on purpose (`notice.ts`), shown as a notice, not a failure. */
+    | { type: "error"; message: string; stack?: string; fatal: boolean; notice?: string }
     | { type: "log"; level: "info" | "error"; message: string }
     /** Answers every `event`, once its handler has returned, or settled when it returned a promise. */
     | { type: "eventSettled" }
@@ -61,7 +63,7 @@ export type HostToWorker =
     | { type: "slots"; nodes: number[] }
     | { type: "pop" }
     | { type: "unload" }
-    | { type: "rpcResult"; id: number; result?: unknown; error?: string }
+    | { type: "rpcResult"; id: number; result?: unknown; error?: string; notice?: string }
     | { type: "toastAction"; toast: number; action: "primary" | "secondary" };
 
 /** Host → app. */
@@ -136,7 +138,11 @@ export function parseAppMessage(line: string): Parsed {
             if (problem) return problem;
             if (id === undefined) return protocolError("`rpcResult` needs a numeric `id`");
             const error = typeof value.error === "string" ? value.error : undefined;
-            return { ok: true, message: { type: "rpcResult", session: session!, id, result: value.result, error } };
+            const notice = typeof value.notice === "string" ? { notice: value.notice } : {};
+            return {
+                ok: true,
+                message: { type: "rpcResult", session: session!, id, result: value.result, error, ...notice },
+            };
         }
         case "toastAction": {
             const problem = needsSession();

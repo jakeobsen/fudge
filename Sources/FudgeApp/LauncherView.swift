@@ -327,8 +327,8 @@ struct LauncherView: View {
                 ProgressView().controlSize(.small)
             }
         case .failure(let failure):
-            if failure.notice != nil {
-                NoticeView(title: failure.title)
+            if let notice = failure.notice {
+                NoticeView(title: failure.title, message: failure.message, symbol: notice.symbol)
             } else {
                 FailureView(failure: failure)
             }
@@ -688,14 +688,24 @@ private struct SignInView: View {
     }
 }
 
-/// A notice in place of a command, drawn as a List's empty view is: the Extension Store's "off" view.
+/// A notice in place of a command, drawn as a List's empty view is: the Extension Store's "off" view, or a sign-in
+/// that stopped on purpose (`SignInNotice`). Nothing in it is red: nothing failed.
 private struct NoticeView: View {
     let title: String
+    let message: String
+    let symbol: String
 
     var body: some View {
         VStack(spacing: 12) {
-            Image(systemName: "puzzlepiece.extension").font(.system(size: 40)).foregroundStyle(.secondary)
+            Image(systemName: symbol).font(.system(size: 40)).foregroundStyle(.secondary)
             Text(title).font(.system(size: 15, weight: .semibold))
+            if !message.isEmpty {
+                Text(message)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 460)
+                    .textSelection(.enabled)
+            }
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

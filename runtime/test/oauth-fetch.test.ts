@@ -17,6 +17,7 @@ import {
     type ServerAnswer,
 } from "../src/api/oauth-fetch.ts";
 import { signInOffMessage } from "../src/api/oauth.ts";
+import { noticeOf } from "../src/notice.ts";
 
 const fixture = readFileSync(new URL("./fixtures/oauth-providers.json", import.meta.url), "utf8");
 const providers = providersFromEnvironment(fixture);
@@ -172,9 +173,10 @@ for (const [state, answer] of [
         const foreign = { href: "https://github.oauth.raycast.com/x", toString: () => "https://github.oauth.raycast.com/x" };
         await assert.rejects(wrapped(foreign as unknown as URL), /Fudge doesn't send requests to|Sign-in is off/);
         if (state === "off") {
-            await assert.rejects(wrapped("https://github.oauth.raycast.com/token", post("authorization_code")), {
-                message: signInOffMessage,
-            });
+            const off = await wrapped("https://github.oauth.raycast.com/token", post("authorization_code")).catch(
+                (error: unknown) => error,
+            );
+            assert.deepEqual(noticeOf(off), { notice: "signInOff", message: signInOffMessage });
             // The providers' own token URLs, and everything else, go where they were going.
             await wrapped("https://oauth2.googleapis.com/token", post("refresh_token"));
             await wrapped("https://api.github.com/user");
@@ -183,6 +185,11 @@ for (const [state, answer] of [
                 ["https://oauth2.googleapis.com/token", "https://api.github.com/user"],
             );
         } else {
+            // Refused with sign-in on: Fudge never sends there, which is a failure, not a notice.
+            const proxy = await wrapped("https://github.oauth.raycast.com/anything-else", post("authorization_code")).catch(
+                (error: unknown) => error,
+            );
+            assert.equal(noticeOf(proxy), undefined);
             assert.equal(sent.length, 0, "nothing was sent");
         }
     });
