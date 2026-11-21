@@ -23,11 +23,13 @@ import {
 import {
     checkFolder,
     compatibilityFile,
+    compatibilityTag,
     compatibilityLine,
     compatibilityText,
     CompatibilityChecks,
     fromReport,
     isNotCompatible,
+    isPartlyCompatible,
     maxCachedResults,
     maxScanBytes,
     maxScanFiles,
@@ -1087,7 +1089,7 @@ test("the detail's Compatibility line: checking, then compatible, not compatible
 });
 
 test("the list's Not compatible tag comes only from a cached result that says so", () => {
-    assert.deepEqual(accessoryTexts(gamma, "installed", true), [
+    assert.deepEqual(accessoryTexts(gamma, "installed", "Not compatible"), [
         { text: "someone" },
         { text: "1 command" },
         { tag: "Not compatible" },
@@ -1098,6 +1100,102 @@ test("the list's Not compatible tag comes only from a cached result that says so
     assert.equal(isNotCompatible(fromReport({ supported: false, gaps: [{ api: "AI.ask", byDesign: "AI" }], unreadable: [] })), true);
     assert.equal(isNotCompatible(fromReport({ supported: false, gaps: [{ api: "OAuth", byDesign: "OAuth" }], unreadable: [] })), false);
     assert.equal(isNotCompatible(fromReport({ supported: false, gaps: [{ api: "Clipboard.read" }], unreadable: [] })), false);
+});
+
+// SPEC-109 §2: with each command's result, an extension where only some commands use Raycast AI is Partly compatible.
+
+/** A scan report whose commands each reach what's given (Raycast AI by default). */
+const perCommand = (using: Record<string, string[]>, gaps = [{ api: "AI.ask", byDesign: "AI" }]): ScanReport => ({
+    supported: false,
+    gaps,
+    unreadable: [],
+    commands: Object.entries(using).map(([name, unsupported]) => ({ name, unsupported })),
+});
+const slackLike = perCommand({ search: [], "send-message": [], "search-emojis": ["AI"], "set-status": ["AI"] });
+const titles = (name: string) =>
+    ({ search: "Search", "send-message": "Send Message", "search-emojis": "Search Emojis", "set-status": "Set Status" })[
+        name
+    ] ?? name;
+
+test("some commands using Raycast AI is Partly compatible, orange; every command is Not compatible, as before", () => {
+    const partly = fromReport(slackLike);
+    assert.deepEqual(partly, {
+        byCommand: { count: 4, using: ["search-emojis", "set-status"] },
+        notSupported: ["AI"],
+        missing: [],
+        signsIn: false,
+        unreadable: false,
+    });
+    assert.equal(compatibilityTag(partly), "Partly compatible");
+    assert.equal(isNotCompatible(partly), false);
+    assert.equal(isPartlyCompatible(partly), true);
+    const every = fromReport(perCommand({ ask: ["AI"], chat: ["AI", "Browser Extension"] }));
+    assert.equal(compatibilityTag(every), "Not compatible");
+    assert.equal(compatibilityTag(fromReport(perCommand({ a: [], b: [] }, []))), undefined);
+    // An AI tool's use isn't a command's: no AI label at all.
+    const toolsOnly = fromReport(perCommand({ meetings: [] }));
+    assert.deepEqual(toolsOnly.notChecked ? undefined : toolsOnly.notSupported, []);
+    assert.equal(compatibilityTag(toolsOnly), undefined);
+    assert.equal(compatibilityText(toolsOnly), "Compatible");
+    // A scanner from before SPEC-109 says nothing per command: Not compatible, as before.
+    assert.equal(compatibilityTag(fromReport({ supported: false, gaps: [{ api: "AI.ask", byDesign: "AI" }], unreadable: [] })), "Not compatible");
+    assert.deepEqual(accessoryTexts(gamma, "available", "Partly compatible"), [
+        { text: "someone" },
+        { text: "1 command" },
+        { tag: "Partly compatible" },
+    ]);
+});
+
+test("the detail and the confirmation name the commands, and the confirmation says they won't be enabled", () => {
+    assert.equal(
+        compatibilityText(fromReport(slackLike), titles),
+        "Partly compatible: 2 of 4 commands use Raycast AI: Search Emojis, Set Status",
+    );
+    assert.equal(
+        compatibilityText(fromReport(perCommand({ a: ["AI"], b: [], c: [] }))),
+        "Partly compatible: 1 of 3 commands uses Raycast AI: a",
+    );
+    assert.equal(
+        compatibilityLine(fromReport(slackLike), titles),
+        "Partly compatible with Fudge: Search Emojis and Set Status use Raycast AI, which Fudge doesn't support. " +
+            "They won't be enabled. You can turn them on in Settings → Commands.",
+    );
+    assert.equal(
+        compatibilityLine(fromReport(perCommand({ ask: ["AI"], list: [] })), titles),
+        "Partly compatible with Fudge: ask uses Raycast AI, which Fudge doesn't support. It won't be enabled. " +
+            "You can turn it on in Settings → Commands.",
+    );
+    assert.equal(
+        compatibilityLine(fromReport(perCommand({ ask: ["AI"], tabs: ["Browser Extension"] }, [
+            { api: "AI.ask", byDesign: "AI" },
+            { api: "BrowserExtension.getTabs", byDesign: "Browser Extension" },
+        ]))),
+        "Not compatible with Fudge: every command uses Raycast AI or the Raycast Browser Extension, which Fudge " +
+            "doesn't support, so none of them will be enabled. You can turn them on in Settings → Commands.",
+    );
+});
+
+test("a cached result keeps its commands, and one with a bad commands entry is dropped", async () => {
+    const supportPath = await mkdtemp(path.join(tmpdir(), "fudge-partly-"));
+    const partly = fromReport(slackLike);
+    await writeCompatibility(supportPath, "scanner-1", new Map([[treeOf(1), partly]]));
+    assert.deepEqual((await readCompatibility(supportPath, "scanner-1")).get(treeOf(1)), partly);
+    const bad = (byCommand: unknown) => ({ notSupported: ["AI"], missing: [], signsIn: false, unreadable: false, byCommand });
+    await writeFile(
+        compatibilityFile(supportPath),
+        JSON.stringify({
+            scanner: "scanner-1",
+            trees: {
+                [treeOf(2)]: bad({ count: 2, using: ["a", "b", "c"] }),
+                [treeOf(3)]: bad({ count: 2, using: ["Not A Name"] }),
+                [treeOf(4)]: bad({ count: "2", using: [] }),
+                [treeOf(5)]: bad(null),
+                [treeOf(6)]: bad({ count: 3, using: ["a"] }),
+            },
+        }),
+    );
+    assert.deepEqual([...(await readCompatibility(supportPath, "scanner-1")).keys()], [treeOf(6)]);
+    await rm(supportPath, { recursive: true, force: true });
 });
 
 test("install's confirmation carries the scan's gaps, and a failed scan doesn't stop the install", async () => {

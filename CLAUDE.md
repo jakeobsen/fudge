@@ -62,6 +62,11 @@ Extensions run in a separate Node.js process, the extension host.
       It does that once per query (`AliasHandOff`): the same query coming back while an argument field has the keyboard is the search field writing its text back as it loses the keyboard, and changes nothing.
       `CommandAliases.problem` holds the alias rules (1–32 characters, no whitespace, unique ignoring case).
       A disabled command's hotkey isn't registered (`FudgeSettings.availableHotkeys`), and `CommandLocator` refuses `launchCommand` for it (`LaunchCommandError.disabled`).
+      **A command that uses Raycast AI or the Browser Extension is off by default** (SPEC-109): `fudge build` records which commands do in the install's `compatibility.json` (`CommandCompatibility`), and `FudgeSettings.offByDefault` (`InstalledExtension.offByDefault`) holds their ids.
+      `offByDefault` is never saved: the launcher and the Settings window work it out from the installed extensions each time they read `settings.json`, so Fudge's default never looks like the user's choice.
+      A command's own Enabled (`FudgeSettings.isEnabledOwn`) is `enabled` when it's set, which only the user's toggle does, true or false (`FudgeSettings.setEnabled(_:commandID:)`), and otherwise whether it's off by default.
+      So an update that drops the use turns the command on again, and a command the user turned on stays on.
+      An install without `compatibility.json` (built before, or its scan failed) has every command on.
     - **Built-in command groups** (`BuiltInCommandGroup`, core) are Fudge's own commands, each with a title, keywords and an SF Symbol.
       Root search lists the enabled ones (`RootItem.Kind.builtInCommand`, the group's title as the subtitle, the symbol as the icon), and the Commands page lists each group above the extensions.
       They can take arguments, as Define Word does.
@@ -528,6 +533,7 @@ Extensions run in a separate Node.js process, the extension host.
       Ending the recording (saving, Esc, closing the window, or leaving the page or onboarding step) resumes them (`HotKeyRecorder`, `SettingsModel.select`).
       A conflict (`HotKeyConflict`: the launcher's key, another installed command's, named by its title, with its extension's when two share one, `CommandNames`, or no ⌘ ⌥ ⌃) or a shortcut the system refuses keeps the old hotkey and shows why in the cell.
       A command that isn't installed keeps its saved hotkey for a reinstall, but doesn't block the key: taking it clears that one's hotkey, keeping its alias and Enabled state (`HotKeyConflict.displaced`), and the cell says so (`HotKeyConflict.displacedNote`): by the command's title, and a deleted quicklink's key as "a deleted quicklink", never its id.
+      A command that's off by default says why on a line under its title (`SettingsModel.offByDefaultReason`, `CommandCompatibility.reason`: "Uses Raycast AI, which Fudge doesn't support.").
     - **The Sign-in page** (`SignInPage.swift`, after Window Management) sets the server extensions sign in through (SPEC-056): Off (the default), **Fudge's sign-in server** (`SignInServer.fudgeURL`, `https://fudge-oauth.rackofpain.net`) or **Your own server…**, whose address is saved on ↵ once `SignInServer.validate` accepts it (`https://`, or `http://` on `localhost` or `127.0.0.1`;
       no user info, query or fragment).
       It's saved as the worker's `new URL()` writes it (scheme and host in lowercase, no default port, dot segments resolved), since a sign-in's authorize URL is compared with what the worker sends back; a host that parser would rewrite otherwise (non-ASCII, percent-encoded, IPv6, IPv4 in another notation) isn't accepted.
@@ -845,8 +851,10 @@ Extensions run in a separate Node.js process, the extension host.
   - `compatibility.ts` is what the store says about compatibility (FUD-118).
     A scan's result (`Compatibility`: the categories Fudge doesn't support, the APIs it lacks, signing in, unreadable source;
     or `notChecked`) is cached by the folder's git tree id in `compatibility.json` in the store's data folder (the newest 4,000, entries checked on reading, API names identifiers only), with the scanner that wrote it: the `fudge` tool's size and modification time, so a new build of Fudge, which may support more, scans again (`scannerIdentity`).
-    The list never scans: a row whose cached result uses something Fudge doesn't support gets a red **Not compatible** tag.
-    The detail pane's first fact is **Compatibility** (`compatibilityText`): Checking…, Compatible, Not compatible: Raycast AI, Missing: the APIs, Signs in with OAuth, Couldn't check, or Not checked.
+    The list never scans: a row whose cached result uses something Fudge doesn't support gets a tag (`compatibilityTag`), a red **Not compatible** when every command does, or an orange **Partly compatible** when only some do.
+    A result keeps which commands do (`byCommand`, from the scan's per-command results); one without it, or whose scan has none, counts the whole extension, as before SPEC-109.
+    What only an AI tool uses counts for no command, so it isn't mentioned.
+    The detail pane's first fact is **Compatibility** (`compatibilityText`): Checking…, Compatible, Partly compatible: 2 of 9 commands use Raycast AI: and their titles, Not compatible: Raycast AI, Missing: the APIs, Signs in with OAuth, Couldn't check, or Not checked.
     **Browsing never turns into downloading** (`CompatibilityChecks`): only the row the selection rests on, with the detail showing, is checked, after half a second, and moving on cancels its timer, or the check itself before its fetch or its scan; selecting the same row again changes nothing, and a cached row is never fetched.
     A check (`checkFolder`) runs in the git queue, one at a time: it counts the folder's source files from the trees (more than `maxScanFiles`, 300, isn't checked;
     no extension in the store has more than about 220), fetches only those, checks their size before scanning (more than `maxScanBytes`, 5 MiB, isn't checked), scans with `fudge scan`, caches the result, and always takes its patterns out again.
@@ -854,8 +862,9 @@ Extensions run in a separate Node.js process, the extension host.
     Install shares the cache both ways.
   - `store.ts` installs with `$FUDGE_CLI build <source> --into $FUDGE_EXTENSIONS_DIR`.
     Every git operation (refresh, a README's `sparse-checkout add`, a detail's scan, install, uninstall) waits its turn in one queue (`oneAtATime`), so none overlaps another.
-    Before asking, it takes this version's cached result, or runs `$FUDGE_CLI scan <source> --json` and caches it, and the confirmation says what it found (`compatibilityLine`): "Not compatible with Fudge" for Raycast AI or the Raycast Browser Extension, which Fudge doesn't support (installing stays possible, since some commands may not use them);
-    up to five APIs it doesn't have yet and how many more; that it signs in with OAuth, which works if the chosen sign-in server supports its provider (never called not compatible); everything supported; or that the scan couldn't run, which doesn't stop the install.
+    Before asking, it takes this version's cached result, or runs `$FUDGE_CLI scan <source> --json` and caches it, and the confirmation says what it found (`compatibilityLine`).
+    For Raycast AI or the Raycast Browser Extension, which Fudge doesn't support, it's "Partly compatible with Fudge", naming exactly the commands the build installs turned off, or "Not compatible with Fudge" when that's every command; installing stays possible either way.
+    Then it names up to five APIs it doesn't have yet and how many more; that it signs in with OAuth, which works if the chosen sign-in server supports its provider (never called not compatible); everything supported; or that the scan couldn't run, which doesn't stop the install.
     It records the folder's git tree id in `installed.json` ("Update available" when the id changes), and uninstalls only what it recorded.
     **Unloading the store doesn't stop a `fudge build` it started** (or npm under it), unlike its git: the worker's timeout goes with it, so the build runs to the end, or until npm's own network timeouts give up.
     That's acceptable because nothing is installed half-way: the build writes into a staging folder and swaps it in only at the end, and the extensions watcher picks the result up like any install.
@@ -875,6 +884,8 @@ Extensions run in a separate Node.js process, the extension host.
     The modules the host provides (`ExtensionBuilder.providedModules`) stay external.
     Extension and command names are lowercase letters, digits, `-` and `_`, starting with a letter or digit, as Raycast's rule allows (`notion_researcher`): `ExtensionManifest.isValidName` is the one name rule, which every check of an extension's name uses (the build, backups and their paths, settings keys, built-in group names) and the store's `catalog.ts` mirrors.
   - It writes the build into `.staging-<name>-<uuid>` with `package.json` and `assets/` alongside, then swaps the whole folder into place (a previous install is moved to `.old-<name>-<uuid>` first, then deleted).
+  - Before the swap it scans the source (`ExtensionBuilder.scanCommands`: the CLI runs `fudge scan --json` through `CompatScanner.commands`, reading its stdout alone) and writes which commands use Raycast AI or the Browser Extension into the install as `compatibility.json`.
+    A scan that can't run or fails leaves it out, and every command is on.
   - It never writes into the source folder.
     When the source has no `node_modules`, it installs the dependencies into a temporary folder (`npm ci --ignore-scripts`; under `$TMPDIR` when it's set, which Foundation's `temporaryDirectory` ignores) and points esbuild at it with `NODE_PATH`.
   - **Ending the tool ends what it started.**
@@ -939,7 +950,14 @@ Extensions run in a separate Node.js process, the extension host.
     The app has esbuild's binary but not its JS package, so the bundle marks `esbuild` external, `toJavaScript` takes the transform to use (esbuild's JS API is imported only when it's the default), and the CLI passes `FUDGE_ESBUILD` (the binary, `binaryTransform`) and `FUDGE_RAYCAST_TYPES`:
     the types beside the script, unless it's set already or there are none there, as with `FUDGE_COMPAT_SCAN=runtime/dist/compat-scan.js` in a checkout, which then reads the vendored ones.
     The JSON report (`report`) names the extension, says `supported` (no gaps and every file read), and lists each gap with its kind and, for one counted apart, its category (`byDesign`).
+    It also has `commands`: each command of the manifest with the categories Fudge doesn't support that it reaches (`unsupported`), and whether every import it makes could be followed (`traced`).
+    A command is traced from its entry (`src/<name>.{tsx,ts,jsx,js}`, as the build finds it) through every import esbuild leaves, re-exports, `import()` and `require` included (`imports`), resolved among the files the scan read, ignoring case as APFS does (`resolveImport`): relative paths, `@/…` and `~/…` as `src/…`, and TypeScript's `./x.js` for `x.ts`.
+    A bare import is a package's only when the manifest lists that package in any of its dependency sections, it's one of Node's built-ins, or the host provides it (`packages`), and a data file (`.json`, `.css`, an image) can't reach the API.
+    A command with an import that can't be followed (outside `src/`, an unreadable file, any other bare import, such as a tsconfig `paths` alias or a `baseUrl` import, or an `import()` or `require()` of a computed path, `hasComputedImport`) counts as reaching the whole extension.
+    So does every command when a file that uses Raycast AI or the Browser Extension is reached by no entry, a command's or a tool's (`src/tools/<name>`), since something the scan can't see reaches it.
+    A barrel's re-exports are followed whole, so a command can be counted for a module of the barrel it doesn't use; in the store that decides 3 of 224 commands.
     The text output (`describe`) lists what Fudge doesn't have yet, then each category apart, saying why (`byDesign`'s `says`: Raycast AI and the Raycast Browser Extension, "which Fudge doesn't support", from the runtime's `unsupported`; OAuth, "which needs a sign-in server").
+    Under Raycast AI and the Browser Extension it says which commands use them ("in 2 of 9 commands: …", or "in every command").
     Before scanning it checks that the esbuild it was given runs (exit 1 with one line if not, rather than every file unreadable), and a folder without a `package.json` file and a `src` folder, or with either as a link, is refused with exit 2.
     `FudgeToolTests` runs the real `fudge` binary end to end.
   - The Markdown report counts extensions with no gaps, those lacking only APIs counted apart (AI and the Browser Extension, which Fudge doesn't support, and OAuth, which signs in through a sign-in server, only to the providers it supports: D-63), and the rest.

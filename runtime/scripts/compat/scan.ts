@@ -57,7 +57,9 @@ function bindings(code: string, module: string): Map<string, string> {
         if (fallback && !star) names.set(fallback[1], "*");
     }
     const require = String.raw`require\(\s*${quoted}\s*\)`;
-    for (const match of code.matchAll(new RegExp(String.raw`\{([^}]*)\}\s*=\s*${require}`, "g"))) named(match[1], /\s*:\s*/);
+    // `[^{}]`, so a brace before the destructuring (esbuild's CommonJS wrapper, `__commonJS({ … (exports) {`) can't
+    // swallow it.
+    for (const match of code.matchAll(new RegExp(String.raw`\{([^{}]*)\}\s*=\s*${require}`, "g"))) named(match[1], /\s*:\s*/);
     for (const match of code.matchAll(new RegExp(String.raw`(?:const|let|var)\s+(${identifier})\s*=\s*${require}`, "g"))) {
         names.set(match[1], "*");
     }
@@ -85,6 +87,31 @@ export function uses(code: string): Uses {
     const utils = new Set<string>();
     for (const [, imported] of bindings(code, "@raycast/utils")) if (imported !== "*") utils.add(imported);
     return { api, utils };
+}
+
+/**
+ * Every module specifier a JavaScript module loads: `import … from`, a bare `import "…"`, `export … from` (a barrel's
+ * re-exports), `import("…")` and `require("…")`. esbuild has already dropped the imports used only as types, so what's
+ * left is what runs.
+ */
+export function imports(code: string): string[] {
+    const found = new Set<string>();
+    const patterns = [
+        /\b(?:import|export)\s+[^;]*?\bfrom\s*["']([^"']+)["']/g,
+        /\bimport\s*["']([^"']+)["']/g,
+        /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
+        /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
+    ];
+    for (const pattern of patterns) for (const match of code.matchAll(pattern)) found.add(match[1]!);
+    return [...found];
+}
+
+/**
+ * Whether `code` has an `import()` or `require()` whose target isn't a plain string (a template with a value in it, a
+ * variable, a sum), which no scan can follow: `import(\`./commands/${name}\`)`.
+ */
+export function hasComputedImport(code: string): boolean {
+    return /\b(?:import|require)\s*\(\s*(?!["'][^"']*["']\s*\))/.test(code);
 }
 
 /** Why an extension can't use an API in fudge. */

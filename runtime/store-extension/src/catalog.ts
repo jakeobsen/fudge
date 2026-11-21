@@ -188,15 +188,21 @@ export function searchKeywords(entry: StoreEntry): string[] {
 
 export type AccessoryText = { text: string } | { tag: string };
 
-/** The author, the number of commands, Not compatible when a cached scan says so, and Installed or Update available. */
-export function accessoryTexts(entry: StoreEntry, state: Status, notCompatible = false): AccessoryText[] {
+/** The author, the number of commands, Not compatible or Partly compatible when a cached scan says so
+ * (`compatibilityTag`), and Installed or Update available. */
+export function accessoryTexts(entry: StoreEntry, state: Status, compatibility?: string): AccessoryText[] {
     const accessories: AccessoryText[] = [];
     if (entry.author) accessories.push({ text: entry.author });
     accessories.push({ text: entry.commands.length === 1 ? "1 command" : `${entry.commands.length} commands` });
-    if (notCompatible) accessories.push({ tag: "Not compatible" });
+    if (compatibility) accessories.push({ tag: compatibility });
     if (state === "installed") accessories.push({ tag: "Installed" });
     if (state === "update") accessories.push({ tag: "Update available" });
     return accessories;
+}
+
+/** A command's title by its name, as the store's sentences name commands; the name when the manifest has none. */
+export function commandTitles(entry: StoreEntry): (name: string) => string {
+    return (name) => entry.commands.find((command) => command.name === name)?.title || name;
 }
 
 /** The extension's folder (`dir`) at `commit`, on github.com and as raw files. */
