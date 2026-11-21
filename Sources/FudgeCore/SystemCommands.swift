@@ -107,19 +107,35 @@ public struct MountedVolume: Sendable, Equatable {
     public var isRemovable: Bool
     public var isLocal: Bool
     public var isRootFileSystem: Bool
+    /// The BSD name of the whole disk it's on (`disk4`), from DiskArbitration; nil for a network volume, or when it
+    /// can't be told.
+    public var wholeDisk: String?
 
-    public init(url: URL, name: String, isEjectable: Bool, isRemovable: Bool, isLocal: Bool, isRootFileSystem: Bool) {
+    public init(
+        url: URL, name: String, isEjectable: Bool, isRemovable: Bool, isLocal: Bool, isRootFileSystem: Bool,
+        wholeDisk: String? = nil
+    ) {
         self.url = url
         self.name = name
         self.isEjectable = isEjectable
         self.isRemovable = isRemovable
         self.isLocal = isLocal
         self.isRootFileSystem = isRootFileSystem
+        self.wholeDisk = wholeDisk
     }
 
-    /// What Eject All Disks ejects: ejectable, removable and network volumes, never the one macOS started from.
+    /// What Eject All Disks ejects: ejectable, removable and network volumes, never the one macOS started from. The
+    /// volumes of one disk come together, where its first one is, so ejecting that one ejects the disk once and its
+    /// other volumes are then found gone.
     public static func toEject(_ volumes: [MountedVolume]) -> [MountedVolume] {
-        volumes.filter { !$0.isRootFileSystem && ($0.isEjectable || $0.isRemovable || !$0.isLocal) }
+        let ejectable = volumes.filter { !$0.isRootFileSystem && ($0.isEjectable || $0.isRemovable || !$0.isLocal) }
+        var ordered: [MountedVolume] = []
+        for volume in ejectable where !ordered.contains(where: { $0.url == volume.url }) {
+            ordered.append(volume)
+            guard let disk = volume.wholeDisk else { continue }
+            ordered += ejectable.filter { $0.wholeDisk == disk && $0.url != volume.url }
+        }
+        return ordered
     }
 }
 
@@ -166,8 +182,10 @@ public protocol SystemActions: AnyObject {
     func darkMode() async throws -> Bool
     func setDarkMode(_ on: Bool) async throws
     func mountedVolumes() async -> [MountedVolume]
-    /// Unmounts and ejects `volume`; the error's description says why it couldn't.
+    /// Unmounts and ejects `volume`, and with it the rest of its disk; the error's description says why it couldn't.
     func eject(_ volume: MountedVolume) async throws
+    /// Whether `volume` is still mounted (`FileManager.mountedVolumeURLs` lists it), read afresh.
+    func isMounted(_ volume: MountedVolume) async -> Bool
     func runningApps() -> [RunningApp]
     func hide(_ app: RunningApp)
     func quit(_ app: RunningApp)
@@ -200,6 +218,7 @@ public final class InertSystemActions: SystemActions {
     public func setDarkMode(_ on: Bool) async throws {}
     public func mountedVolumes() async -> [MountedVolume] { [] }
     public func eject(_ volume: MountedVolume) async throws {}
+    public func isMounted(_ volume: MountedVolume) async -> Bool { false }
     public func runningApps() -> [RunningApp] { [] }
     public func hide(_ app: RunningApp) {}
     public func quit(_ app: RunningApp) {}
@@ -354,17 +373,30 @@ public struct SystemCommandRunner {
         return await appleEvent(.finder, doing: "empty the Trash") { try await actions.emptyTrash() }
     }
 
+    /// Ejects each volume in `MountedVolume.toEject`'s order. One that's no longer mounted when its turn comes went
+    /// with an earlier volume of its disk, so it counts as ejected. Whether an eject worked is read from the mounts
+    /// afterwards, never from the call's error: a volume that's still mounted failed, with the error's reason, and
+    /// one that's gone was ejected, whatever the call said.
     private func ejectAll() async -> String {
         let volumes = MountedVolume.toEject(await actions.mountedVolumes())
         guard !volumes.isEmpty else { return SystemCommandMessage.nothingToEject }
         var ejected: [String] = []
         var failed: [(name: String, reason: String)] = []
         for volume in volumes {
+            guard await actions.isMounted(volume) else {
+                ejected.append(volume.name)
+                continue
+            }
+            var reason: String?
             do {
                 try await actions.eject(volume)
-                ejected.append(volume.name)
             } catch {
-                failed.append((volume.name, (error as NSError).localizedDescription))
+                reason = (error as NSError).localizedDescription
+            }
+            if await actions.isMounted(volume) {
+                failed.append((volume.name, reason ?? "It's still mounted."))
+            } else {
+                ejected.append(volume.name)
             }
         }
         return SystemCommandMessage.ejected(ejected, failed: failed)

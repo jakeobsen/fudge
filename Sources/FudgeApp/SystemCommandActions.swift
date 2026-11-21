@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import DiskArbitration
 import FudgeCore
 import IOKit.pwr_mgt
 
@@ -111,12 +112,14 @@ final class MacSystemActions: SystemActions {
             let urls =
                 FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys, options: .skipHiddenVolumes)
                 ?? []
+            let session = DASessionCreate(kCFAllocatorDefault)
             return urls.compactMap { url -> MountedVolume? in
                 guard let values = try? url.resourceValues(forKeys: Set(keys)) else { return nil }
                 return MountedVolume(
                     url: url, name: values.volumeLocalizedName ?? url.lastPathComponent,
                     isEjectable: values.volumeIsEjectable ?? false, isRemovable: values.volumeIsRemovable ?? false,
-                    isLocal: values.volumeIsLocal ?? true, isRootFileSystem: values.volumeIsRootFileSystem ?? false)
+                    isLocal: values.volumeIsLocal ?? true, isRootFileSystem: values.volumeIsRootFileSystem ?? false,
+                    wholeDisk: Self.wholeDisk(of: url, session: session))
             }
         }) ?? []
     }
@@ -125,6 +128,23 @@ final class MacSystemActions: SystemActions {
     func eject(_ volume: MountedVolume) async throws {
         let url = volume.url
         try await offMain { try NSWorkspace.shared.unmountAndEjectDevice(at: url) }
+    }
+
+    func isMounted(_ volume: MountedVolume) async -> Bool {
+        let path = volume.url.standardizedFileURL.path
+        return
+            (try? await offMain {
+                let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: []) ?? []
+                return urls.contains { $0.standardizedFileURL.path == path }
+            }) ?? true
+    }
+
+    /// The BSD name of the whole disk a volume is on, through DiskArbitration (read only); nil for a network volume.
+    nonisolated private static func wholeDisk(of url: URL, session: DASession?) -> String? {
+        guard let session, let disk = DADiskCreateFromVolumePath(kCFAllocatorDefault, session, url as CFURL),
+            let whole = DADiskCopyWholeDisk(disk), let name = DADiskGetBSDName(whole)
+        else { return nil }
+        return String(cString: name)
     }
 
     func runningApps() -> [RunningApp] {
