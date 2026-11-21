@@ -4268,16 +4268,8 @@ final class LauncherModel {
             image = NSWorkspace.shared.icon(forFile: url.path)
         case .settings:
             image = NSApp.applicationIconImage
-        case .reloadExtensions:
-            image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)!
-        case .quit:
-            image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)!
-        case .createQuicklink:
-            image = NSImage(systemSymbolName: "link.badge.plus", accessibilityDescription: nil)!
-        case .searchSnippets:
-            image = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)!
-        case .createSnippet:
-            image = NSImage(systemSymbolName: "text.badge.plus", accessibilityDescription: nil)!
+        case .reloadExtensions, .quit, .createQuicklink, .searchSnippets, .createSnippet:
+            image = NSImage(systemSymbolName: item.kind.symbol!, accessibilityDescription: nil)!
         case .builtInCommand(let group, let command):
             let symbol = BuiltInCommandGroup.command(group: group, command: command, in: builtInGroups)?.command
                 .symbol

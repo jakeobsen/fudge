@@ -21,6 +21,19 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         case createSnippet
         /// Runs one of Fudge's own commands (`BuiltInCommandGroup`).
         case builtInCommand(group: String, command: String)
+
+        /// The SF Symbol of one of Fudge's own items (Reload Extensions, Quit Fudge, …); nil for the rest, whose
+        /// icons are an app's, an extension's, a quicklink's, Fudge's own or their group's command's.
+        public var symbol: String? {
+            switch self {
+            case .reloadExtensions: "arrow.clockwise"
+            case .quit: "power"
+            case .createQuicklink: "link.badge.plus"
+            case .searchSnippets: "doc.text"
+            case .createSnippet: "text.badge.plus"
+            case .application, .command, .settings, .quicklink, .builtInCommand: nil
+            }
+        }
     }
 
     public var id: String
