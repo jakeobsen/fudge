@@ -75,11 +75,14 @@ public struct RunningApp: Sendable, Equatable {
     public var bundleIdentifier: String?
     /// Whether it's a regular app, one with a Dock icon (`NSApplication.ActivationPolicy.regular`).
     public var isRegular: Bool
+    /// `NSRunningApplication.isFinishedLaunching`: false while it's still starting up.
+    public var isFinishedLaunching: Bool
 
-    public init(pid: Int32, bundleIdentifier: String?, isRegular: Bool) {
+    public init(pid: Int32, bundleIdentifier: String?, isRegular: Bool, isFinishedLaunching: Bool = true) {
         self.pid = pid
         self.bundleIdentifier = bundleIdentifier
         self.isRegular = isRegular
+        self.isFinishedLaunching = isFinishedLaunching
     }
 
     public static let finder = "com.apple.finder"
@@ -89,9 +92,10 @@ public struct RunningApp: Sendable, Equatable {
         apps.filter { $0.isRegular && $0.pid != ownPid }
     }
 
-    /// What Quit All Apps quits: every regular app but Fudge and Finder.
+    /// What Quit All Apps counts and quits: every regular app but Fudge and Finder that has finished launching. One
+    /// still starting up may not answer a quit yet, so it's neither counted nor asked.
     public static func toQuit(_ apps: [RunningApp], ownPid: Int32) -> [RunningApp] {
-        toHide(apps, ownPid: ownPid).filter { $0.bundleIdentifier != finder }
+        toHide(apps, ownPid: ownPid).filter { $0.bundleIdentifier != finder && $0.isFinishedLaunching }
     }
 }
 

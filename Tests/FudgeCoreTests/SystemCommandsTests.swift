@@ -323,6 +323,33 @@ private func volume(
 }
 
 @MainActor
+@Test func quitAllAppsSkipsAppsStillLaunching() async {
+    let system = FakeSystem()
+    let textEdit = RunningApp(pid: 2, bundleIdentifier: "com.apple.TextEdit", isRegular: true)
+    let starting = RunningApp(pid: 6, bundleIdentifier: "com.example.slow", isRegular: true, isFinishedLaunching: false)
+    system.apps = [textEdit, starting]
+    // Still launching when the alert opens and when it's confirmed: neither counted nor quit.
+    let (message, asked) = await run(.quitAllApps, on: system)
+    #expect(message == nil)
+    #expect(asked == [.quitAllApps(1)], "the count leaves it out")
+    #expect(system.done == ["quit 2"])
+
+    // One that finishes launching while the alert is up is quit with the rest, as the list is read again then.
+    let later = FakeSystem()
+    later.apps = [textEdit, starting]
+    var finished = starting
+    finished.isFinishedLaunching = true
+    _ = await run(.quitAllApps, on: later) { later.apps = [textEdit, finished] }
+    #expect(later.done == ["quit 2", "quit 6"])
+
+    let onlyStarting = FakeSystem()
+    onlyStarting.apps = [starting]
+    let (none, askedNone) = await run(.quitAllApps, on: onlyStarting)
+    #expect(none == "There are no apps to quit." && askedNone.isEmpty)
+    #expect(onlyStarting.done.isEmpty)
+}
+
+@MainActor
 @Test func toggleDarkModeFlipsTheAppearanceThroughSystemEvents() async {
     let light = FakeSystem()
     light.dark = false

@@ -128,7 +128,7 @@ final class MacSystemActions: SystemActions {
         NSWorkspace.shared.runningApplications.map {
             RunningApp(
                 pid: $0.processIdentifier, bundleIdentifier: $0.bundleIdentifier,
-                isRegular: $0.activationPolicy == .regular)
+                isRegular: $0.activationPolicy == .regular, isFinishedLaunching: $0.isFinishedLaunching)
         }
     }
 
