@@ -6,6 +6,7 @@
 // this thread only.
 
 import Module from "node:module";
+import path from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import React, { createElement, type FunctionComponent } from "react";
 import * as jsxRuntime from "react/jsx-runtime";
@@ -66,6 +67,8 @@ if (launchProps.launchContext !== undefined) {
 }
 setLaunchContext({
     preferences,
+    // `fudge build` installs each command as `<extension>/dist/<command>.cjs`, with the manifest beside `dist/`.
+    manifestFile: path.join(path.dirname(path.dirname(entry)), "package.json"),
     environment: { ...placeholderEnvironment, commandMode: mode, ...environment },
     launchProps,
 });

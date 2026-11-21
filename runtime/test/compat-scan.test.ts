@@ -63,6 +63,11 @@ test("a stub is missing wherever the path reaches it, lowercase members included
     assert.equal(support(api, "environment.commandName"), "implemented", "a getter that needs a running command");
 });
 
+test("the deprecated preferences and randomId are implemented", () => {
+    assert.equal(support(api, "preferences", declared), "implemented");
+    assert.equal(support(api, "randomId", declared), "implemented");
+});
+
 test("an action that renders but fails when used is render-but-fail", () => {
     for (const path of ["Action.CreateQuicklink", "Action.CreateSnippet", "Action.ToggleQuickLook", "Action.PickDate"]) {
         assert.equal(support(api, path, declared), "render-but-fail", path);
