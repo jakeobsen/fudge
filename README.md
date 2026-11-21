@@ -126,7 +126,9 @@ A snippet is text you use often, such as an address or a reply, saved to paste a
 
 To make one, open **Create Snippet**, give it a name and its text, and press ⌘↵. Extensions can offer to make one too (**Create Snippet** in their ⌘K). **Settings → Snippets** lists them all, to add, change or delete one.
 
-A snippet's text can fill itself in: `{clipboard}`, `{date}`, `{time}`, `{datetime}`, `{day}` and `{uuid}`, changed by `| uppercase`, `| lowercase` or `| trim`. `{cursor}` marks where the cursor ends up after pasting. A snippet can also have a keyword, such as `;addr`, which Search Snippets finds it by. No keyword can contain another.
+A snippet's text can fill itself in: `{clipboard}`, `{date}`, `{time}`, `{datetime}`, `{day}` and `{uuid}`, changed by `| uppercase`, `| lowercase` or `| trim`. `{cursor}` marks where the cursor ends up after pasting.
+
+A snippet can also have a keyword, such as `;addr`. Turn on **Expand Snippets as You Type** in **Settings → Snippets**, and typing a keyword in any app replaces it with its snippet. It needs macOS's Input Monitoring permission, which Fudge asks for when you turn it on, and Accessibility, as pasting does. Fudge keeps only the last few characters you typed, in memory, to spot a keyword; nothing is saved or sent, and nothing is expanded in password fields or in Fudge's own windows. No keyword can contain another, so a keyword never expands inside a longer one.
 
 ### Calculator and currency
 
