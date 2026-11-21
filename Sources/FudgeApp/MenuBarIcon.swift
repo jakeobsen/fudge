@@ -10,7 +10,7 @@ enum MenuBarIcon {
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = "fudge"
+        image.accessibilityDescription = "Fudge"
         return image
     }()
 

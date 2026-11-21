@@ -22,22 +22,22 @@ struct GeneralPage: View {
                     LauncherHotkeyControls(model: model)
                 }
                 SettingsPopupRow(
-                    "Show fudge on",
+                    "Show Fudge on",
                     selection: Binding(get: { model.showOnScreen }, set: { model.setShowOnScreen($0) }),
                     options: ShowOnScreen.allCases.map { ($0, $0.title) },
-                    help: "Which screen fudge opens on when you press its hotkey."
+                    help: "Which screen Fudge opens on when you press its hotkey."
                 )
                 SettingsPopupRow(
                     "Pop to Root Search",
                     selection: Binding(get: { model.resetAfter }, set: { model.setResetAfter($0) }),
                     options: PanelResetSetting.allCases.map { ($0, $0.title) },
-                    help: "How long after the window closes fudge goes back to root search."
+                    help: "How long after the window closes Fudge goes back to root search."
                 )
                 SettingsPopupRow(
                     "Escape Key Behavior",
                     selection: Binding(get: { model.escapeBehavior }, set: { model.setEscapeBehavior($0) }),
                     options: EscapeBehavior.allCases.map { ($0, $0.title) },
-                    help: "What Esc does in fudge. By default it clears the search, then goes back, then closes the "
+                    help: "What Esc does in Fudge. By default it clears the search, then goes back, then closes the "
                         + "window. \"Close window and pop to root\" closes the window at once and starts from root "
                         + "search next time."
                 )
@@ -110,7 +110,7 @@ struct CurrencyRatesToggle: View {
     var body: some View {
         Toggle(isOn: Binding(get: { model.currencyRates }, set: { model.setCurrencyRates($0) })) {
             Text("Currency conversion")
-            Text("fudge downloads exchange rates from the European Central Bank once a day.")
+            Text("Fudge downloads exchange rates from the European Central Bank once a day.")
         }
         .toggleStyle(.switch)
     }

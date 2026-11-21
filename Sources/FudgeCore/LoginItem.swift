@@ -25,7 +25,7 @@ public struct LoginItemState: Sendable, Equatable {
     /// Whether to offer a button that opens System Settings' Login Items.
     public var offersLoginItemsSettings: Bool
 
-    public static let approvalNote = "Allow fudge in System Settings → General → Login Items"
+    public static let approvalNote = "Allow Fudge in System Settings → General → Login Items"
 
     public init(_ status: LoginItemStatus) {
         switch status {

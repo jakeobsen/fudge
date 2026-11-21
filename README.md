@@ -1,16 +1,16 @@
-# fudge
+# Fudge
 
-A keyboard launcher for macOS, built to run extensions written for Raycast's [`@raycast/api`](https://developers.raycast.com).
+A Raycast-compatible keyboard launcher for your Mac. It runs extensions written for Raycast's [`@raycast/api`](https://developers.raycast.com).
 
-fudge is an independent project. It is not affiliated with or endorsed by Raycast.
+Fudge is an independent project. It is not affiliated with or endorsed by Raycast.
 
 ## What's here
 
 - `Sources/FudgeApp`: the macOS app. It runs in the menu bar, without a Dock icon.
-- `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for fudge; `--into <folder>` installs it in that extensions folder instead. A running fudge picks up an extension you install, rebuild or remove within a second, with nothing to reload.
+- `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for Fudge; `--into <folder>` installs it in that extensions folder instead. A running Fudge picks up an extension you install, rebuild or remove within a second, with nothing to reload.
 - `Sources/FudgeCore`: code shared by the app and the tool.
 - `runtime/`: the extension host. This is the Node.js program that runs extensions. The app talks to it over stdin/stdout.
-- `runtime/store-extension/`: the Extension Store, an extension bundled with fudge that lists and installs the extensions published in github.com/raycast/extensions.
+- `runtime/store-extension/`: the Extension Store, an extension bundled with Fudge that lists and installs the extensions published in github.com/raycast/extensions.
 
 ## Building
 
@@ -29,7 +29,7 @@ make install-extension DIR=path/to/extension   # compile and install an extensio
 
 ### Keeping permissions across builds
 
-macOS remembers the permissions you give fudge (Accessibility, Automation) by its code signature. An ad hoc signature changes with every build, so macOS would forget them each time. `make app` signs with the first of these that your keychain has:
+macOS remembers the permissions you give Fudge (Accessibility, Automation) by its code signature. An ad hoc signature changes with every build, so macOS would forget them each time. `make app` signs with the first of these that your keychain has:
 
 1. a code-signing identity named **fudge local signing**;
 2. an **Apple Development** identity, which Xcode creates when you add your Apple Account under **Xcode → Settings → Accounts**;
@@ -45,25 +45,25 @@ Without an Apple Development identity, you can create the self-signed one:
 2. Open the certificate, expand **Trust**, and set **Code Signing** to **Always Trust**.
 3. Expand the certificate in **My Certificates**, open its private key, and under **Access Control** add `/usr/bin/codesign` to the allowed applications (⌘⇧G in the file dialog lets you type the path). Or answer the first build's prompt with **Always Allow**, as above.
 
-Release builds are signed ad hoc. Until fudge has a Developer ID, you grant its permissions again after each update.
+Release builds are signed ad hoc. Until Fudge has a Developer ID, you grant its permissions again after each update.
 
 ## Using it
 
-Open fudge with ⌥Space, type to search applications and extension commands, and press ↵. Esc goes back, then hides the window.
+Open Fudge with ⌥Space, type to search applications and extension commands, and press ↵. Esc goes back, then hides the window.
 
-When you open fudge again within 90 seconds, it's as you left it. After longer, it starts over on an empty root search. **Pop to Root Search** on the **General** page of **Settings…** sets how long: Immediately, after 30 seconds, 1 minute or 90 seconds, or Never. Only the time the window is closed counts.
+When you open Fudge again within 90 seconds, it's as you left it. After longer, it starts over on an empty root search. **Pop to Root Search** on the **General** page of **Settings…** sets how long: Immediately, after 30 seconds, 1 minute or 90 seconds, or Never. Only the time the window is closed counts.
 
-**Show fudge on**, on the same page, picks the screen fudge opens on: the one with the mouse (the default), the primary screen, or the one with the app you're using. **Escape Key Behavior** picks what Esc does: by default it clears the search, then goes back, then closes the window; with "Close window and pop to root", Esc closes the window at once, and fudge opens on an empty root search next time.
+**Show Fudge on**, on the same page, picks the screen Fudge opens on: the one with the mouse (the default), the primary screen, or the one with the app you're using. **Escape Key Behavior** picks what Esc does: by default it clears the search, then goes back, then closes the window; with "Close window and pop to root", Esc closes the window at once, and Fudge opens on an empty root search next time.
 
-What the fudge menu bar menu does is in root search too: "fudge Settings", **Reload Extensions** (reads the extensions and applications again) and **Quit fudge** (asks first, since fudge's hotkeys stop working until you open it again).
+What the Fudge menu bar menu does is in root search too: "Fudge Settings", **Reload Extensions** (reads the extensions and applications again) and **Quit Fudge** (asks first, since Fudge's hotkeys stop working until you open it again).
 
-To use another shortcut, open **Settings…** on the **General** page, click the keys next to **Launcher hotkey**, and press the new shortcut. Esc cancels. A shortcut needs ⌘, ⌥ or ⌃, unless it's an F-key. The launcher always has a hotkey, so ⌫ (or **Reset to ⌥Space**) puts ⌥Space back. fudge refuses a shortcut that a command already has, and keeps the old one when another app has the new one. If another app already holds the launcher's hotkey when fudge starts, the General page says so, and the menu bar menu's **Open fudge** still works.
+To use another shortcut, open **Settings…** on the **General** page, click the keys next to **Launcher hotkey**, and press the new shortcut. Esc cancels. A shortcut needs ⌘, ⌥ or ⌃, unless it's an F-key. The launcher always has a hotkey, so ⌫ (or **Reset to ⌥Space**) puts ⌥Space back. Fudge refuses a shortcut that a command already has, and keeps the old one when another app has the new one. If another app already holds the launcher's hotkey when Fudge starts, the General page says so, and the menu bar menu's **Open Fudge** still works.
 
 ### Command hotkeys
 
-Any command can have its own hotkey. Open **Settings…** on the **Commands** page, click **Record Hotkey** next to the command, and press the shortcut. Esc cancels, and ⌫ removes it. A hotkey needs ⌘, ⌥ or ⌃, unless it's an F-key. Pressing it anywhere opens the command as root search would: a view command shows the fudge window, a no-view command just runs, and a command with a required argument shows root search with that field ready. Pressing a view command's hotkey again while it's on screen hides the window.
+Any command can have its own hotkey. Open **Settings…** on the **Commands** page, click **Record Hotkey** next to the command, and press the shortcut. Esc cancels, and ⌫ removes it. A hotkey needs ⌘, ⌥ or ⌃, unless it's an F-key. Pressing it anywhere opens the command as root search would: a view command shows the Fudge window, a no-view command just runs, and a command with a required argument shows root search with that field ready. Pressing a view command's hotkey again while it's on screen hides the window.
 
-fudge refuses a shortcut that's the launcher's or another command's, and one another app has registered. That last check is best-effort: macOS doesn't report system shortcuts such as ⌘Space or ⌃↑, so one of those can be recorded but never fire.
+Fudge refuses a shortcut that's the launcher's or another command's, and one another app has registered. That last check is best-effort: macOS doesn't report system shortcuts such as ⌘Space or ⌃↑, so one of those can be recorded but never fire.
 
 ### Aliases and turning commands off
 
@@ -71,17 +71,17 @@ On the same page, a command can have an **Alias**: a short word such as `sf`. Cl
 
 Untick **Enabled** to turn a command off, or a whole extension. A command that's off isn't in root search, its hotkey doesn't fire, and other extensions can't launch it; its alias and hotkey are kept for when you turn it back on. A menu bar command that's off leaves the menu bar, and comes back when you turn it on again.
 
-**Settings…** in the fudge menu bar menu, ⌘, in the fudge window, and "fudge Settings" in root search open the Settings window on its **General** page. Extensions' preferences are in the same window, under each extension. To go straight to a command's extension, select the command and press ⌘⇧, (or ⌘K, then **Configure Extension**). A command that needs a preference you haven't set opens that window instead of running.
+**Settings…** in the Fudge menu bar menu, ⌘, in the Fudge window, and "Fudge Settings" in root search open the Settings window on its **General** page. Extensions' preferences are in the same window, under each extension. To go straight to a command's extension, select the command and press ⌘⇧, (or ⌘K, then **Configure Extension**). A command that needs a preference you haven't set opens that window instead of running.
 
 ### First run
 
-The first time fudge starts, it walks you through a few choices: the launcher hotkey, Accessibility, Open at Login and currency conversion. Each takes effect at once, and **Settings…** has them all. Until you click **Start Using fudge** at the end, fudge shows these steps again at its next start, from where you left off.
+The first time Fudge starts, it walks you through a few choices: the launcher hotkey, Accessibility, Open at Login and currency conversion. Each takes effect at once, and **Settings…** has them all. Until you click **Start Using Fudge** at the end, Fudge shows these steps again at its next start, from where you left off.
 
-**Settings… → Permissions** shows whether fudge may use Accessibility, which extensions need to read the text you've selected or to paste. **Open Accessibility Settings** lets macOS ask you first; if it doesn't ask, click it again to open **System Settings → Privacy & Security → Accessibility** and turn fudge on there. **Show Onboarding Again** goes through the first-run choices again.
+**Settings… → Permissions** shows whether Fudge may use Accessibility, which extensions need to read the text you've selected or to paste. **Open Accessibility Settings** lets macOS ask you first; if it doesn't ask, click it again to open **System Settings → Privacy & Security → Accessibility** and turn Fudge on there. **Show Onboarding Again** goes through the first-run choices again.
 
 ### Open at Login and search history
 
-fudge doesn't start at login until you turn on **Open at Login** at the top of **Settings… → General**. macOS then shows a "Login item added" notification, and lists fudge under **System Settings → General → Login Items**, where you can also turn it off; the switch shows what's set there. If macOS asks you to allow it first, the page says so and **Open Login Items** takes you there. The login item is tied to where the app is, so after moving fudge (to `/Applications`, say), turn Open at Login off and on again.
+Fudge doesn't start at login until you turn on **Open at Login** at the top of **Settings… → General**. macOS then shows a "Login item added" notification, and lists Fudge under **System Settings → General → Login Items**, where you can also turn it off; the switch shows what's set there. If macOS asks you to allow it first, the page says so and **Open Login Items** takes you there. The login item is tied to where the app is, so after moving Fudge (to `/Applications`, say), turn Open at Login off and on again.
 
 Root search ranks what you open often first. **Clear Search History…** on the same page makes it forget, after asking.
 
@@ -91,12 +91,12 @@ The first time an extension opens another extension's command, Fudge asks whethe
 
 ### Backup: import and export
 
-**Settings… → General → Import / Export** saves everything you've set up in fudge to one file, and brings it back, on this Mac or another one.
+**Settings… → General → Import / Export** saves everything you've set up in Fudge to one file, and brings it back, on this Mac or another one.
 
-- **Export…** asks for a password (at least 8 characters), then where to save `fudge-backup-<date>.fudgebackup`. The file holds fudge's settings (hotkeys, aliases, which commands are on), the answers about extensions opening other extensions, root search's ranking, every extension's preferences and data, and the list of installed extensions. It's always encrypted with your password, because extensions keep passwords and tokens in there; fudge can't recover a forgotten one. The file opens only in fudge, not with Apple's `aea` tool. Extension data over 100 MB in total leaves out the biggest extensions' data, and the export says which.
+- **Export…** asks for a password (at least 8 characters), then where to save `fudge-backup-<date>.fudgebackup`. The file holds Fudge's settings (hotkeys, aliases, which commands are on), the answers about extensions opening other extensions, root search's ranking, every extension's preferences and data, and the list of installed extensions. It's always encrypted with your password, because extensions keep passwords and tokens in there; Fudge can't recover a forgotten one. The file opens only in Fudge, not with Apple's `aea` tool. Extension data over 100 MB in total leaves out the biggest extensions' data, and the export says which.
 - **Import…** (also **Restore from a Backup…** on the Welcome screen Fudge shows the first time) asks for the file and its password, shows what's in it, and replaces your settings and the data of the extensions in the backup; other extensions keep theirs. It then lists the extensions in the backup that aren't installed here, so you can reinstall them. It installs nothing itself.
 - **The extensions themselves aren't in a backup**, only the list, and neither are caches, the exchange rates or the Extension Store's switch (turn it on again yourself).
-- Before importing, fudge saves what it's about to replace in `backups/` in its support folder (`~/Library/Application Support/fudge/backups`), readable by you only. It keeps the last 3. You can import one of those with **Import…**; it needs no password.
+- Before importing, Fudge saves what it's about to replace in `backups/` in its support folder (`~/Library/Application Support/fudge/backups`), readable by you only. It keeps the last 3. You can import one of those with **Import…**; it needs no password.
 
 ### Calculator and currency
 
@@ -124,36 +124,36 @@ In the **Extension Store** command, search the extensions, or pick a category in
 
 ### Menu bar commands
 
-An extension's menu bar command puts its own item in the menu bar. Run it from root search to turn it on, and the item stays there, across restarts, until you select the command in root search and pick **Deactivate Menu Bar Item** from ⌘K. Running it again from root search refreshes it and opens its menu. The command refreshes itself in the background at fudge's start and as often as its extension asks, and again each time you open its menu. When a background refresh fails, the item keeps what it showed last and its menu ends with "⚠ Last refresh failed". fudge shows at most 50 of these items.
+An extension's menu bar command puts its own item in the menu bar. Run it from root search to turn it on, and the item stays there, across restarts, until you select the command in root search and pick **Deactivate Menu Bar Item** from ⌘K. Running it again from root search refreshes it and opens its menu. The command refreshes itself in the background at Fudge's start and as often as its extension asks, and again each time you open its menu. When a background refresh fails, the item keeps what it showed last and its menu ends with "⚠ Last refresh failed". Fudge shows at most 50 of these items.
 
 ### Selected text and Finder items
 
-Extensions can read the text selected in the app you were in, and the items selected in Finder. The first time, macOS asks you to allow fudge under **Privacy & Security → Accessibility** or **Automation**.
+Extensions can read the text selected in the app you were in, and the items selected in Finder. The first time, macOS asks you to allow Fudge under **Privacy & Security → Accessibility** or **Automation**.
 
-macOS only asks when fudge isn't in the Accessibility list yet. If fudge is there but switched off, or the entry was left by an older build of fudge, nothing appears, and extensions are just refused. So when Accessibility is refused a second time, fudge shows its own alert, once per run, and **Open Accessibility Settings** takes you to the list. Switch fudge on there. If it's already on, select it, remove it with −, and add it again with +.
+macOS only asks when Fudge isn't in the Accessibility list yet. If Fudge is there but switched off, or the entry was left by an older build of Fudge, nothing appears, and extensions are just refused. So when Accessibility is refused a second time, Fudge shows its own alert, once per run, and **Open Accessibility Settings** takes you to the list. Switch Fudge on there. If it's already on, select it, remove it with −, and add it again with +.
 
-When an app doesn't share its selection through Accessibility (often browsers and Electron apps such as VS Code), fudge copies it with ⌘C and puts back what was on your clipboard right after. That has some side effects:
+When an app doesn't share its selection through Accessibility (often browsers and Electron apps such as VS Code), Fudge copies it with ⌘C and puts back what was on your clipboard right after. That has some side effects:
 
 - A clipboard history app may record the copied text.
-- If your clipboard holds a password that a password manager marked as concealed, fudge leaves the clipboard empty instead of putting the password back. Put back, it would look like a new copy, and the password manager would no longer clear it.
+- If your clipboard holds a password that a password manager marked as concealed, Fudge leaves the clipboard empty instead of putting the password back. Put back, it would look like a new copy, and the password manager would no longer clear it.
 - Clipboard data over 50 MB (of one type) isn't put back. An app that only produces its clipboard data when asked (some design apps do this with large images) still has to produce it, so that can take a moment.
 - An app that copies something when nothing is selected hands that over instead. VS Code, for example, copies the current line.
-- fudge waits half a second for the copy. An app that answers ⌘C later than that copies after fudge has put your clipboard back, so the selected text ends up on your clipboard.
+- Fudge waits half a second for the copy. An app that answers ⌘C later than that copies after Fudge has put your clipboard back, so the selected text ends up on your clipboard.
 
 Secure text fields, such as passwords, never give their text.
 
 ### Images from the web
 
-When an extension uses an `https://` image (an icon, or an image in markdown), fudge shows it and keeps it in `~/Library/Application Support/fudge/image-cache/` (up to 200 MB). A downloaded image is reused for a day, then checked for changes the next time it's shown. `http://` images, and images from your Mac or the local network, aren't shown.
+When an extension uses an `https://` image (an icon, or an image in markdown), Fudge shows it and keeps it in `~/Library/Application Support/fudge/image-cache/` (up to 200 MB). A downloaded image is reused for a day, then checked for changes the next time it's shown. `http://` images, and images from your Mac or the local network, aren't shown.
 
 ### Pasting
 
-Extensions can paste into the app you were in (`Clipboard.paste`, the Paste action). fudge puts the content on your clipboard, presses ⌘V in that app, and puts back what was on your clipboard about a second later. It needs the same Accessibility permission. Without it, the content stays on your clipboard for you to paste yourself.
+Extensions can paste into the app you were in (`Clipboard.paste`, the Paste action). Fudge puts the content on your clipboard, presses ⌘V in that app, and puts back what was on your clipboard about a second later. It needs the same Accessibility permission. Without it, the content stays on your clipboard for you to paste yourself.
 
-- fudge marks what it puts on the clipboard as transient, so clipboard history apps that follow [nspasteboard.org](http://nspasteboard.org) skip it.
-- If you copy something within that second, fudge leaves your new copy alone.
-- If your clipboard held a password that a password manager marked as concealed, fudge leaves the clipboard empty instead of putting the password back, for the same reason as above.
-- Apps that read the clipboard late, such as virtual machines or remote desktops that sync it, may paste what fudge put back instead of the content.
+- Fudge marks what it puts on the clipboard as transient, so clipboard history apps that follow [nspasteboard.org](http://nspasteboard.org) skip it.
+- If you copy something within that second, Fudge leaves your new copy alone.
+- If your clipboard held a password that a password manager marked as concealed, Fudge leaves the clipboard empty instead of putting the password back, for the same reason as above.
+- Apps that read the clipboard late, such as virtual machines or remote desktops that sync it, may paste what Fudge put back instead of the content.
 
 ## License
 

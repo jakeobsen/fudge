@@ -227,7 +227,7 @@ private func sample(title: String = "Add", isLoading: Bool = false) -> UINode {
     #expect(store.active.count == 50)
     #expect(
         MenuBarStore.LimitReached().description
-            == "fudge shows at most 50 menu bar items. Deactivate one first.")
+            == "Fudge shows at most 50 menu bar items. Deactivate one first.")
     try store.activate("x/c0")
     store.deactivate("x/c1")
     try store.activate("x/c50")

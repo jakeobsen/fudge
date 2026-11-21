@@ -1,7 +1,7 @@
 import CoreGraphics
 import Foundation
 
-/// "Show fudge on": which screen the panel opens on (`showOnScreen` in `settings.json`).
+/// "Show Fudge on": which screen the panel opens on (`showOnScreen` in `settings.json`).
 public enum ShowOnScreen: String, Sendable, CaseIterable, Identifiable {
     case mouse
     case primary

@@ -11,7 +11,7 @@ public enum PasteError: Error, Equatable, Sendable, CustomStringConvertible {
     public var description: String {
         switch self {
         case .accessibilityNeeded:
-            "fudge needs Accessibility permission to paste. The content was copied instead; allow fudge in System "
+            "Fudge needs Accessibility permission to paste. The content was copied instead; allow Fudge in System "
                 + "Settings → Privacy & Security → Accessibility."
         case .noTarget:
             "There is no app to paste into"
