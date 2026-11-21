@@ -175,6 +175,8 @@ final class LauncherModel {
     /// Each session's latest `oauth.prepare` and the one the prompt shows, with their loopback listeners, and the relay
     /// sign-ins pending (`SignInCalls.pending`).
     @ObservationIgnored private var signInRequests = SignInRequests<OAuthLoopback>()
+    /// `node --version` per binary, read off the main actor (SPEC-084).
+    @ObservationIgnored private let nodeVersions = NodeVersionCache()
     /// The user's answer to the prompt on screen: true for ↵, false for Esc or the command going away.
     @ObservationIgnored private var signInAnswer: CheckedContinuation<Bool, Never>?
 
@@ -279,6 +281,8 @@ final class LauncherModel {
             log: { [weak self] session, level, message in self?.log(session, level, message) }
         )
         reload()
+        // The extension host's first start shouldn't wait for `node --version` (SPEC-084).
+        if let node = Runtime.locateNode() { warmNodeVersion(node) }
     }
 
     /// Clear Search History: root search forgets which results were opened, in memory and in `history.json`.
@@ -2629,10 +2633,18 @@ final class LauncherModel {
                 description: "The extension host is missing from Fudge.app. Rebuild it with `make app`.")
         }
         let cli = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/fudge")
-        // Extensions trust the certificates the Mac trusts (SPEC-081), read afresh at each start.
+        // Extensions trust the certificates the Mac trusts (SPEC-081). The Node version comes from the cache, never
+        // read here (SPEC-084): while it isn't known, this start takes the NODE_EXTRA_CA_CERTS path, which works on any
+        // Node, and it's read in the background for the next.
+        let version: String?
+        if case .known(let known) = nodeVersions.cached(node) {
+            version = known
+        } else {
+            version = nil
+            warmNodeVersion(node)
+        }
         let trust = NodeTrust.launch(
-            nodeVersion: NodeTrust.version(of: node), certificates: SystemTrustSettings.certificates,
-            rootsFile: paths.trustRootsFile)
+            nodeVersion: version, certificates: SystemTrustSettings.certificates, rootsFile: paths.trustRootsFile)
         let host = try ExtensionHost(
             node: node, script: script, nodeArguments: trust.arguments,
             environment: ExtensionStore.hostEnvironment(
@@ -2640,11 +2652,28 @@ final class LauncherModel {
             ).merging([OAuthProviders.environmentKey: OAuthProviders.environmentValue]) { _, new in new }
                 .merging(trust.environment) { _, new in new })
         self.host = host
+        let startedWithFlag = trust.arguments.contains(NodeTrust.systemCAFlag)
+        let started = ContinuousClock.now
         Task { [weak self] in
-            for await message in host.messages { self?.receive(message) }
+            var heard = false
+            for await message in host.messages {
+                heard = true
+                self?.receive(message)
+            }
+            // A host that ends at once, saying nothing, on `--use-system-ca`: its Node refused the flag (a version
+            // manager's shim can change Node underneath), so the next start takes the other path.
+            if startedWithFlag, !heard, ContinuousClock.now - started < .seconds(5) {
+                self?.nodeVersions.refuseSystemCA(node)
+            }
             self?.hostStopped(host)
         }
         return host
+    }
+
+    /// Reads the Node version in the background, for the next host start.
+    private func warmNodeVersion(_ node: URL) {
+        let versions = nodeVersions
+        Task.detached(priority: .utility) { versions.load(node) }
     }
 
     private func send(_ message: AppMessage) {

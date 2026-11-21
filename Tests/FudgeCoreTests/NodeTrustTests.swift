@@ -112,3 +112,44 @@ private func cert(_ byte: UInt8, _ settings: [NodeTrust.Domain: [NodeTrust.Setti
     let unread = NodeTrust.launch(nodeVersion: "v23.1.0", certificates: mac, rootsFile: file, inherited: missing)
     #expect(unread.arguments.isEmpty && unread.environment.isEmpty)
 }
+
+@Test func theNodeVersionIsReadOncePerBinaryAndAgainWhenItChanges() throws {
+    final class Reads: @unchecked Sendable {
+        var count = 0
+        var stamp = Date(timeIntervalSince1970: 1)
+    }
+    let reads = Reads()
+    let cache = NodeVersionCache(
+        read: { _ in
+            reads.count += 1
+            return "v24.\(reads.count).0"
+        }, stamp: { _ in reads.stamp })
+    let node = URL(fileURLWithPath: "/opt/fake/bin/node")
+
+    #expect(cache.cached(node) == .unknown, "never read on asking")
+    #expect(cache.load(node) == "v24.1.0")
+    #expect(cache.load(node) == "v24.1.0" && reads.count == 1, "a second start with the same binary doesn't read")
+    #expect(cache.cached(node) == .known("v24.1.0"))
+
+    reads.stamp = Date(timeIntervalSince1970: 2)  // a new modification date: a new Node
+    #expect(cache.cached(node) == .unknown)
+    #expect(cache.load(node) == "v24.2.0" && reads.count == 2)
+
+    cache.refuseSystemCA(node)  // the binary refused the flag
+    #expect(cache.cached(node) == .known(nil))
+}
+
+@Test func theVersionIsKeyedByTheResolvedBinary() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("fudge-node-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: folder) }
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let real = folder.appendingPathComponent("node-24")
+    try Data("#!/bin/sh\n".utf8).write(to: real)
+    let link = folder.appendingPathComponent("node")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+
+    let cache = NodeVersionCache(read: { _ in "v24.0.0" })
+    cache.load(link)
+    #expect(cache.cached(real) == .known("v24.0.0"), "a link and its target are one binary")
+    #expect(NodeVersionCache.modificationDate(of: link) == NodeVersionCache.modificationDate(of: real))
+}

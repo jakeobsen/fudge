@@ -174,3 +174,62 @@ public enum NodeTrust {
         return text.isEmpty ? nil : text
     }
 }
+
+/// `node --version` per Node binary, for the run (SPEC-084): read once, off the main actor, and again only when the
+/// binary changes. It's keyed by the resolved binary (Homebrew's `node` is a link) and its modification date.
+public final class NodeVersionCache: @unchecked Sendable {
+    public enum Lookup: Equatable, Sendable {
+        case known(String?)
+        case unknown
+    }
+
+    private let lock = NSLock()
+    private var entries: [String: (stamp: Date?, version: String?)] = [:]
+    private let read: @Sendable (URL) -> String?
+    private let stamp: @Sendable (URL) -> Date?
+
+    public init(
+        read: @escaping @Sendable (URL) -> String? = { NodeTrust.version(of: $0) },
+        stamp: @escaping @Sendable (URL) -> Date? = NodeVersionCache.modificationDate
+    ) {
+        self.read = read
+        self.stamp = stamp
+    }
+
+    public static func modificationDate(of node: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: node.resolvingSymlinksInPath().path))?[.modificationDate]
+            as? Date
+    }
+
+    private static func key(_ node: URL) -> String { node.resolvingSymlinksInPath().path }
+
+    /// The version, when it's known for the binary as it is now. Never reads it, so the main actor can ask.
+    public func cached(_ node: URL) -> Lookup {
+        let now = stamp(node)
+        lock.lock()
+        defer { lock.unlock() }
+        guard let entry = entries[Self.key(node)], entry.stamp == now else { return .unknown }
+        return .known(entry.version)
+    }
+
+    /// The version, read now unless it's known; this blocks, so call it off the main actor.
+    @discardableResult
+    public func load(_ node: URL) -> String? {
+        if case .known(let version) = cached(node) { return version }
+        let now = stamp(node)
+        let version = read(node)
+        lock.lock()
+        entries[Self.key(node)] = (now, version)
+        lock.unlock()
+        return version
+    }
+
+    /// The binary refused `--use-system-ca` (a version manager's shim can switch Node without changing): it counts
+    /// as having none until it changes.
+    public func refuseSystemCA(_ node: URL) {
+        let now = stamp(node)
+        lock.lock()
+        entries[Self.key(node)] = (now, nil)
+        lock.unlock()
+    }
+}
