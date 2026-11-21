@@ -10,16 +10,25 @@ enum EntryFile {
     /// The file's object, or `[:]` when it's missing or blank. Throws `Unreadable` for anything else that isn't an
     /// object whose `key` is a list.
     static func object(at file: URL, key: String) throws -> [String: JSONValue] {
+        try object(at: file, keys: [key])
+    }
+
+    /// The same for a file with several lists, such as `window-layouts.json`: every one of `keys` must be a list
+    /// or missing.
+    static func object(at file: URL, keys: [String]) throws -> [String: JSONValue] {
         guard FileManager.default.fileExists(atPath: file.path) else { return [:] }
         guard let data = try? Data(contentsOf: file) else { throw Unreadable() }
         if String(decoding: data, as: UTF8.self).allSatisfy(\.isWhitespace) { return [:] }
         guard case .object(let object) = try? JSONDecoder().decode(JSONValue.self, from: data) else {
             throw Unreadable()
         }
-        switch object[key] {
-        case nil, .array: return object
-        default: throw Unreadable()
+        for key in keys {
+            switch object[key] {
+            case nil, .array: continue
+            default: throw Unreadable()
+            }
         }
+        return object
     }
 
     /// The file's entries, raw; none when it can't be read.
@@ -28,11 +37,26 @@ enum EntryFile {
         return entries
     }
 
+    /// Each of `keys`' entries, raw; none when the file can't be read.
+    static func lists(at file: URL, keys: [String]) -> [String: [JSONValue]] {
+        guard let object = try? object(at: file, keys: keys) else { return [:] }
+        var lists: [String: [JSONValue]] = [:]
+        for key in keys {
+            if case .array(let entries) = object[key] { lists[key] = entries }
+        }
+        return lists
+    }
+
     /// Writes `entries` under `key`, over the file's other keys, read again first. Throws `Unreadable` rather than
     /// overwrite a file it can't read.
     static func save(_ entries: [JSONValue], to file: URL, key: String) throws {
-        var object = try Self.object(at: file, key: key)
-        object[key] = .array(entries)
+        try save([key: entries], to: file)
+    }
+
+    /// Writes each list under its key, over the file's other keys, as `save(_:to:key:)` does.
+    static func save(_ lists: [String: [JSONValue]], to file: URL) throws {
+        var object = try Self.object(at: file, keys: lists.keys.sorted())
+        for (key, entries) in lists { object[key] = .array(entries) }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         let data = try encoder.encode(JSONValue.object(object))
