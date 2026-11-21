@@ -33,9 +33,15 @@ private final class FakeKeyMapping: KeyMappingSystem, @unchecked Sendable {
     var modifierKeysFail = false
     var writeFails = false
     private(set) var writes: [String] = []
-    /// What `replacedCapsLock` keeps across launches; the app's is a file.
-    var replaced = false
+    /// What `replacedCapsLock` keeps across launches, as the bytes of the app's `hyperkey.json`, read and written
+    /// through the same functions.
+    var state: Data?
     var rememberFails = false
+    /// How many replaced entries the state says.
+    var replaced: Int {
+        get { HyperkeyMapping.replacedCount(inState: state) }
+        set { state = newValue > 0 ? HyperkeyMapping.state(replaced: newValue) : nil }
+    }
 
     init(mapping: String = "(null)\n", keyboards: String = "RegistryID  Key                   Value\n") {
         self.mapping = mapping
@@ -65,11 +71,11 @@ private final class FakeKeyMapping: KeyMappingSystem, @unchecked Sendable {
         mapping = Self.printed(try written(writes.count - 1))
     }
 
-    func replacedCapsLock() -> Bool { replaced }
+    func replacedCapsLock() -> Int { replaced }
 
-    func setReplacedCapsLock(_ replaced: Bool) throws {
+    func setReplacedCapsLock(_ count: Int) throws {
         if rememberFails { throw Failed() }
-        self.replaced = replaced
+        replaced = count
     }
 
     /// A list as `hidutil property --get UserKeyMapping` prints it, so a write is what the next read sees.
@@ -451,20 +457,70 @@ private let rightOptionToControl = KeyRemap(source: rightOption, destination: le
     let fake = FakeKeyMapping(mapping: FakeKeyMapping.printed(before))
     try HyperkeyMapping.apply(fake)
     #expect(try fake.written(0) == [escapeToRightOption, HyperkeyMapping.entry, rightOptionToControl], "in its place")
-    #expect(fake.replaced, "remembered, before the write")
+    #expect(fake.replaced == 1, "remembered, before the write")
 
     try HyperkeyMapping.remove(fake)
     #expect(try fake.written(1) == before, "exactly as it was, in the same place")
-    #expect(!fake.replaced)
+    #expect(fake.replaced == 0 && fake.state == nil)
+}
+
+@Test func everyCapsLockToItselfEntryIsReplacedAndAsManyGoBack() throws {
+    // Three of them: Fudge's entry takes the first one's place, and no Caps Lock → Caps Lock stays beside F18.
+    let before = [
+        HyperkeyMapping.capsLockItself, escapeToRightOption, HyperkeyMapping.capsLockItself, rightOptionToControl,
+        HyperkeyMapping.capsLockItself,
+    ]
+    let fake = FakeKeyMapping(mapping: FakeKeyMapping.printed(before))
+    try HyperkeyMapping.apply(fake)
+    #expect(try fake.written(0) == [HyperkeyMapping.entry, escapeToRightOption, rightOptionToControl])
+    #expect(fake.replaced == 3, "how many, remembered before the write")
+
+    // Turned off: as many go back, all where Fudge's was, since they're alike.
+    try HyperkeyMapping.remove(fake)
+    #expect(
+        try fake.written(1) == [
+            HyperkeyMapping.capsLockItself, HyperkeyMapping.capsLockItself, HyperkeyMapping.capsLockItself,
+            escapeToRightOption, rightOptionToControl,
+        ])
+    #expect(fake.replaced == 0)
+
+    // On again from there: the same three are replaced, and nothing else moves.
+    try HyperkeyMapping.apply(fake)
+    #expect(try fake.written(2) == [HyperkeyMapping.entry, escapeToRightOption, rightOptionToControl])
+    #expect(fake.replaced == 3)
+}
+
+@Test func hyperkeyJSONFromBeforeCountsAsOneEntry() throws {
+    // A Mac that updates with Hyperkey on has SPEC-118's file: turning it off still puts the user's entry back.
+    let fake = FakeKeyMapping(mapping: FakeKeyMapping.printed([HyperkeyMapping.entry, escapeToRightOption]))
+    fake.state = Data(#"{"replacedCapsLock":true}"#.utf8)
+    #expect(fake.replaced == 1)
+    try HyperkeyMapping.remove(fake)
+    #expect(try fake.written(0) == [HyperkeyMapping.capsLockItself, escapeToRightOption])
+    #expect(fake.state == nil, "forgotten once it's back")
+}
+
+@Test func hyperkeyJSONIsReadAsACountOrNone() {
+    let read = { (text: String?) in HyperkeyMapping.replacedCount(inState: text.map { Data($0.utf8) }) }
+    #expect(read(#"{"replacedCapsLock":2}"#) == 2)
+    #expect(read(#"{"replacedCapsLock":true}"#) == 1, "SPEC-118's flag")
+    #expect(HyperkeyMapping.replacedCount(inState: HyperkeyMapping.state(replaced: 7)) == 7, "what Fudge writes")
+    for text in [
+        nil, "", "not json", "[]", "{}", #"{"replacedCapsLock":false}"#, #"{"replacedCapsLock":0}"#,
+        #"{"replacedCapsLock":-1}"#, #"{"replacedCapsLock":1.5}"#, #"{"replacedCapsLock":"2"}"#,
+        #"{"replacedCapsLock":101}"#, #"{"replacedCapsLock":null}"#,
+    ] {
+        #expect(read(text) == 0, "\(text ?? "no file")")
+    }
 }
 
 @Test func theLaunchCleanupAfterACrashPutsTheEntryBackToo() throws {
     // A crash left Fudge's entry where Caps Lock → Caps Lock was: a new launch only has what was remembered.
     let fake = FakeKeyMapping(mapping: FakeKeyMapping.printed([HyperkeyMapping.entry, escapeToRightOption]))
-    fake.replaced = true
+    fake.replaced = 1
     try HyperkeyMapping.remove(fake)
     #expect(try fake.written(0) == [HyperkeyMapping.capsLockItself, escapeToRightOption])
-    #expect(!fake.replaced)
+    #expect(fake.replaced == 0)
 }
 
 @Test func withoutAReplacedEntryRemovalAddsNothing() throws {
@@ -475,15 +531,15 @@ private let rightOptionToControl = KeyRemap(source: rightOption, destination: le
     // The user wrote Caps Lock → Caps Lock again meanwhile: it isn't doubled.
     let rewritten = FakeKeyMapping(
         mapping: FakeKeyMapping.printed([HyperkeyMapping.capsLockItself, HyperkeyMapping.entry]))
-    rewritten.replaced = true
+    rewritten.replaced = 1
     try HyperkeyMapping.remove(rewritten)
     #expect(try rewritten.written(0) == [HyperkeyMapping.capsLockItself])
 
     // Fudge's entry is gone already (the user removed it): nothing is written, and what was remembered goes.
     let gone = FakeKeyMapping(mapping: FakeKeyMapping.printed([escapeToRightOption]))
-    gone.replaced = true
+    gone.replaced = 1
     try HyperkeyMapping.remove(gone)
-    #expect(gone.writes.isEmpty && !gone.replaced)
+    #expect(gone.writes.isEmpty && gone.replaced == 0)
 }
 
 @Test func whatCantBeRememberedIsntReplacedAndAFailedRemovalKeepsIt() throws {
@@ -493,8 +549,8 @@ private let rightOptionToControl = KeyRemap(source: rightOption, destination: le
     #expect(fake.writes.isEmpty, "the user's entry is never replaced without a way back")
 
     let failing = FakeKeyMapping(mapping: FakeKeyMapping.printed([HyperkeyMapping.entry]))
-    failing.replaced = true
+    failing.replaced = 2
     failing.writeFails = true
     #expect(throws: HyperkeyMapping.Problem.self) { try HyperkeyMapping.remove(failing) }
-    #expect(failing.replaced, "still remembered, for the next try")
+    #expect(failing.replaced == 2, "still remembered, for the next try")
 }
