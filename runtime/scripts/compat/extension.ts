@@ -124,14 +124,22 @@ const kindWords: Record<Gap["kind"], string> = {
     "via @raycast/utils": "through @raycast/utils",
 };
 
-/** `fudge scan <folder>` without `--json`: a short list for a person. */
+/**
+ * `fudge scan <folder>` without `--json`: a short list for a person. What Fudge doesn't have yet comes first; APIs it
+ * leaves out on purpose follow, apart, by category.
+ */
 export function describe(scanned: Report): string {
     if (scanned.supported) return `${scanned.extension}: Fudge supports everything it uses.`;
-    const lines =
-        scanned.gaps.length === 0 ? [] : [`${scanned.extension} uses things Fudge doesn't have yet:`];
-    for (const gap of scanned.gaps) {
-        const how = gap.kind === "via @raycast/utils" ? `${kindWords[gap.kind]}: ${gap.via!.join(", ")}` : kindWords[gap.kind];
-        lines.push(`  ${gap.api} (${how}${gap.byDesign ? `; ${gap.byDesign}, left out on purpose` : ""})`);
+    const via = (gap: Gap) => (gap.kind === "via @raycast/utils" ? `through @raycast/utils: ${gap.via!.join(", ")}` : "");
+    const lines: string[] = [];
+    const missing = scanned.gaps.filter((gap) => !gap.byDesign);
+    if (missing.length > 0) lines.push(`${scanned.extension} uses things Fudge doesn't have yet:`);
+    for (const gap of missing) lines.push(`  ${gap.api} (${via(gap) || kindWords[gap.kind]})`);
+    for (const design of new Set(scanned.gaps.flatMap((gap) => (gap.byDesign ? [gap.byDesign] : [])))) {
+        lines.push(`${scanned.extension} uses ${design}, which Fudge leaves out:`);
+        for (const gap of scanned.gaps.filter((gap) => gap.byDesign === design)) {
+            lines.push(`  ${gap.api}${via(gap) ? ` (${via(gap)})` : ""}`);
+        }
     }
     if (scanned.unreadable.length > 0) lines.push(`Couldn't read: ${scanned.unreadable.join(", ")}`);
     return lines.join("\n");

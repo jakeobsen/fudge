@@ -790,17 +790,53 @@ test("the confirmation says what the scan found: up to five APIs, and how many m
         "This extension uses things Fudge doesn't have yet: A, B, C, D, E, and 2 more. Some of its commands may not work.",
     );
     assert.equal(
+        compatibilityLine(gaps("A", "B", "C", "D", "E")),
+        "This extension uses things Fudge doesn't have yet: A, B, C, D, E. Some of its commands may not work.",
+        "exactly five: all named",
+    );
+    assert.equal(
+        compatibilityLine(gaps("A", "B", "C", "D", "E", "F")),
+        "This extension uses things Fudge doesn't have yet: A, B, C, D, E, and 1 more. Some of its commands may not work.",
+        "six: five and one more",
+    );
+    assert.equal(
         compatibilityLine({ supported: false, gaps: [], unreadable: ["src/a.ts"] }),
         "Fudge couldn't read all of this extension's source, so some of it may not work.",
     );
     assert.equal(compatibilityLine(undefined), "Fudge couldn't check what this extension uses.");
 });
 
+test("APIs Fudge leaves out on purpose are named apart, never as something it doesn't have yet", () => {
+    const report = (...gaps: { api: string; byDesign?: string }[]) => ({ supported: false, gaps, unreadable: [] });
+    assert.equal(
+        compatibilityLine(report({ api: "AI.ask", byDesign: "AI" }, { api: "AI.Model", byDesign: "AI" })),
+        "This extension uses AI, which Fudge leaves out. Some of its commands may not work.",
+    );
+    assert.equal(
+        compatibilityLine(
+            report({ api: "WindowManagement.getActiveWindow" }, { api: "AI.ask", byDesign: "AI" }, { api: "OAuth.PKCEClient", byDesign: "OAuth" }),
+        ),
+        "This extension uses things Fudge doesn't have yet: WindowManagement.getActiveWindow. It also uses AI and OAuth, which Fudge leaves out. Some of its commands may not work.",
+    );
+    assert.equal(
+        compatibilityLine(
+            report(
+                { api: "AI.ask", byDesign: "AI" },
+                { api: "BrowserExtension.getContent", byDesign: "Browser Extension" },
+                { api: "OAuth.PKCEClient", byDesign: "OAuth" },
+            ),
+        ),
+        "This extension uses AI, Browser Extension and OAuth, which Fudge leaves out. Some of its commands may not work.",
+    );
+    const sixAndAI = report(...["A", "B", "C", "D", "E", "F"].map((api) => ({ api })), { api: "AI.ask", byDesign: "AI" });
+    assert.match(compatibilityLine(sixAndAI), /A, B, C, D, E, and 1 more\. It also uses AI/, "by-design APIs don't count toward the five");
+});
+
 test("install's confirmation carries the scan's gaps, and a failed scan doesn't stop the install", async () => {
     const report = { extension: "alpha", supported: false, gaps: [{ api: "AI.ask", kind: "missing", byDesign: "AI" }], unreadable: [] };
     const withGaps = await storeContext({ scan: { stdout: JSON.stringify(report) } });
     assert.equal(await install(alphaEntry, withGaps.context), true);
-    assert.match(withGaps.asked[0]!.message, /\n\nThis extension uses things Fudge doesn't have yet: AI\.ask\. Some of its commands may not work\.$/);
+    assert.match(withGaps.asked[0]!.message, /\n\nThis extension uses AI, which Fudge leaves out\. Some of its commands may not work\.$/);
 
     for (const scan of [{ code: 1, stdout: "" }, { stdout: "not json" }, { stdout: "{}" }]) {
         const failed = await storeContext({ scan });

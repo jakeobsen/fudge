@@ -62,8 +62,9 @@ test("without --json, fudge scan lists the gaps for a person, saying Fudge", () 
         run(path.join(fixtures, "gaps")),
         [
             "scan-gaps uses things Fudge doesn't have yet:",
-            "  AI.ask (not in Fudge; AI, left out on purpose)",
             "  WindowManagement.getActiveWindow (not in Fudge)",
+            "scan-gaps uses AI, which Fudge leaves out:",
+            "  AI.ask",
         ].join("\n"),
     );
     const other: Report = {
@@ -82,9 +83,24 @@ test("without --json, fudge scan lists the gaps for a person, saying Fudge", () 
             "other uses things Fudge doesn't have yet:",
             "  Action.ToggleQuickLook (shows, but fails when used)",
             "  Form.LinkAccessory (not drawn)",
-            "  OAuth.PKCEClient (through @raycast/utils: OAuthService; OAuth, left out on purpose)",
+            "other uses OAuth, which Fudge leaves out:",
+            "  OAuth.PKCEClient (through @raycast/utils: OAuthService)",
             "Couldn't read: src/broken.ts",
         ].join("\n"),
+    );
+    const onlyByDesign: Report = {
+        extension: "asks",
+        supported: false,
+        gaps: [
+            { api: "AI.ask", kind: "missing", byDesign: "AI" },
+            { api: "AI.Model", kind: "missing", byDesign: "AI" },
+        ],
+        unreadable: [],
+    };
+    assert.equal(
+        describe(onlyByDesign),
+        ["asks uses AI, which Fudge leaves out:", "  AI.ask", "  AI.Model"].join("\n"),
+        "nothing under \"doesn't have yet\" when only by-design APIs are used",
     );
 });
 
