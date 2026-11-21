@@ -103,6 +103,28 @@ test("a view command renders, handles an event and renders again", async () => {
     assert.equal(await host.close(), 0);
 });
 
+test("slots answers with the items' action panels", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "s1", entry: fixture("counter.cjs"), mode: "view" });
+    const first = await host.next(of("s1", "render"));
+    const item = (first.view as UINode).children[0]!;
+
+    host.send({ type: "slots", session: "s1", nodes: [item.id, 9999] });
+    const answer = await host.next(of("s1", "slots"));
+    assert.deepEqual(answer, {
+        type: "slots",
+        session: "s1",
+        items: [
+            { id: item.id, slots: { actions: item.props.actions } },
+            { id: 9999, slots: {} },
+        ],
+    });
+
+    host.send({ type: "unload", session: "s1" });
+    await host.next(of("s1", "exit"));
+    assert.equal(await host.close(), 0);
+});
+
 test("a menu-bar command renders its MenuBarExtra, and every event is answered once its handler settles", async () => {
     const host = start();
     host.send({ type: "launch", session: "mb", entry: fixture("menu-bar.cjs"), mode: "menu-bar", launchProps: { launchType: "background" } });
