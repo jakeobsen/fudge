@@ -7,10 +7,9 @@ import Security
 enum SystemTrustSettings {
     static func certificates() -> [NodeTrust.Certificate] {
         var found: [Data: NodeTrust.Certificate] = [:]
-        var order: [Data] = []
-        let domains: [(NodeTrust.Domain, SecTrustSettingsDomain)] = [
-            (.user, .user), (.admin, .admin), (.system, .system),
-        ]
+        var order: [(Data, SecCertificate)] = []
+        // Only the user's and admin's certificates are candidates (SPEC-084); the system's roots are Apple's.
+        let domains: [(NodeTrust.Domain, SecTrustSettingsDomain)] = [(.user, .user), (.admin, .admin)]
         for (domain, secDomain) in domains {
             var list: CFArray?
             guard SecTrustSettingsCopyCertificates(secDomain, &list) == errSecSuccess,
@@ -18,23 +17,27 @@ enum SystemTrustSettings {
             else { continue }
             for certificate in certificates {
                 let der = SecCertificateCopyData(certificate) as Data
-                var raw: CFArray?
-                let status = SecTrustSettingsCopyTrustSettings(certificate, secDomain, &raw)
-                // A system root with no settings of its own is trusted, as the system's anchors are.
-                let settings: [NodeTrust.Setting]?
-                if status == errSecSuccess {
-                    settings = ((raw as? [[String: Any]]) ?? []).map(setting)
-                } else {
-                    settings = domain == .system ? [] : nil
-                }
                 if found[der] == nil {
                     found[der] = NodeTrust.Certificate(der: der, settings: [:])
-                    order.append(der)
+                    order.append((der, certificate))
                 }
-                if let settings { found[der]?.settings[domain] = settings }
+                if let settings = settings(of: certificate, in: secDomain) { found[der]?.settings[domain] = settings }
             }
         }
-        return order.compactMap { found[$0] }
+        // A deny in the system's domain still leaves a candidate out, so each one's system settings are read too.
+        for (der, certificate) in order {
+            if let settings = settings(of: certificate, in: .system) { found[der]?.settings[.system] = settings }
+        }
+        return order.compactMap { found[$0.0] }
+    }
+
+    /// A certificate's settings in a domain; nil when the domain has none for it.
+    private static func settings(of certificate: SecCertificate, in domain: SecTrustSettingsDomain)
+        -> [NodeTrust.Setting]?
+    {
+        var raw: CFArray?
+        guard SecTrustSettingsCopyTrustSettings(certificate, domain, &raw) == errSecSuccess else { return nil }
+        return ((raw as? [[String: Any]]) ?? []).map(setting)
     }
 
     /// One trust settings dictionary, as Apple documents its keys.
