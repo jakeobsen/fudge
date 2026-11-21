@@ -25,6 +25,40 @@ enum Tool {
 
     static func isGone(_ pid: pid_t) -> Bool { kill(pid, 0) == -1 && errno == ESRCH }
 
+    /// The node on `PATH`, which `make test` runs the runtime's tests with.
+    static let node: URL? = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":")
+        .map { URL(fileURLWithPath: String($0)).appendingPathComponent("node") }
+        .first { FileManager.default.isExecutableFile(atPath: $0.path) }
+
+    /// The scan fixtures the runtime's tests use.
+    static let scanFixtures = Fixtures.repository.appendingPathComponent("runtime/test/fixtures/scan")
+
+    /// Runs `fudge scan` from a checkout: the TypeScript scanner with node and esbuild's binary, and no
+    /// `FUDGE_RAYCAST_TYPES`, so the scanner reads the vendored types. Returns the status, stdout and stderr.
+    static func scan(_ arguments: [String], esbuild: String? = nil) throws -> (Int32, String, String) {
+        let tool = try #require(fudge, "swift test builds the fudge tool")
+        let node = try #require(node)
+        let esbuild = try esbuild ?? #require(Fixtures.esbuild).path
+        let process = Process()
+        process.executableURL = tool
+        process.arguments = ["scan"] + arguments
+        process.environment = [
+            "HOME": FileManager.default.temporaryDirectory.path, "PATH": "/usr/bin:/bin", "FUDGE_NODE": node.path,
+            "FUDGE_ESBUILD": esbuild,
+            "FUDGE_COMPAT_SCAN": Fixtures.repository.appendingPathComponent("runtime/scripts/compat/fudge-scan.ts")
+                .path,
+        ]
+        let output = Pipe()
+        let errors = Pipe()
+        process.standardOutput = output
+        process.standardError = errors
+        try process.run()
+        let out = output.fileHandleForReading.readDataToEndOfFile()
+        let err = errors.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return (process.terminationStatus, String(decoding: out, as: UTF8.self), String(decoding: err, as: UTF8.self))
+    }
+
     /// Runs `fudge` with `arguments` until the stand-in has started, then sends it SIGTERM: the tool must exit
     /// with 143 and take the stand-in and its child with it, all within two seconds.
     static func expectTerminationEndsEverything(
@@ -89,4 +123,53 @@ enum Tool {
         environment: ["HOME": folder.path, "PATH": "/usr/bin:/bin", "FUDGE_ESBUILD": esbuild.path],
         pids: pids)
     #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("extensions/greeter").path))
+}
+
+@Suite(.enabled(if: Fixtures.esbuild != nil && Tool.node != nil, "needs esbuild and node: run `make test`"))
+struct FudgeScanEndToEnd {
+    @Test func scansTheFixturesThroughTheRealTool() throws {
+        let (status, json, _) = try Tool.scan([Tool.scanFixtures.appendingPathComponent("gaps").path, "--json"])
+        #expect(status == 0)
+        let report = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(report["extension"] as? String == "scan-gaps" && report["supported"] as? Bool == false)
+        let gaps = try #require(report["gaps"] as? [[String: String]])
+        #expect(
+            gaps == [
+                ["api": "AI.ask", "kind": "missing", "byDesign": "AI"],
+                ["api": "WindowManagement.getActiveWindow", "kind": "missing"],
+            ])
+
+        let (supportedStatus, text, _) = try Tool.scan([Tool.scanFixtures.appendingPathComponent("supported").path])
+        #expect(supportedStatus == 0 && text == "scan-supported: Fudge supports everything it uses.\n")
+        let (gapsStatus, gapsText, _) = try Tool.scan([Tool.scanFixtures.appendingPathComponent("gaps").path])
+        #expect(gapsStatus == 0)
+        #expect(
+            gapsText == """
+                scan-gaps uses things Fudge doesn't have yet:
+                  WindowManagement.getActiveWindow (not in Fudge)
+                scan-gaps uses AI, which Fudge leaves out:
+                  AI.ask
+
+                """)
+    }
+
+    @Test func aSrcThatIsAFileIsAClearErrorWithExitCode2() throws {
+        let folder = try Fixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try "{}".write(to: folder.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
+        try "not a folder".write(to: folder.appendingPathComponent("src"), atomically: true, encoding: .utf8)
+        let (status, out, err) = try Tool.scan([folder.path])
+        #expect(status == 2 && out.isEmpty)
+        #expect(err == "\(folder.path) isn't an extension: it needs a package.json file and a src folder\n")
+    }
+
+    @Test func anEsbuildThatCantRunFailsTheScanClearly() throws {
+        for esbuild in ["/usr/bin/false", "/nonexistent/esbuild"] {
+            let (status, out, err) = try Tool.scan(
+                [Tool.scanFixtures.appendingPathComponent("supported").path, "--json"], esbuild: esbuild)
+            #expect(status == 1 && out.isEmpty, "\(esbuild)")
+            #expect(err.hasPrefix("can't run esbuild at \(esbuild): "), "\(err)")
+            #expect(!err.contains("unreadable") && !err.contains("    at "), "no list of unreadable files, no stack")
+        }
+    }
 }
