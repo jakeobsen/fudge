@@ -14,6 +14,26 @@ private func firstLine(of descriptor: Int32) -> String {
 
 private func isGone(_ pid: pid_t) -> Bool { kill(pid, 0) == -1 && errno == ESRCH }
 
+/// Waits for a child on a thread of its own, started at once: `waitpid` blocks, and on a busy machine Swift's shared
+/// pool of threads can take seconds to free one, which would make a timing check fail for nothing.
+private final class Waiter: @unchecked Sendable {
+    private let done = DispatchSemaphore(value: 0)
+    private var status: Int32 = 0
+
+    init(_ children: ChildProcesses, _ pid: pid_t) {
+        Thread { [self] in
+            status = children.wait(pid)
+            done.signal()
+        }.start()
+    }
+
+    /// The child's status, once it has exited.
+    var result: Int32 {
+        done.wait()
+        return status
+    }
+}
+
 @Test func aChildsExitStatusComesBackAndASignalCountsAs128Plus() throws {
     let children = ChildProcesses()
     let sh = URL(fileURLWithPath: "/bin/sh")
@@ -48,9 +68,9 @@ private func isGone(_ pid: pid_t) -> Bool { kill(pid, 0) == -1 && errno == ESRCH
     #expect(!isGone(grandchild))
 
     let started = ContinuousClock.now
-    let waiting = Task.detached { children.wait(pid) }
+    let waiter = Waiter(children, pid)
     children.endAll(grace: .seconds(1))
-    #expect(await waiting.value == 128 + SIGTERM, "SIGTERM was enough")
+    #expect(waiter.result == 128 + SIGTERM, "SIGTERM was enough")
     #expect(ContinuousClock.now - started < .seconds(2))
     var gone = false
     for _ in 0..<50 where !gone {
@@ -74,9 +94,9 @@ private func isGone(_ pid: pid_t) -> Bool { kill(pid, 0) == -1 && errno == ESRCH
     close(pipe[1])
     #expect(firstLine(of: pipe[0]) == "ready")
     let started = ContinuousClock.now
-    let waiting = Task.detached { children.wait(pid) }
+    let waiter = Waiter(children, pid)
     children.endAll(grace: .milliseconds(300))
-    #expect(await waiting.value == 128 + SIGKILL)
+    #expect(waiter.result == 128 + SIGKILL)
     #expect(ContinuousClock.now - started < .seconds(2))
 }
 
