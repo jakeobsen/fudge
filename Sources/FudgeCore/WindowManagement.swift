@@ -70,6 +70,9 @@ public struct WindowScreen: Sendable, Equatable {
     public var id: UInt32
     public var bounds: CGRect
 
+    /// The screen's desktop: one per screen, for this run.
+    var desktopId: String { "screen-\(id)" }
+
     public init(id: UInt32, bounds: CGRect) {
         self.id = id
         self.bounds = bounds
@@ -154,7 +157,7 @@ public struct WindowManager<System: WindowSystem> {
             let front = reading.windows.first { reading.screen(of: $0)?.id == screen.id }
             let fullScreen = front.flatMap { reading.ax(for: $0)?.fullScreen } ?? false
             return .object([
-                "id": .string(Self.desktopId(screen)),
+                "id": .string(screen.desktopId),
                 "screenId": .string(String(screen.id)),
                 "size": .object([
                     "width": .number(Double(screen.bounds.width)), "height": .number(Double(screen.bounds.height)),
@@ -200,7 +203,7 @@ public struct WindowManager<System: WindowSystem> {
             guard case .string(let wanted) = desktop else {
                 throw WindowManagementError.invalidOptions("desktopId must be a string")
             }
-            guard wanted == reading.screen(of: listed).map(Self.desktopId) else {
+            guard wanted == reading.screen(of: listed)?.desktopId else {
                 throw WindowManagementError.otherDesktop
             }
         }
@@ -231,9 +234,6 @@ public struct WindowManager<System: WindowSystem> {
             throw WindowManagementError.invalidOptions(#"bounds must be an object or "fullscreen""#)
         }
     }
-
-    /// A screen's desktop: one per screen, for this run.
-    static func desktopId(_ screen: WindowScreen) -> String { "screen-\(screen.id)" }
 
     /// The two optional numbers of a `position` or `size`.
     private static func parts(of value: JSONValue?, named name: String, keys: (String, String)) throws -> (
@@ -352,7 +352,7 @@ public struct WindowManager<System: WindowSystem> {
                 "id": .string(String(listed.number)),
                 "application": application,
                 "bounds": bounds,
-                "desktopId": screen(of: listed).map { .string(WindowManager.desktopId($0)) } ?? .null,
+                "desktopId": screen(of: listed).map { .string($0.desktopId) } ?? .null,
                 "positionable": .bool(ax?.positionSettable ?? false),
                 "resizable": .bool(ax?.sizeSettable ?? false),
                 "fullScreenSettable": .bool(ax?.fullScreenSettable ?? false),
