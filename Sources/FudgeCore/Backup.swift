@@ -13,10 +13,13 @@ public enum Backup {
     public static let dataCap = 100 * 1024 * 1024
 
     /// `settings.json` keys an import never takes from a backup: the Extension Store's switch and its consent
-    /// (D-52). This Mac's stay as they are.
-    public static let consentKeys = ["extensionStore", "extensionStoreConsentAt"]
-    /// The consent itself never goes into a backup. The switch does, so an import can say the store was on.
-    static let exportStrippedKeys = ["extensionStoreConsentAt"]
+    /// (D-52), and the sign-in server and its consent, whose sign-ins are in this Mac's Keychain. This Mac's stay as
+    /// they are.
+    public static let consentKeys = [
+        "extensionStore", "extensionStoreConsentAt", "signInServer", "signInServerConsentAt",
+    ]
+    /// The consents themselves never go into a backup. The switch does, so an import can say the store was on.
+    static let exportStrippedKeys = ["extensionStoreConsentAt", "signInServerConsentAt"]
 
     /// Single files at the top of the support folder.
     static let rootFiles = [
