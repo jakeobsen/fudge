@@ -10,20 +10,20 @@ public struct BuiltInCommand: Sendable, Equatable {
     public var symbol: String
     /// Its arguments, entered in fields after the query as an extension command's are.
     public var arguments: [ExtensionManifest.Argument]
-    /// A word that, typed with a space and more in root search, hands the rest to its first argument, as its alias
-    /// would (`CommandAliases.handOff`): "define" for Define Word, so `define serendipity` works.
-    public var handOffWord: String?
+    /// Its alias until the user sets or clears one (`FudgeSettings.alias(ofCommand:)`): "define" for Define Word, so
+    /// `define serendipity` hands the word to its field.
+    public var defaultAlias: String?
 
     public init(
         name: String, title: String, keywords: [String] = [], symbol: String,
-        arguments: [ExtensionManifest.Argument] = [], handOffWord: String? = nil
+        arguments: [ExtensionManifest.Argument] = [], defaultAlias: String? = nil
     ) {
         self.name = name
         self.title = title
         self.keywords = keywords
         self.symbol = symbol
         self.arguments = arguments
-        self.handOffWord = handOffWord
+        self.defaultAlias = defaultAlias
     }
 }
 

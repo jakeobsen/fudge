@@ -273,6 +273,7 @@ Give either one a hotkey under **Settings… → Commands → Tools**.
 
 **Define Word** shows a word's definition from your Mac's own dictionaries.
 Type `define` and the word (`define serendipity`), or run it with nothing typed to look up the text selected in the app you're in.
+`define` is its alias, so you can change or clear it on the Commands page.
 ↵ (or ⌘D) opens the word in Dictionary, and ⌘↵ copies the definition.
 
 ### Clipboard History

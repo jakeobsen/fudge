@@ -53,7 +53,9 @@ Extensions run in a separate Node.js process, the extension host.
       `LauncherModel.applySettings()` rebuilds root search from the cached installed extensions with `RootSearch.applying`, which drops disabled commands and sets aliases; it runs on every reload and whenever the Settings window changes something.
       An exact alias (case-insensitive) outranks everything (`exactAliasScore`), and `RootSearch.rows` puts it above the calculator card: that's the one row order the panel draws and ↑↓ follows.
       An alias prefix ranks next.
-      For a command with arguments, "alias, space, rest" in the search field selects it and moves the rest into its first argument field (`CommandAliases.handOff`); one of Fudge's own commands can have a hand-off word that does the same (`define`), unless a command has it as its alias.
+      For a command with arguments, "alias, space, rest" in the search field selects it and moves the rest into its first argument field (`CommandAliases.handOff`).
+      One of Fudge's own commands can have a default alias (`CommandAliases.defaults`: Define Word's `define`), which the Commands page shows and edits like any other.
+      It applies while `settings.json` has no alias for the command and no other command has taken it, so the user's own wins, and it's never written there (`FudgeSettings.alias(ofCommand:)`); clearing it saves an empty alias, so it stays cleared (`setAlias`).
       It does that once per query (`AliasHandOff`): the same query coming back while an argument field has the keyboard is the search field writing its text back as it loses the keyboard, and changes nothing.
       `CommandAliases.problem` holds the alias rules (1–32 characters, no whitespace, unique ignoring case).
       A disabled command's hotkey isn't registered (`FudgeSettings.availableHotkeys`), and `CommandLocator` refuses `launchCommand` for it (`LaunchCommandError.disabled`).
@@ -169,11 +171,13 @@ Extensions run in a separate Node.js process, the extension host.
       Its empty view offers Pick Color.
       Its hotkey shows it as a view command's does, or hides the panel when it's already on screen.
       **The Color Picker page** (`ColorPickerPage.swift`, after Sign-in) has Copy Format, a `SettingsPopupRow`; changing it draws Recent Colors again if it's open.
-    - **Define Word** (SPEC-091, the Tools group) takes an optional Word argument (`DefineWord.argument`), and `define` is its hand-off word (`BuiltInCommand.handOffWord`), so `define serendipity` hands "serendipity" to the field as an alias would.
+    - **Define Word** (SPEC-091, the Tools group) takes an optional Word argument (`DefineWord.argument`), and `define` is its default alias (`BuiltInCommand.defaultAlias`), so `define serendipity` hands "serendipity" to the field.
       `DefineWord.start` (core) takes the typed word, else the frontmost app's selection (`LauncherModel.selectedText`, `selection.text` as the user's own call, read only when nothing was typed), each cut to its first line that isn't blank, trimmed, at most 100 characters (`DefineWord.word`); with neither, root search shows the Word field with the keyboard in it.
       The word is looked up through `DefinitionLookup`: the app's `DictionaryServicesLookup` is `DCSCopyTextDefinition`, the Mac's active dictionaries, offline; snapshot runs read no selection and get `FixedDefinitions` (`--definitions <file>`, a JSON object of word to made-up definition, else none), and tests fakes.
-      `DefineWordView` (core) is a Detail under its own session (in `LauncherModel.builtInSessions`): `DefinitionText.markdown` makes the plain text light Markdown (the headword, the text before the first " | ", as a heading; the pronunciation; each part of speech in italics on its own line where a definition or a run of senses starts;
-      each numbered sense in the expected order, each `•` sub-sense and each section such as ORIGIN on its own line), with everything from the dictionary escaped so none of it is read as Markdown.
+      `DefineWordView` (core) is a Detail under its own session (in `LauncherModel.builtInSessions`), and `DefinitionText.markdown` makes the dictionary's plain text light Markdown.
+      The headword, the text before the first " | ", is the heading, then the pronunciation; each part of speech is in italics on its own line where a definition or a run of senses starts, and each numbered sense in the expected order, each `•` sub-sense and each section such as ORIGIN gets a line of its own.
+      Everything from the dictionary, and the word, is escaped so none of it is read as Markdown (`DefinitionText.escaped`), scalar by scalar as Markdown reads it, since a `*` with a combining mark after it is one `Character` that isn't `*` (FUD-142).
+      An e-mail address in it is still linked, since that happens after escapes are read.
       ↵ and ⌘D (Look Up in Dictionary) open `dict://` and the word, percent-encoded and cut (`DefineWord.dictionaryURL`); ⌘↵ (Copy Definition) copies the dictionary's text with a HUD.
       With no definition it says so, with Look Up in Dictionary only.
       A run from root search shows its result only if root search is still on Define Word when the selection and the dictionary have answered.

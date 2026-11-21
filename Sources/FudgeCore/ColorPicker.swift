@@ -205,9 +205,9 @@ public enum ToolCommand: String, CaseIterable, Sendable {
         }
     }
 
-    /// Define Word's Word argument, and "define" as its hand-off word, so `define serendipity` works.
+    /// Define Word's Word argument, and "define" as its default alias, so `define serendipity` works.
     var arguments: [ExtensionManifest.Argument] { self == .defineWord ? [DefineWord.argument] : [] }
-    var handOffWord: String? { self == .defineWord ? "define" : nil }
+    var defaultAlias: String? { self == .defineWord ? "define" : nil }
 }
 
 extension BuiltInCommandGroup {
@@ -218,6 +218,6 @@ extension BuiltInCommandGroup {
             let (title, keywords, symbol) = command.presentation
             return BuiltInCommand(
                 name: command.rawValue, title: title, keywords: keywords, symbol: symbol,
-                arguments: command.arguments, handOffWord: command.handOffWord)
+                arguments: command.arguments, defaultAlias: command.defaultAlias)
         })
 }

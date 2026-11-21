@@ -158,18 +158,24 @@ public enum DefinitionText {
         token == String(expected)
     }
 
-    /// `text` with Markdown's punctuation escaped, so the dictionary's text is shown as it is.
+    /// `text` with Markdown's punctuation escaped, so the dictionary's text and the word are shown as they are.
+    /// It goes scalar by scalar, as Markdown reads them, never character by character (FUD-142): `*` and a combining
+    /// mark after it are one `Character` that isn't `*`, yet the `*` still opens emphasis, and a backslash a prepended
+    /// mark has taken into its `Character` would cancel the escape after it.
+    /// `:` keeps a URL from being linked, and `&` an entity from being read; an e-mail address is still linked, since
+    /// that happens after escapes are read.
     static func escaped(_ text: String) -> String {
-        let special: Set<Character> = [
-            "\\", "`", "*", "_", "{", "}", "[", "]", "(", ")", "#", "+", "-", ".", "!", "<", ">", "|", "~",
-        ]
-        var result = ""
-        for character in text {
-            if special.contains(character) { result.append("\\") }
-            result.append(character)
+        var result = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            if markdownPunctuation.contains(scalar) { result.append("\\") }
+            result.append(scalar)
         }
-        return result
+        return String(result)
     }
+
+    private static let markdownPunctuation: Set<Unicode.Scalar> = [
+        "\\", "`", "*", "_", "{", "}", "[", "]", "(", ")", "#", "+", "-", ".", "!", "<", ">", "|", "~", ":", "&",
+    ]
 }
 
 /// The Define Word view: a Detail with the definition, built here as an extension's would arrive, under its own

@@ -9,6 +9,14 @@ public enum CommandAliases {
         case duplicate(String)
     }
 
+    /// The default aliases of Fudge's own commands, by `settings.json` id (`BuiltInCommand.defaultAlias`): Define
+    /// Word's `define`.
+    public static let defaults: [String: String] = Dictionary(
+        BuiltInCommandGroup.all.flatMap { group in
+            group.commands.compactMap { command in command.defaultAlias.map { (group.commandID(command), $0) } }
+        },
+        uniquingKeysWith: { first, _ in first })
+
     /// Why `alias` can't be `commandID`'s: 1 to 32 characters, no spaces, unique among commands ignoring case.
     public static func problem(with alias: String, for commandID: String, in settings: FudgeSettings) -> Problem? {
         guard (1...32).contains(alias.count) else { return .length }
@@ -22,15 +30,13 @@ public enum CommandAliases {
     }
 
     /// "Alias then space", as in Raycast: when `query` is an alias of a command with arguments followed by a space,
-    /// the command takes the alias and the rest of the query becomes its first argument's text. A built-in command's
-    /// hand-off word (`define`) works the same way, unless a command has it as its alias: the alias wins, and hands
-    /// off only if its command has arguments.
+    /// the command takes the alias and the rest of the query becomes its first argument's text. A default alias
+    /// (`define`) is an alias like any other.
     public static func handOff(_ query: String, in items: [RootItem]) -> (item: RootItem, rest: String)? {
         guard let space = query.firstIndex(of: " ") else { return nil }
         let typed = query[..<space].lowercased()
         guard !typed.isEmpty,
-            let item = items.first(where: { $0.alias?.lowercased() == typed })
-                ?? items.first(where: { $0.handOffWord?.lowercased() == typed }),
+            let item = items.first(where: { $0.alias?.lowercased() == typed }),
             !item.arguments.isEmpty
         else { return nil }
         return (item, String(query[query.index(after: space)...]))

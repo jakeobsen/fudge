@@ -17,11 +17,9 @@ struct MarkdownView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Inline markdown (emphasis, code, links, strikethrough) as attributed text.
+    /// Inline markdown (emphasis, code, links, strikethrough) as attributed text (`Markdown.inline`).
     static func inline(_ text: String) -> AttributedString {
-        let options = AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .inlineOnlyPreservingWhitespace, failurePolicy: .returnPartiallyParsedIfPossible)
-        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        Markdown.inline(text)
     }
 }
 
