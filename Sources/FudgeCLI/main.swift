@@ -20,11 +20,16 @@ func fail(_ message: String, status: Int32 = 1) -> Never {
     exit(status)
 }
 
+/// The folder this tool really is in, links resolved: the bundle's `Contents/Helpers`, beside Fudge's own Node.js.
+let helpers = Bundle.main.executableURL?.resolvingSymlinksInPath().deletingLastPathComponent()
+
 func build(_ arguments: BuildArguments) {
     guard let esbuild = ExtensionBuilder.locateEsbuild() else {
         fail("can't find esbuild: set FUDGE_ESBUILD to its path, or use the fudge tool inside Fudge.app")
     }
-    let builder = ExtensionBuilder(esbuild: esbuild, log: { print("  \($0)") })
+    // Node.js is needed only for an extension's dependencies; one without them builds without it.
+    let builder = ExtensionBuilder(
+        esbuild: esbuild, node: Runtime.locateNode(helpers: helpers), log: { print("  \($0)") })
     do {
         let installed = try builder.build(
             source: arguments.source, into: arguments.destination ?? FudgePaths.standard().extensionsDirectory)
@@ -37,7 +42,6 @@ func build(_ arguments: BuildArguments) {
 
 /// Runs the bundled compatibility scanner with node; its output and exit status are the command's.
 func scan(_ arguments: ScanArguments) -> Never {
-    let executable = Bundle.main.executableURL?.resolvingSymlinksInPath()
     guard let script = CompatScanner.locateScript() else {
         fail(
             "can't find the compatibility scanner: set FUDGE_COMPAT_SCAN to compat-scan.js, or use the fudge inside Fudge.app"
@@ -46,8 +50,8 @@ func scan(_ arguments: ScanArguments) -> Never {
     guard let esbuild = ExtensionBuilder.locateEsbuild() else {
         fail("can't find esbuild: set FUDGE_ESBUILD to its path, or use the fudge inside Fudge.app")
     }
-    guard let node = Runtime.locateNode(helpers: executable?.deletingLastPathComponent()) else {
-        fail("can't find node: set FUDGE_NODE to its path")
+    guard let node = Runtime.locateNode(helpers: helpers)?.node else {
+        fail("can't find Fudge's own Node.js beside this fudge tool: use the fudge inside Fudge.app")
     }
     let (nodeArguments, environment) = CompatScanner.invocation(
         script: script, esbuild: esbuild, arguments: arguments, environment: ProcessInfo.processInfo.environment)

@@ -128,6 +128,12 @@ struct SystemMenus: MenuSystem, Sendable {
             case kAXMenuItemRole, kAXMenuBarItemRole: .item
             default: .other
             }
+        // An item without AXEnabled is on, as the list shows it; one whose AXEnabled the app couldn't give (it timed out,
+        // say) is unknown, so a press doesn't take it as on.
+        var enabled: Bool? = (value(2) as? NSNumber)?.boolValue
+        if enabled == nil, let error = Self.error(values[2]), error == .attributeUnsupported || error == .noValue {
+            enabled = true
+        }
         let character = (value(4) as? String).flatMap { $0.isEmpty ? nil : $0 }
         let glyph = (value(6) as? NSNumber)?.intValue
         let virtualKey = (value(7) as? NSNumber)?.intValue
@@ -139,7 +145,7 @@ struct SystemMenus: MenuSystem, Sendable {
         }
         return .answered(
             MenuNode(
-                role: role, title: value(1) as? String ?? "", enabled: (value(2) as? NSNumber)?.boolValue ?? true,
+                role: role, title: value(1) as? String ?? "", enabled: enabled,
                 children: value(3) as? [AXUIElement] ?? [], shortcut: shortcut))
     }
 
@@ -151,6 +157,15 @@ struct SystemMenus: MenuSystem, Sendable {
         case .cannotComplete: return .noAnswer
         default: return .failed
         }
+    }
+
+    /// The error an attribute's value holds, when `AXUIElementCopyMultipleAttributeValues` couldn't read it.
+    private static func error(_ value: AnyObject) -> AXError? {
+        guard CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        var error = AXError.success
+        guard AXValueGetType(value as! AXValue) == .axError, AXValueGetValue(value as! AXValue, .axError, &error)
+        else { return nil }
+        return error
     }
 
     /// An error as an answer: the element is gone, or the app didn't answer (in time, or at all).

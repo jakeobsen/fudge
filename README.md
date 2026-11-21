@@ -26,11 +26,13 @@ It is not affiliated with or endorsed by Raycast.
 ## Installing
 
 Each release on GitHub has a disk image, `Fudge-<version>.dmg`: open it and drag Fudge to Applications.
+Fudge includes the Node.js that runs extensions, so there's nothing else to install.
 Fudge isn't notarized yet, so macOS blocks it the first time: open it, then go to System Settings → Privacy & Security and click Open Anyway (on macOS 14, Control-click Fudge and choose Open instead).
 
 ## Building
 
-You need macOS 14 or later, Xcode 26 or later and Node.js 22.18 or later.
+You need macOS 14 or later and Xcode 26 or later.
+The first build downloads the Node.js that Fudge includes from nodejs.org, checks it against the checksum pinned in the `Makefile`, and keeps it in `.cache/node`; every build step and test uses it.
 The app runs on macOS 14 and later.
 
 ```bash

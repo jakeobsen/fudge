@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- V8 compiles JavaScript to machine code at run time: without it, Node.js can't start. -->
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<!-- An extension's native addons (`.node` files from its dependencies) are signed by whoever built them, never with
+	     Fudge's identity, and library validation would refuse every one ("different Team IDs"). -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>

@@ -58,6 +58,7 @@ public final class FixedMenuSystem: MenuSystem, @unchecked Sendable {
     private var elements: [Element] = []
     private var bar: [FixedMenuHandle] = []
     private var pressedTitles: [String] = []
+    private var pressedHandles: [FixedMenuHandle] = []
     private var silent = false
     private var asked = 0
 
@@ -85,6 +86,27 @@ public final class FixedMenuSystem: MenuSystem, @unchecked Sendable {
 
     /// The titles of the items pressed, in order.
     public var pressed: [String] { lock.withLock { pressedTitles } }
+
+    /// The elements pressed, in order, to tell alike items apart.
+    public var pressedElements: [FixedMenuHandle] { lock.withLock { pressedHandles } }
+
+    /// The leaf items titled `title`, in menu order.
+    public func items(titled title: String) -> [FixedMenuHandle] {
+        lock.withLock {
+            elements.indices.filter { elements[$0].title == title && elements[$0].node.children.isEmpty }
+                .map { FixedMenuHandle(build: build, index: $0) }
+        }
+    }
+
+    /// Turns the items titled `title` on or off, as an app does while its menus stay up; nil is an app that doesn't
+    /// say.
+    public func setEnabled(_ enabled: Bool?, titled title: String) {
+        lock.withLock {
+            for index in elements.indices where elements[index].title == title {
+                elements[index].node.enabled = enabled
+            }
+        }
+    }
 
     /// How many times an element was read.
     public var reads: Int { lock.withLock { asked } }
@@ -136,6 +158,7 @@ public final class FixedMenuSystem: MenuSystem, @unchecked Sendable {
             if silent { return .noAnswer }
             guard element.build == build, elements.indices.contains(element.index) else { return .gone }
             pressedTitles.append(elements[element.index].title)
+            pressedHandles.append(element)
             return .pressed
         }
     }

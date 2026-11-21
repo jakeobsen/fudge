@@ -93,3 +93,31 @@ private struct FixedGenerator: RandomNumberGenerator {
     sessions.endAll()
     #expect(!sessions.mayReceive(.pop(session: "s-b")), "nor after the host stopped")
 }
+
+// MARK: - Panels over a command that ended (SPEC-107 §4)
+
+@Test func theCommandOnScreenEndingClosesItsPanels() {
+    let shown = "s-shown"
+    #expect(
+        EndedCommand.closesPanels(
+            screenSession: shown, isBuiltIn: false, event: .exited(session: shown, reason: "crashed")))
+    #expect(
+        EndedCommand.closesPanels(
+            screenSession: shown, isBuiltIn: false, event: .exited(session: shown, reason: "finished")))
+    #expect(
+        !EndedCommand.closesPanels(
+            screenSession: shown, isBuiltIn: false, event: .exited(session: shown, reason: "unloaded")),
+        "Fudge unloaded it to show something else")
+    #expect(
+        !EndedCommand.closesPanels(
+            screenSession: shown, isBuiltIn: false, event: .exited(session: "s-other", reason: "crashed")),
+        "another command, a background one say, ending leaves the screen's panels alone")
+}
+
+@Test func theHostStoppingClosesTheCommandsPanelsButNotFudgesOwnViews() {
+    #expect(EndedCommand.closesPanels(screenSession: "s-shown", isBuiltIn: false, event: .hostStopped))
+    #expect(
+        !EndedCommand.closesPanels(screenSession: RecentColorsGrid.session, isBuiltIn: true, event: .hostStopped),
+        "Fudge's own views need no host")
+    #expect(!EndedCommand.closesPanels(screenSession: nil, isBuiltIn: false, event: .hostStopped), "root search")
+}
