@@ -41,6 +41,24 @@ extension WindowManager {
     /// move follows), so a window crossing a screen edge lands where it should; an app that refuses part of it keeps
     /// what it accepted. Every move but Restore remembers the frame before it, and Restore forgets it.
     public func run(_ command: WindowCommand, frames: inout WindowFrames) -> WindowCommandResult {
+        run(.command(command), frames: &frames)
+    }
+
+    /// A custom position (SPEC-094 §1): `position` in the window's screen's visible frame, with every rule of the
+    /// commands above, Restore and full screen included.
+    public func run(position: WindowFractions, frames: inout WindowFrames) -> WindowCommandResult {
+        run(.position(position), frames: &frames)
+    }
+
+    /// What a window command does: one of Fudge's commands, or a custom position.
+    private enum Move {
+        case command(WindowCommand)
+        case position(WindowFractions)
+    }
+
+    private func run(_ move: Move, frames: inout WindowFrames) -> WindowCommandResult {
+        var command: WindowCommand?
+        if case .command(let named) = move { command = named }
         let reading = Reading(self)
         frames.keep(only: Set(reading.windows.map(\.number)))
         guard let listed = reading.activeWindow(), let ax = reading.ax(for: listed),
@@ -56,34 +74,25 @@ extension WindowManager {
 
         var visible = screen.visibleBounds
         let target: CGRect
-        switch command {
-        case .restore:
+        switch (move, command) {
+        case (.position(let position), _):
+            target = position.frame(in: visible)
+        case (_, .restore):
             guard let saved = frames.frame(of: listed.number) else { return .done }
             target = saved
-        case .nextDisplay, .previousDisplay:
+        case (_, .nextDisplay), (_, .previousDisplay):
             let ordered = WindowLayout.displayOrder(reading.screens) { $0.visibleBounds }
             guard ordered.count > 1, let index = ordered.firstIndex(of: screen) else { return .oneDisplay }
             let next = ordered[
                 WindowLayout.neighbour(of: index, among: ordered.count, forward: command == .nextDisplay)]
             target = WindowLayout.moved(current, from: visible, to: next.visibleBounds)
             visible = next.visibleBounds
-        default:
+        case (.command(let command), _):
             guard let frame = WindowLayout.frame(for: command, in: visible, current: current) else { return .done }
             target = frame
         }
 
-        let result: WindowCommandResult
-        switch (ax.positionSettable, ax.sizeSettable) {
-        case (true, true):
-            result = setFrame(target, of: ax.handle)
-        case (true, false):
-            let moved = WindowLayout.movedOnly(size: current.size, to: target, in: visible)
-            result = apply(.frame(position: moved.origin, size: nil), to: ax.handle)
-        case (false, true):
-            result = apply(.frame(position: nil, size: target.size), to: ax.handle)
-        case (false, false):
-            return .cantMove
-        }
+        let result = place(ax, at: target, current: current, in: visible)
         guard result == .done else { return result }
         if command == .restore {
             frames.forget(listed.number)
@@ -91,6 +100,25 @@ extension WindowManager {
             frames.remember(current, of: listed.number)
         }
         return .done
+    }
+
+    /// Puts the window at `target` in `visible`: the whole frame; its own size at the target's top-left corner, kept
+    /// inside `visible`, when it can't be resized; only the size when it can't be moved; nothing when it can't be
+    /// either (`cantMove`).
+    func place(
+        _ ax: AXWindow<System.Handle>, at target: CGRect, current: CGRect, in visible: CGRect
+    ) -> WindowCommandResult {
+        switch (ax.positionSettable, ax.sizeSettable) {
+        case (true, true):
+            return setFrame(target, of: ax.handle)
+        case (true, false):
+            let moved = WindowLayout.movedOnly(size: current.size, to: target, in: visible)
+            return apply(.frame(position: moved.origin, size: nil), to: ax.handle)
+        case (false, true):
+            return apply(.frame(position: nil, size: target.size), to: ax.handle)
+        case (false, false):
+            return .cantMove
+        }
     }
 
     /// Position, size, then position again, through `apply`'s size, position, size.
@@ -111,14 +139,19 @@ extension WindowManager {
 }
 
 extension BuiltInCommandGroup {
-    /// Window Management: one command per `WindowCommand`, named by its raw value.
+    /// Window Management: one command per `WindowCommand`, named by its raw value, then Switch Windows
+    /// (`SwitchWindowsList`).
     public static let windowManagement = BuiltInCommandGroup(
         name: ":window-management", title: "Window Management",
         commands: WindowCommand.allCases.map { command in
             let (title, keywords, symbol) = command.presentation
             return BuiltInCommand(
                 name: command.rawValue, title: title, keywords: keywords + ["window"], symbol: symbol)
-        })
+        } + [
+            BuiltInCommand(
+                name: SwitchWindowsList.commandName, title: SwitchWindowsList.title,
+                keywords: ["switcher", "focus", "windows", "window"], symbol: "macwindow.on.rectangle")
+        ])
 }
 
 extension WindowCommand {
