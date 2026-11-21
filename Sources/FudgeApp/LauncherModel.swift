@@ -3283,6 +3283,8 @@ final class LauncherModel {
         default:
             break
         }
+        // Nothing goes to a command that has ended: a late pick or action from an overlay left open is dropped.
+        guard hostSessions.mayReceive(message) else { return }
         do {
             try host?.send(message)
         } catch {
@@ -3463,6 +3465,8 @@ final class LauncherModel {
                     )
                 }
             } else if case .command(var command) = screen, command.session == session, reason != "unloaded" {
+                // Its ⌘K panel or date picker goes with it, so nothing in them can be picked for a command that ended.
+                actionPanel = nil
                 if command.failure == nil {
                     command.failure = Failure(
                         title: "\(command.title) stopped", message: "The command exited (\(reason)).")

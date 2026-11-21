@@ -375,3 +375,17 @@ public struct ItemSlots: Sendable, Equatable {
             detail: slots["detail"].flatMap(UINode.init(json:)))
     }
 }
+
+extension AppMessage {
+    /// The session the message is for, if any.
+    public var session: String? {
+        switch self {
+        case .ping:
+            nil
+        case .launch(let session, _, _, _, _, _), .event(let session, _, _, _), .slots(let session, _),
+            .pop(let session), .unload(let session), .rpcResult(let session, _, _, _, _),
+            .toastAction(let session, _, _):
+            session
+        }
+    }
+}
