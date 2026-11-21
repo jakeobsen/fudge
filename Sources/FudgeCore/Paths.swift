@@ -90,6 +90,11 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("colors.json")
     }
 
+    /// The user's custom window positions and saved layouts (`WindowLayoutStore`).
+    public var windowLayoutsFile: URL {
+        supportDirectory.appendingPathComponent("window-layouts.json")
+    }
+
     /// The preference values set for each extension.
     public var preferencesDirectory: URL {
         supportDirectory.appendingPathComponent("preferences", isDirectory: true)

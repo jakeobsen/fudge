@@ -47,11 +47,14 @@ public struct AXWindow<Handle> {
     public var focused: Bool
     /// `kAXMinimizedAttribute`. A minimized window isn't in the window list, so it's never matched to one.
     public var minimized: Bool
+    /// Whether its `kAXSubroleAttribute` is `kAXStandardWindowSubrole`: an ordinary window, not a panel, sheet or
+    /// floating window. Saved layouts take only these (SPEC-094 §2).
+    public var standard: Bool
 
     public init(
         handle: Handle, frame: CGRect?, title: String? = nil, positionSettable: Bool = true,
         sizeSettable: Bool = true, fullScreen: Bool = false, fullScreenSettable: Bool = true, focused: Bool = false,
-        minimized: Bool = false
+        minimized: Bool = false, standard: Bool = true
     ) {
         self.handle = handle
         self.frame = frame
@@ -62,6 +65,7 @@ public struct AXWindow<Handle> {
         self.fullScreenSettable = fullScreenSettable
         self.focused = focused
         self.minimized = minimized
+        self.standard = standard
     }
 }
 
@@ -72,14 +76,17 @@ public struct WindowScreen: Sendable, Equatable {
     /// The part windows go in, without the menu bar and the Dock (`NSScreen.visibleFrame`), in the same top-left
     /// coordinates as `bounds` (`PanelScreen.topLeftFrame`).
     public var visibleBounds: CGRect
+    /// The display's name (`NSScreen.localizedName`), which saved layouts find it by.
+    public var name: String
 
     /// The screen's desktop: one per screen, for this run.
     var desktopId: String { "screen-\(id)" }
 
-    public init(id: UInt32, bounds: CGRect, visibleBounds: CGRect? = nil) {
+    public init(id: UInt32, bounds: CGRect, visibleBounds: CGRect? = nil, name: String = "") {
         self.id = id
         self.bounds = bounds
         self.visibleBounds = visibleBounds ?? bounds
+        self.name = name
     }
 }
 

@@ -207,6 +207,10 @@ Fudge can move and resize the window you're using: halves, quarters, thirds and 
 
 **Switch Windows**, in the same group, lists the open windows of all your apps, minimized ones included, and finds them by title or app name. The window you were in comes second, so ↵ right away takes you back to the one before it. ↵ switches to the selected window, ⌃X closes it and ⌃⌥X quits its app. macOS usually shows Fudge only the windows on the current Space. An app that's too slow to answer is left out and named at the bottom of the list.
 
+**Custom positions** are your own: on **Settings… → Window Management**, click + and give one a name and where it goes, in percent of the screen from its top left (say "Left 70%" at 0, 0, 70 × 100). Each one is a command like Left Half, with its own alias and hotkey.
+
+**Save Layout…** remembers where every app's windows are on your screens and asks for a name. **Apply <name>** puts them back later. It moves only apps that are running, and the HUD says how many windows it placed and skipped. Layouts keep apps and places, never window titles. Rename or delete them on the same Settings page.
+
 ### System commands
 
 Fudge's System commands are **Lock Screen**, **Sleep**, **Restart**, **Shut Down**, **Log Out**, **Empty Trash**, **Eject All Disks**, **Toggle Dark Mode**, **Hide All Apps** and **Quit All Apps**. Restart, Shut Down, Log Out, Empty Trash and Quit All Apps ask first, and apps with unsaved work ask about it as they quit. Search for them, or give them hotkeys under **Settings… → Commands → System**. The first time, macOS asks you to let Fudge control Finder, System Events or the login window (**Privacy & Security → Automation**). Lock Screen needs Accessibility permission.

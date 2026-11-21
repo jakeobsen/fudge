@@ -733,3 +733,30 @@ private func storeFolder(_ trees: [String: String]) throws -> Folder {
         ])
     }
 }
+
+@Test func windowLayoutsGoIntoABackupAndAreCounted() throws {
+    let source = try Folder()
+    try source.write(
+        "window-layouts.json",
+        #"{"positions":[{"id":"p1","name":"Left 70%","x":0,"y":0,"width":0.7,"height":1}],"#
+            + #""layouts":[{"id":"l1","name":"Coding","windows":[{"bundleId":"com.example.editor","index":0,"#
+            + #""screen":{"name":"Display A","index":0},"x":0,"y":0,"width":0.5,"height":1}]}]}"#)
+    let export = Backup.collect(from: source.paths, installed: [], fudgeVersion: "1.0", now: now)
+    #expect(export.summary.windowPositions == 1 && export.summary.windowLayouts == 1)
+    #expect(export.summary.text.contains("1 window position, 1 window layout"))
+    let file = source.url.appendingPathComponent("b.fudgebackup")
+    try BackupArchive.write(export.entries, to: file, password: password)
+    let contents = try Backup.open(file, password: password)
+    #expect(contents.summary.windowPositions == 1 && contents.summary.windowLayouts == 1)
+    let target = try Folder()
+    _ = try Backup.apply(contents, to: target.paths, installed: [], fudgeVersion: "1.0", now: now)
+    let restored = WindowLayoutStore.load(from: target.paths.windowLayoutsFile)
+    #expect(restored.positions.map(\.name) == ["Left 70%"] && restored.layouts.map(\.name) == ["Coding"])
+    let manifest = #"{"format":1,"fudgeVersion":"1","created":"2026-01-01T00:00:00Z","extensions":[]}"#
+    #expect(throws: BackupError.self, "a window-layouts.json that isn't an object is refused") {
+        try Backup.contents(of: [
+            BackupEntry(path: "manifest.json", data: Data(manifest.utf8)),
+            BackupEntry(path: "window-layouts.json", data: Data("[1]".utf8)),
+        ])
+    }
+}
