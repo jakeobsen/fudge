@@ -826,6 +826,8 @@ Extensions run in a separate Node.js process, the extension host.
   `npm run typecheck` checks it with its own `tsconfig.json`, and `runtime/test/store.test.ts` tests its modules, with a fake git runner and a local bare repository (no network).
   - `git.ts` keeps a shallow, blobless, sparse clone of github.com/raycast/extensions in its support folder's `repo/`, with only `/extensions/*/package.json` checked out.
     A README or an extension's source comes on demand through `sparse-checkout add`; the detail's scan adds only a folder's source files (`scanPatterns`: `src/**/*.ts`, `.tsx`, `.js`, `.jsx`) and takes those patterns out again afterwards (`drop`, through `sparse-checkout set --no-cone --stdin` with every other pattern), so a later refresh doesn't fetch their changes.
+    What was downloaded stays in `.git` while the copy's commit reaches it (a refresh prunes only what its new commit doesn't), so a checked folder's source is downloaded once per version.
+    Nothing else prunes it, since a repack that left out blobs would also drop the checked-out manifests.
     `sourceFiles` lists a folder's `src/` from the trees alone, which a blobless clone has in full, so it downloads nothing.
     The copy is refreshed when it's a day old or on ⌘R: the default branch's name (checked by `isValidBranch`) is fetched as `refs/heads/<branch>` into its remote-tracking ref, the branch moves there, every other ref and the reflogs go, and only what the refs reach is packed again, into one pack marked as the remote's, before `git prune`.
     So the copy stays one commit deep and `.git/shallow` names only that commit.
@@ -857,9 +859,17 @@ Extensions run in a separate Node.js process, the extension host.
     A result keeps which commands do (`byCommand`, from the scan's per-command results); one without it, or whose scan has none, counts the whole extension, as before SPEC-109.
     What only an AI tool uses counts for no command, so it isn't mentioned.
     The detail pane's first fact is **Compatibility** (`compatibilityText`): Checking…, Compatible, Partly compatible: 2 of 9 commands use Raycast AI: and their titles, Not compatible: Raycast AI, Missing: the APIs, Signs in with OAuth, Couldn't check, or Not checked.
-    **Browsing never turns into downloading** (`CompatibilityChecks`): only the row the selection rests on, with the detail showing, is checked, after half a second, and moving on cancels its timer, or the check itself before its fetch or its scan; selecting the same row again changes nothing, and a cached row is never fetched.
-    A check (`checkFolder`) runs in the git queue, one at a time: it counts the folder's source files from the trees (more than `maxScanFiles`, 300, isn't checked;
-    no extension in the store has more than about 220), fetches only those, checks their size before scanning (more than `maxScanBytes`, 5 MiB, isn't checked), scans with `fudge scan`, caches the result, and always takes its patterns out again.
+    **Browsing never turns into downloading** (`CompatibilityChecks`): only the row the selection rests on, with the detail showing, is checked, after half a second, and moving on cancels its timer, or the check itself: its download ends at once, and the check stops between its other steps; selecting the same row again changes nothing, and a cached row is never fetched.
+    Only the download (`fetchSource`) is ever ended, since it writes nothing but new packs: it runs in a process group of its own, which the cancel's `signal` sends SIGTERM, then SIGKILL after `cancelGrace` (a second).
+    Every other git step runs to its end, since one that writes the index holds `index.lock`, and ending it would leave that behind for every later checkout and install.
+    The README waits the same way: both run through `RestingWork` (`resting.ts`), and only the resting row's README is fetched (`fetchReadme`), once per folder tree, since READMEs are kept by tree id.
+    It's selected before the check, so its quick fetch goes ahead of the check's download in the git queue.
+    A README git couldn't fetch isn't kept (it shows as none), and ⌘R fetches it again (`RestingWork.again`).
+    A check (`checkFolder`) runs in the git queue, one at a time: it counts the files under the folder's `src/` from the trees (more than `maxScanFiles`, 300, isn't checked), then downloads those that aren't here yet with each one's size capped (`fetchSource`); `missingSource` comes first, so a folder checked before in this version downloads nothing again.
+    That's the `src/` tree fetched again (`--refetch`) with a `blob:limit` of `maxScanBytes`, which the server applies to what it finds under the tree; blobs asked for by their own ids would come whatever their size.
+    A file left out for its size means the row isn't checked (`missingSource`, `rev-list --missing=print`, which downloads nothing on any git).
+    It then checks out the source files with git's lazy fetch off (`addFetched`, `GIT_NO_LAZY_FETCH`), checks their total (more than `maxScanBytes`, 5 MiB, isn't checked), scans with `fudge scan`, caches the result, and always takes its patterns out again.
+    A server that won't send a folder's tree gets the fetch as before, with the size checked after the download.
     A blobless clone has no sizes before a download, so the first cap is on the number of files.
     Install shares the cache both ways.
   - `store.ts` installs with `$FUDGE_CLI build <source> --into $FUDGE_EXTENSIONS_DIR`.
