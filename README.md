@@ -439,6 +439,8 @@ Copyright (C) 2026 Morten Jakobsen.
 Licensed under the GNU Affero General Public License, version 3 or (at your option) any later version (`AGPL-3.0-or-later`).
 See [LICENSE](LICENSE).
 
+The app also ships third-party code and data, each under its own license: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) lists them, and Fudge.app carries the same as `Third-Party Notices.txt`, linked from **About Fudge**.
+
 `runtime/vendor/unicode/` holds Unicode's emoji data and CLDR's English annotations, under the Unicode License v3; see [the license next to them](runtime/vendor/unicode/LICENSE).
 
 `runtime/vendor/raycast-api/index.d.ts` contains the type definitions from the `@raycast/api` package.

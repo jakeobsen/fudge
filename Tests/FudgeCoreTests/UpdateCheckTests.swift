@@ -89,6 +89,14 @@ private func releaseJSON(
         // Info.plist's own value, and FudgeVersion.current outside a bundle.
         ("0.0.0", .tagged(version("0.0.0"))),
         ("0.0.0-dev", .tagged(version("0.0.0-dev"))),
+        // The short version `make app` writes for a build after a tag (scripts/bundle-version.ts).
+        ("0.2.0-dev+14.51ba5a2", .tagged(version("0.2.0"))),
+        ("0.2.0-dev+14.51ba5a2.dirty", .tagged(version("0.2.0"))),
+        ("0.2.0-dev+dirty", .tagged(version("0.2.0"))),
+        ("1.2.0-rc.1.dev+3.abc1234", .tagged(version("1.2.0-rc.1"))),
+        ("0.0.0-dev+8f8e040", .tagged(version("0.0.0"))),
+        // A tag that is itself named dev is a pre-release, as any other.
+        ("v1.0.0-dev", .tagged(version("1.0.0-dev"))),
         // No tag yet: a bare commit, or the Makefile's `dev` when git can't say.
         ("8f8e040", .untagged),
         ("8f8e040-dirty", .untagged),
@@ -126,8 +134,13 @@ private func releaseJSON(
     #expect(told("v1.2.0-rc.1-3-gabc1234", about: "v1.2.0"))
     #expect(told("v1.2.0-rc.1-3-gabc1234-dirty", about: "v1.2.0"))
     #expect(!told("v1.2.0-rc.1-3-gabc1234", about: "v1.1.9"))
+    // The short version of a build after v0.2.0 says the same as its describe.
+    #expect(!told("0.2.0-dev+14.51ba5a2", about: "v0.2.0"))
+    #expect(told("0.2.0-dev+14.51ba5a2", about: "v0.2.1"))
+    #expect(told("1.2.0-rc.1.dev+3.abc1234", about: "v1.2.0"))
+    #expect(!told("1.2.0-rc.1.dev+3.abc1234", about: "v1.2.0-rc.1"))
     // No tag: older than any release.
-    for running in ["8f8e040", "8f8e040-dirty", "dev"] {
+    for running in ["8f8e040", "8f8e040-dirty", "dev", "0.0.0-dev+8f8e040"] {
         #expect(told(running, about: "v0.0.1"), "\(running)")
         #expect(told(running, about: "v0.2.0"), "\(running)")
     }
@@ -341,7 +354,7 @@ private func latest(_ tag: String) -> Result<Data?, any Error> {
 
     await checker.setSetting(.daily, now: now)
     #expect(await fetcher.calls == 1, "choosing Daily checks")
-    #expect(checker.status.headline == "Fudge is up to date")
+    #expect(checker.status.headline(version: "0.3.0") == "Fudge 0.3.0 is up to date")
     #expect(checker.state.lastSuccess == now)
     for tick in 1...23 {
         await checker.checkIfDue(now: now.addingTimeInterval(Double(tick) * hour))
@@ -372,7 +385,7 @@ private func latest(_ tag: String) -> Result<Data?, any Error> {
     var changes = 0
     checker.onChange = { changes += 1 }
     await checker.checkIfDue(now: now)
-    #expect(checker.status.headline == "Couldn't check for updates")
+    #expect(checker.status.headline(version: "0.3.0") == "Fudge 0.3.0: couldn't check for updates")
     #expect(checker.status.details(locale: Locale(identifier: "en_US")).first == "GitHub answered 503")
     #expect(changes >= 2, "checking, then the result")
     for tick in 1...10 {
@@ -400,7 +413,7 @@ private func latest(_ tag: String) -> Result<Data?, any Error> {
     #expect(await fetcher.calls == 4)
     await checker.checkIfDue(now: now.addingTimeInterval(day))
     #expect(await fetcher.calls == 5, "the first failure is a day old")
-    #expect(checker.status.headline == "Fudge is up to date")
+    #expect(checker.status.headline(version: "0.3.0") == "Fudge 0.3.0 is up to date")
 }
 
 @MainActor @Test func theHUDSaysEachNewVersionOnce() async throws {
@@ -414,14 +427,14 @@ private func latest(_ tag: String) -> Result<Data?, any Error> {
 
     await checker.checkIfDue(now: now)
     #expect(announced == ["Fudge 0.9.0 is available"])
-    #expect(checker.status.headline == "Fudge 0.9.0 is available")
+    #expect(checker.status.headline(version: "0.3.0") == "Fudge 0.9.0 is available")
     #expect(checker.available?.pageURL.absoluteString == "https://github.com/jakeobsen/fudge/releases/tag/v0.9.0")
     await checker.checkNow(now: now.addingTimeInterval(hour))
     #expect(announced.count == 1, "the same version isn't announced again")
 
     await checker.checkNow(now: now.addingTimeInterval(2 * hour))
     #expect(checker.available?.tag == "v0.9.0", "a failure keeps what the last answer found")
-    #expect(checker.status.headline == "Fudge 0.9.0 is available")
+    #expect(checker.status.headline(version: "0.3.0") == "Fudge 0.9.0 is available")
     #expect(
         checker.status.details(locale: Locale(identifier: "en_US")).first
             == "Couldn't check for updates: The Internet connection appears to be offline.")
@@ -445,7 +458,7 @@ private func latest(_ tag: String) -> Result<Data?, any Error> {
     checker.onNewRelease = { _ in announced += 1 }
     await checker.checkNow(now: now)
     #expect(checker.available == nil)
-    #expect(checker.status.headline == "Fudge is up to date")
+    #expect(checker.status.headline(version: "0.3.0") == "Fudge 0.3.0 is up to date")
     #expect(announced == 0)
     await checker.checkNow(now: now.addingTimeInterval(hour))
     #expect(checker.available?.tag == "v0.2.1")
@@ -464,7 +477,9 @@ private func latest(_ tag: String) -> Result<Data?, any Error> {
     await checker.checkNow(now: now)
     #expect(checker.state.failure == nil)
     #expect(checker.state.lastSuccess == now)
-    #expect(checker.status.headline == "Fudge is up to date", "GitHub's 404 when there's no release")
+    #expect(
+        checker.status.headline(version: "0.3.0") == "Fudge 0.3.0 is up to date", "GitHub's 404 when there's no release"
+    )
     await checker.checkNow(now: now.addingTimeInterval(hour))
     #expect(checker.available == nil, "a pre-release is never offered")
 }
@@ -475,7 +490,7 @@ private func latest(_ tag: String) -> Result<Data?, any Error> {
     let first = Task { await checker.checkNow(now: now) }
     while await fetcher.calls == 0 { await Task.yield() }
     #expect(checker.checking)
-    #expect(checker.status.headline == "Checking for updates…")
+    #expect(checker.status.headline(version: "0.3.0") == "Checking for updates…")
     await checker.checkNow(now: now)
     await checker.checkIfDue(now: now)
     #expect(await fetcher.calls == 1, "a second check while one runs does nothing")
@@ -491,7 +506,7 @@ private func latest(_ tag: String) -> Result<Data?, any Error> {
     var announced = 0
     checker.onNewRelease = { _ in announced += 1 }
     checker.show(release("v0.9.0"), checkedAt: now)
-    #expect(checker.status.headline == "Fudge 0.9.0 is available")
+    #expect(checker.status.headline(version: "0.3.0") == "Fudge 0.9.0 is available")
     #expect(await fetcher.calls == 0)
     #expect(announced == 0, "no HUD")
 }
@@ -527,19 +542,21 @@ private func latest(_ tag: String) -> Result<Data?, any Error> {
 @Test func theGeneralPageSaysWhatTheLastCheckFound() {
     let enUS = Locale(identifier: "en_US")
     let utc = TimeZone(identifier: "UTC")!
-    #expect(UpdateStatus().headline == "Not checked yet")
+    #expect(UpdateStatus().headline(version: "0.3.0") == "Fudge 0.3.0: not checked for updates yet")
     #expect(UpdateStatus().details(locale: enUS, timeZone: utc).isEmpty)
     let upToDate = UpdateStatus(lastCheck: now)
-    #expect(upToDate.headline == "Fudge is up to date")
+    #expect(upToDate.headline(version: "0.3.0") == "Fudge 0.3.0 is up to date")
     #expect(upToDate.details(locale: enUS, timeZone: utc).count == 1)
     #expect(upToDate.details(locale: enUS, timeZone: utc)[0].hasPrefix("Last checked: "))
     let failed = UpdateStatus(lastCheck: now, failure: "GitHub answered 503")
-    #expect(failed.headline == "Couldn't check for updates")
+    #expect(failed.headline(version: "0.3.0") == "Fudge 0.3.0: couldn't check for updates")
     #expect(failed.details(locale: enUS, timeZone: utc).first == "GitHub answered 503")
     let checking = UpdateStatus(checking: true, lastCheck: now, failure: "GitHub answered 503")
-    #expect(checking.headline == "Checking for updates…")
+    #expect(checking.headline(version: "0.3.0") == "Checking for updates…")
     #expect(checking.details(locale: enUS, timeZone: utc).count == 1, "the old failure isn't shown while checking")
-    #expect(UpdateStatus(lastCheck: now, available: release("v0.9.0")).headline == "Fudge 0.9.0 is available")
+    #expect(
+        UpdateStatus(lastCheck: now, available: release("v0.9.0")).headline(version: "0.3.0")
+            == "Fudge 0.9.0 is available")
 }
 
 // MARK: - "Not Chosen" while unset (FUD-135 §3)
@@ -559,4 +576,11 @@ private func latest(_ tag: String) -> Result<Data?, any Error> {
     let setting = FudgeSettings.load(from: file).updateCheck
     #expect(setting == nil)
     #expect(UpdateCheckSetting.popupOptions(current: setting).first?.1 == "Not Chosen")
+}
+
+@Test func theUpdateRowNamesTheRunningVersion() {
+    let available = UpdateStatus(lastCheck: Date(timeIntervalSince1970: 0), available: release("v0.3.1"))
+    #expect(available.headline(version: "0.3.0") == "Fudge 0.3.1 is available")
+    #expect(available.details(version: "0.3.0", locale: Locale(identifier: "en_US")).first == "You have Fudge 0.3.0")
+    #expect(!UpdateStatus(lastCheck: Date()).details(version: "0.3.0").contains("You have Fudge 0.3.0"))
 }
