@@ -108,3 +108,22 @@ private final class Waiter: @unchecked Sendable {
         try Shell.run(URL(fileURLWithPath: "/bin/sh"), ["-c", "exit 4"], children: ChildProcesses())
     }
 }
+
+@Test func aSignalDeletesWhatWasNamedAndNotTakenBack() throws {
+    let children = ChildProcesses()
+    let folder = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let scratch = folder.appendingPathComponent("fudge-build-x")
+    let staging = folder.appendingPathComponent(".staging-greeter-x")
+    let moved = folder.appendingPathComponent(".staging-moved-x")
+    for url in [scratch, staging, moved] {
+        try FileManager.default.createDirectory(
+            at: url.appendingPathComponent("inside"), withIntermediateDirectories: true)
+        children.deleteOnSignal(url)
+    }
+    children.forget(moved)
+    children.deleteLeftovers()
+    #expect(!FileManager.default.fileExists(atPath: scratch.path))
+    #expect(!FileManager.default.fileExists(atPath: staging.path))
+    #expect(FileManager.default.fileExists(atPath: moved.path), "a folder taken back stays")
+}

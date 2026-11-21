@@ -19,9 +19,35 @@ public final class ChildProcesses: @unchecked Sendable {
     /// `wait` never return, and a build that fails because its child was ended can't exit first with its own status.
     private var exiting = false
 
+    /// What the signal's handler deletes before this process exits, since `defer` doesn't run then: `fudge build`'s
+    /// scratch and staging folders, while they exist (`deleteOnSignal`, `forget`).
+    private var leftovers: Set<URL> = []
+
     /// Blocks the calling thread for good, while the signal's handler ends the process.
     private func waitForExit() -> Never {
         while true { sleep(60) }
+    }
+
+    /// Has a signal that ends this process (`endChildrenOnSignals`) delete `url` first, until `forget(_:)`.
+    public func deleteOnSignal(_ url: URL) {
+        lock.withLock { _ = leftovers.insert(url) }
+    }
+
+    /// Takes `url` back from `deleteOnSignal`, before it's moved into place or once it's deleted. Once a signal is
+    /// ending this process, it never returns, so nothing moves `url` while the signal's handler deletes it.
+    public func forget(_ url: URL) {
+        if lock.withLock({
+            if !exiting { leftovers.remove(url) }
+            return exiting
+        }) {
+            waitForExit()
+        }
+    }
+
+    /// Deletes what `deleteOnSignal` named and `forget` didn't take back. The signal's handler calls it once every
+    /// child has ended (`endAll`), so nothing is still writing there.
+    func deleteLeftovers() {
+        for url in lock.withLock({ leftovers }) { try? FileManager.default.removeItem(at: url) }
     }
 
     public struct SpawnError: Error, CustomStringConvertible {
@@ -119,14 +145,16 @@ public final class ChildProcesses: @unchecked Sendable {
     /// The signal sources `endChildrenOnSignals` installs, kept for the life of the process.
     nonisolated(unsafe) private static var signalSources: [any DispatchSourceSignal] = []
 
-    /// Makes SIGTERM, SIGINT and SIGHUP end the children first (`endAll`), then this process, with 128 + the signal
-    /// as its status. For the tool's long-running commands, `scan` and `build`.
+    /// Makes SIGTERM, SIGINT and SIGHUP end the children first (`endAll`) and delete what `deleteOnSignal` named,
+    /// then this process, with 128 + the signal as its status. For the tool's long-running commands, `scan` and
+    /// `build`.
     public static func endChildrenOnSignals() {
         for signal in [SIGTERM, SIGINT, SIGHUP] {
             Darwin.signal(signal, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: signal, queue: .global())
             source.setEventHandler {
                 shared.endAll(exiting: true)
+                shared.deleteLeftovers()
                 exit(128 + signal)
             }
             source.resume()

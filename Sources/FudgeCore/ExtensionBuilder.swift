@@ -102,9 +102,16 @@ public struct ExtensionBuilder: Sendable {
         }
         try Self.checkDestination(extensionsDirectory.appendingPathComponent(manifest.name), source: source)
 
-        let scratch = files.temporaryDirectory.appendingPathComponent("fudge-build-\(UUID().uuidString)")
+        // A signal that ends `fudge build` skips every `defer`, so the two folders are named to the signal's handler
+        // too, which deletes them before the tool exits (`ChildProcesses.deleteOnSignal`).
+        let children = ChildProcesses.shared
+        let scratch = Self.temporaryDirectory().appendingPathComponent("fudge-build-\(UUID().uuidString)")
+        children.deleteOnSignal(scratch)
+        defer {
+            try? files.removeItem(at: scratch)
+            children.forget(scratch)
+        }
         try files.createDirectory(at: scratch, withIntermediateDirectories: true)
-        defer { try? files.removeItem(at: scratch) }
 
         var environment: [String: String] = [:]
         if manifest.hasDependencies, !files.fileExists(atPath: source.appendingPathComponent("node_modules").path) {
@@ -114,7 +121,11 @@ public struct ExtensionBuilder: Sendable {
 
         try files.createDirectory(at: extensionsDirectory, withIntermediateDirectories: true)
         let staging = extensionsDirectory.appendingPathComponent(".staging-\(manifest.name)-\(UUID().uuidString)")
-        defer { try? files.removeItem(at: staging) }
+        children.deleteOnSignal(staging)
+        defer {
+            try? files.removeItem(at: staging)
+            children.forget(staging)
+        }
         try files.createDirectory(at: staging, withIntermediateDirectories: true)
 
         log("compiling \(entries.count) command\(entries.count == 1 ? "" : "s")")
@@ -137,6 +148,8 @@ public struct ExtensionBuilder: Sendable {
         }
 
         let destination = extensionsDirectory.appendingPathComponent(manifest.name, isDirectory: true)
+        // From here the staging folder is the install: a signal no longer deletes it.
+        children.forget(staging)
         try Self.replace(destination, with: staging)
         return InstalledExtension(manifest: manifest, directory: destination)
     }
@@ -205,6 +218,15 @@ public struct ExtensionBuilder: Sendable {
         if names.contains(where: { !$0.hasPrefix(".") && !installedItems.contains($0) }) {
             throw BuildError.notAnInstall(destination.path)
         }
+    }
+
+    /// Where the build's scratch folder goes: an absolute `$TMPDIR` when it's set, as for any command-line tool, else
+    /// the user's temporary folder. Foundation's `temporaryDirectory` doesn't read `TMPDIR` on macOS.
+    static func temporaryDirectory(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        guard let path = environment["TMPDIR"], path.hasPrefix("/") else {
+            return FileManager.default.temporaryDirectory
+        }
+        return URL(fileURLWithPath: path, isDirectory: true)
     }
 
     static func replace(_ destination: URL, with staging: URL) throws {

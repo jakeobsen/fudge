@@ -118,11 +118,19 @@ enum Tool {
     defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
     let extensions = folder.appendingPathComponent("extensions")
     try FileManager.default.createDirectory(at: extensions, withIntermediateDirectories: true)
+    // The build's scratch folder goes in `TMPDIR`: this test's folder, not the user's.
+    let temporary = folder.appendingPathComponent("tmp")
+    try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
     try await Tool.expectTerminationEndsEverything(
         ["build", source.path, "--into", extensions.path],
-        environment: ["HOME": folder.path, "PATH": "/usr/bin:/bin", "FUDGE_ESBUILD": esbuild.path],
+        environment: [
+            "HOME": folder.path, "PATH": "/usr/bin:/bin", "FUDGE_ESBUILD": esbuild.path, "TMPDIR": temporary.path + "/",
+        ],
         pids: pids)
     #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("extensions/greeter").path))
+    // esbuild runs once both folders exist, so a terminated build has both to delete.
+    #expect(try FileManager.default.contentsOfDirectory(atPath: extensions.path) == [], "no .staging-* is left")
+    #expect(try FileManager.default.contentsOfDirectory(atPath: temporary.path) == [], "no fudge-build-* is left")
 }
 
 @Suite(.enabled(if: Fixtures.esbuild != nil && Tool.node != nil, "needs esbuild and node: run `make test`"))
