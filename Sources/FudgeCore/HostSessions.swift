@@ -52,6 +52,14 @@ public struct HostSessions: Sendable {
         live.removeAll()
     }
 
+    /// Whether `message` may go to the host: one for a session that isn't running (it has exited, or never ran in
+    /// this host) is never sent, so a pick in a date picker or a ⌘K action left open can't reach a command that has
+    /// ended (FUD-135 §2). A launch's session is started before its `launch` is sent.
+    public func mayReceive(_ message: AppMessage) -> Bool {
+        guard let session = message.session else { return true }
+        return live.contains(session)
+    }
+
     /// What to do with `message` from the host. A message naming no session (`pong`, a protocol error) is handled. A
     /// session's `exit` is handled and ends it, so a late `log` or `exit` after it is dropped.
     public mutating func admit(_ message: HostMessage) -> Verdict {

@@ -48,8 +48,11 @@ struct GeneralPage: View {
             Section("Updates") {
                 SettingsPopupRow(
                     "Check for Updates",
-                    selection: Binding(get: { model.updateCheck ?? .off }, set: { model.setUpdateCheck($0) }),
-                    options: UpdateCheckSetting.allCases.map { ($0, $0.title) },
+                    // "Not Chosen" while unset: it checks nothing, as Never, and onboarding still asks.
+                    selection: Binding(
+                        get: { model.updateCheck },
+                        set: { choice in if let choice { model.setUpdateCheck(choice) } }),
+                    options: UpdateCheckSetting.popupOptions(current: model.updateCheck),
                     help: "How often Fudge asks GitHub whether there's a new version. It tells you when there is, "
                         + "and never downloads or installs anything by itself."
                 )

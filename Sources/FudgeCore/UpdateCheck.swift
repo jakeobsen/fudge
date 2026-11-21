@@ -30,6 +30,16 @@ public enum UpdateCheckSetting: String, Sendable, CaseIterable, Identifiable {
         }
     }
 
+    /// What the popup says while nothing has been chosen (FUD-135 §3). It behaves as Never until a choice is made.
+    public static let notChosenTitle = "Not Chosen"
+
+    /// The General page's popup for `current`: while it's unset (nil, or an unknown value in `settings.json`), "Not
+    /// Chosen" first, then the four; once something is chosen, only the four, so "Not Chosen" can't be picked again.
+    public static func popupOptions(current: UpdateCheckSetting?) -> [(UpdateCheckSetting?, String)] {
+        let choices = allCases.map { (Optional($0), $0.title) }
+        return current == nil ? [(nil, notChosenTitle)] + choices : choices
+    }
+
     /// Onboarding's choices: Daily, Weekly, Monthly, Off.
     public var onboardingTitle: String {
         self == .off ? "Off" : title
