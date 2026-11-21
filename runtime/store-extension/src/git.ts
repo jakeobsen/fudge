@@ -38,17 +38,23 @@ export function storeEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.
     return { ...base, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
 }
 
-/** `spawn` with no shell, a timeout that sends SIGTERM, and `storeEnvironment()`. */
+/**
+ * `spawn` with no shell, a timeout that sends SIGTERM, and `storeEnvironment()`. When the timeout fired, stderr ends
+ * with "<program> stopped after N s", whatever the exit: `fudge` catches SIGTERM and exits with 143.
+ */
 export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable, input }) =>
     new Promise((resolve) => {
         const child = spawn(program, args, {
             cwd,
-            timeout,
-            // SIGTERM, not SIGKILL: `fudge scan` and `fudge build` pass it on to everything they started.
-            killSignal: "SIGTERM",
             stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
             env: storeEnvironment(),
         });
+        let timedOut = false;
+        const timer = setTimeout(() => {
+            timedOut = true;
+            // SIGTERM, not SIGKILL: `fudge scan` and `fudge build` pass it on to everything they started.
+            child.kill("SIGTERM");
+        }, timeout);
         if (stoppable) running.add(child);
         if (input !== undefined && child.stdin) {
             // A program that exits early closes its stdin; its exit status says what went wrong.
@@ -60,12 +66,15 @@ export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable, inpu
         child.stdout?.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
         child.stderr?.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
         child.on("error", (error) => {
+            clearTimeout(timer);
             running.delete(child);
             resolve({ code: -1, stdout, stderr: error.message });
         });
         child.on("close", (code, signal) => {
+            clearTimeout(timer);
             running.delete(child);
-            if (code === null) stderr += `\n${path.basename(program)} stopped (${signal ?? "killed"}) after ${timeout / 1000} s`;
+            if (timedOut) stderr += `\n${path.basename(program)} stopped after ${timeout / 1000} s`;
+            else if (code === null) stderr += `\n${path.basename(program)} stopped (${signal ?? "killed"})`;
             resolve({ code: code ?? -1, stdout, stderr });
         });
     });

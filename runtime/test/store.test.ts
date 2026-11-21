@@ -618,7 +618,19 @@ test("unloading the store stops its running git, and only that", async () => {
     const result = await git;
     assert.notEqual(result.code, 0);
     assert.ok(Date.now() - started < 4000, "stopped, not run to the end");
+    assert.match(result.stderr, /\nsleep stopped \(SIGTERM\)$/, "stopped, but not said to have timed out");
     assert.equal((await other).code, 0, "the CLI's build isn't stoppable");
+});
+
+test("a timeout says so whatever the exit, as when fudge catches SIGTERM and exits 143", async () => {
+    // Like fudge: it catches SIGTERM, ends what it started, and exits with 128 + 15.
+    const fudgeLike = 'trap "exit 143" TERM; while :; do sleep 0.05; done';
+    const result = await spawnProgram("/bin/sh", ["-c", fudgeLike], { timeout: 1000 });
+    assert.equal(result.code, 143);
+    assert.match(result.stderr, /\nsh stopped after 1 s$/);
+    const failed = await spawnProgram("/bin/sh", ["-c", "echo nope >&2; exit 3"], { timeout: 30_000 });
+    assert.equal(failed.code, 3);
+    assert.equal(failed.stderr, "nope\n", "a program that fails by itself gets no note");
 });
 
 test("every git call of the repository is stoppable, and a copy can be removed", async () => {
