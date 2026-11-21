@@ -84,12 +84,13 @@ private let userClipboard = PasteboardContents(items: [
 private let app = FrontmostApplication(pid: 42, bundleIdentifier: "com.apple.TextEdit")
 private let fudgePid: Int32 = 99
 
-/// A copy that works ends the wait as soon as its text is there, so the long timeout only matters on a slow machine.
-/// Tests that expect nothing to be copied pass a short one.
+/// A copy that works ends the wait as soon as its text is there, so the long timeout is only a ceiling: a CI runner
+/// can stall for seconds between the app's clear and its write, and the copy must still be read. Tests that expect
+/// nothing to be copied pass a short one, which a stall can only lengthen.
 @MainActor
 private func reader(
     _ accessibility: FakeAccessibility, _ keys: FakeKeys, _ pasteboard: FakePasteboard,
-    copyTimeout: Duration = .seconds(5)
+    copyTimeout: Duration = .seconds(60)
 ) -> SelectedText {
     SelectedText(
         accessibility: accessibility, keys: keys, pasteboard: pasteboard, ownPid: fudgePid,
