@@ -1,8 +1,8 @@
-import { Action, ActionPanel, Detail, Icon, List, useNavigation } from "@raycast/api";
+import { Action, ActionPanel, Detail, Icon, List, showToast, Toast, useNavigation } from "@raycast/api";
 import os from "node:os";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { causeOf, cleanOutput, failureMarkdown, failureReport, type FailureDetails } from "./failure.ts";
-import { spawnProgram } from "./git.ts";
+import { installCommandLineTools, spawnProgram, type Run } from "./git.ts";
 import { systemProxy } from "./proxy.ts";
 
 /**
@@ -68,6 +68,7 @@ export function FailureView(props: {
                         shortcut={{ modifiers: ["cmd"], key: "c" }}
                         content={report}
                     />
+                    {cause.kind === "gitMissing" && <InstallToolsAction />}
                     {pageURL && <Action.OpenInBrowser title="Open Extension Page on GitHub" url={pageURL} />}
                     <Action title="Back" icon={Icon.ArrowLeft} onAction={pop} />
                 </ActionPanel>
@@ -118,6 +119,53 @@ export function LoadFailure(props: { title: string; details: FailureDetails; cli
                                 />,
                             )
                         }
+                    />
+                </ActionPanel>
+            }
+        />
+    );
+}
+
+/**
+ * Install Command Line Tools: macOS's own installer for the tools that bring git (`xcode-select --install`), started
+ * only by the user's action. A toast says what to do next, or why it couldn't start. `run` is for tests, which never
+ * start the installer.
+ */
+export function InstallToolsAction(props: { run?: Run }) {
+    return (
+        <Action
+            title="Install Command Line Tools"
+            icon={Icon.Download}
+            onAction={async () => {
+                const problem = await installCommandLineTools(props.run);
+                await showToast(
+                    problem === undefined
+                        ? { style: Toast.Style.Success, title: "Follow macOS's installer", message: "Then refresh the store." }
+                        : { style: Toast.Style.Failure, title: "Couldn't start the installer", message: problem },
+                );
+            }}
+        />
+    );
+}
+
+/**
+ * The store without git (the Command Line Tools aren't installed): what it needs in plain words, ↵ Install Command Line
+ * Tools, and ⌘R Refresh, which checks again once they're in.
+ */
+export function NeedsGit(props: { refresh: () => void; run?: Run }) {
+    return (
+        <List.EmptyView
+            icon={Icon.ExclamationMark}
+            title="The Extension Store needs Git"
+            description="Git comes with Apple's Command Line Tools. Install them, then refresh."
+            actions={
+                <ActionPanel>
+                    <InstallToolsAction run={props.run} />
+                    <Action
+                        title="Refresh"
+                        icon={Icon.ArrowClockwise}
+                        shortcut={{ modifiers: ["cmd"], key: "r" }}
+                        onAction={props.refresh}
                     />
                 </ActionPanel>
             }

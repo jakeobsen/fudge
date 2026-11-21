@@ -44,7 +44,7 @@ import { gitAvailable, stopRunningGit, StoreRepository } from "./git.ts";
 import { maxReadmeBytes, readRegularFile } from "./files.ts";
 import { detailMarkdown } from "./readme.ts";
 import type { FailureDetails } from "./failure.ts";
-import { FailureView, LoadFailure } from "./failure-view.tsx";
+import { FailureView, LoadFailure, NeedsGit } from "./failure-view.tsx";
 import { failureDetails, install, oneAtATime, readInstalled, uninstall, type StoreContext } from "./store.ts";
 
 type Loaded = { entries: StoreEntry[]; installed: Installed; trees: Map<string, string>; commit: string };
@@ -146,7 +146,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
 
     /**
      * Opens the copy: clones it the first time, clones it again when it can't be read (a clone stopped halfway), and
-     * refreshes it when it's a day old, or always when `retry` (the load-error view's Refresh).
+     * refreshes it when it's a day old, or always when `retry` (the load-error view's Refresh, or the needs-Git view's).
      */
     const open = useCallback(
         async (retry: boolean) => {
@@ -155,6 +155,8 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                 setNoGit(true);
                 return;
             }
+            // Refresh after installing the Command Line Tools finds git now.
+            setNoGit(false);
             if (!(await repo.exists())) {
                 await refresh();
                 return;
@@ -292,11 +294,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     if (noGit) {
         return (
             <List>
-                <List.EmptyView
-                    icon={Icon.ExclamationMark}
-                    title="The Extension Store needs Git"
-                    description="Install Apple's Command Line Tools: run `xcode-select --install` in Terminal."
-                />
+                <NeedsGit refresh={() => void open(true)} />
             </List>
         );
     }
