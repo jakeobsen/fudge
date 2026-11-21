@@ -45,9 +45,15 @@ public struct LoginItemState: Sendable, Equatable {
     }
 
     /// Turns `item` on (`register()`) or off (`unregister()`), then reads its real state back, whether that
-    /// worked or not. A failure comes back as the message to show under the switch.
+    /// worked or not. A failure comes back as the message to show under the switch. Turning it on while Fudge runs
+    /// from somewhere that goes away (`AppLocation.loginItemRefusal`) registers nothing and says why instead.
     @MainActor
-    public static func change(_ item: any LoginItem, to on: Bool) -> (state: LoginItemState, error: String?) {
+    public static func change(_ item: any LoginItem, to on: Bool, location: AppLocation = .installed)
+        -> (state: LoginItemState, error: String?)
+    {
+        if on, let refusal = location.loginItemRefusal {
+            return (LoginItemState(item.status), refusal)
+        }
         var error: String?
         do {
             if on { try item.register() } else { try item.unregister() }

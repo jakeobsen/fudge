@@ -27,6 +27,8 @@ It is not affiliated with or endorsed by Raycast.
 
 Each release on GitHub has a disk image, `Fudge-<version>.dmg`: open it and drag Fudge to Applications.
 Fudge includes the Node.js that runs extensions, so there's nothing else to install.
+If you open Fudge straight from the disk image or from Downloads, it offers to move itself to Applications, since it can't open at login from there.
+On an account that can't add apps to `/Applications`, it moves to the Applications folder in your home folder instead.
 Fudge isn't notarized yet, so macOS blocks it the first time: open it, then go to System Settings → Privacy & Security and click Open Anyway (on macOS 14, Control-click Fudge and choose Open instead).
 
 ## Building

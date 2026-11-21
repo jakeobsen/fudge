@@ -432,6 +432,7 @@ Extensions run in a separate Node.js process, the extension host.
       **Open at Login** goes through the `LoginItem` protocol (core): `SMAppServiceLoginItem` (`SMAppService.mainApp`) in the app, and a `FixedLoginItem` in snapshot runs, so they never register anything (`--login-item <status>` sets its status).
       The switch shows the system's real status (`LoginItemState`, core), read whenever the page appears or the window becomes key, so changes made in System Settings show; nothing is stored.
       `LoginItemState.change` registers or unregisters, then reads the status back, with any error to show.
+      It turns nothing on while Fudge runs from its disk image or a translocated copy (`AppLocation.loginItemRefusal`), since that path goes away, and says to move Fudge to Applications first.
       **Clear Search History…** confirms in a sheet, then `LauncherModel.clearHistory()` empties `LaunchHistory` and `history.json`.
     - **Import / Export** (`BackupSection.swift`, at the bottom of General) writes and reads a `.fudgebackup` (declared in `App/Info.plist`).
       `Backup` (core) collects the parts from the support folder:
@@ -591,6 +592,14 @@ Extensions run in a separate Node.js process, the extension host.
       Below it, always shown, are the answers to "Allow <A> to open <B>'s commands?" (`LaunchPermissionsSection`, `LaunchPermissions.entries`), each changeable or forgotten, with the file read again before each change, a line saying none has asked yet when there are none, and the unreadable-file notice.
       Between them is Calendar access as macOS has it, with Open Privacy Settings (`CalendarAccessRow`); My Schedule asks for it, never this page.
       Show Onboarding Again restarts onboarding from Welcome.
+    - **Moving to Applications** (SPEC-114 §1).
+      At launch, before onboarding, `AppLocation` (core) reads where the app runs from: a read-only volume is the disk image, and a path through `AppTranslocation` is macOS's read-only copy of a quarantined download.
+      Either gets one alert, **Move to Applications** (↵) or **Not Now**, which keeps it running and asks nothing more this run.
+      `AppMover` (app) copies it into `/Applications`, or `~/Applications` for an account that can't write there, and never asks for an administrator's password (`AppLocation.destination`).
+      It copies under a hidden name, asks before replacing a copy already there (asking a Fudge running from there to quit), puts the old one in the Trash and moves the new one into place, so a failed copy never leaves half an app.
+      It clears the new copy's quarantine, since this copy has already passed Gatekeeper and a quarantined copy not moved by Finder would be translocated again, then opens it once this one has quit (a shell waiting on its pid, the paths as arguments).
+      The moved copy is opened with `--moved-to-applications`; if macOS still runs it from a read-only place, it says so once instead of offering the move again (`AppLocation.launchStep`), so the offer can't loop.
+      Snapshot runs leave launch before it.
     - **Onboarding** (`OnboardingWindow.swift`) opens at every launch until it's complete, once the extensions have loaded; never in snapshot runs, tests or the CLI.
       `Onboarding` (core) keeps the answered step ids in `onboarding.json` and decides what to show (`pending`): the unanswered steps, in order, then Done.
       Once it has been completed, Welcome isn't shown again, and a step added later shows on its own, then Done, under "Something new to decide" (`hasSomethingNew`).
