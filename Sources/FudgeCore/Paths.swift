@@ -35,6 +35,11 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("exchange-rates.json")
     }
 
+    /// When Fudge last checked GitHub for a new release, and what it found (`UpdateCheckState`).
+    public var updateCheckFile: URL {
+        supportDirectory.appendingPathComponent("update-check.json")
+    }
+
     /// How often and how recently root items were opened.
     public var historyFile: URL {
         supportDirectory.appendingPathComponent("history.json")
