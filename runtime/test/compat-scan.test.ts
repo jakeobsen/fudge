@@ -64,6 +64,27 @@ test("a stub is missing wherever the path reaches it, lowercase members included
     assert.equal(support(api, "environment.commandName"), "implemented", "a getter that needs a running command");
 });
 
+test("the deprecated preferences and randomId are implemented", () => {
+    assert.equal(support(api, "preferences", declared), "implemented");
+    assert.equal(support(api, "randomId", declared), "implemented");
+});
+
+test("an extension reading the deprecated preferences record has no gaps", async () => {
+    const source = `
+        import { preferences, showToast } from "@raycast/api";
+        export default async function Command() {
+            const key = preferences.apiKey.value as string;
+            const { value: region } = preferences.region;
+            await showToast({ title: key + String(region) + String(preferences["host"]?.value) });
+        }
+    `;
+    const found = uses(await toJavaScript(source, "command.ts"));
+    assert.ok([...found.api].some((path) => path.startsWith("preferences.apiKey")), [...found.api].join(", "));
+    assert.equal(support(api, "preferences.apiKey.value", declared), "implemented");
+    assert.equal(support(api, "preferences.apiKey", declared), "implemented");
+    assert.deepEqual(gaps(found, api, declared, RAYCAST_UTILS_PATHS), { gaps: [], notRaycast: [] });
+});
+
 test("OAuth stays left out by design, though its client can be built (D-50)", () => {
     for (const path of ["OAuth", "OAuth.PKCEClient", "OAuth.RedirectMethod.Web", "OAuth.RedirectMethod.AppURI"]) {
         assert.equal(support(api, path, declared), "missing", path);

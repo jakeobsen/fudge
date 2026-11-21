@@ -366,3 +366,38 @@ private struct Offline: Error {}
     let off = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
     #expect(off["currencyRates"] == nil, "off is the default, so it isn't written")
 }
+
+@Test func newRatesEvaluateACurrencyCardAgainAndNothingElse() {
+    let downloading = CurrencyState(enabled: true, downloading: true)
+    let arrived = ready
+
+    // The open query's card says "Downloading…" until the rates arrive; then it's evaluated again.
+    let card = calculate("100 usd to eur", enUS, downloading)
+    #expect(card?.answer == "Downloading exchange rates…")
+    var evaluated = 0
+    let after = Calculator.afterRatesChange(card) {
+        evaluated += 1
+        return calculate("100 usd to eur", enUS, arrived)
+    }
+    #expect(evaluated == 1)
+    #expect(after?.kind == .currency)
+    #expect(after == calculate("100 usd to eur", enUS, arrived), "as typing it again would")
+    #expect(after?.footnote != nil, "says how fresh the rates are")
+
+    // A failed download turns it into the retry card the same way.
+    let failed = Calculator.afterRatesChange(card) {
+        calculate("100 usd to eur", enUS, CurrencyState(enabled: true, failure: "The network is down"))
+    }
+    #expect(failed?.answer == "Couldn't download exchange rates")
+
+    // Any other card, or none, isn't evaluated again.
+    for other in [calculate("2+2", enUS, downloading), calculate("13kg to lbs", enUS, downloading), nil] {
+        evaluated = 0
+        let kept = Calculator.afterRatesChange(other) {
+            evaluated += 1
+            return nil
+        }
+        #expect(evaluated == 0)
+        #expect(kept == other)
+    }
+}
