@@ -206,6 +206,42 @@ enum SystemCalls {
     nonisolated private static let windowFrames = WindowFramesBox()
     private static let windowCommandQueue = DispatchQueue(label: "fudge.window-commands", qos: .userInitiated)
 
+    /// A custom position (SPEC-094 §1), as `windowCommand` runs Left Half: on the same queue, with Restore's memory.
+    static func windowPosition(_ position: WindowFractions) async -> String? {
+        let result = await onWindowQueue { manager, frames in manager.run(position: position, frames: &frames) }
+        guard let result else { return accessibilityNeededForWindows }
+        if case .message(let text) = result { return text }
+        return nil
+    }
+
+    /// Save Layout… (SPEC-094 §2): the standard windows on the screens now, read on the window commands' queue.
+    /// Nil without Accessibility permission.
+    static func captureLayout() async -> [SavedWindow]? {
+        await onWindowQueue { manager, _ in manager.captureLayout() }
+    }
+
+    /// "Apply <name>": what the HUD says, "Placed 5 windows; skipped 2".
+    static func applyLayout(_ layout: SavedWindowLayout) async -> String {
+        let placement = await onWindowQueue { manager, frames in manager.apply(layout, frames: &frames) }
+        return placement?.message ?? accessibilityNeededForWindows
+    }
+
+    static let accessibilityNeededForWindows = "Fudge needs Accessibility permission to manage windows."
+
+    /// Runs `body` on the window commands' queue with Restore's memory, after the user-initiated Accessibility
+    /// check; nil when it's refused.
+    private static func onWindowQueue<Result: Sendable>(
+        _ body: @escaping @Sendable (WindowManager<SystemWindows>, inout WindowFrames) -> Result
+    ) async -> Result? {
+        guard gate.isTrusted(origin: .userInitiated) else { return nil }
+        let manager = WindowManager(system: SystemWindows.current(), ownPid: ProcessInfo.processInfo.processIdentifier)
+        return await withCheckedContinuation { continuation in
+            windowCommandQueue.async {
+                continuation.resume(returning: body(manager, &windowFrames.frames))
+            }
+        }
+    }
+
     private static func frontmost() -> FrontmostApplication? {
         NSWorkspace.shared.frontmostApplication.map {
             FrontmostApplication(pid: $0.processIdentifier, bundleIdentifier: $0.bundleIdentifier)

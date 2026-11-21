@@ -347,8 +347,9 @@ final class LauncherModel {
         settings = FudgeSettings.load(from: paths.settingsFile)
         panelReset.setting = settings.resetAfter
         let commands = installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
+        windowLayouts = WindowLayoutStore.load(from: paths.windowLayoutsFile)
         items =
-            RootSearch.applying(settings, to: commands + BuiltInCommandGroup.all.flatMap(RootItem.builtInCommands))
+            RootSearch.applying(settings, to: commands + builtInGroups.flatMap(RootItem.builtInCommands))
             + RootSearch.builtInItems + loadQuicklinks() + applications
         menuBar.update(installed: installedExtensions, settings: settings)
         clipboardHistory.apply(settings, watch: watchesClipboard)
@@ -360,6 +361,12 @@ final class LauncherModel {
     @ObservationIgnored private var applications: [RootItem] = []
 
     /// Reads `quicklinks.json` for root search. Their icons are looked up again, since an app may have changed.
+    /// The user's custom window positions and saved layouts (SPEC-094), read again with the settings.
+    @ObservationIgnored private var windowLayouts = WindowLayoutStore()
+
+    /// Fudge's command groups, with the user's own window commands (`BuiltInCommandGroup.all(with:)`).
+    var builtInGroups: [BuiltInCommandGroup] { BuiltInCommandGroup.all(with: windowLayouts) }
+
     private func loadQuicklinks() -> [RootItem] {
         icons = icons.filter { !$0.key.hasPrefix("quicklink:") }
         return QuicklinkStore.load(from: paths.quicklinksFile).quicklinks.map(RootItem.quicklink)
@@ -1638,6 +1645,8 @@ final class LauncherModel {
             /// field is edited.
             case quicklink(QuicklinkDraft, applications: [QuicklinkApplication], problems: QuicklinkDraft.Problems)
             case snippet(SnippetDraft, problems: SnippetDraft.Problems)
+            /// Save Layout… (SPEC-094 §2): the windows it read, and the name's problem after a refused save.
+            case layout(LayoutDraft, problem: String?)
         }
 
         var content: Content
@@ -1647,13 +1656,18 @@ final class LauncherModel {
         var deferred: [HostMessage] = []
 
         var session: String {
-            if case .quicklink = content { QuicklinkForm.session } else { SnippetForm.session }
+            switch content {
+            case .quicklink: QuicklinkForm.session
+            case .snippet: SnippetForm.session
+            case .layout: LayoutForm.session
+            }
         }
 
         var title: String {
             switch content {
             case .quicklink(let draft, _, _): QuicklinkForm.title(for: draft)
             case .snippet(let draft, _): SnippetForm.title(for: draft)
+            case .layout: LayoutForm.title
             }
         }
 
@@ -1663,11 +1677,17 @@ final class LauncherModel {
                 QuicklinkForm.view(draft: draft, problems: problems, applications: applications)
             case .snippet(let draft, let problems):
                 SnippetForm.view(draft: draft, problems: problems)
+            case .layout(let draft, let problem):
+                LayoutForm.view(draft: draft, problem: problem)
             }
         }
 
         var saveNode: Int {
-            if case .quicklink = content { QuicklinkForm.Node.save } else { SnippetForm.Node.save }
+            switch content {
+            case .quicklink: QuicklinkForm.Node.save
+            case .snippet: SnippetForm.Node.save
+            case .layout: LayoutForm.Node.save
+            }
         }
 
         /// Clears the problem of the field `node`, after an edit; false when it had none.
@@ -1688,6 +1708,9 @@ final class LauncherModel {
                 default: return false
                 }
                 content = .snippet(draft, problems: problems)
+            case .layout(let draft, let problem):
+                guard node == LayoutForm.Node.name, problem != nil else { return false }
+                content = .layout(draft, problem: nil)
             }
             return true
         }
@@ -1695,7 +1718,7 @@ final class LauncherModel {
 
     /// The sessions of Fudge's own views, its forms, Search Snippets and Switch Windows, which never reach the host.
     static let builtInSessions: Set<String> = [
-        QuicklinkForm.session, SnippetForm.session, SnippetList.session, SwitchWindowsList.session,
+        QuicklinkForm.session, SnippetForm.session, SnippetList.session, SwitchWindowsList.session, LayoutForm.session,
     ]
 
     @ObservationIgnored private var builtInForm: BuiltInFormState?
@@ -1818,6 +1841,25 @@ final class LauncherModel {
             }
             saved = "Snippet saved"
             snippetsChanged()
+        case .layout(let draft, _):
+            let draft = LayoutForm.draft(draft, with: values)
+            let file = paths.windowLayoutsFile
+            var store = WindowLayoutStore.load(from: file)
+            if let problem = draft.problem(among: store.layouts) {
+                form.content = .layout(draft, problem: problem)
+                builtInForm = form
+                renderBuiltInForm()
+                return
+            }
+            draft.save(into: &store)
+            do {
+                try store.save(to: file)
+            } catch {
+                showFailureToast("Can't save the layout", message: String(describing: error))
+                return
+            }
+            saved = "Layout saved"
+            windowLayoutsChanged()
         }
         let fromRootSearch = form.returnTo == nil
         closeBuiltInForm()
@@ -2556,7 +2598,7 @@ final class LauncherModel {
     /// (`BuiltInCommandGroup`), enabled or not.
     var installedCommandIDs: [String] {
         installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
-            .compactMap(\.commandSettingsID) + BuiltInCommandGroup.commandIDs()
+            .compactMap(\.commandSettingsID) + BuiltInCommandGroup.commandIDs(in: builtInGroups)
     }
 
     /// A command's hotkey was pressed anywhere (`HotKeyLaunch`): open it as root search would, hide the panel if
@@ -2739,6 +2781,10 @@ final class LauncherModel {
             return
         }
         recordLaunch(item)
+        if group == BuiltInCommandGroup.windowManagement.name, let command = windowLayouts.command(named: command) {
+            runUserWindowCommand(command, fromHotkey: fromHotkey)
+            return
+        }
         if group == BuiltInCommandGroup.windowManagement.name, let command = WindowCommand(rawValue: command) {
             // The window to move is the frontmost app's, which the panel never takes from it. A window command never
             // shows the panel, and from root search (or with the panel up) the panel goes first.
@@ -2770,6 +2816,64 @@ final class LauncherModel {
 
     private func recordLaunch(_ item: RootItem) {
         if item.recordsLaunch { recordLaunch(item.id) }
+    }
+
+    // MARK: - Custom positions and saved layouts (SPEC-094)
+
+    /// What the user's own window commands read and move: the system's windows, or none in a snapshot run, which the
+    /// app delegate gives made-up windows (`--layout-windows`) and nothing to move.
+    @ObservationIgnored var windowLayoutActions = WindowLayoutActions.system
+    /// The Settings window reads the positions and layouts again, after Save Layout… saved one; set by the app
+    /// delegate.
+    @ObservationIgnored var windowLayoutsChanged: () -> Void = {}
+
+    /// A custom position, or "Apply <name>", works as the window commands do: the panel goes first, since the window
+    /// to move is the frontmost app's, and the HUD says what happened. Save Layout… reads the windows, then asks for
+    /// a name in the panel.
+    private func runUserWindowCommand(_ command: UserWindowCommand, fromHotkey: Bool) {
+        switch command {
+        case .position(let position):
+            if !fromHotkey { searchText = "" }
+            if isVisible() { hide() }
+            Task {
+                if let message = await windowLayoutActions.position(position.frame) { showHUD(message) }
+            }
+        case .layout(let layout):
+            if !fromHotkey { searchText = "" }
+            if isVisible() { hide() }
+            Task { showHUD(await windowLayoutActions.apply(layout)) }
+        case .saveLayout:
+            Task { await saveLayout(fromHotkey: fromHotkey) }
+        }
+    }
+
+    /// Save Layout…: reads every standard window on the screens, then shows the Save Layout form for its name. From
+    /// its hotkey, it works as a view command's does: over whatever the panel shows (after Pop to Root Search's reset,
+    /// when that's due), or it hides the panel when the form is on screen already. From root search, the form shows
+    /// only if the panel is still up once the windows are read.
+    private func saveLayout(fromHotkey: Bool) async {
+        if fromHotkey, isVisible(), builtInForm?.session == LayoutForm.session {
+            hide()
+            return
+        }
+        guard let windows = await windowLayoutActions.capture() else {
+            showHUD(SystemCalls.accessibilityNeededForWindows)
+            return
+        }
+        guard !windows.isEmpty else {
+            showHUD("There are no windows to save.")
+            return
+        }
+        let form = BuiltInFormState(content: .layout(LayoutDraft(windows: windows), problem: nil))
+        guard fromHotkey else {
+            if isVisible(), case .root = screen { showBuiltInForm(form) }
+            return
+        }
+        resettingFirst {
+            if case .command = screen { leaveCommand() }
+            showBuiltInForm(form)
+            show()
+        }
     }
 
     /// "Quit Fudge" asks first: its hotkeys stop working until Fudge is opened again.
@@ -3774,7 +3878,8 @@ final class LauncherModel {
         case .createSnippet:
             image = NSImage(systemSymbolName: "text.badge.plus", accessibilityDescription: nil)!
         case .builtInCommand(let group, let command):
-            let symbol = BuiltInCommandGroup.command(group: group, command: command)?.command.symbol
+            let symbol = BuiltInCommandGroup.command(group: group, command: command, in: builtInGroups)?.command
+                .symbol
             image =
                 symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }
                 ?? NSImage(systemSymbolName: "command", accessibilityDescription: nil)!
