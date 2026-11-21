@@ -31,6 +31,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The Quick Look preview (SPEC-049). Never in snapshot runs.
     private var quickLook: QuickLookPreview?
 
+    func applicationWillTerminate(_ notification: Notification) {
+        // Clipboard History's decrypted image copies don't outlive the run.
+        model?.clipboardHistory.clearPreviews()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = Self.mainMenu()
         model = LauncherModel(paths: paths)
@@ -39,6 +44,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let files = snapshot.foundFiles.map { FixedFileQuery.load($0, home: FileSearchOptions.home()) } ?? []
             model.fileSearch = FileSearch { FixedFileQuery(files) }
             model.templateClipboard = { nil }
+            // Nor the clipboard or the Keychain: Clipboard History gets `--clipboard-entries`' made-up entries.
+            if let file = snapshot.clipboardEntries {
+                model.clipboardHistory = ClipboardHistoryService(
+                    paths: paths, secrets: MemorySecretStore(), turns: SystemCalls.pasteboardTurns,
+                    fixed: ClipboardHistoryService.fixedHistory(from: file))
+            }
         }
         panel = LauncherPanel(content: LauncherView(model: model))
         settingsModel = SettingsModel(paths: paths)
@@ -95,6 +106,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.extensionStoreChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.quicklinksChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.snippetsChanged = { [weak self] in self?.model.reloadSnippetList() }
+        settingsModel.clipboardHistoryChanged = { [weak self] in self?.model.applySettings() }
+        settingsModel.deleteClipboardHistory = { [weak self] in self?.model.clipboardHistory.deleteAll() }
         settingsModel.stopExtensionStore = { [weak self] in
             await self?.model.unloadSessions(ofExtension: ExtensionStore.extensionName)
         }
@@ -610,9 +623,14 @@ struct Snapshot {
     let signIns: MemorySecretStore
     /// `--sign-in-consent`: picks Fudge's sign-in server on the Sign-in page and saves its consent sheet instead.
     let signInConsent: Bool
+    /// `--clipboard-consent`: turns on Clipboard History's switch and saves its consent sheet instead.
+    let clipboardConsent: Bool
     /// `--found-files <file>`: Search Files' results, a JSON array of `files.search` entries (`~/` paths are in the
     /// home folder). Snapshots never ask Spotlight, so without it there are none.
     let foundFiles: URL?
+    /// `--clipboard-entries <file>`: Clipboard History's made-up entries, a JSON array of `clipboardHistory.list`
+    /// entries. Snapshots never read the clipboard.
+    let clipboardEntries: URL?
 
     init?(arguments: [String]) {
         guard let index = arguments.firstIndex(of: "--snapshot"), index + 1 < arguments.count else { return nil }
@@ -648,7 +666,9 @@ struct Snapshot {
             try? signIns.write(JSONEncoder().encode(tokens), account: parts[0])
         }
         signInConsent = arguments.contains("--sign-in-consent")
+        clipboardConsent = arguments.contains("--clipboard-consent")
         foundFiles = value("--found-files").map { URL(fileURLWithPath: $0) }
+        clipboardEntries = value("--clipboard-entries").map { URL(fileURLWithPath: $0) }
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1
@@ -660,9 +680,18 @@ struct Snapshot {
     }
 
     func take(of controller: SettingsWindowController) {
-        controller.renderOffscreen(extension: signInConsent ? SettingsModel.signInPage : settingsExtension)
-        if signInConsent {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { controller.model.setSignInServer(.fudge) }
+        let page =
+            signInConsent
+            ? SettingsModel.signInPage : clipboardConsent ? ClipboardHistory.extensionName : settingsExtension
+        controller.renderOffscreen(extension: page)
+        if signInConsent || clipboardConsent {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [signInConsent] in
+                if signInConsent {
+                    controller.model.setSignInServer(.fudge)
+                } else {
+                    controller.model.setClipboardHistory(true)
+                }
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 guard let view = controller.snapshotSheet?.contentView else { exit(1) }
                 save(view)

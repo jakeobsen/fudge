@@ -13,7 +13,7 @@ APP       := build/Fudge.app
 # The disk image a release ships, named after the version without its leading v (Fudge-0.3.0.dmg).
 DMG       := build/Fudge-$(patsubst v%,%,$(VERSION)).dmg
 # The extensions bundled with the app, as BundledExtensions.folders lists them.
-BUNDLED_EXTENSIONS := store-extension file-search-extension emoji-extension
+BUNDLED_EXTENSIONS := store-extension file-search-extension emoji-extension clipboard-history-extension
 SWIFT_BIN  =$(shell swift build -c $(CONFIG) --show-bin-path)
 # esbuild's native binary, installed with the extension host's dependencies.
 ESBUILD    = $(firstword $(wildcard runtime/node_modules/@esbuild/darwin-*/bin/esbuild))

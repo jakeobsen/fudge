@@ -8,9 +8,11 @@ import {
     accessoryTexts,
     allFilter,
     categories,
+    distinctFolders,
     filterEntries,
     iconURL,
     installedFilter,
+    isValidName,
     parseManifest,
     readCatalog,
     searchKeywords,
@@ -45,6 +47,7 @@ import {
 } from "../store-extension/src/sources.ts";
 import {
     buildArguments,
+    bundledNames,
     compatibilityLine,
     install,
     oneAtATime,
@@ -85,11 +88,31 @@ async function writeJSON(file: string, value: unknown): Promise<void> {
 
 // MARK: - Names and the catalog
 
-test("a manifest's name must be valid and equal its folder's", () => {
+test("the name rule is the app's: one fixture pins both", async () => {
+    const names = JSON.parse(await readFile(new URL("./fixtures/extension-names.json", import.meta.url), "utf8")) as {
+        valid: string[];
+        invalid: string[];
+    };
+    assert.ok(names.valid.length > 0 && names.invalid.length > 0);
+    for (const name of names.valid) assert.ok(isValidName(name), name);
+    for (const name of names.invalid) assert.ok(!isValidName(name), name);
+});
+
+test("a manifest's name and its folder each pass their own rule, and may differ", () => {
     assert.equal(parseManifest("alpha", manifest("alpha"))?.name, "alpha");
-    assert.equal(parseManifest("alpha", manifest("beta")), undefined, "a mismatched name");
-    for (const bad of ["Alpha", "-alpha", "al pha", "../alpha", "alpha/x", "al*pha", "", ".alpha"]) {
-        assert.equal(parseManifest(bad, manifest(bad)), undefined, bad);
+    const aws = parseManifest("amazon-aws", manifest("aws"))!;
+    assert.deepEqual([aws.name, aws.dir], ["aws", "amazon-aws"], "amazon-aws holds aws");
+    for (const folder of ["CodeBlocks", "http.cat", "notion_researcher", "Bilibili", "transfer-sh_upload", "8ball"]) {
+        assert.equal(parseManifest(folder, manifest("fine"))?.dir, folder, `folder ${folder}`);
+    }
+    for (const bad of ["..", ".", ".hidden", "a/b", "", "-alpha", "_alpha", "al pha", "al*pha", "al?pha", "a\\b", "[a]"]) {
+        assert.equal(parseManifest(bad, manifest("fine")), undefined, `folder ${JSON.stringify(bad)}`);
+    }
+    for (const bad of ["Alpha", "-alpha", "_alpha", "al pha", "../alpha", "alpha/x", "al*pha", "", ".alpha", "a.b"]) {
+        assert.equal(parseManifest("fine", manifest(bad)), undefined, `name ${JSON.stringify(bad)}`);
+    }
+    for (const name of ["notion_researcher", "solana_nodes", "liba-ro_shortener"]) {
+        assert.equal(parseManifest(name, manifest(name))?.name, name, `${name} installs, as Raycast's rule allows _`);
     }
     assert.equal(parseManifest("alpha", manifest("alpha", { commands: [] })), undefined, "no commands");
     assert.equal(parseManifest("alpha", { ...manifest("alpha"), title: 5 }), undefined, "no title");
@@ -100,6 +123,7 @@ test("an entry has the manifest's fields, and only a plain icon file name", () =
     const entry = parseManifest("alpha", manifest("alpha"))!;
     assert.deepEqual(entry, {
         name: "alpha",
+        dir: "alpha",
         title: "Alpha",
         description: "The alpha extension",
         author: "someone",
@@ -121,8 +145,10 @@ test("the catalog reads valid manifests only, sorted by title", async () => {
     const repo = await temporary();
     await writeJSON(path.join(repo, "extensions/zeta/package.json"), manifest("zeta"));
     await writeJSON(path.join(repo, "extensions/alpha/package.json"), manifest("alpha"));
-    await writeJSON(path.join(repo, "extensions/mismatch/package.json"), manifest("other"));
+    await writeJSON(path.join(repo, "extensions/amazon-aws/package.json"), manifest("aws", { title: "Amazon AWS" }));
+    await writeJSON(path.join(repo, "extensions/http.cat/package.json"), manifest("http-cat", { title: "HTTP Cat" }));
     await writeJSON(path.join(repo, "extensions/Upper/package.json"), manifest("Upper"));
+    await writeJSON(path.join(repo, "extensions/.hidden/package.json"), manifest("hidden"));
     await writeJSON(path.join(repo, "extensions/empty/package.json"), manifest("empty", { commands: [] }));
     await mkdir(path.join(repo, "extensions/no-manifest"), { recursive: true });
     await writeFile(path.join(repo, "extensions/broken-json"), "");
@@ -130,10 +156,20 @@ test("the catalog reads valid manifests only, sorted by title", async () => {
     await writeFile(path.join(repo, "extensions/broken/package.json"), "{ not json");
     const entries = await readCatalog(repo);
     assert.deepEqual(
-        entries.map((entry) => entry.name),
-        ["alpha", "zeta"],
+        entries.map((entry) => [entry.name, entry.dir]),
+        [
+            ["alpha", "alpha"],
+            ["aws", "amazon-aws"],
+            ["http-cat", "http.cat"],
+            ["zeta", "zeta"],
+        ],
+        "by title; Upper's name isn't valid, and .hidden isn't a folder the store reads",
     );
     assert.deepEqual(await readCatalog(path.join(repo, "missing")), []);
+});
+
+test("folders that differ only by case are one folder, as on APFS", () => {
+    assert.deepEqual(distinctFolders(["dup", "Zeta", "Dup", "alpha", "DUP"]), ["DUP", "Zeta", "alpha"]);
 });
 
 // MARK: - Rows
@@ -141,17 +177,33 @@ test("the catalog reads valid manifests only, sorted by title", async () => {
 const alpha = parseManifest("alpha", manifest("alpha", { categories: ["Productivity", "Developer Tools"] }))!;
 const beta = parseManifest("beta", manifest("beta", { author: "", commands: [{ name: "a", title: "A" }, { name: "b", title: "B" }] }))!;
 const gamma = parseManifest("gamma", manifest("gamma", { categories: ["Media"] }))!;
-const record = (tree: string) => ({ tree, commit: "c1", installedAt: "2026-11-20T00:00:00.000Z" });
+const record = (tree: string, dir: string) => ({ tree, commit: "c1", installedAt: "2026-11-20T00:00:00.000Z", dir });
 
 test("installed and update come from installed.json and the folder's tree id", () => {
     const trees = new Map([
         ["alpha", "t1"],
         ["beta", "t2-new"],
     ]);
-    const installed = { alpha: record("t1"), beta: record("t2") };
+    const installed = { alpha: record("t1", "alpha"), beta: record("t2", "beta") };
     assert.equal(status(alpha, installed, trees), "installed");
     assert.equal(status(beta, installed, trees), "update");
     assert.equal(status(gamma, installed, trees), "available");
+});
+
+test("two folders with one name: only the folder it was installed from is installed, and its tree is compared", () => {
+    const first = parseManifest("world-clock", manifest("world-clock"))!;
+    const second = parseManifest("world-clock-2", manifest("world-clock"))!;
+    const installed = { "world-clock": record("t1", "world-clock") };
+    const trees = new Map([
+        ["world-clock", "t1"],
+        ["world-clock-2", "t9"],
+    ]);
+    assert.equal(status(first, installed, trees), "installed");
+    assert.equal(status(second, installed, trees), "available", "the other folder's newer tree isn't an update");
+    assert.equal(status(first, installed, new Map([["world-clock", "t2"]])), "update");
+    assert.equal(status(parseManifest("World-Clock", manifest("world-clock"))!, installed, trees), "installed", "APFS ignores case");
+    assert.deepEqual(filterEntries([first, second], installedFilter, installed), [first]);
+    assert.deepEqual(sections([first, second], installed).other, [second]);
 });
 
 test("rows show the author, the commands and the state; search includes keywords, author and name", () => {
@@ -160,11 +212,12 @@ test("rows show the author, the commands and the state; search includes keywords
     assert.deepEqual(accessoryTexts(gamma, "available"), [{ text: "someone" }, { text: "1 command" }]);
     assert.deepEqual(searchKeywords(alpha), ["word", "someone", "alpha"]);
     assert.deepEqual(searchKeywords(beta), ["word", "beta"]);
+    assert.deepEqual(searchKeywords(parseManifest("amazon-aws", manifest("aws"))!), ["word", "someone", "aws", "amazon-aws"]);
 });
 
 test("the category and Installed filters, and installed ones first", () => {
     const entries: StoreEntry[] = [gamma, beta, alpha];
-    const installed = { gamma: record("t") };
+    const installed = { gamma: record("t", "gamma") };
     assert.deepEqual(categories(entries), ["Developer Tools", "Media", "Productivity"]);
     assert.deepEqual(filterEntries(entries, allFilter, installed), entries);
     assert.deepEqual(filterEntries(entries, installedFilter, installed), [gamma]);
@@ -470,6 +523,14 @@ test("everything in the detail goes through the filter, the manifest's text incl
     assert.match(detailMarkdown(entry, "c0ffee", undefined), /Loading the README/);
 });
 
+test("the detail names the repository folder when it differs from the name, and links to the folder", () => {
+    const aws = parseManifest("amazon-aws", manifest("aws", { title: "Amazon AWS" }))!;
+    const detail = detailMarkdown(aws, "abc123", "");
+    assert.ok(detail.includes("In the repository as `amazon-aws`"), detail);
+    assert.ok(detail.includes("https://github.com/raycast/extensions/tree/abc123/extensions/amazon-aws"), detail);
+    assert.ok(!detailMarkdown(alpha, "abc123", "").includes("In the repository as"), "not when they're the same");
+});
+
 test("the detail lists each command with its mode", () => {
     const entry = parseManifest(
         "alpha",
@@ -676,7 +737,14 @@ test("without the Command Line Tools, git itself is never run", async () => {
 const supportedScan = { extension: "alpha", supported: true, gaps: [], unreadable: [] };
 
 async function storeContext(
-    options: { confirm?: boolean; cliCode?: number; tree?: string; scan?: { code?: number; stdout?: string } } = {},
+    options: {
+        confirm?: boolean;
+        cliCode?: number;
+        tree?: string;
+        scan?: { code?: number; stdout?: string };
+        /** More folders in the repository: each with its manifest's name and its tree id. */
+        folders?: { dir: string; name: string; tree: string }[];
+    } = {},
 ) {
     const root = await temporary();
     const supportPath = path.join(root, "support");
@@ -684,9 +752,16 @@ async function storeContext(
     const repoPath = path.join(supportPath, "repo");
     await mkdir(extensionsDir, { recursive: true });
     await writeJSON(path.join(repoPath, "extensions/alpha/package.json"), manifest("alpha", { dependencies: { a: "^1" } }));
+    for (const folder of options.folders ?? []) {
+        await writeJSON(path.join(repoPath, "extensions", folder.dir, "package.json"), manifest(folder.name));
+    }
     const git = fakeRun((_program, args) => {
         if (args[0] === "rev-parse") return { stdout: "c0ffee1234\n" };
-        if (args[0] === "ls-tree") return { stdout: `040000 tree ${options.tree ?? "aaa1"}\textensions/alpha\n` };
+        if (args[0] === "ls-tree") {
+            const lines = [`040000 tree ${options.tree ?? "aaa1"}\textensions/alpha`];
+            for (const folder of options.folders ?? []) lines.push(`040000 tree ${folder.tree}\textensions/${folder.dir}`);
+            return { stdout: `${lines.join("\n")}\n` };
+        }
         return {};
     });
     const cli = fakeRun((_program, args) =>
@@ -734,8 +809,75 @@ test("install fetches the source, checks it, asks, builds into FUDGE_EXTENSIONS_
     ]);
     assert.deepEqual(buildArguments("/src", "/dest"), ["build", "/src", "--into", "/dest"]);
     assert.deepEqual(await readInstalled(supportPath), {
-        alpha: { tree: "aaa1", commit: "c0ffee1234", installedAt: "2026-11-20T12:00:00.000Z" },
+        alpha: { tree: "aaa1", commit: "c0ffee1234", installedAt: "2026-11-20T12:00:00.000Z", dir: "alpha" },
     });
+});
+
+test("a folder whose manifest has another name installs from the folder, under the name, and records both", async () => {
+    const { context, git, cli, supportPath, extensionsDir, repoPath } = await storeContext({
+        folders: [{ dir: "amazon-aws", name: "aws", tree: "a5a1" }],
+    });
+    const aws = parseManifest("amazon-aws", manifest("aws", { title: "Amazon AWS" }))!;
+    assert.equal(await install(aws, context), true);
+    assert.deepEqual(git.calls[0]!.args, ["sparse-checkout", "add", "/extensions/amazon-aws/"]);
+    assert.deepEqual(cli.calls.at(-1)!.args, ["build", path.join(repoPath, "extensions/amazon-aws"), "--into", extensionsDir]);
+    assert.deepEqual((await readInstalled(supportPath)).aws, {
+        tree: "a5a1",
+        commit: "c0ffee1234",
+        installedAt: "2026-11-20T12:00:00.000Z",
+        dir: "amazon-aws",
+    });
+    // fudge build installs under the manifest's name, so `<extensions>/aws` is what's checked and trashed.
+    await mkdir(path.join(extensionsDir, "aws"));
+    assert.equal(await uninstall(aws, context), true);
+});
+
+test("two folders with one name: the second can't install over the first, and updates follow the first's folder", async () => {
+    const { context, supportPath, extensionsDir, asked } = await storeContext({
+        folders: [
+            { dir: "world-clock", name: "world-clock", tree: "c10c1" },
+            { dir: "world-clock-2", name: "world-clock", tree: "c10c2" },
+        ],
+    });
+    const first = parseManifest("world-clock", manifest("world-clock"))!;
+    const second = parseManifest("world-clock-2", manifest("world-clock"))!;
+    assert.equal(await install(first, context), true);
+    await mkdir(path.join(extensionsDir, "world-clock"));
+    await assert.rejects(install(second, context), (error: unknown) => {
+        assert.ok(error instanceof StoreError);
+        assert.equal(error.message, "Another extension called world-clock is installed. Uninstall it first.");
+        return true;
+    });
+    await assert.rejects(uninstall(second, context), /wasn't installed by the store/, "nor removed through the other row");
+    assert.equal(await install(first, context), true, "updating the first one");
+    assert.equal(asked.at(-1)!.title, "Update World-clock?");
+    assert.equal((await readInstalled(supportPath))["world-clock"]?.dir, "world-clock");
+});
+
+test("the bundled names are the Makefile's bundled extensions' own names", async () => {
+    const runtime = new URL("..", import.meta.url);
+    const makefile = await readFile(new URL("../Makefile", runtime), "utf8");
+    const folders = /^BUNDLED_EXTENSIONS\s*:=\s*(.+)$/m.exec(makefile)![1]!.trim().split(/\s+/);
+    const names = await Promise.all(
+        folders.map(async (folder) => (JSON.parse(await readFile(new URL(`${folder}/package.json`, runtime), "utf8")) as { name: string }).name),
+    );
+    assert.deepEqual([...bundledNames].sort(), names.sort());
+});
+
+test("an extension Fudge bundles is never installed from the store", async () => {
+    const { context, git } = await storeContext();
+    for (const name of bundledNames) {
+        const bundled = parseManifest(name, manifest(name))!;
+        await assert.rejects(install(bundled, context), new RegExp(`${name} is part of Fudge`));
+    }
+    assert.equal(git.calls.length, 0);
+});
+
+test("a manifest whose name changed since the list loaded is refused before anything is built", async () => {
+    const { context, cli, repoPath } = await storeContext();
+    await writeJSON(path.join(repoPath, "extensions/alpha/package.json"), manifest("renamed"));
+    await assert.rejects(install(alphaEntry, context), /Alpha has changed in the store's copy\. Refresh the list/);
+    assert.equal(cli.calls.length, 0);
 });
 
 test("cancelling builds nothing and records nothing", async () => {
@@ -750,7 +892,7 @@ test("a name clash with an extension the store didn't install is refused before 
     await mkdir(path.join(extensionsDir, "alpha"));
     await assert.rejects(install(alphaEntry, context), (error: unknown) => {
         assert.ok(error instanceof StoreError);
-        assert.equal(error.message, "An extension named alpha is already installed (not from the store)");
+        assert.equal(error.message, "Another extension called alpha is installed. Uninstall it first.");
         return true;
     });
     assert.equal(git.calls.length, 0);
@@ -773,7 +915,7 @@ test("a failed build shows the CLI's message and records nothing", async () => {
 
 test("updating an installed extension asks to update and records the new tree", async () => {
     const { context, asked, supportPath, extensionsDir } = await storeContext({ tree: "bbb2" });
-    await writeInstalled(supportPath, { alpha: { tree: "aaa1", commit: "old", installedAt: "x" } });
+    await writeInstalled(supportPath, { alpha: { tree: "aaa1", commit: "old", installedAt: "x", dir: "alpha" } });
     await mkdir(path.join(extensionsDir, "alpha"));
     assert.equal(await install(alphaEntry, context), true, "its own folder isn't a clash");
     assert.equal(asked[0]!.title, "Update Alpha?");
@@ -784,7 +926,7 @@ test("uninstall trashes only what the store installed, and forgets it", async ()
     const { context, trashed, supportPath, extensionsDir } = await storeContext();
     await assert.rejects(uninstall(alphaEntry, context), /wasn't installed by the store/);
     await mkdir(path.join(extensionsDir, "alpha"));
-    await writeInstalled(supportPath, { alpha: { tree: "t", commit: "c", installedAt: "x" } });
+    await writeInstalled(supportPath, { alpha: { tree: "t", commit: "c", installedAt: "x", dir: "alpha" } });
     assert.equal(await uninstall(alphaEntry, context), true);
     assert.deepEqual(trashed, [path.join(extensionsDir, "alpha")]);
     assert.deepEqual(await readInstalled(supportPath), {});
@@ -857,17 +999,23 @@ test("install's confirmation carries the scan's gaps, and a failed scan doesn't 
     }
 });
 
-test("installed.json drops invalid names and records; a broken file reads as empty", async () => {
+test("installed.json drops invalid names, folders and records; an entry without a folder came from its name's", async () => {
     const support = await temporary();
     await writeFile(
         path.join(support, "installed.json"),
         JSON.stringify({
             alpha: { tree: "t", commit: "c", installedAt: "x" },
+            aws: { tree: "t", commit: "c", installedAt: "x", dir: "amazon-aws" },
+            notion_researcher: { tree: "t", commit: "c", installedAt: "x", dir: "notion_researcher" },
             "../escape": { tree: "t", commit: "c", installedAt: "x" },
+            gamma: { tree: "t", commit: "c", installedAt: "x", dir: "../out" },
             beta: { tree: 5 },
         }),
     );
-    assert.deepEqual(Object.keys(await readInstalled(support)), ["alpha"]);
+    const installed = await readInstalled(support);
+    assert.deepEqual(Object.keys(installed), ["alpha", "aws", "notion_researcher"]);
+    assert.equal(installed.alpha?.dir, "alpha", "written before folders were recorded");
+    assert.equal(installed.aws?.dir, "amazon-aws");
     await writeFile(path.join(support, "installed.json"), "{ broken");
     assert.deepEqual(await readInstalled(support), {});
     assert.deepEqual(await readInstalled(path.join(support, "missing")), {});
@@ -915,7 +1063,7 @@ test("clone, list, fetch a README on demand, and see an update after a refresh",
     await assert.rejects(readFile(path.join(repo.path, "extensions/alpha/src.ts")), "nothing else of it yet");
 
     const before = await repo.trees();
-    const installed = { alpha: { tree: before.get("alpha")!, commit: await repo.commit(), installedAt: "x" } };
+    const installed = { alpha: { tree: before.get("alpha")!, commit: await repo.commit(), installedAt: "x", dir: "alpha" } };
     assert.equal(status(parseManifest("alpha", manifest("alpha"))!, installed, before), "installed");
 
     await writeFile(path.join(source, "extensions/alpha/src.ts"), "export const changed = 1;\n");

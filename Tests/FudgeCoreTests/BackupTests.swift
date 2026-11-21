@@ -157,6 +157,38 @@ private func seeded() throws -> Folder {
     }
 }
 
+@Test func anExtensionWhoseNameHasAnUnderscoreRoundTrips() throws {
+    // Raycast allows _ in an extension's name (notion_researcher), so everything kept under that name comes back.
+    let name = "notion_researcher"
+    let source = try Folder()
+    try source.write("settings.json", #"{"commands":{"\#(name)/ask":{"alias":"nr"}},"extensions":{"\#(name)":{}}}"#)
+    try source.write("launch-permissions.json", #"{"\#(name)":{"alpha":true}}"#)
+    try source.write("history.json", #"{"\#(name)/ask":2}"#)
+    try source.write("dropdown-values.json", #"{"\#(name)/ask/kind":"b"}"#)
+    try source.write("preferences/\(name).json", #"{"token":"t"}"#)
+    try source.write("local-storage/\(name).json", #"{"k":"v"}"#)
+    try source.write("form-values/\(name).json", #"{"ask":{"q":"x"}}"#)
+    try source.write("extension-data/\(name)/notes.txt", "kept")
+    let export = Backup.collect(
+        from: source.paths, installed: [try installed(name, title: "Notion Researcher")], fudgeVersion: "1.0", now: now)
+    #expect(export.leftOut.isEmpty && export.skipped == 0)
+    let file = source.url.appendingPathComponent("out/b.fudgebackup")
+    try BackupArchive.write(export.entries, to: file, password: password)
+    let contents = try Backup.open(file, password: password)
+    #expect(contents.manifest.extensions.map(\.name) == [name])
+
+    let target = try Folder()
+    _ = try Backup.apply(contents, to: target.paths, installed: [], fudgeVersion: "1.0", now: now)
+    for path in [
+        "launch-permissions.json", "history.json", "preferences/\(name).json", "local-storage/\(name).json",
+        "form-values/\(name).json", "extension-data/\(name)/notes.txt",
+    ] {
+        #expect(target.read(path) == source.read(path), "\(path)")
+    }
+    #expect(target.json("dropdown-values.json") as? [String: String] == ["\(name)/ask/kind": "b"])
+    #expect((target.json("settings.json")?["commands"] as? [String: Any])?["\(name)/ask"] != nil)
+}
+
 @Test func aWrongPasswordOrADamagedFileFailsCleanly() throws {
     let source = try seeded()
     let export = Backup.collect(from: source.paths, installed: [], fudgeVersion: "1.0", now: now)

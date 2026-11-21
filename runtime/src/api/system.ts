@@ -21,6 +21,15 @@ function normalize(content: Content): { text?: string; html?: string; file?: str
     return { text: content.text };
 }
 
+/**
+ * `clipboard.read`'s params. Offset 0 is the current clipboard, and n above 0 the nth previous copy in Fudge's clipboard
+ * history, which the app answers with null while history is off. Raycast's minimum is 0, so less is the current
+ * clipboard too, and never reaches the history.
+ */
+function readParams(offset: number | undefined): { offset: number } {
+    return { offset: offset !== undefined && offset > 0 ? offset : 0 };
+}
+
 export const Clipboard = {
     async copy(content: Content, options: { concealed?: boolean; transient?: boolean } = {}): Promise<void> {
         await callApp("clipboard.copy", { ...normalize(content), concealed: options.concealed ?? false, transient: options.transient ?? false });
@@ -28,12 +37,14 @@ export const Clipboard = {
     async clear(): Promise<void> {
         await callApp("clipboard.clear");
     },
+    /** Nothing there, no history, or no such entry reads as an empty text: Raycast's `ReadContent` always has one. */
     async read(options: { offset?: number } = {}): Promise<{ text: string; file?: string; html?: string }> {
-        const content = await callApp<{ text: string; file?: string; html?: string } | null>("clipboard.read", { offset: options.offset ?? 0 });
+        const content = await callApp<{ text: string; file?: string; html?: string } | null>("clipboard.read", readParams(options.offset));
         return content ?? { text: "" };
     },
+    /** Nothing there, no history, or no such entry reads as `undefined`. */
     async readText(options: { offset?: number } = {}): Promise<string | undefined> {
-        const content = await callApp<{ text?: string } | null>("clipboard.read", { offset: options.offset ?? 0 });
+        const content = await callApp<{ text?: string } | null>("clipboard.read", readParams(options.offset));
         return content?.text;
     },
     /**

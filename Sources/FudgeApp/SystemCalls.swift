@@ -33,8 +33,8 @@ enum SystemCalls {
     private static let keys = SystemCopyKey()
     private static let pasteboard = SystemPasteboard()
     /// Shared by pasting and reading the selection's ⌘C fallback, so neither snapshots the pasteboard while the
-    /// other's content is on it.
-    private static let pasteboardTurns = PasteboardTurns()
+    /// other's content is on it. Clipboard history asks them which changes were Fudge's own.
+    static let pasteboardTurns = PasteboardTurns()
     private static let selectedText = SelectedText(
         accessibility: accessibility, keys: keys, pasteboard: pasteboard,
         ownPid: ProcessInfo.processInfo.processIdentifier, turns: pasteboardTurns, gate: gate)
@@ -56,7 +56,7 @@ enum SystemCalls {
             NSPasteboard.general.clearContents()
             return .null
         case "clipboard.read":
-            // fudge has no clipboard history yet, so only the current item (offset 0) exists.
+            // An offset above 0 is clipboard history's, answered by `LauncherModel` before it gets here.
             guard (params.number("offset") ?? 0) == 0 else { return .null }
             return read()
         case "open":
@@ -117,6 +117,19 @@ enum SystemCalls {
         try await paster.paste(
             PasteboardContents.forPaste(text: text, html: nil, file: nil), closeMainWindow: true,
             origin: .userInitiated, leftArrows: leftArrows, hideWindow: hideWindow, frontmost: frontmost)
+    }
+
+    /// Pastes `contents` into the frontmost app as `clipboard.paste` does: clipboard history's Paste.
+    static func paste(
+        _ contents: PasteboardContents, origin: CallOrigin, hideWindow: () async -> Void
+    ) async throws {
+        try await paster.paste(
+            contents, closeMainWindow: true, origin: origin, hideWindow: hideWindow, frontmost: frontmost)
+    }
+
+    /// Puts `contents` on the clipboard: clipboard history's Copy.
+    static func write(_ contents: PasteboardContents) {
+        pasteboard.replace(with: contents)
     }
 
     /// `WindowManagement` (`windows.*`). It needs Accessibility permission, checked as Paste checks it, and runs off

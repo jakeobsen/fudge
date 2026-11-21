@@ -151,6 +151,19 @@ private struct Rig {
     #expect(!none.log.events.contains { $0.hasPrefix("←") }, "with no app to paste into, no ← either")
 }
 
+@Test @MainActor func aPasteAndItsRestoreAreMarkedAsFudgesOwnForClipboardHistory() async throws {
+    let rig = Rig()
+    let before = rig.pasteboard.changeCount
+    #expect(!rig.turns.isOwn(before), "the user's copy")
+    try await rig.run("pasted")
+    #expect(rig.turns.isOwn(rig.pasteboard.changeCount), "the paste's write")
+    #expect(rig.turns.isBusy, "its restore is still to come")
+    await rig.afterRestore()
+    #expect(rig.pasteboard.plainText() == "user's clipboard")
+    #expect(rig.turns.isOwn(rig.pasteboard.changeCount), "the restore's write")
+    #expect(!rig.turns.isBusy)
+}
+
 @Test @MainActor func keepsThePanelWhenAskedTo() async throws {
     let rig = Rig()
     try await rig.run("pasted", closeMainWindow: false)

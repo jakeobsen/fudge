@@ -124,6 +124,7 @@ public final class Paste {
         pending = nil
         pasteboard.replace(with: content)
         let written = pasteboard.changeCount
+        turns.markOwn(written)
 
         // Without permission the content stays on the pasteboard, so the user can paste it themselves.
         guard gate.isTrusted(origin: origin) else { throw PasteError.accessibilityNeeded }
@@ -149,5 +150,6 @@ public final class Paste {
     private func restore(_ snapshot: PasteboardContents, ifStill written: Int) {
         guard pasteboard.changeCount == written else { return }
         pasteboard.replace(with: snapshot)
+        turns.markOwn(pasteboard.changeCount)
     }
 }

@@ -13,6 +13,7 @@ Fudge is an independent project. It is not affiliated with or endorsed by Raycas
 - `runtime/store-extension/`: the Extension Store, an extension bundled with Fudge that lists and installs the extensions published in github.com/raycast/extensions.
 - `runtime/file-search-extension/`: Search Files, an extension bundled with Fudge that finds files and folders by name.
 - `runtime/emoji-extension/`: Search Emoji & Symbols, an extension bundled with Fudge that finds emoji by name and pastes them.
+- `runtime/clipboard-history-extension/`: Clipboard History, an extension bundled with Fudge that lists what you copied.
 
 ## Installing
 
@@ -151,6 +152,15 @@ In **Settings… → Search Files**, **Search In** picks your home folder (the d
 
 In **Settings… → Search Emoji & Symbols**, **Skin Tone** picks the tone for the emoji that have one.
 
+### Clipboard History
+
+**Clipboard History** keeps what you copy, so you can search it and paste it again. It's off until you turn on **Keep Clipboard History** in **Settings… → Clipboard History**. The history is encrypted on this Mac, and copies that password managers mark as private aren't kept. Extensions can read it, as in Raycast.
+
+- ↵ pastes a copy into the app you're in, and ⌘↵ copies it. ⇧⌘P pins it, so it's kept however old it gets.
+- ⌃X deletes a copy, and ⌃⇧X deletes them all, after asking.
+
+On the same page, **Keep For** sets how long copies are kept (7 days by default), **Ignore Apps** lists apps whose copies aren't kept, and **Clear History…** deletes everything. Turning the switch off asks whether to keep or delete what's there.
+
 ### Extension Store
 
 The Extension Store browses the extensions in Raycast's open-source repository and installs the ones you choose. It takes two steps:
@@ -165,7 +175,7 @@ In the **Extension Store** command, search the extensions, or pick a category in
 - ↵ installs one, after saying whether Fudge supports everything it uses. ⌘U updates one marked **Update available**, and ⌃X uninstalls it, to the Trash.
 - ⌘D shows an extension's details, with each command and whether it opens a view, runs without one, or sits in the menu bar, and its README. ⌘R updates the list, which otherwise happens when you open the store and the list is a day old. If the list couldn't be downloaded, ⌘R tries again.
 - The store needs Git. If it's missing, install Apple's Command Line Tools: run `xcode-select --install` in Terminal.
-- It never touches extensions you installed with `fudge build` yourself.
+- It never touches extensions you installed with `fudge build` yourself. An extension installs under its own name, so it can't be installed while another extension of that name is: uninstall that one first.
 
 ### Signing in
 

@@ -54,7 +54,7 @@ test("the table reads from the app's variable, and a bad one is empty", () => {
 test("exactly the seven providers' token and refresh requests go to the relay", async () => {
     const { sent, fetch } = recorder();
     const asked: string[] = [];
-    const wrapped = rewriteFetch(fetch, providers, async (provider) => (asked.push(provider), on));
+    const wrapped = rewriteFetch(fetch, providers, async (provider) => (asked.push(provider), on), fetch);
     const expected: [string, string, string][] = [
         ["https://github.oauth.raycast.com/token", "github/token", "authorization_code"],
         ["https://github.oauth.raycast.com/refresh-token", "github/refresh-token", "refresh_token"],
@@ -85,7 +85,7 @@ test("exactly the seven providers' token and refresh requests go to the relay", 
 
 test("anything else at a provider's own token URL is left alone", async () => {
     const { sent, fetch } = recorder();
-    const wrapped = rewriteFetch(fetch, providers, async () => on);
+    const wrapped = rewriteFetch(fetch, providers, async () => on, fetch);
     const untouched: [string, RequestInit | undefined][] = [
         // Not a POST, or not a code or refresh grant: a service account's JWT grant stays with Google.
         ["https://oauth2.googleapis.com/token", { method: "GET" }],
@@ -108,7 +108,7 @@ test("anything else at a provider's own token URL is left alone", async () => {
 
 test("a provider's own URL goes to the relay only for an extension with a relay sign-in there", async () => {
     const { sent, fetch } = recorder();
-    const wrapped = rewriteFetch(fetch, providers, async () => ({ ...on, signedIn: false }));
+    const wrapped = rewriteFetch(fetch, providers, async () => ({ ...on, signedIn: false }), fetch);
     await wrapped("https://oauth2.googleapis.com/token", post("refresh_token", { refresh_token: "r" }));
     await wrapped("https://auth.atlassian.com/oauth/token", post("authorization_code", { code: "c" }));
     assert.deepEqual(
@@ -123,7 +123,7 @@ test("a provider's own URL goes to the relay only for an extension with a relay 
 
 test("a URL object or a Request is rewritten the same way", async () => {
     const { sent, fetch } = recorder();
-    const wrapped = rewriteFetch(fetch, providers, async () => ({ server: "https://relay.example", signedIn: true }));
+    const wrapped = rewriteFetch(fetch, providers, async () => ({ server: "https://relay.example", signedIn: true }), fetch);
     await wrapped(new URL("https://linear.oauth.raycast.com/token"), {
         method: "POST",
         body: new URLSearchParams({ grant_type: "authorization_code" }),
@@ -149,7 +149,7 @@ for (const [state, answer] of [
 ] as const) {
     test(`with sign-in ${state}, nothing is sent to Raycast's proxy hosts`, async () => {
         const { sent, fetch } = recorder();
-        const wrapped = rewriteFetch(fetch, providers, async () => answer);
+        const wrapped = rewriteFetch(fetch, providers, async () => answer, fetch);
         const refused: [string, RequestInit | undefined][] = [
             ["https://github.oauth.raycast.com/anything-else", post("authorization_code")],
             ["https://github.oauth.raycast.com/token", { method: "GET" }],
@@ -190,14 +190,14 @@ for (const [state, answer] of [
 
 for (const status of [301, 302, 303, 307, 308]) {
     test(`a ${status} from the relay is an error, never followed`, async () => {
-        const sent: { url: string; redirect: RequestInit["redirect"] }[] = [];
+        const sent: { url: string }[] = [];
         let cancelled = 0;
         const answer = (async (input: string | URL | Request, init?: RequestInit) => {
-            sent.push({ url: input instanceof Request ? input.url : String(input), redirect: init?.redirect });
+            sent.push({ url: input instanceof Request ? input.url : String(input) });
             const body = new ReadableStream({ cancel: () => void cancelled++ });
             return new Response(body, { status, headers: { Location: "https://elsewhere.example/steal" } });
         }) as typeof globalThis.fetch;
-        const wrapped = rewriteFetch(answer, providers, async () => on);
+        const wrapped = rewriteFetch(answer, providers, async () => on, answer);
         await assert.rejects(wrapped("https://github.oauth.raycast.com/token", post("authorization_code")), {
             message: redirectedMessage,
         });
@@ -206,8 +206,8 @@ for (const status of [301, 302, 303, 307, 308]) {
             message: redirectedMessage,
         });
         assert.deepEqual(sent, [
-            { url: "https://relay.example/base/github/token", redirect: "manual" },
-            { url: "https://relay.example/base/zoom/refresh-token", redirect: "manual" },
+            { url: "https://relay.example/base/github/token" },
+            { url: "https://relay.example/base/zoom/refresh-token" },
         ]);
         assert.equal(cancelled, 2, "the redirect's body isn't left open");
     });

@@ -78,12 +78,14 @@ public enum ExtensionStore {
     }
 }
 
-/// The extensions bundled with Fudge (SPEC-069 §1): the Extension Store, Search Files and Search Emoji & Symbols. `make app` builds each from
+/// The extensions bundled with Fudge (SPEC-069 §1): the Extension Store, Search Files, Search Emoji & Symbols and Clipboard History. `make app` builds each from
 /// `runtime/<folder>` into the app's resources, under the same folder name. They're always installed. The store keeps
 /// its own off-by-default rule and switch (`ExtensionStore`); the others are enabled by default, like any extension.
 public enum BundledExtensions {
     /// Their folders, in `runtime/` and in the app's resources.
-    public static let folders = ["store-extension", "file-search-extension", "emoji-extension"]
+    public static let folders = [
+        "store-extension", "file-search-extension", "emoji-extension", "clipboard-history-extension",
+    ]
 
     /// The bundled extension in `folder` of the app's resources, when it's there.
     public static func directory(_ folder: String, resources: URL?) -> URL? {
@@ -108,11 +110,12 @@ extension InstalledExtension {
         return extensions.sorted { $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending }
     }
 
-    /// The extensions with a page in the Settings window's sidebar: those with preferences, and the Extension Store,
-    /// whose page starts with its switch. Enabled or not.
+    /// The extensions with a page in the Settings window's sidebar: those with preferences, and the Extension Store
+    /// and Clipboard History, whose pages start with their switches. Enabled or not.
     public static func settingsPages(of installed: [InstalledExtension]) -> [InstalledExtension] {
         installed.filter { installed in
-            installed.manifest.name == ExtensionStore.extensionName || !installed.manifest.preferences.isEmpty
+            installed.manifest.name == ExtensionStore.extensionName
+                || installed.manifest.name == ClipboardHistory.extensionName || !installed.manifest.preferences.isEmpty
                 || installed.manifest.commands.contains { !$0.preferences.isEmpty }
         }
     }

@@ -1,0 +1,32 @@
+{
+  "comment": "The extension name rule (ExtensionManifest.isValidName), pinned for both Swift and the Extension Store's catalog.ts, so the two can't drift apart. Raycast's own rule allows _ too.",
+  "valid": [
+    "scratch",
+    "better-visual-studio-code-project-manager",
+    "a1",
+    "aws",
+    "8-ball",
+    "notion_researcher",
+    "transfer-sh_upload",
+    "solana_nodes",
+    "x_",
+    "a-_-b"
+  ],
+  "invalid": [
+    "",
+    "-leading",
+    "_leading",
+    "Upper",
+    "../escape",
+    "with space",
+    "a/b",
+    ".hidden",
+    "a.b",
+    "~tilde",
+    "a~b",
+    ":group",
+    "café",
+    "a*b",
+    "a\nb"
+  ]
+}

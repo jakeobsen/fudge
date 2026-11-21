@@ -10,7 +10,7 @@
   "scripts": {
     "build": "esbuild src/host.ts src/worker.ts --bundle --platform=node --format=esm --target=node22 --outdir=dist --define:process.env.NODE_ENV='\"production\"' --log-level=warning && esbuild scripts/compat/fudge-scan.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/compat-scan.js --external:esbuild --define:process.env.NODE_ENV='\"production\"' --log-level=warning",
     "generate": "node scripts/raycast-types.ts && node scripts/compat/raycast-utils.ts && node scripts/emoji-data.ts",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p store-extension && tsc --noEmit -p file-search-extension && tsc --noEmit -p emoji-extension && node scripts/raycast-types.ts --check && node scripts/compat/raycast-utils.ts --check && node scripts/emoji-data.ts --check",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p store-extension && tsc --noEmit -p file-search-extension && tsc --noEmit -p emoji-extension && tsc --noEmit -p clipboard-history-extension && node scripts/raycast-types.ts --check && node scripts/compat/raycast-utils.ts --check && node scripts/emoji-data.ts --check",
     "test": "node --test 'test/**/*.test.ts'"
   },
   "devDependencies": {

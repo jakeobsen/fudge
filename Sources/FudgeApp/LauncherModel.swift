@@ -210,6 +210,13 @@ final class LauncherModel {
         return QuicklinkTemplate.clipboardText(
             pasteboard.string(forType: .string), types: (pasteboard.types ?? []).map(\.rawValue))
     }
+    /// Clipboard history (SPEC-077): its watcher, its encrypted store and its calls. `AppDelegate` gives snapshot
+    /// runs a fixed history, never the real clipboard or Keychain.
+    @ObservationIgnored lazy var clipboardHistory = ClipboardHistoryService(
+        paths: paths, secrets: KeychainSecretStore(service: ClipboardHistoryStore.keychainService),
+        turns: SystemCalls.pasteboardTurns)
+    /// Whether clipboard history may watch the pasteboard: never in snapshot runs.
+    @ObservationIgnored let watchesClipboard = !Snapshot.isRequested(CommandLine.arguments)
     /// No-view commands still running, by session.
     @ObservationIgnored private var background: [String: String] = [:]
     /// No-view commands that `launchCommand` started in the background, by session. They leave the panel alone.
@@ -333,6 +340,7 @@ final class LauncherModel {
             RootSearch.applying(settings, to: commands + BuiltInCommandGroup.all.flatMap(RootItem.builtInCommands))
             + RootSearch.builtInItems + loadQuicklinks() + applications
         menuBar.update(installed: installedExtensions, settings: settings)
+        clipboardHistory.apply(settings, watch: watchesClipboard)
         refreshResults(keepingSelection: keepingSelection)
         refreshCommandHotkeys()
     }
@@ -3025,6 +3033,7 @@ final class LauncherModel {
 
         case .exit(let session, let reason):
             endSignIn(of: session)
+            if sessionExtensions[session] == ClipboardHistory.extensionName { clipboardHistory.clearPreviews() }
             sessionExtensions[session] = nil
             sessionCommands[session] = nil
             if let quiet = quietSessions.removeValue(forKey: session) {
@@ -3059,6 +3068,28 @@ final class LauncherModel {
                 }
                 if let extensionName = sessionExtensions[session] { openSettings(extensionName, origin) }
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
+            case let method where method.hasPrefix("clipboardHistory."):
+                // Clipboard History's own calls (SPEC-077), refused for any other extension.
+                let caller = sessionExtensions[session]
+                let origin = origin(of: session)
+                Task {
+                    do {
+                        let result = try await clipboardHistory.handle(
+                            method, params, caller: caller, origin: origin, hideWindow: { await self.hideForPaste() })
+                        send(.rpcResult(session: session, id: id, result: result, error: nil))
+                    } catch {
+                        send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
+                    }
+                }
+            case "clipboard.read" where ClipboardOffset(params: params) != .current:
+                // Raycast's `offset`, 1 to 5: a previous copy from clipboard history, for any extension.
+                let result: JSONValue =
+                    if case .previous(let offset) = ClipboardOffset(params: params) {
+                        clipboardHistory.read(offset: offset)
+                    } else {
+                        .null
+                    }
+                send(.rpcResult(session: session, id: id, result: result, error: nil))
             case "form.storeValues":
                 storeFormValues(params, session: session)
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))

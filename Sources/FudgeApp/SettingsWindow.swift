@@ -410,6 +410,60 @@ final class SettingsModel {
         }
     }
 
+    // MARK: - Clipboard history (SPEC-077)
+
+    /// Whether clipboard history is on: switched on through its consent sheet.
+    var clipboardHistory: Bool { fudgeSettings.isClipboardHistoryOn }
+    var clipboardHistoryKeepDays: Int { fudgeSettings.clipboardHistoryKeepDays }
+    var clipboardHistoryIgnoredApps: [String] { fudgeSettings.clipboardHistoryIgnoredApps }
+    /// Tells the launcher's clipboard history to read the settings again; set by the app delegate.
+    @ObservationIgnored var clipboardHistoryChanged: () -> Void = {}
+    /// Deletes every copy and the key; set by the app delegate.
+    @ObservationIgnored var deleteClipboardHistory: () -> Void = {}
+
+    /// The switch: on only after the consent sheet's Turn On, which records the date. Off stops recording at once,
+    /// then asks whether to keep what's there.
+    func setClipboardHistory(_ on: Bool) {
+        guard on != clipboardHistory else { return }
+        Task {
+            if on {
+                guard await confirm(ClipboardHistorySheets.consent) else { return }
+                guard change({ $0.setClipboardHistory(true, now: Date()) }) else { return }
+                clipboardHistoryChanged()
+            } else {
+                guard change({ $0.setClipboardHistory(false, now: Date()) }) else { return }
+                clipboardHistoryChanged()
+                if !(await confirm(ClipboardHistorySheets.turnedOff)) { deleteClipboardHistory() }
+            }
+            reload()
+        }
+    }
+
+    func setClipboardHistoryKeepDays(_ days: Int) {
+        guard change({ $0.clipboardHistoryKeepDays = days }) else { return }
+        clipboardHistoryChanged()
+    }
+
+    /// Adds the app at `path` to **Ignore Apps**, by its bundle id.
+    func ignoreClipboard(fromApplicationAt path: String) {
+        guard let id = Bundle(path: path)?.bundleIdentifier, !clipboardHistoryIgnoredApps.contains(id) else { return }
+        guard change({ $0.clipboardHistoryIgnoredApps.append(id) }) else { return }
+        clipboardHistoryChanged()
+    }
+
+    func stopIgnoringClipboard(of bundleId: String) {
+        guard change({ $0.clipboardHistoryIgnoredApps.removeAll { $0 == bundleId } }) else { return }
+        clipboardHistoryChanged()
+    }
+
+    /// **Clear History…**: asks first.
+    func clearClipboardHistory() {
+        Task {
+            guard await confirm(ClipboardHistorySheets.clear) else { return }
+            deleteClipboardHistory()
+        }
+    }
+
     // MARK: - Sign-in (SPEC-056)
 
     /// The server extensions sign in through.
@@ -973,6 +1027,9 @@ private struct ExtensionPreferencesForm: View {
             if manifest.name == ExtensionStore.extensionName {
                 ExtensionStoreSwitch(model: model)
             }
+            if manifest.name == ClipboardHistory.extensionName {
+                ClipboardHistorySettings(model: model)
+            }
             if !manifest.preferences.isEmpty {
                 Section(manifest.title) {
                     ForEach(manifest.preferences, id: \.name) { preference in
@@ -1015,6 +1072,69 @@ private struct ExtensionStoreSwitch: View {
             }
             .toggleStyle(.switch)
         }
+    }
+}
+
+/// Clipboard History's page (SPEC-077 §1): its switch first, then Keep For, Ignore Apps and Clear History….
+private struct ClipboardHistorySettings: View {
+    let model: SettingsModel
+
+    var body: some View {
+        if let problem = model.settingsProblem {
+            Label(problem, systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.red)
+        }
+        Section {
+            Toggle(isOn: Binding(get: { model.clipboardHistory }, set: { model.setClipboardHistory($0) })) {
+                Text(ClipboardHistorySheets.switchTitle)
+                Text(ClipboardHistorySheets.switchHelp)
+            }
+            .toggleStyle(.switch)
+            Picker(
+                ClipboardHistorySheets.keepFor,
+                selection: Binding(
+                    get: { model.clipboardHistoryKeepDays }, set: { model.setClipboardHistoryKeepDays($0) })
+            ) {
+                ForEach(ClipboardHistory.keepForChoices, id: \.self) { days in
+                    Text(ClipboardHistorySheets.keepForTitle(days)).tag(days)
+                }
+            }
+        }
+        Section {
+            ForEach(model.clipboardHistoryIgnoredApps, id: \.self) { bundleId in
+                LabeledContent(Self.name(of: bundleId)) {
+                    Button {
+                        model.stopIgnoringClipboard(of: bundleId)
+                    } label: {
+                        Image(systemName: "minus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Keep copies made in this app")
+                }
+            }
+            Menu("Add App…") {
+                ForEach(model.applications) { application in
+                    if case .application(let url) = application.kind {
+                        Button(application.title) { model.ignoreClipboard(fromApplicationAt: url.path) }
+                    }
+                }
+            }
+            .fixedSize()
+        } header: {
+            Text(ClipboardHistorySheets.ignoreApps)
+        } footer: {
+            Text(ClipboardHistorySheets.ignoreAppsHelp).foregroundStyle(.secondary)
+        }
+        Section {
+            Button("Clear History…") { model.clearClipboardHistory() }
+        }
+    }
+
+    /// An app's name for a bundle id, or the id when it isn't installed.
+    private static func name(of bundleId: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else { return bundleId }
+        return FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
     }
 }
 
