@@ -54,8 +54,11 @@ extension WindowManager {
         frames.keep(only: Set(reading.windows.map(\.number)))
         let byApp = reading.standardWindowsByApp()
         var result = LayoutPlacement(placed: 0, skipped: 0)
+        // A hand-edited file can name one app and place twice: the first is placed, the rest skipped.
+        var seen = Set<String>()
         for saved in layout.windows {
-            guard let windows = byApp[saved.bundleId], windows.indices.contains(saved.index),
+            guard seen.insert("\(saved.index) \(saved.bundleId)").inserted, let windows = byApp[saved.bundleId],
+                windows.indices.contains(saved.index),
                 let ax = reading.ax(for: windows[saved.index]), !ax.fullScreen,
                 let screen = saved.screen.match(in: reading.screens)
             else {
@@ -220,8 +223,10 @@ public struct PositionDraft: Sendable, Equatable {
             let values = [frame.x, frame.y, frame.width, frame.height]
             if !values.allSatisfy({ $0.isFinite && $0 >= 0 && $0 <= 1 }) {
                 problems.frame = "Each value is a percentage from 0 to 100."
-            } else if frame.width <= 0 || frame.height <= 0 {
-                problems.frame = "Width and height must be more than 0%."
+            } else if frame.width < WindowFractions.minimum - WindowFractions.tolerance
+                || frame.height < WindowFractions.minimum - WindowFractions.tolerance
+            {
+                problems.frame = "Width and height must each be at least 5%."
             } else if !frame.isValid {
                 problems.frame = "It must fit on the screen: X + Width and Y + Height at most 100%."
             }

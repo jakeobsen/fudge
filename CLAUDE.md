@@ -53,11 +53,12 @@ Extensions run in a separate Node.js process, the extension host.
       `LauncherModel.applySettings()` rebuilds root search from the cached installed extensions with `RootSearch.applying`, which drops disabled commands and sets aliases; it runs on every reload and whenever the Settings window changes something.
       An exact alias (case-insensitive) outranks everything (`exactAliasScore`), and `RootSearch.rows` puts it above the calculator card: that's the one row order the panel draws and ↑↓ follows.
       An alias prefix ranks next.
-      For a command with arguments, "alias, space, rest" in the search field selects it and moves the rest into its first argument field (`CommandAliases.handOff`).
+      For a command with arguments, "alias, space, rest" in the search field selects it and moves the rest into its first argument field (`CommandAliases.handOff`); one of Fudge's own commands can have a hand-off word that does the same (`define`), unless a command has it as its alias.
       `CommandAliases.problem` holds the alias rules (1–32 characters, no whitespace, unique ignoring case).
       A disabled command's hotkey isn't registered (`FudgeSettings.availableHotkeys`), and `CommandLocator` refuses `launchCommand` for it (`LaunchCommandError.disabled`).
     - **Built-in command groups** (`BuiltInCommandGroup`, core) are Fudge's own commands, each with a title, keywords and an SF Symbol.
       Root search lists the enabled ones (`RootItem.Kind.builtInCommand`, the group's title as the subtitle, the symbol as the icon), and the Commands page lists each group above the extensions.
+      They can take arguments, as Define Word does.
       They get an alias, a hotkey and Enabled as an extension's commands do: in `settings.json`'s `commands` under `<group>/<command>`, and the group's own Enabled under `extensions`, like an extension's.
       A group's name is `:` and then a valid extension name (`:window-management`, `BuiltInCommandGroup.isValidName`).
       The extension name rule allows no `:`, so no extension can take a group's keys.
@@ -76,6 +77,7 @@ Extensions run in a separate Node.js process, the extension host.
       `WindowSwitcher` (core) reads through `WindowSwitchSystem`: the regular apps but Fudge, each app's AX windows (title, frame, minimized, subrole, focused), the window list's order, the screens' names, and the apps most recently active (`RecentApps`, which `SystemWindowSwitching` keeps from `didActivateApplicationNotification` from launch).
       Every app is read at once, each on its own thread with FUD-93's AX timeout, and the read waits about 1 s for them all.
       An app that hasn't answered by then, or answers `kAXErrorCannotComplete`, is left out and named in the bottom bar ("Some apps didn't answer: …", the List's `navigationTitle`); one still being read isn't asked again until that read ends (`WindowReadsInFlight`), so a hung app holds one thread.
+      A later read waits on that read, holding no thread of its own, and takes its answer if it comes within its own deadline; the answer goes to no read after it.
       Only standard windows are listed (`kAXStandardWindowSubrole`).
       **The order** (`WindowSwitcher.order`): the windows on screen front to back, each the AX window `WindowMatch.pairs` pairs it with; then the rest by app, most recently active first; then the window the user was in (the frontmost app's focused window, else its front window on screen) moves to second, so the list is `[z2, z1, z3, …]` and ↵ goes back as ⌘Tab does.
       A row is the app's icon (`fileIcon`), the title or else the app's name, the app's name as subtitle and keyword (so search matches it), and "Minimized" or, with several screens, the screen's name. ↵ Switch to Window hides the panel, then, off the main thread, un-minimizes, performs `kAXRaiseAction` (and sets `kAXMainAttribute`),
@@ -88,11 +90,12 @@ Extensions run in a separate Node.js process, the extension host.
       Snapshot runs use `FixedWindowSwitching`, never the system.
     - **Custom positions and saved layouts** (SPEC-094) are the user's own commands in that group, kept in `window-layouts.json` by `WindowLayoutStore` (core):
       `{ "positions": [ { id, name, x, y, width, height } ], "layouts": [ { id, name, createdAt, windows: [ { bundleId, index, screen: { name, index }, x, y, width, height } ] } ] }`, through `EntryFile` (read tolerantly, written atomically, keys it doesn't know kept, an `Unreadable` file never overwritten), and in backups.
-      Frames are `WindowFractions` of a screen's visible frame, valid only within 0–1 with a size above 0 and inside the screen; an entry that isn't valid (or a layout window that isn't) is left out and kept in the file.
+      Frames are `WindowFractions` of a screen's visible frame, valid only within 0–1, with a width and height of at least 5% (`WindowFractions.minimum`, the same on any screen) and inside the screen; an entry that isn't valid (or a layout window that isn't) is left out and kept in the file.
+      Placing one grows a side under 100 pt to 100 pt (`minimumPoints`, or the whole side of a smaller screen) and moves it back inside the visible frame, and a window saved smaller than 5% is kept at 5%.
       `BuiltInCommandGroup.all(with:)` adds Save Layout…, then each position (`position-<id>`, titled by its name) and each layout (`layout-<id>`, "Apply <name>"), each by name, after the group's own commands; the app's root search, hotkeys and Commands page use that list, never `all` alone.
       `WindowManager.run(position:)` moves the front window exactly as Left Half does (`place`, shared with the commands).
       `captureLayout` keeps every standard window (`AXWindow.standard`, `kAXStandardWindowSubrole`) of the regular apps on the screens: its app's bundle id, its place among that app's standard windows front to back (a full-screen window counts but isn't kept), its screen (`WindowScreen.name`, `NSScreen.localizedName`, and its place in the screen list) and its fractions; never a title.
-      `apply` places each saved window by app and place on its screen (`SavedScreen.match`: by name, then place, then the primary), skips what isn't there (an app that isn't running is never launched), and the HUD says `LayoutPlacement.message` ("Placed 5 windows; skipped 2").
+      `apply` places each saved window by app and place on its screen (`SavedScreen.match`: by name, then place, then the primary), once (a hand-edited file's second entry for the same app and place is skipped), skips what isn't there (an app that isn't running is never launched), and the HUD says `LayoutPlacement.message` ("Placed 5 windows; skipped 2").
       Save Layout… reads the windows (`WindowLayoutActions`; a snapshot run's are `--layout-windows`' made-up ones, and it moves nothing), then asks for the name in the Save Layout form (`LayoutForm`, `LayoutDraft`), shown like Create Snippet.
       **The Window Management page** (`WindowManagementPage.swift`, after Snippets) lists the positions (+, Edit…, −; the sheet takes x, y, width and height in percent, checked by `PositionDraft.problems`, with a drawing) and the layouts (Rename…, −).
       Deleting one also removes its command's alias, hotkey and Enabled from `settings.json`.
@@ -130,7 +133,7 @@ Extensions run in a separate Node.js process, the extension host.
       Hiding the panel drops the read on screen, and showing it reads the frontmost app's menus again.
       Without Accessibility the list says so, after the gate's prompt or offer.
       Snapshot runs never read a real app's menus (`FixedMenuSystem`).
-    - **The Color Picker** (SPEC-090) is the Tools group (`BuiltInCommandGroup.tools`, one command per `ToolCommand`), a group for utilities.
+    - **The Color Picker** (SPEC-090) is the Tools group (`BuiltInCommandGroup.tools`, one command per `ToolCommand`), a group for utilities that also holds Define Word.
       **Pick Color** hides the panel as the window commands do, then shows macOS's loupe through `ColorSampling` (the app's `ScreenColorSampler` is `NSColorSampler`, which needs no Screen Recording permission; snapshot runs get `InertColorSampler`, which picks nothing, and tests a fake).
       `ColorPick` (core) copies the picked color in the **Copy Format** (`colorFormat` in `settings.json`, `ColorFormat`: HEX by default, RGB, HSL, SwiftUI or UIColor) with a HUD ("Copied #3A7BD5") and adds it to Recent Colors; Esc copies and keeps nothing, and a color `colors.json` can't take is still copied, with the HUD saying so.
       `PickedColor(cgColor:)` converts the loupe's color, which is in the display's color space (often Display P3), to sRGB with `CGColor.converted(to:)` (what `NSColor.usingColorSpace(.sRGB)` gives), and every component is clamped to 0…1.
@@ -143,6 +146,14 @@ Extensions run in a separate Node.js process, the extension host.
       Its empty view offers Pick Color.
       Its hotkey shows it as a view command's does, or hides the panel when it's already on screen.
       **The Color Picker page** (`ColorPickerPage.swift`, after Sign-in) has Copy Format, a `SettingsPopupRow`; changing it draws Recent Colors again if it's open.
+    - **Define Word** (SPEC-091, the Tools group) takes an optional Word argument (`DefineWord.argument`), and `define` is its hand-off word (`BuiltInCommand.handOffWord`), so `define serendipity` hands "serendipity" to the field as an alias would.
+      `DefineWord.start` (core) takes the typed word, else the frontmost app's selection (`LauncherModel.selectedText`, `selection.text` as the user's own call, read only when nothing was typed), each cut to its first line that isn't blank, trimmed, at most 100 characters (`DefineWord.word`); with neither, root search shows the Word field with the keyboard in it.
+      The word is looked up through `DefinitionLookup`: the app's `DictionaryServicesLookup` is `DCSCopyTextDefinition`, the Mac's active dictionaries, offline; snapshot runs read no selection and get `FixedDefinitions` (`--definitions <file>`, a JSON object of word to made-up definition, else none), and tests fakes.
+      `DefineWordView` (core) is a Detail under its own session (in `LauncherModel.builtInSessions`): `DefinitionText.markdown` makes the plain text light Markdown (the headword, the text before the first " | ", as a heading; the pronunciation; each part of speech in italics on its own line where a definition or a run of senses starts;
+      each numbered sense in the expected order, each `•` sub-sense and each section such as ORIGIN on its own line), with everything from the dictionary escaped so none of it is read as Markdown.
+      ↵ and ⌘D (Look Up in Dictionary) open `dict://` and the word, percent-encoded and cut (`DefineWord.dictionaryURL`); ⌘↵ (Copy Definition) copies the dictionary's text with a HUD.
+      With no definition it says so, with Look Up in Dictionary only.
+      A run from root search shows its result only if root search is still on Define Word when the selection and the dictionary have answered.
     - **Arguments.**
       A selected command's `arguments` get fields after the query, which then shrinks to its text.
       `ArgumentInput` (core) holds what's entered and which field has the keyboard, and takes the keys: Tab and ⇧Tab between the fields, Esc back to the query, ⌫ in an empty field back one, ↑↓ on a dropdown argument. ↵ with a required argument empty moves the keyboard there and outlines it.
@@ -349,7 +360,8 @@ Extensions run in a separate Node.js process, the extension host.
       It holds public facts only: window classes and levels, bundle ids and decisions, never paths, titles or typing.
       Read it with `/usr/bin/log show --last 2m --predicate 'subsystem == "io.github.jakeobsen.fudge"' --info` (in zsh, a bare `log` is a builtin).
     - **The General page** (`GeneralPage.swift`) is the Settings window's first page, and the one ⌘, Settings… and "Fudge Settings" open on:
-      Open at Login, the launcher's hotkey, Show Fudge on, Pop to Root Search, Escape Key Behavior (all three `SettingsPopupRow`s), Updates (Check for Updates, another `SettingsPopupRow` with Daily, Weekly, Monthly and Never, which it shows while unset, then `UpdateStatusRow`:
+      Open at Login, the launcher's hotkey, Show Fudge on, Pop to Root Search, Escape Key Behavior (all three `SettingsPopupRow`s), Updates (Check for Updates, another `SettingsPopupRow` with Daily, Weekly, Monthly and Never, then `UpdateStatusRow`:
+      While the update check is unset, that popup shows Not Chosen first (`UpdateCheckSetting.popupOptions`): it checks nothing, as Never does, and can't be picked again once something is chosen.
       the last check's result and time, Check Now, and Download… while a newer release is known; saved through `change {}`), the currency switch, the calculator's Number format (Same as macOS, "1,234.5" or "1.234,5", saved through `change {}`; changing it re-evaluates the open query), Clear Search History…, and Import / Export.
       The launcher's hotkey is recorded like a command's, through the same `HotkeyRecordingPrompt`, but it can't be cleared: ⌫ and the Reset button set ⌥Space (`HotKeyRecording.launcherEdit`).
       A command's hotkey wins, so a launcher hotkey that equals one is refused, naming the command.
@@ -477,6 +489,7 @@ Extensions run in a separate Node.js process, the extension host.
       The wait lasts at most 5 minutes, and a request never used closes after 5 minutes too.
       On the code, the launcher comes back to the command.
       **A sign-in stopped on purpose** (SPEC-095) names why in its refusal (`SignInRefusal.notice`: off, cancelled, timed out, or refused by the provider or the relay), and the error the command reports with that `notice` (`HostMessage.error`) shows as `SignInNotice` (core) in the command's place, drawn like the store's "off" notice, with no trace and nothing red:
+      Like any failure that stands in for a command, the notice keeps the command's title in the bottom bar (`LauncherFooter`); one that belongs to no command, like the store's, says "Fudge".
       "Sign-in is off" with Open Extension Settings (↵, ⌘⇧,) and Open Sign-in Settings (⌘⌥,), or the others with Try Again (`RootAction.retryCommand`, as root search runs it).
       A background or menu-bar command shows its `hud` instead.
       Any other error keeps the failure view with its details.
@@ -565,7 +578,9 @@ Extensions run in a separate Node.js process, the extension host.
     The app reads lines with `LineSplitter`, which looks at each byte once, and decodes them through `JSONSerialization` (`HostMessage(line:)`), falling back to `JSONDecoder`: a 1,000-row list is a line of several hundred kilobytes.
     Messages about a running command carry the `session` id the app chose when launching it: `s-` and 32 hex digits from 128 random bits (`SessionID.make()`).
     The app handles a host message only when it names no session, or one the app started in the running host and hasn't seen exit (`HostSessions`, checked in `LauncherModel.receive`).
+    Nor does the app send anything for a session that isn't running (`HostSessions.mayReceive`, checked in `send`), so a pick or an action left open in a command that has ended goes nowhere, and the command's exit closes its ⌘K panel and date picker.
     Anything else is dropped and logged once per id, the sessions of Fudge's own views included (`LauncherModel.builtInSessions`):
+    - Define Word
     - its forms
     - Recent Colors
     - Search Menu Items
@@ -884,7 +899,9 @@ Extensions run in a separate Node.js process, the extension host.
     - `--run-action <title>`, given once or more, runs those actions in order, half a second apart (e.g. an extension's Create Quicklink, then Save Quicklink).
     - `--search text` types into its search field.
   - `--accessibility allowed|missing`, `--input-monitoring allowed|missing` and `--login-item <status>` fix what Accessibility, the Snippets page's Input Monitoring and Open at Login show, so nothing asks the system.
+  - `--clipboard-consent` saves Clipboard History's consent sheet, laid out off-screen like the sign-in one; it implies `--settings` and that page, as `--sign-in-consent` does.
   - `--clipboard-entries <file>` gives Clipboard History made-up entries (a JSON array of `clipboardHistory.list` entries); snapshots never read the clipboard or watch it.
+  - `--definitions <file>` gives Define Word made-up definitions; snapshots never read the selection or the Mac's dictionaries.
   - `--found-files <file>` gives Search Files fixed results (a JSON array of `files.search` entries, `~/` paths in the home folder), and without it there are none; snapshots never ask Spotlight.
   - `--menu-items <file>` gives Search Menu Items a made-up app and menus (`FixedMenuFile`: `{ "app", "path"?, "menus": [{ "title", "key"?, "modifiers"?, "glyph"?, "enabled"?, "items"? }] }`, the app's own menu first), and without it there's no app to search; snapshots never read another app's menus.
   - `--onboarding [<step>]` renders the onboarding window.
@@ -895,9 +912,9 @@ Extensions run in a separate Node.js process, the extension host.
     - `:quicklinks`
     - `:snippets`
     - `:window-management`
-  - `--settings --clipboard-consent` saves Clipboard History's consent sheet, laid out off-screen like the sign-in one.
   - `--update-available <version>` shows that version as found by an update check (General's line and Download…); no snapshot run asks GitHub.
   - `--windows <file>` gives Switch Windows made-up windows (`FixedWindowSystem`: a JSON array of `{ app, path?, title?, screen?, minimized?, answers? }`, front to back), and without it Switch Windows shows that it needs Accessibility; snapshots never read the window list or the Accessibility API.
+    Made-up pids never take the run's own, and the windows step ten times down their screen, then start again at its corner.
 - **Permission grants need a signing identity.** macOS ties Accessibility and Automation grants to the app's designated requirement.
   An ad hoc signature's is its cdhash, which changes with every build, so each ad hoc `make run` drops them; builds signed with an identity keep them.
   **The first signing with an identity shows a keychain prompt** that only a person can answer (Always Allow).

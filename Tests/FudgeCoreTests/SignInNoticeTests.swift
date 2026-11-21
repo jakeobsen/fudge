@@ -93,3 +93,19 @@ private let enter = KeyShortcut(key: "return", modifiers: [])
     #expect(SignInRefusal.off.message.hasPrefix("Sign-in is off. This extension needs to sign in with OAuth"))
     #expect(SignInNotice.Kind.allCases.map(\.rawValue) == pinned.kinds)
 }
+
+// MARK: - The footer names the command (FUD-135 §1)
+
+@Test func aNoticeInACommandsPlaceKeepsItsTitleInTheFooter() throws {
+    let notice = try #require(
+        SignInNotice(
+            notice: "signInOff", message: "x", extensionName: "acme", extensionTitle: "Acme",
+            commandID: "acme/issues", commandTitle: "Acme Issues"))
+    #expect(notice.footerTitle == "Acme Issues")
+    // One that belongs to no command, like the Extension Store's "off" notice, keeps "Fudge".
+    let unnamed = try #require(
+        SignInNotice(notice: "signInOff", message: "x", extensionName: "acme", extensionTitle: "Acme", commandID: nil))
+    #expect(unnamed.footerTitle == "Fudge")
+    #expect(LauncherFooter.title(standingInFor: nil) == LauncherFooter.fudge)
+    #expect(LauncherFooter.title(standingInFor: "") == "Fudge")
+}
