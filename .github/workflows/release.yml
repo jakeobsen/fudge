@@ -17,6 +17,9 @@ permissions:
 jobs:
   build:
     runs-on: macos-latest
+    # The signing secrets are the release environment's, which only mainline and v* tags may use, so a workflow on
+    # any other branch, one an unreviewed branch adds included, can't read them.
+    environment: release
     permissions:
       contents: read
     outputs:

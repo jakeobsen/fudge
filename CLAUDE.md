@@ -1052,6 +1052,8 @@ Extensions run in a separate Node.js process, the extension host.
     A tag with a pre-release suffix (`v1.2.0-rc.1`) is a pre-release.
   - **Run by hand** (Actions → Release → Run workflow, `workflow_dispatch`), it's the dry run: no tag check, the version `git describe` gives the commit, signed, notarized and stapled, and the disk image as an artifact.
     Nothing is published.
+  - **The secrets are the `release` environment's**, not the repository's: only `mainline` and `v*` tags may use that environment, and only `build` names it, so no workflow on another branch can read them, one an unreviewed branch adds included.
+    Never add them as repository secrets again.
 - **Release signing** (`scripts/release.sh`, FUD-44) reads five secrets, which the workflow gives to that one step only:
   - `APPLE_CERTIFICATE_BASE64`: the Developer ID Application certificate with its private key, a `.p12` in base64
   - `APPLE_CERTIFICATE_PASSWORD`: the `.p12`'s password
