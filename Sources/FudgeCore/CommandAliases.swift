@@ -22,12 +22,16 @@ public enum CommandAliases {
     }
 
     /// "Alias then space", as in Raycast: when `query` is an alias of a command with arguments followed by a space,
-    /// the command takes the alias and the rest of the query becomes its first argument's text.
+    /// the command takes the alias and the rest of the query becomes its first argument's text. A built-in command's
+    /// hand-off word (`define`) works the same way, unless a command has it as its alias: the alias wins, and hands
+    /// off only if its command has arguments.
     public static func handOff(_ query: String, in items: [RootItem]) -> (item: RootItem, rest: String)? {
         guard let space = query.firstIndex(of: " ") else { return nil }
         let typed = query[..<space].lowercased()
         guard !typed.isEmpty,
-            let item = items.first(where: { $0.alias?.lowercased() == typed && !$0.arguments.isEmpty })
+            let item = items.first(where: { $0.alias?.lowercased() == typed })
+                ?? items.first(where: { $0.handOffWord?.lowercased() == typed }),
+            !item.arguments.isEmpty
         else { return nil }
         return (item, String(query[query.index(after: space)...]))
     }

@@ -53,12 +53,13 @@ Extensions run in a separate Node.js process, the extension host.
       `LauncherModel.applySettings()` rebuilds root search from the cached installed extensions with `RootSearch.applying`, which drops disabled commands and sets aliases; it runs on every reload and whenever the Settings window changes something.
       An exact alias (case-insensitive) outranks everything (`exactAliasScore`), and `RootSearch.rows` puts it above the calculator card: that's the one row order the panel draws and ↑↓ follows.
       An alias prefix ranks next.
-      For a command with arguments, "alias, space, rest" in the search field selects it and moves the rest into its first argument field (`CommandAliases.handOff`).
+      For a command with arguments, "alias, space, rest" in the search field selects it and moves the rest into its first argument field (`CommandAliases.handOff`); one of Fudge's own commands can have a hand-off word that does the same (`define`), unless a command has it as its alias.
       It does that once per query (`AliasHandOff`): the same query coming back while an argument field has the keyboard is the search field writing its text back as it loses the keyboard, and changes nothing.
       `CommandAliases.problem` holds the alias rules (1–32 characters, no whitespace, unique ignoring case).
       A disabled command's hotkey isn't registered (`FudgeSettings.availableHotkeys`), and `CommandLocator` refuses `launchCommand` for it (`LaunchCommandError.disabled`).
     - **Built-in command groups** (`BuiltInCommandGroup`, core) are Fudge's own commands, each with a title, keywords and an SF Symbol.
       Root search lists the enabled ones (`RootItem.Kind.builtInCommand`, the group's title as the subtitle, the symbol as the icon), and the Commands page lists each group above the extensions.
+      They can take arguments, as Define Word does.
       They get an alias, a hotkey and Enabled as an extension's commands do: in `settings.json`'s `commands` under `<group>/<command>`, and the group's own Enabled under `extensions`, like an extension's.
       A group's name is `:` and then a valid extension name (`:window-management`, `BuiltInCommandGroup.isValidName`).
       The extension name rule allows no `:`, so no extension can take a group's keys.
@@ -133,7 +134,7 @@ Extensions run in a separate Node.js process, the extension host.
       Hiding the panel drops the read on screen, and showing it reads the frontmost app's menus again.
       Without Accessibility the list says so, after the gate's prompt or offer.
       Snapshot runs never read a real app's menus (`FixedMenuSystem`).
-    - **The Color Picker** (SPEC-090) is the Tools group (`BuiltInCommandGroup.tools`, one command per `ToolCommand`), a group for utilities.
+    - **The Color Picker** (SPEC-090) is the Tools group (`BuiltInCommandGroup.tools`, one command per `ToolCommand`), a group for utilities that also holds Define Word.
       **Pick Color** hides the panel as the window commands do, then shows macOS's loupe through `ColorSampling` (the app's `ScreenColorSampler` is `NSColorSampler`, which needs no Screen Recording permission; snapshot runs get `InertColorSampler`, which picks nothing, and tests a fake).
       `ColorPick` (core) copies the picked color in the **Copy Format** (`colorFormat` in `settings.json`, `ColorFormat`: HEX by default, RGB, HSL, SwiftUI or UIColor) with a HUD ("Copied #3A7BD5") and adds it to Recent Colors; Esc copies and keeps nothing, and a color `colors.json` can't take is still copied, with the HUD saying so.
       `PickedColor(cgColor:)` converts the loupe's color, which is in the display's color space (often Display P3), to sRGB with `CGColor.converted(to:)` (what `NSColor.usingColorSpace(.sRGB)` gives), and every component is clamped to 0…1.
@@ -146,6 +147,14 @@ Extensions run in a separate Node.js process, the extension host.
       Its empty view offers Pick Color.
       Its hotkey shows it as a view command's does, or hides the panel when it's already on screen.
       **The Color Picker page** (`ColorPickerPage.swift`, after Sign-in) has Copy Format, a `SettingsPopupRow`; changing it draws Recent Colors again if it's open.
+    - **Define Word** (SPEC-091, the Tools group) takes an optional Word argument (`DefineWord.argument`), and `define` is its hand-off word (`BuiltInCommand.handOffWord`), so `define serendipity` hands "serendipity" to the field as an alias would.
+      `DefineWord.start` (core) takes the typed word, else the frontmost app's selection (`LauncherModel.selectedText`, `selection.text` as the user's own call, read only when nothing was typed), each cut to its first line that isn't blank, trimmed, at most 100 characters (`DefineWord.word`); with neither, root search shows the Word field with the keyboard in it.
+      The word is looked up through `DefinitionLookup`: the app's `DictionaryServicesLookup` is `DCSCopyTextDefinition`, the Mac's active dictionaries, offline; snapshot runs read no selection and get `FixedDefinitions` (`--definitions <file>`, a JSON object of word to made-up definition, else none), and tests fakes.
+      `DefineWordView` (core) is a Detail under its own session (in `LauncherModel.builtInSessions`): `DefinitionText.markdown` makes the plain text light Markdown (the headword, the text before the first " | ", as a heading; the pronunciation; each part of speech in italics on its own line where a definition or a run of senses starts;
+      each numbered sense in the expected order, each `•` sub-sense and each section such as ORIGIN on its own line), with everything from the dictionary escaped so none of it is read as Markdown.
+      ↵ and ⌘D (Look Up in Dictionary) open `dict://` and the word, percent-encoded and cut (`DefineWord.dictionaryURL`); ⌘↵ (Copy Definition) copies the dictionary's text with a HUD.
+      With no definition it says so, with Look Up in Dictionary only.
+      A run from root search shows its result only if root search is still on Define Word when the selection and the dictionary have answered.
     - **Arguments.**
       A selected command's `arguments` get fields after the query, which then shrinks to its text.
       `ArgumentInput` (core) holds what's entered and which field has the keyboard, and takes the keys: Tab and ⇧Tab between the fields, Esc back to the query, ⌫ in an empty field back one, ↑↓ on a dropdown argument. ↵ with a required argument empty moves the keyboard there and outlines it.
@@ -550,6 +559,7 @@ Extensions run in a separate Node.js process, the extension host.
     Messages about a running command carry the `session` id the app chose when launching it: `s-` and 32 hex digits from 128 random bits (`SessionID.make()`).
     The app handles a host message only when it names no session, or one the app started in the running host and hasn't seen exit (`HostSessions`, checked in `LauncherModel.receive`).
     Anything else is dropped and logged once per id, the sessions of Fudge's own views included (`LauncherModel.builtInSessions`):
+    - Define Word
     - its forms
     - Recent Colors
     - Search Menu Items
@@ -869,6 +879,7 @@ Extensions run in a separate Node.js process, the extension host.
     - `--search text` types into its search field.
   - `--accessibility allowed|missing` and `--login-item <status>` fix what Accessibility and Open at Login show, so nothing asks the system.
   - `--clipboard-entries <file>` gives Clipboard History made-up entries (a JSON array of `clipboardHistory.list` entries); snapshots never read the clipboard or watch it.
+  - `--definitions <file>` gives Define Word made-up definitions; snapshots never read the selection or the Mac's dictionaries.
   - `--found-files <file>` gives Search Files fixed results (a JSON array of `files.search` entries, `~/` paths in the home folder), and without it there are none; snapshots never ask Spotlight.
   - `--menu-items <file>` gives Search Menu Items a made-up app and menus (`FixedMenuFile`: `{ "app", "path"?, "menus": [{ "title", "key"?, "modifiers"?, "glyph"?, "enabled"?, "items"? }] }`, the app's own menu first), and without it there's no app to search; snapshots never read another app's menus.
   - `--onboarding [<step>]` renders the onboarding window.

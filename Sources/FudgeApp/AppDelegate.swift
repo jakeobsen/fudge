@@ -62,6 +62,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model.windowLayoutActions = .inert(windows: snapshot.layoutWindows)
             // Nor other apps' menus: Search Menu Items gets `--menu-items`' made-up app and menus.
             model.menuItemsAccess = FixedMenuItemsAccess(file: snapshot.menuItems)
+            // Define Word reads no selection and no dictionary: it gets `--definitions`' made-up ones, or none.
+            model.selectedText = { nil }
+            model.definitionLookup = snapshot.definitions.map(FixedDefinitions.load) ?? FixedDefinitions([:])
             // Nor the clipboard or the Keychain: Clipboard History gets `--clipboard-entries`' made-up entries.
             if let file = snapshot.clipboardEntries {
                 model.clipboardHistory = ClipboardHistoryService(
@@ -728,6 +731,8 @@ struct Snapshot {
     /// `--clipboard-entries <file>`: Clipboard History's made-up entries, a JSON array of `clipboardHistory.list`
     /// entries. Snapshots never read the clipboard.
     let clipboardEntries: URL?
+    /// Made-up definitions for Define Word (a JSON object of word to definition), so no run reads the dictionaries.
+    let definitions: URL?
     /// `--update-available <version>` (`0.9.0` or `v0.9.0`): an update check found that release.
     let updateAvailable: Release?
     /// `--trash-count <n>`: what Empty Trash's made-up count of the Trash gives (12 without it); anything but a number
@@ -784,6 +789,7 @@ struct Snapshot {
         foundFiles = value("--found-files").map { URL(fileURLWithPath: $0) }
         clipboardEntries = value("--clipboard-entries").map { URL(fileURLWithPath: $0) }
         menuItems = value("--menu-items").map { URL(fileURLWithPath: $0) }
+        definitions = value("--definitions").map { URL(fileURLWithPath: $0) }
         updateAvailable = value("--update-available").flatMap { Release(tag: $0.hasPrefix("v") ? $0 : "v" + $0) }
         trashCount = value("--trash-count").map { Int($0) } ?? InertSystemActions.trashCount
         windows = value("--windows").map { URL(fileURLWithPath: $0) }
