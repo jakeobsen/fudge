@@ -168,13 +168,26 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         return "command:\(commandID)"
     }
 
+    /// `subtitle`, or nil when it only repeats `title`, ignoring case and spaces around either (SPEC-120). It's for
+    /// the subtitle a row falls back to, its extension's or group's title: a one-command extension named like its
+    /// command would otherwise show its name twice. A subtitle an author set (the command's own in `package.json`, or
+    /// one from `updateCommandMetadata`) is shown as set.
+    static func subtitle(_ subtitle: String?, unlessItRepeats title: String) -> String? {
+        guard let subtitle else { return nil }
+        let (shown, named) = (
+            subtitle.trimmingCharacters(in: .whitespacesAndNewlines),
+            title.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        return shown.caseInsensitiveCompare(named) == .orderedSame ? nil : subtitle
+    }
+
     /// One item per command of a group of Fudge's own, with the group's title as its subtitle.
     public static func builtInCommands(of group: BuiltInCommandGroup) -> [RootItem] {
         group.commands.map { command in
             RootItem(
                 id: commandID(extension: group.name, command: command.name),
                 title: command.title,
-                subtitle: group.title,
+                subtitle: subtitle(group.title, unlessItRepeats: command.title),
                 extensionTitle: group.title,
                 keywords: command.keywords,
                 kind: .builtInCommand(group: group.name, command: command.name),
@@ -195,7 +208,7 @@ public struct RootItem: Sendable, Equatable, Identifiable {
                 id: commandID(extension: manifest.name, command: command.name),
                 title: command.title,
                 subtitle: metadata.subtitle(extension: manifest.name, command: command.name) ?? command.subtitle
-                    ?? manifest.title,
+                    ?? subtitle(manifest.title, unlessItRepeats: command.title),
                 extensionTitle: manifest.title,
                 keywords: command.keywords,
                 kind: .command(

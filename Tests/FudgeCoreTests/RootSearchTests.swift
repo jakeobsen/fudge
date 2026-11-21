@@ -262,6 +262,67 @@ private func byTitle(_ titles: [String]) -> [String] {
     )
 }
 
+// MARK: - No subtitle that only repeats the title (SPEC-120)
+
+private func commandItems(_ json: String, metadata: CommandMetadata = CommandMetadata()) throws -> [RootItem] {
+    let manifest = try JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8))
+    let installed = InstalledExtension(
+        manifest: manifest, directory: URL(fileURLWithPath: "/nonexistent/\(manifest.name)"))
+    return RootItem.commands(of: installed, metadata: metadata)
+}
+
+@Test func aCommandNamedLikeItsExtensionHasNoSubtitle() throws {
+    let items = try commandItems(
+        #"""
+        {"name":"clipboard","title":"Clipboard History","commands":[
+          {"name":"clipboard-history","title":"Clipboard History","mode":"view"},
+          {"name":"clear","title":"Clear History","mode":"no-view"},
+          {"name":"shouting","title":"CLIPBOARD history ","mode":"view"}]}
+        """#)
+    #expect(items.map(\.subtitle) == [nil, "Clipboard History", nil], "the same title, ignoring case and spaces")
+    // Typing the extension's name still finds it, through `extensionTitle`.
+    #expect(items[0].extensionTitle == "Clipboard History")
+    let found = RootSearch.rank(
+        items + [item("Clipboard Viewer")], query: "clipboard history", history: LaunchHistory())
+    #expect(found.contains { $0.id == items[0].id })
+
+    // A subtitle the author wrote in the manifest is shown as written, even one that repeats the title.
+    let own = try commandItems(
+        #"""
+        {"name":"notes","title":"Notes","commands":[
+          {"name":"notes","title":"Notes","subtitle":"notes","mode":"view"},
+          {"name":"new","title":"New Note","subtitle":"Notes","mode":"view"}]}
+        """#)
+    #expect(own.map(\.subtitle) == ["notes", "Notes"])
+}
+
+@Test func aBuiltInCommandNamedLikeItsGroupHasNoSubtitle() {
+    let group = BuiltInCommandGroup(
+        name: ":clock", title: "Clock",
+        commands: [
+            BuiltInCommand(name: "clock", title: "Clock", symbol: "clock"),
+            BuiltInCommand(name: "timer", title: "Start Timer", symbol: "timer"),
+        ])
+    let items = RootItem.builtInCommands(of: group)
+    #expect(items.map(\.subtitle) == [nil, "Clock"])
+    #expect(items.map(\.extensionTitle) == ["Clock", "Clock"], "search still matches the group's title")
+    // Fudge's own groups don't have one today, so their rows keep the group's title.
+    for group in BuiltInCommandGroup.all {
+        for item in RootItem.builtInCommands(of: group) { #expect(item.subtitle == group.title, "\(item.title)") }
+    }
+}
+
+@Test func aSubtitleTheCommandSetItselfIsShownAsSet() throws {
+    var metadata = CommandMetadata()
+    metadata.setSubtitle("Clipboard History", extension: "clipboard", command: "clipboard-history")
+    let items = try commandItems(
+        #"""
+        {"name":"clipboard","title":"Clipboard History","commands":[
+          {"name":"clipboard-history","title":"Clipboard History","mode":"view"}]}
+        """#, metadata: metadata)
+    #expect(items.map(\.subtitle) == ["Clipboard History"], "the extension chose it")
+}
+
 @Test func scansFoldersForApplications() throws {
     let folder = try Fixtures.temporaryDirectory()
     for name in ["Zeta.app", "Alpha.app", "notes.txt"] {
