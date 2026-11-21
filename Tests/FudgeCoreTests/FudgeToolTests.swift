@@ -47,9 +47,18 @@ enum Tool {
         return bundled
     }
 
-    /// Runs `tool` with `arguments` and `environment`, and returns its status, stdout and stderr.
-    static func run(_ tool: URL, _ arguments: [String], environment: [String: String]) throws -> (Int32, String, String)
-    {
+    /// Runs `tool` with `arguments` and `environment`, and returns its status, stdout and stderr. It all happens on a
+    /// thread of its own (`OffThePool`), reading both pipes at once, so a full stderr can't hold up stdout. A tool still
+    /// running after `noHang` is ended, and a pipe a leftover child still holds is given up on 5 s later.
+    static func run(_ tool: URL, _ arguments: [String], environment: [String: String]) async throws -> (
+        Int32, String, String
+    ) {
+        try await OffThePool.run { try runHere(tool, arguments, environment: environment) }
+    }
+
+    private static func runHere(_ tool: URL, _ arguments: [String], environment: [String: String]) throws -> (
+        Int32, String, String
+    ) {
         let process = Process()
         process.executableURL = tool
         process.arguments = arguments
@@ -58,11 +67,16 @@ enum Tool {
         let errors = Pipe()
         process.standardOutput = output
         process.standardError = errors
+        let read = PipeReader(output, errors)
         try process.run()
-        let out = output.fileHandleForReading.readDataToEndOfFile()
-        let err = errors.fileHandleForReading.readDataToEndOfFile()
+        if !read.ended(within: noHang) {
+            process.terminate()
+            if !read.ended(within: .seconds(5)) { kill(process.processIdentifier, SIGKILL) }
+            _ = read.ended(within: .seconds(5))
+        }
         process.waitUntilExit()
-        return (process.terminationStatus, String(decoding: out, as: UTF8.self), String(decoding: err, as: UTF8.self))
+        let (out, err) = read.text
+        return (process.terminationStatus, out, err)
     }
 
     /// The scan fixtures the runtime's tests use.
@@ -70,13 +84,13 @@ enum Tool {
 
     /// Runs `fudge scan` from a checkout: the TypeScript scanner with node and esbuild's binary, and no
     /// `FUDGE_RAYCAST_TYPES`, so the scanner reads the vendored types. Returns the status, stdout and stderr.
-    static func scan(_ arguments: [String], esbuild: String? = nil) throws -> (Int32, String, String) {
+    static func scan(_ arguments: [String], esbuild: String? = nil) async throws -> (Int32, String, String) {
         let folder = try Fixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: folder) }
         let node: URL = try #require(Tool.node, "make test hands the tests Fudge's Node.js")
         let tool = try bundled(in: folder, node: node)
         let esbuild = try esbuild ?? #require(Fixtures.esbuild).path
-        return try run(
+        return try await run(
             tool, ["scan"] + arguments,
             environment: [
                 "HOME": FileManager.default.temporaryDirectory.path, "PATH": "/usr/bin:/bin", "FUDGE_ESBUILD": esbuild,
@@ -99,6 +113,11 @@ enum Tool {
         process.standardError = FileHandle.nullDevice
         try process.run()
         var started: [pid_t] = []
+        // Whatever happens, nothing is left running: the tool, the stand-in and its child.
+        defer {
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            for pid in started where !isGone(pid) { kill(pid, SIGKILL) }
+        }
         let launched = ContinuousClock.now
         while started.count < 2, ContinuousClock.now - launched < noHang {
             started = ((try? String(contentsOf: pids, encoding: .utf8)) ?? "")
@@ -109,13 +128,49 @@ enum Tool {
 
         let clock = ContinuousClock.now
         process.terminate()
-        process.waitUntilExit()
+        // Waited for on a thread of its own, with a deadline Dispatch enforces.
+        let exited = try await OffThePool.run(within: noHang) {
+            process.waitUntilExit()
+            return true
+        }
+        try #require(exited == true, "the tool exited")
         #expect(process.terminationReason == .exit && process.terminationStatus == 128 + SIGTERM)
         while !started.allSatisfy(isGone), ContinuousClock.now - clock < noHang {
             try await Task.sleep(for: .milliseconds(20))
         }
         #expect(started.allSatisfy(isGone), "the stand-in and its child are gone")
-        for pid in started where !isGone(pid) { kill(pid, SIGKILL) }
+    }
+}
+
+/// Reads two pipes to their ends at once, on Dispatch's queues, and says whether both ended within a deadline.
+private final class PipeReader: @unchecked Sendable {
+    private let lock = NSLock()
+    private var out = Data()
+    private var err = Data()
+    private let done = DispatchGroup()
+
+    init(_ output: Pipe, _ errors: Pipe) {
+        for (pipe, isOutput) in [(output, true), (errors, false)] {
+            done.enter()
+            pipe.fileHandleForReading.readabilityHandler = { [self] handle in
+                let data = handle.availableData
+                if data.isEmpty {
+                    handle.readabilityHandler = nil
+                    done.leave()
+                } else {
+                    lock.withLock { isOutput ? out.append(data) : err.append(data) }
+                }
+            }
+        }
+    }
+
+    /// Whether both pipes have ended, waiting up to `limit`.
+    func ended(within limit: Duration) -> Bool {
+        done.wait(timeout: .now() + .milliseconds(max(0, Int(limit / .milliseconds(1))))) == .success
+    }
+
+    var text: (String, String) {
+        lock.withLock { (String(decoding: out, as: UTF8.self), String(decoding: err, as: UTF8.self)) }
     }
 }
 
@@ -136,7 +191,7 @@ enum Tool {
         pids: pids, tool: tool)
 }
 
-@Test func theToolRunsOnlyTheNodeBesideIt() throws {
+@Test func theToolRunsOnlyTheNodeBesideIt() async throws {
     // A Node.js on PATH and in FUDGE_NODE, which the tool used to take, is never run (SPEC-115).
     let folder = try Fixtures.temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: folder) }
@@ -147,7 +202,7 @@ enum Tool {
     try "#!/bin/sh\ntouch '\(ran.path)'\n".write(to: impostor, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: impostor.path)
     let tool = try Tool.bundled(in: folder.appendingPathComponent("app"), node: nil)
-    let (status, out, err) = try Tool.run(
+    let (status, out, err) = try await Tool.run(
         tool, ["scan", Fixtures.repository.appendingPathComponent("runtime/test/fixtures/scan/supported").path],
         environment: [
             "HOME": folder.path, "PATH": "\(elsewhere.path):/usr/bin:/bin", "FUDGE_NODE": impostor.path,
@@ -159,7 +214,7 @@ enum Tool {
 }
 
 @Test(.enabled(if: Fixtures.esbuild != nil, "needs esbuild: run `make test`"))
-func buildInstallsDependenciesWithTheBundledNpm() throws {
+func buildInstallsDependenciesWithTheBundledNpm() async throws {
     let folder = try Fixtures.temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: folder) }
     // A stand-in for Node.js that writes down how it was run, and installs nothing.
@@ -182,7 +237,7 @@ func buildInstallsDependenciesWithTheBundledNpm() throws {
         try FileManager.default.createDirectory(at: made, withIntermediateDirectories: true)
     }
 
-    let (status, _, err) = try Tool.run(
+    let (status, _, err) = try await Tool.run(
         tool, ["build", source.path, "--into", extensions.path],
         environment: [
             "HOME": folder.path, "PATH": "/usr/bin:/bin", "FUDGE_ESBUILD": try #require(Fixtures.esbuild).path,
@@ -224,8 +279,8 @@ func buildInstallsDependenciesWithTheBundledNpm() throws {
 
 @Suite(.enabled(if: Fixtures.esbuild != nil && Tool.node != nil, "needs esbuild and node: run `make test`"))
 struct FudgeScanEndToEnd {
-    @Test func scansTheFixturesThroughTheRealTool() throws {
-        let (status, json, _) = try Tool.scan([Tool.scanFixtures.appendingPathComponent("gaps").path, "--json"])
+    @Test func scansTheFixturesThroughTheRealTool() async throws {
+        let (status, json, _) = try await Tool.scan([Tool.scanFixtures.appendingPathComponent("gaps").path, "--json"])
         #expect(status == 0)
         let report = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         #expect(report["extension"] as? String == "scan-gaps" && report["supported"] as? Bool == false)
@@ -236,9 +291,11 @@ struct FudgeScanEndToEnd {
                 ["api": "captureMemorySnapshot", "kind": "missing"],
             ])
 
-        let (supportedStatus, text, _) = try Tool.scan([Tool.scanFixtures.appendingPathComponent("supported").path])
+        let (supportedStatus, text, _) = try await Tool.scan([
+            Tool.scanFixtures.appendingPathComponent("supported").path
+        ])
         #expect(supportedStatus == 0 && text == "scan-supported: Fudge supports everything it uses.\n")
-        let (gapsStatus, gapsText, _) = try Tool.scan([Tool.scanFixtures.appendingPathComponent("gaps").path])
+        let (gapsStatus, gapsText, _) = try await Tool.scan([Tool.scanFixtures.appendingPathComponent("gaps").path])
         #expect(gapsStatus == 0)
         #expect(
             gapsText == """
@@ -251,19 +308,19 @@ struct FudgeScanEndToEnd {
                 """)
     }
 
-    @Test func aSrcThatIsAFileIsAClearErrorWithExitCode2() throws {
+    @Test func aSrcThatIsAFileIsAClearErrorWithExitCode2() async throws {
         let folder = try Fixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: folder) }
         try "{}".write(to: folder.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
         try "not a folder".write(to: folder.appendingPathComponent("src"), atomically: true, encoding: .utf8)
-        let (status, out, err) = try Tool.scan([folder.path])
+        let (status, out, err) = try await Tool.scan([folder.path])
         #expect(status == 2 && out.isEmpty)
         #expect(err == "\(folder.path) isn't an extension: it needs a package.json file and a src folder\n")
     }
 
-    @Test func anEsbuildThatCantRunFailsTheScanClearly() throws {
+    @Test func anEsbuildThatCantRunFailsTheScanClearly() async throws {
         for esbuild in ["/usr/bin/false", "/nonexistent/esbuild"] {
-            let (status, out, err) = try Tool.scan(
+            let (status, out, err) = try await Tool.scan(
                 [Tool.scanFixtures.appendingPathComponent("supported").path, "--json"], esbuild: esbuild)
             #expect(status == 1 && out.isEmpty, "\(esbuild)")
             #expect(err.hasPrefix("can't run esbuild at \(esbuild): "), "\(err)")
