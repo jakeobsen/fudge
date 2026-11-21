@@ -18,8 +18,7 @@ import Testing
     #expect(proxy.http == "http://10.0.0.5:8080")
     #expect(proxy.noProxy == ".local,localhost,.corp.example.test", "macOS's 169.254/16 can't be written for NO_PROXY")
     #expect(!proxy.autoConfig)
-    let value = try? #require(proxy.environmentValue)
-    #expect(value?.contains("\"https\":\"http:\\/\\/proxy.example.test:3128\"") == true)
+    #expect(proxy.environmentValue?.contains("\"https\":\"http:\\/\\/proxy.example.test:3128\"") == true)
 }
 
 @Test func onlyAnEnabledWellFormedProxyCounts() {
