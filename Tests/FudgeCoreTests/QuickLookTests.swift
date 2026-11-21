@@ -213,10 +213,12 @@ func escClosesQuickLookAfterThePopoversAndDoesNothingElse(behavior: EscapeBehavi
 
 /// What holds the keyboard a turn after the launcher resigned.
 private func settled(
-    sheet: Bool = false, launcherKey: Bool = false, previewOpen: Bool = false, previewKey: Bool = false
+    shown: Bool = true, sheet: Bool = false, launcherKey: Bool = false, previewOpen: Bool = false,
+    previewKey: Bool = false
 ) -> LauncherResign.Settled {
     LauncherResign.Settled(
-        sheetAttached: sheet, launcherIsKey: launcherKey, previewOpen: previewOpen, previewIsKey: previewKey)
+        launcherShown: shown, sheetAttached: sheet, launcherIsKey: launcherKey, previewOpen: previewOpen,
+        previewIsKey: previewKey)
 }
 
 @Test func theLauncherStaysWhenTheQuickLookPreviewTakesTheKeyboard() {
@@ -239,4 +241,17 @@ private func settled(
     #expect(LauncherResign.decide(settled(previewOpen: true, previewKey: true)) == .takeKeyBack)
     // Its keyboard back already by then: nothing to do.
     #expect(LauncherResign.decide(settled(launcherKey: true, previewOpen: true)) == .stay)
+}
+
+/// The decision comes a turn after the resign; whatever changed meanwhile wins, so there's no second hide and no
+/// stray take-back.
+@Test func aResignDecidedLateLeavesWhatChangedMeanwhile() {
+    // Hidden already (Esc, the hotkey, a launch): nothing more, whatever holds the keyboard.
+    #expect(LauncherResign.decide(settled(shown: false)) == .stay)
+    #expect(LauncherResign.decide(settled(shown: false, previewOpen: true, previewKey: true)) == .stay)
+    // Key again (a take-back that already ran, the panel shown again): nothing more.
+    #expect(LauncherResign.decide(settled(launcherKey: true)) == .stay)
+    #expect(LauncherResign.decide(settled(launcherKey: true, previewOpen: true, previewKey: true)) == .stay)
+    // Still shown, and another app's window has the keyboard: it hides, a turn later.
+    #expect(LauncherResign.decide(settled()) == .hide)
 }

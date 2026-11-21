@@ -349,9 +349,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Look preview, when the user clicks it or Quick Look takes it as the preview opens; none of them is the user
     /// leaving.
     private func settleResign() {
-        guard panel.isVisible else { return }
         let settled = LauncherResign.Settled(
-            sheetAttached: panel.attachedSheet != nil, launcherIsKey: panel.isKeyWindow,
+            launcherShown: panel.isVisible, sheetAttached: panel.attachedSheet != nil, launcherIsKey: panel.isKeyWindow,
             previewOpen: quickLook?.item != nil, previewIsKey: quickLook?.isKey == true)
         switch LauncherResign.decide(settled) {
         case .stay:
