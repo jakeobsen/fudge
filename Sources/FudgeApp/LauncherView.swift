@@ -292,6 +292,14 @@ struct LauncherView: View {
     }
 
     @ViewBuilder private var content: some View {
+        if let prompt = model.signIn {
+            SignInView(prompt: prompt, assets: model.command?.assets) { model.answerSignIn(true) }
+        } else {
+            screenContent
+        }
+    }
+
+    @ViewBuilder private var screenContent: some View {
         switch model.screen {
         case .root:
             RootResults(model: model)
@@ -333,11 +341,16 @@ struct LauncherView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if let label = primaryLabel {
+            if let prompt = model.signIn {
+                if !prompt.waiting {
+                    Text("Continue in Browser").foregroundStyle(.primary)
+                    KeyCap("↵")
+                }
+            } else if let label = primaryLabel {
                 Text(label).foregroundStyle(.primary)
                 KeyCap(model.command == nil ? "↵" : model.primaryKey.description)
             }
-            if !model.currentActions.isEmpty {
+            if model.signIn == nil, !model.currentActions.isEmpty {
                 Divider().frame(height: 16)
                 Button {
                     model.toggleActionPanel()
@@ -635,6 +648,38 @@ private struct ArgumentField: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
+    }
+}
+
+/// "Sign in to <provider>" while an extension signs in (SPEC-056): the provider's icon and description; ↵ continues
+/// in the browser, Esc cancels.
+private struct SignInView: View {
+    let prompt: SignInPrompt
+    let assets: URL?
+    let onContinue: () -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            if prompt.icon != nil {
+                ExtensionImage(source: prompt.icon, assets: assets, size: 48)
+            } else {
+                Image(systemName: "person.badge.key").font(.system(size: 40)).foregroundStyle(.secondary)
+            }
+            Text("Sign in to \(prompt.providerName)").font(.system(size: 15, weight: .semibold))
+            if prompt.waiting {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Finish signing in in your browser. Esc cancels.").foregroundStyle(.secondary)
+                }
+            } else {
+                if let description = prompt.description {
+                    Text(description).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }
+                Button("Continue in Browser", action: onContinue).buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

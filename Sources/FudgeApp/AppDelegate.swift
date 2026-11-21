@@ -50,6 +50,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 openPane: { _ in })
             : AccessibilityStatus(
                 access: SystemAccessibility(), promptShownElsewhere: { SystemAccessibility.promptShown })
+        // Sign-ins live in the Keychain; a snapshot run keeps them in memory, from `--sign-ins`, and never reads it.
+        let secrets: any SecretStore =
+            Snapshot.isRequested(CommandLine.arguments)
+            ? Snapshot(arguments: CommandLine.arguments)?.signIns ?? MemorySecretStore() : KeychainSecretStore()
+        model.tokenSecrets = secrets
+        settingsModel.tokenSecrets = secrets
         settingsWindow = SettingsWindowController(model: settingsModel)
         onboardingWindow = OnboardingWindowController(settings: settingsModel, file: paths.onboardingFile)
         onboardingWindow.openLauncher = { [weak self] in self?.showPanel() }
@@ -531,6 +537,10 @@ struct Snapshot {
     /// `--onboarding [<step>]`: the onboarding window instead, optionally on one step.
     let onboarding: Bool
     let onboardingStep: OnboardingStep?
+    /// `--sign-ins <extension>/<providerId>=<Provider>,…`: sign-ins the Sign-in page lists, kept in memory.
+    let signIns: MemorySecretStore
+    /// `--sign-in-consent`: picks Fudge's sign-in server on the Sign-in page and saves its consent sheet instead.
+    let signInConsent: Bool
 
     init?(arguments: [String]) {
         guard let index = arguments.firstIndex(of: "--snapshot"), index + 1 < arguments.count else { return nil }
@@ -552,6 +562,17 @@ struct Snapshot {
         accessibility = value("--accessibility") == "allowed"
         onboarding = arguments.contains("--onboarding")
         onboardingStep = value("--onboarding").flatMap(OnboardingStep.init(rawValue:))
+        signIns = MemorySecretStore()
+        for entry in (value("--sign-ins") ?? "").split(separator: ",") {
+            let parts = entry.split(separator: "=", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            let tokens = StoredTokenSet(
+                accessToken: "snapshot",
+                updatedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-7200)),
+                providerName: parts[1])
+            try? signIns.write(JSONEncoder().encode(tokens), account: parts[0])
+        }
+        signInConsent = arguments.contains("--sign-in-consent")
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1
@@ -563,7 +584,15 @@ struct Snapshot {
     }
 
     func take(of controller: SettingsWindowController) {
-        controller.renderOffscreen(extension: settingsExtension)
+        controller.renderOffscreen(extension: signInConsent ? SettingsModel.signInPage : settingsExtension)
+        if signInConsent {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { controller.model.setSignInServer(.fudge) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                guard let view = controller.attachedSheet?.contentView else { exit(1) }
+                save(view)
+            }
+            return
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
             guard let view = controller.contentView else { exit(1) }
             save(view)

@@ -14,6 +14,7 @@ final class SettingsModel {
     static let generalPage = ":general"
     static let commandsPage = ":commands"
     static let permissionsPage = ":permissions"
+    static let signInPage = ":sign-in"
     /// Every installed extension, for the Commands page.
     private(set) var allExtensions: [InstalledExtension] = []
     /// `settings.json`, as the Commands page edits it.
@@ -68,8 +69,9 @@ final class SettingsModel {
         fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
         settingsProblem = FudgeSettings.isWritable(paths.settingsFile) ? nil : unreadableMessage
         loadLaunchPermissions()
+        loadSignIns()
         if selected != Self.generalPage, selected != Self.commandsPage, selected != Self.permissionsPage,
-            !extensions.contains(where: { $0.manifest.name == selected })
+            selected != Self.signInPage, !extensions.contains(where: { $0.manifest.name == selected })
         {
             select(Self.generalPage)
         }
@@ -270,6 +272,82 @@ final class SettingsModel {
             reload()
             extensionStoreChanged()
         }
+    }
+
+    // MARK: - Sign-in (SPEC-056)
+
+    /// The server extensions sign in through.
+    var signInServer: SignInServer { fudgeSettings.signIn }
+    /// The stored sign-ins, for the Signed in table.
+    private(set) var signIns: [SignInEntry] = []
+    /// Why the typed server address wasn't saved, or why the Keychain couldn't be read or changed.
+    private(set) var signInProblem: String?
+    /// Where sign-ins are kept: the Keychain, set by the app delegate; memory in snapshot runs.
+    @ObservationIgnored var tokenSecrets: any SecretStore = MemorySecretStore()
+
+    private var tokenStore: OAuthTokenStore { OAuthTokenStore(secrets: tokenSecrets) }
+
+    func loadSignIns() {
+        do {
+            signIns = try tokenStore.entries()
+        } catch {
+            signIns = []
+            signInProblem = String(describing: error)
+        }
+    }
+
+    /// Chooses a server: the consent sheet first (Continue saves it). Changing from one server to another, or to off,
+    /// signs out of everything, after its own sheet when there are sign-ins.
+    func setSignInServer(_ server: SignInServer) {
+        guard server != signInServer else { return }
+        signInProblem = nil
+        Task {
+            loadSignIns()
+            if !signIns.isEmpty {
+                let change = SignInServer.Change.self
+                guard
+                    await confirm(
+                        LauncherModel.AlertRequest(
+                            title: change.title, message: change.message, primary: change.confirm,
+                            dismiss: change.cancel, destructive: true))
+                else { return }
+            }
+            if let host = server.host {
+                let consent = SignInServer.Consent.self
+                guard
+                    await confirm(
+                        LauncherModel.AlertRequest(
+                            title: consent.title(host: host), message: nil, primary: consent.confirm,
+                            dismiss: consent.cancel, destructive: false))
+                else { return }
+            }
+            do {
+                try tokenStore.removeAll()
+            } catch {
+                signInProblem = String(describing: error)
+                return
+            }
+            _ = change { $0.setSignIn(server, now: Date()) }
+            loadSignIns()
+        }
+    }
+
+    /// "Your own server…": the typed address, saved on ↵ when it's valid.
+    func setCustomSignInServer(_ text: String) {
+        switch SignInServer.validate(text) {
+        case .success(let url): setSignInServer(.custom(url))
+        case .failure(let problem): signInProblem = problem.message
+        }
+    }
+
+    func signOut(_ entry: SignInEntry) {
+        do {
+            try tokenStore.remove(extension: entry.extensionName, provider: entry.providerID)
+            signInProblem = nil
+        } catch {
+            signInProblem = String(describing: error)
+        }
+        loadSignIns()
     }
 
     // MARK: - Show fudge on, and Escape key behavior
@@ -523,7 +601,7 @@ final class SettingsNSWindow: NSWindow {
 
 @MainActor
 final class SettingsWindowController {
-    private let model: SettingsModel
+    let model: SettingsModel
     private var window: NSWindow?
 
     init(model: SettingsModel) {
@@ -618,6 +696,8 @@ final class SettingsWindowController {
     }
 
     var contentView: NSView? { window?.contentView }
+    /// A sheet on the window, for snapshot runs.
+    var attachedSheet: NSWindow? { window?.attachedSheet }
 
     /// A sheet's last paragraph, as selectable text with a working link: an alert's own text can't hold one.
     /// Clicking the link opens the browser and leaves the sheet open.
@@ -653,6 +733,7 @@ struct SettingsView: View {
                 Label("General", systemImage: "gearshape").tag(SettingsModel.generalPage)
                 Label("Permissions", systemImage: "hand.raised").tag(SettingsModel.permissionsPage)
                 Label("Commands", systemImage: "command").tag(SettingsModel.commandsPage)
+                Label("Sign-in", systemImage: "person.badge.key").tag(SettingsModel.signInPage)
                 Section("Extensions") {
                     ForEach(model.extensions, id: \.manifest.name) { installed in
                         Text(installed.manifest.title).tag(installed.manifest.name)
@@ -671,6 +752,8 @@ struct SettingsView: View {
                     PermissionsPage(model: model)
                 } else if model.selected == SettingsModel.commandsPage {
                     CommandsPage(model: model)
+                } else if model.selected == SettingsModel.signInPage {
+                    SignInPage(model: model)
                 } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {
                     ExtensionPreferencesForm(model: model, installed: installed)
                 } else {
