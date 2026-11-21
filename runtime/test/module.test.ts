@@ -6,6 +6,7 @@ import { raycastEnums, raycastExports, renderEnums, renderExports, vendoredVersi
 import * as implementation from "../src/api/index.ts";
 import { createApiModule, NotAvailableError } from "../src/api/module.ts";
 import { RAYCAST_EXPORTS } from "../src/api/raycast-exports.generated.ts";
+import { recordRender } from "../src/api/render.ts";
 
 const read = (path: string) => readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
 const types = read("../vendor/raycast-api/index.d.ts");
@@ -104,4 +105,23 @@ test("Image.Mask, the old ImageMask, Color.Brown and captureException are there"
         console.error = original;
     }
     assert.equal((errors[0]?.[1] as Error).message, "boom");
+});
+
+test("render() outside a command module's load does nothing and doesn't throw", () => {
+    const api = createApiModule() as { render: (element: unknown) => unknown };
+    assert.equal(api.render({ type: "List" }), undefined);
+    // During a load, the first call is recorded; a later load starts afresh, and calls after it count for nothing.
+    assert.deepEqual(recordRender(() => api.render("first")), { result: undefined, rendered: { element: "first" } });
+    assert.deepEqual(recordRender(() => 1), { result: 1 });
+    assert.equal(api.render("late"), undefined);
+    assert.deepEqual(recordRender(() => 2), { result: 2 });
+});
+
+test("a load that throws still stops recording render() calls", () => {
+    assert.throws(() =>
+        recordRender(() => {
+            throw new Error("broken module");
+        }),
+    );
+    assert.deepEqual(recordRender(() => 3), { result: 3 });
 });

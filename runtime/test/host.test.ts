@@ -217,6 +217,58 @@ test("a command file that can't be loaded is reported", async () => {
     await host.close();
 });
 
+test("an old module that only calls render() renders that element, which handles events", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "old", entry: fixture("render-only.cjs"), mode: "view" });
+    const first = await host.next(of("old", "render"));
+    const list = first.view as UINode;
+    assert.equal(list.type, "List");
+    assert.equal(list.props.navigationTitle, "rendered");
+    const item = list.children[0]!;
+    assert.equal(item.props.title, "count 0");
+    const log = await host.next(of("old", "log"));
+    assert.equal(log.level, "error");
+    assert.match(String(log.message), /render\(\) was called again/, "a second call is ignored, with a log line");
+
+    const action = (item.props.actions as unknown as UINode).children[0]!;
+    host.send({ type: "event", session: "old", node: action.id, path: ["onAction"], args: [] });
+    assert.equal(((await host.next(of("old", "render"))).view as UINode).children[0]!.props.title, "count 1");
+    await host.close();
+});
+
+test("a no-view command that only calls render() fails, saying why, rather than showing nothing", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "nv", entry: fixture("render-only.cjs"), mode: "no-view" });
+    const error = await host.next(of("nv", "error"));
+    assert.match(String(error.message), /render-only\.cjs shows a view with render\(\), but it's a no-view command$/);
+    assert.equal(error.fatal, true);
+    assert.equal((await host.next(of("nv", "exit"))).reason, "crashed");
+    assert.equal(host.arrived.some(of("nv", "render")), false, "nothing was rendered");
+    await host.close();
+});
+
+test("a menu-bar command that only calls render() renders it", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "mbr", entry: fixture("render-only.cjs"), mode: "menu-bar" });
+    assert.equal(((await host.next(of("mbr", "render"))).view as UINode).props.navigationTitle, "rendered");
+    await host.close();
+});
+
+test("a module with a default export uses it, even if it called render()", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "d", entry: fixture("render-and-default.cjs"), mode: "view" });
+    assert.equal(((await host.next(of("d", "render"))).view as UINode).props.markdown, "from the default export");
+    await host.close();
+});
+
+test("a module with neither a default export nor render() is reported", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "n", entry: fixture("nothing.cjs"), mode: "view" });
+    assert.match(String((await host.next(of("n", "error"))).message), /has no default export to run/);
+    assert.equal((await host.next(of("n", "exit"))).reason, "crashed");
+    await host.close();
+});
+
 test("two sessions run side by side", async () => {
     const host = start();
     host.send({ type: "launch", session: "a", entry: fixture("counter.cjs"), mode: "view" });
