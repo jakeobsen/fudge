@@ -17,7 +17,9 @@ public protocol RemoteImageEntry: AnyObject {
 /// Each time a view asks for a source, its `RemoteImageRetry` says whether to load it: the first time, again after a
 /// back-off when a load failed, and a refresh once the image is `RemoteImageCache.maxAge` old. A first load that
 /// comes from the disk cache older than that is shown at once and refreshed straight away, not at the next ask.
-/// Decoded images stay in memory up to `capacity` sources; past that, the oldest are read from disk again.
+/// Decoded images stay in memory up to `capacity` sources; past that, the oldest are read from disk again. A source
+/// that leaves memory in back-off, or failed for good, keeps that (`RemoteImageRetries`): asked for again, it shows
+/// the fallback and loads only when it's due.
 @MainActor
 public final class RemoteImageStore<Entry: RemoteImageEntry> {
     /// Turns a loaded body into an image, or nil when it isn't one.
@@ -28,7 +30,13 @@ public final class RemoteImageStore<Entry: RemoteImageEntry> {
     @MainActor
     private final class Source {
         let entry = Entry()
-        var retry = RemoteImageRetry()
+        var retry: RemoteImageRetry
+
+        init(retry: RemoteImageRetry) {
+            self.retry = retry
+            // It failed before it left memory: the fallback shows until a retry succeeds.
+            if RemoteImageRetries.keeps(retry) { entry.failed = true }
+        }
     }
 
     private let loader: RemoteImageLoader
@@ -37,15 +45,18 @@ public final class RemoteImageStore<Entry: RemoteImageEntry> {
     private let decode: Decode
     private var sources: [String: Source] = [:]
     private var order: [String] = []
+    private var retries: RemoteImageRetries
     private var running: [Int: Task<Void, Never>] = [:]
     private var nextTask = 0
 
     public init(
-        loader: RemoteImageLoader, capacity: Int = defaultCapacity, now: @escaping () -> Date = { Date() },
+        loader: RemoteImageLoader, capacity: Int = defaultCapacity,
+        retries: RemoteImageRetries = RemoteImageRetries(), now: @escaping () -> Date = { Date() },
         decode: @escaping Decode
     ) {
         self.loader = loader
         self.capacity = capacity
+        self.retries = retries
         self.now = now
         self.decode = decode
     }
@@ -70,12 +81,17 @@ public final class RemoteImageStore<Entry: RemoteImageEntry> {
         }
     }
 
+    /// The sources kept after leaving memory, for tests.
+    var keptRetries: RemoteImageRetries { retries }
+
     private func add(_ source: String) -> Source {
-        let added = Source()
+        let added = Source(retry: retries.take(source))
         sources[source] = added
         order.append(source)
         while order.count > capacity {
-            sources[order.removeFirst()] = nil
+            let old = order.removeFirst()
+            // One still loading is kept when its load ends (`finish`).
+            if let gone = sources.removeValue(forKey: old) { retries.keep(old, gone.retry) }
         }
         return added
     }
@@ -112,9 +128,14 @@ public final class RemoteImageStore<Entry: RemoteImageEntry> {
         case .failed(let failure):
             failed(current, failure)
         }
+        // It left memory while loading: keep how the load ended, unless the source is back already.
+        if sources[source] !== current {
+            if sources[source] == nil { retries.keep(source, current.retry) }
+            return
+        }
         // A first load that came from the disk cache, already due a refresh: it's shown now, and refreshed now. Only
         // after a first load, so a refresh never starts another.
-        if case .loaded = result, !refreshing, sources[source] === current, current.entry.image != nil,
+        if case .loaded = result, !refreshing, current.entry.image != nil,
             current.retry.isDue(now: now())
         {
             load(url, source, current)
