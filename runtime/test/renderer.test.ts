@@ -139,6 +139,65 @@ test("the item selectedItemId names carries its actions and detail in the first 
     assert.deepEqual(titles(grid.first.view), ["cell 1", "cell 40"]);
 });
 
+/**
+ * What one of the next test's items must serialize to, written by hand from the protocol (CLAUDE.md, "Snapshot
+ * encoding": element props as nodes inside props, functions as `{ $fn: path }`), not taken from the serializer, so a
+ * change it makes to every row can't pass unnoticed. Node ids are the renderer's own and left out (`withoutIds`).
+ */
+const expectedItem = (n: number) => ({
+    type: "List.Item",
+    props: {
+        title: `item ${n}`,
+        actions: {
+            type: "ActionPanel",
+            props: {},
+            children: [
+                {
+                    type: "ActionPanel.Section",
+                    props: {},
+                    children: [
+                        {
+                            type: "Action",
+                            props: { title: `Open ${n}`, shortcut: { modifiers: ["cmd"], key: "o" }, onAction: { $fn: ["onAction"] } },
+                            children: [],
+                        },
+                    ],
+                },
+                {
+                    type: "ActionPanel.Submenu",
+                    props: { title: "More" },
+                    children: [{ type: "Action", props: { title: `Copy ${n}`, onAction: { $fn: ["onAction"] } }, children: [] }],
+                },
+            ],
+        },
+        detail: {
+            type: "List.Item.Detail",
+            props: {
+                markdown: `# ${n}`,
+                metadata: {
+                    type: "Metadata",
+                    props: {},
+                    children: [{ type: "Metadata.Label", props: { title: "n", text: String(n) }, children: [] }],
+                },
+            },
+            children: [],
+        },
+    },
+    children: [],
+});
+
+/** A node tree without its nodes' `id`s (an `id` among a node's props stays). */
+const withoutIds = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(withoutIds);
+    if (value === null || typeof value !== "object") return value;
+    const isNode = "type" in value && "props" in value;
+    return Object.fromEntries(
+        Object.entries(value)
+            .filter(([key]) => !(isNode && key === "id"))
+            .map(([key, inner]) => [key, withoutIds(inner)]),
+    );
+};
+
 test("the items a render carries in full match what a full render sends", async () => {
     const item = (n: number) =>
         h(List.Item, {
@@ -159,6 +218,8 @@ test("the items a render carries in full match what a full render sends", async 
     mounted.root.slots(ids);
     const full = mounted.root.snapshot().view!.children;
     assert.ok(full.every((child) => (child.props.actions as unknown as UINode).type === "ActionPanel"));
+    // The baseline itself is checked against the hand-written shape, so it can't share a mistake with what it checks.
+    assert.deepEqual(withoutIds(full), [1, 2, 3, 4].map(expectedItem));
 
     // The first item, in a render that defers, and the selected one (asked for) match the full render exactly.
     mounted.root.slots([ids[2]!]);
