@@ -134,6 +134,11 @@ public enum RootActions {
         }
     }
 
+    /// The one entry of the Extension Store's "off" view: its Settings page, as ⌘⇧, opens it.
+    public static let extensionStoreOffSections = section([
+        (ExtensionStore.Off.action, enter, .configureExtension(ExtensionStore.extensionName))
+    ])
+
     /// The entries for `item`, the first one being what ↵ does. A menu-bar command that's active in the menu bar
     /// can also be deactivated.
     public static func sections(for item: RootItem?, isActiveInMenuBar: Bool = false) -> [ActionSection] {

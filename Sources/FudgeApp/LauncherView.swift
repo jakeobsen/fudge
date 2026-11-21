@@ -297,7 +297,11 @@ struct LauncherView: View {
                 ProgressView().controlSize(.small)
             }
         case .failure(let failure):
-            FailureView(failure: failure)
+            if failure.notice != nil {
+                NoticeView(title: failure.title)
+            } else {
+                FailureView(failure: failure)
+            }
         }
     }
 
@@ -346,7 +350,7 @@ struct LauncherView: View {
         case .root, .command:
             return model.primaryAction?.title
         case .failure:
-            return "Back"
+            return model.primaryAction?.title ?? "Back"
         }
     }
 }
@@ -613,6 +617,20 @@ private struct ArgumentField: View {
         .buttonStyle(.plain)
         .menuIndicator(.hidden)
         .fixedSize()
+    }
+}
+
+/// A notice in place of a command, drawn as a List's empty view is: the Extension Store's "off" view.
+private struct NoticeView: View {
+    let title: String
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "puzzlepiece.extension").font(.system(size: 40)).foregroundStyle(.secondary)
+            Text(title).font(.system(size: 15, weight: .semibold))
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

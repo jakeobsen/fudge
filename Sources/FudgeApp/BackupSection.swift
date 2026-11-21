@@ -300,8 +300,11 @@ struct ImportSummaryStep: View {
                 + "\(contents.manifest.fudgeVersion).")
         Text("\(contents.summary.text).")
         if contents.hadExtensionStore {
-            Text("This backup had the Extension Store on. Turn it on in General if you want it.")
-                .foregroundStyle(.secondary)
+            Text(
+                "This backup had the Extension Store on. To use it here, enable it under Commands, then turn it on "
+                    + "in its settings."
+            )
+            .foregroundStyle(.secondary)
         }
         Text("Importing replaces your current settings and the data of the extensions in the backup.")
             .foregroundStyle(.secondary)
@@ -334,8 +337,11 @@ private struct ImportedStep: View {
             }
         }
         if result.hadExtensionStore {
-            Text("This backup had the Extension Store on. Turn it on in General if you want it.")
-                .foregroundStyle(.secondary)
+            Text(
+                "This backup had the Extension Store on. To use it here, enable it under Commands, then turn it on "
+                    + "in its settings."
+            )
+            .foregroundStyle(.secondary)
         }
         Text("Your settings from before the import are saved in \(result.beforeImport.lastPathComponent).")
             .foregroundStyle(.secondary)
