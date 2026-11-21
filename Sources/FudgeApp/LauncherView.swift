@@ -445,6 +445,7 @@ private struct RootResults: View {
         case .application: "Application"
         case .command: "Command"
         case .settings, .reloadExtensions, .quit: "Fudge"
+        case .quicklink: "Quicklink"
         }
     }
 }

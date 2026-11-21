@@ -56,6 +56,11 @@ final class LauncherModel {
         var searchField = FieldValue(.string(""))
         /// How many items the List had when it was last asked for the next page.
         var requestedMoreAt: Int?
+        /// The `actions` and `detail` the host sent for List items since the last render, by node id. A render sends
+        /// them only for some items (`ItemSlots`); `requestSlots()` asks for the others.
+        var slots: [Int: ItemSlots] = [:]
+        /// What was asked for, and what the host carries in full in every render since (`SlotRequests`).
+        var slotRequests = SlotRequests()
         /// The Form the top view shows.
         var form: FormContent?
         /// The values of the Form's fields as the user edits them, by node id.
@@ -282,7 +287,8 @@ final class LauncherModel {
         settings = FudgeSettings.load(from: paths.settingsFile)
         panelReset.setting = settings.resetAfter
         let commands = installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
-        items = RootSearch.applying(settings, to: commands) + RootSearch.builtInItems + applications
+        items =
+            RootSearch.applying(settings, to: commands) + RootSearch.builtInItems + loadQuicklinks() + applications
         menuBar.update(installed: installedExtensions, settings: settings)
         refreshResults(keepingSelection: keepingSelection)
         refreshCommandHotkeys()
@@ -290,6 +296,12 @@ final class LauncherModel {
 
     @ObservationIgnored private var installedExtensions: [InstalledExtension] = []
     @ObservationIgnored private var applications: [RootItem] = []
+
+    /// Reads `quicklinks.json` for root search. Their icons are looked up again, since an app may have changed.
+    private func loadQuicklinks() -> [RootItem] {
+        icons = icons.filter { !$0.key.hasPrefix("quicklink:") }
+        return QuicklinkStore.load(from: paths.quicklinksFile).quicklinks.map(RootItem.quicklink)
+    }
     /// `settings.json`: command hotkeys, aliases and enabled states.
     @ObservationIgnored private(set) var settings = FudgeSettings()
 
@@ -341,10 +353,12 @@ final class LauncherModel {
             case .command(var command):
                 command.searchText = newValue
                 command.searchField.edit(.string(newValue))
-                refreshList(&command, selectFirst: true)
+                // The command hears the new text first, so it works on its results while the list is filtered here.
+                commandSearchChanged(command)
+                refreshList(&command, selectFirst: true, reread: false)
                 command.selectFirstOnRender = command.view.map { !ListContent.filtersLocally($0) } ?? false
                 screen = .command(command)
-                commandSearchChanged(command)
+                requestSlots()
                 reportSelection()
             case .root, .failure:
                 if case .failure = screen { screen = .root }
@@ -554,10 +568,12 @@ final class LauncherModel {
         command?.view?.bool("isLoading") == true
     }
 
-    /// The selected item of the running command's List.
+    /// The selected item of the running command's List, with its deferred `actions` and `detail` once they've come.
     var selectedListItem: ListContent.Item? {
-        guard let command, let items = command.list?.items else { return nil }
-        return items.first { $0.id == command.selectedNode } ?? items.first
+        guard let command, let items = command.list?.items,
+            let item = items.first(where: { $0.id == command.selectedNode }) ?? items.first
+        else { return nil }
+        return item.filled(with: command.slots[item.id])
     }
 
     /// The actions for what's selected: in root search, fudge's own for the selected item (`RootActions`); in a
@@ -583,15 +599,22 @@ final class LauncherModel {
     }
 
     /// Reads the top view's List or Grid again, after it or the search text changed, and keeps the selection on the
-    /// same item where it can.
-    private func refreshList(_ command: inout CommandScreen, selectFirst: Bool) {
+    /// same item where it can. Without `reread`, only the search text changed: the items read at the last render are
+    /// filtered again.
+    private func refreshList(_ command: inout CommandScreen, selectFirst: Bool, reread: Bool = true) {
         guard let view = command.view, ListContent.viewTypes.contains(view.type) else {
             command.list = nil
             command.dropdown = nil
             return
         }
         let previous = command.list?.items.first { $0.id == command.selectedNode }
-        let list = ListContent(view, searchText: command.searchText)
+        var list: ListContent
+        if !reread, let read = command.list {
+            list = read
+            list.search(command.searchText)
+        } else {
+            list = ListContent(view, searchText: command.searchText)
+        }
         command.list = list
         let wanted = view.string("selectedItemId")
         if let wanted, wanted != command.followedItemId,
@@ -626,11 +649,64 @@ final class LauncherModel {
                 args: [id.map { .string($0) } ?? .null]))
     }
 
+    /// Asks the host for the `actions` and `detail` (`ItemSlots`) of the selected item and those around it, when
+    /// `SlotRequests` says so: the selection came near the edge of the last request, or an item near it is still
+    /// held back. Renders carry the items of the last request in full, so the selection keeps its actions. Called
+    /// before `reportSelection()`, so the host takes the request before the render `onSelectionChange` may cause.
+    private func requestSlots() {
+        guard var command, let items = command.list?.items else { return }
+        let answers = command.slots
+        guard
+            let ids = command.slotRequests.request(
+                items: items, selected: command.selectedNode, answered: { answers[$0] != nil })
+        else { return }
+        screen = .command(command)
+        send(.slots(session: command.session, nodes: ids))
+    }
+
+    /// What a key pressed before the selected item's actions came does once they come: ↵, ⌘↵ and ⌘K wait for them
+    /// rather than doing nothing, and so does a shortcut of those actions, which the host names with the item
+    /// (`Item.waitsForActions`). Other keys don't wait: they'd hold back the search field's ⌘A or ⌘V.
+    private enum WaitingKey {
+        case primary, secondary, actionPanel
+        case shortcut(KeyShortcut)
+    }
+
+    @ObservationIgnored private var waitingKey: (session: String, node: Int, key: WaitingKey)?
+
+    /// Holds `key` until the selected item's actions come, when they haven't yet; false when they're here.
+    private func waitForActions(_ key: WaitingKey) -> Bool {
+        guard let command, let item = selectedListItem, item.deferred.contains(.actions) else { return false }
+        waitingKey = (command.session, item.id, key)
+        return true
+    }
+
+    /// Runs the key waiting for the selected item's actions once they've come. It's dropped when the selection
+    /// moved or the command changed meanwhile.
+    private func runWaitingKey() {
+        guard let waiting = waitingKey else { return }
+        guard let command, command.session == waiting.session, let item = selectedListItem, item.id == waiting.node
+        else {
+            waitingKey = nil
+            return
+        }
+        guard !item.deferred.contains(.actions) else { return }
+        waitingKey = nil
+        switch waiting.key {
+        case .primary: if let primaryAction { run(primaryAction) }
+        case .secondary: if let secondaryAction { run(secondaryAction) }
+        case .actionPanel: if actionPanel == nil { toggleActionPanel() }
+        case .shortcut(let pressed):
+            if let entry = ActionPanelReader.action(for: pressed, in: currentActions) { run(entry) }
+        }
+    }
+
     /// Selects an item of the List (a click).
     func select(node: Int) {
         guard var command, command.list?.items.contains(where: { $0.id == node }) == true else { return }
         command.selectedNode = node
         screen = .command(command)
+        requestSlots()
         reportSelection()
     }
 
@@ -1180,6 +1256,10 @@ final class LauncherModel {
             state.query = ""
             state.selected = ActionPanelReader.flat(submenu).first?.id
             actionPanel = state
+            // `Action.Submenu`'s `onOpen`: e.g. Open With lists the applications only now.
+            if entry.hasOnOpen, case .node(let node) = entry.target, case .command(let command) = screen {
+                send(.event(session: command.session, node: node, path: ["onOpen"], args: []))
+            }
             return
         }
         actionPanel = nil
@@ -1338,6 +1418,76 @@ final class LauncherModel {
             showSettings(extension: nil)
         case .retryExchangeRates:
             retryExchangeRates()
+        case .copyQuicklink(let link):
+            Task {
+                _ = try? await SystemCalls.handle(
+                    "clipboard.copy", .object(["text": .string(link)]), origin: .userInitiated)
+            }
+            hide()
+            showHUD("Copied Link")
+        case .deleteQuicklink(let id):
+            deleteQuicklink(id)
+        }
+    }
+
+    // MARK: - Quicklinks
+
+    /// Opens a quicklink: fills in its placeholders, then opens the result with its app, or the default one, through
+    /// `SystemCalls`' open. The panel hides once it has opened; a link that can't be opened shows a failure toast
+    /// and the panel stays.
+    private func openQuicklink(_ quicklink: Quicklink, item: RootItem) {
+        let entered = argumentsItem == item.id ? arguments : ArgumentInput(arguments: item.arguments)
+        let template = QuicklinkTemplate(quicklink.link)
+        var clipboard: String?
+        if template.usesClipboard {
+            let pasteboard = NSPasteboard.general
+            clipboard = QuicklinkTemplate.clipboardText(
+                pasteboard.string(forType: .string), types: (pasteboard.types ?? []).map(\.rawValue))
+        }
+        let filled = template.fill(arguments: entered.launchArguments, context: .init(clipboard: clipboard))
+        let target: QuicklinkOpening.Target
+        switch QuicklinkOpening.target(for: template, filled: filled) {
+        case .success(let opened): target = opened
+        case .failure(let failure):
+            showFailureToast("Can't open \(quicklink.name)", message: failure.description)
+            return
+        }
+        var params: [String: JSONValue] = ["target": .string(target.openText)]
+        if let application = quicklink.application { params["application"] = .string(application) }
+        Task {
+            do {
+                // The user's own pick in root search.
+                _ = try await SystemCalls.handle("open", .object(params), origin: .userInitiated)
+            } catch {
+                showFailureToast("Can't open \(quicklink.name)", message: String(describing: error))
+                return
+            }
+            recordLaunch(item)
+            searchText = ""
+            if argumentsItem == item.id { resetArguments(for: item) }
+            hide()
+        }
+    }
+
+    /// Delete Quicklink…: asks, then removes it from `quicklinks.json`. A file Fudge can't read stays as it is,
+    /// and a toast says why.
+    private func deleteQuicklink(_ id: String) {
+        let file = paths.quicklinksFile
+        guard let quicklink = QuicklinkStore.load(from: file).quicklink(id: id) else { return }
+        let request = AlertRequest(
+            title: "Delete “\(quicklink.name)”?", message: "It's removed from root search.", primary: "Delete",
+            dismiss: "Cancel", destructive: true)
+        Task {
+            guard await confirm(request, .userInitiated) else { return }
+            var store = QuicklinkStore.load(from: file)
+            store.remove(id: id)
+            do {
+                try store.save(to: file)
+            } catch {
+                showFailureToast("Can't delete \(quicklink.name)", message: String(describing: error))
+                return
+            }
+            applySettings()
         }
     }
 
@@ -1393,7 +1543,7 @@ final class LauncherModel {
     func handleKey(_ pressed: KeyShortcut) -> Bool {
         if datePanel != nil, handleDatePanelKey(pressed) { return true }
         if pressed == KeyShortcut(key: "k", modifiers: ["cmd"]) {
-            toggleActionPanel()
+            if actionPanel != nil || !waitForActions(.actionPanel) { toggleActionPanel() }
             return true
         }
         if actionPanel?.pick != nil { return handleDatePickKey(pressed) }
@@ -1432,6 +1582,7 @@ final class LauncherModel {
             return true
         }
         if pressed == secondaryKey {
+            if waitForActions(.secondary) { return true }
             if let secondaryAction { run(secondaryAction) }
             return true
         }
@@ -1440,6 +1591,8 @@ final class LauncherModel {
             return true
         }
         guard !pressed.modifiers.isEmpty else { return false }
+        // A shortcut of the selected item's actions works before they've come: it waits for them, as ↵ does.
+        if selectedListItem?.waitsForActions(pressed) == true, waitForActions(.shortcut(pressed)) { return true }
         if let entry = ActionPanelReader.action(for: pressed, in: currentActions) {
             run(entry)
             return true
@@ -1549,6 +1702,7 @@ final class LauncherModel {
         guard var command, let items = command.list?.items, items.indices.contains(index) else { return }
         command.selectedNode = items[index].id
         screen = .command(command)
+        requestSlots()
         reportSelection()
         if let node = command.selectedNode { loadMoreIfNeeded(near: node) }
     }
@@ -1563,12 +1717,16 @@ final class LauncherModel {
             }
             guard let item = selectedRootItem else { return }
             // A required argument left empty takes the keyboard instead.
-            if case .command = item.kind, !arguments.checkRequired() { return }
+            switch item.kind {
+            case .command, .quicklink: guard arguments.checkRequired() else { return }
+            default: break
+            }
             open(item)
             // The launch couldn't start (e.g. a required preference is unset). The values stay for the next try,
             // and the failure's search field gets the keyboard.
             if case .failure = screen { arguments.focus = nil }
         case .command:
+            if waitForActions(.primary) { return }
             if let primaryAction { run(primaryAction) }
         case .failure:
             // A notice's first action, else back to root search.
@@ -1766,6 +1924,8 @@ final class LauncherModel {
             Task {
                 if await confirm(Self.quitRequest, .userInitiated) { NSApp.terminate(nil) }
             }
+        case .quicklink(let quicklink):
+            openQuicklink(quicklink, item: item)
         case .command(let extensionName, let commandName, _, _):
             guard let installed = extensions[extensionName],
                 let command = installed.manifest.commands.first(where: { $0.name == commandName })
@@ -2183,7 +2343,7 @@ final class LauncherModel {
                 sessionCommands[session] = nil
                 menuBar.handle(message)
                 return
-            case .rpc, .log, .pong, .protocolError, .unknown:
+            case .slots, .rpc, .log, .pong, .protocolError, .unknown:
                 break
             }
         }
@@ -2205,12 +2365,15 @@ final class LauncherModel {
                 command.selectFirstOnRender = false
                 command.searchField = FieldValue(.string(command.searchText))
                 command.requestedMoreAt = nil
+                command.slotRequests = SlotRequests()
                 actionPanel = nil
                 dropdownPanel = nil
                 datePanel = nil
             }
             command.view = view
             command.depth = depth
+            // Slots that came before this render may be out of date; it carries those of the items asked for last.
+            command.slots = [:]
             // The extension can set the search text (`searchText`); echoes of what was typed don't undo typing.
             if let view, ListContent.viewTypes.contains(view.type), let controlled = view.string("searchText") {
                 command.searchField.render(controlled: .string(controlled))
@@ -2227,7 +2390,16 @@ final class LauncherModel {
             syncDropdownPanel()
             syncDatePanel()
             syncDatePick()
+            requestSlots()
             reportSelection()
+            runWaitingKey()
+
+        case .slots(let session, let items):
+            guard case .command(var command) = screen, command.session == session else { return }
+            for item in items { command.slots[item.id] = item }
+            command.slotRequests.answered(items.map(\.id))
+            screen = .command(command)
+            runWaitingKey()
 
         case .error(let session, let message, let stack, let fatal):
             if var quiet = quietSessions[session] {
@@ -2480,6 +2652,8 @@ final class LauncherModel {
             image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)!
         case .quit:
             image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)!
+        case .quicklink(let quicklink):
+            image = Self.quicklinkIcon(quicklink)
         case .command:
             image =
                 item.iconFile.flatMap(NSImage.init(contentsOf:))
@@ -2487,5 +2661,30 @@ final class LauncherModel {
         }
         icons[item.id] = image
         return image
+    }
+
+    /// The icon of the app that opens a quicklink: its `application`'s, else the default app for its scheme, else a
+    /// path's own Finder icon. Nothing is fetched from a site.
+    private static func quicklinkIcon(_ quicklink: Quicklink) -> NSImage {
+        let workspace = NSWorkspace.shared
+        if let application = quicklink.application,
+            let url = workspace.urlForApplication(withBundleIdentifier: application)
+        {
+            return workspace.icon(forFile: url.path)
+        }
+        let template = QuicklinkTemplate(quicklink.link)
+        if template.isPath {
+            if case .text(let text) = template.segments.first, template.segments.count == 1 {
+                let path = (text as NSString).expandingTildeInPath
+                if FileManager.default.fileExists(atPath: path) { return workspace.icon(forFile: path) }
+            }
+            return workspace.icon(for: .folder)
+        }
+        if let scheme = template.scheme, let probe = URL(string: "\(scheme):"),
+            let app = workspace.urlForApplication(toOpen: probe)
+        {
+            return workspace.icon(forFile: app.path)
+        }
+        return NSImage(systemSymbolName: "link", accessibilityDescription: nil)!
     }
 }

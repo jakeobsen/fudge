@@ -133,6 +133,8 @@ public enum AppMessage: Sendable, Equatable, Encodable {
         environment: LaunchEnvironment? = nil
     )
     case event(session: String, node: Int, path: [String], args: [JSONValue])
+    /// Asks for these List or Grid items' `actions` and `detail`, which renders send only for some (`ItemSlots`).
+    case slots(session: String, nodes: [Int])
     case pop(session: String)
     case unload(session: String)
     case rpcResult(session: String, id: Int, result: JSONValue?, error: String?)
@@ -141,7 +143,7 @@ public enum AppMessage: Sendable, Equatable, Encodable {
 
     enum Keys: String, CodingKey {
         case type, id, session, entry, mode, launchProps, preferences, environment, node, path, args, result, error
-        case toast, action
+        case toast, action, nodes
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -164,6 +166,10 @@ public enum AppMessage: Sendable, Equatable, Encodable {
             try container.encode(node, forKey: .node)
             try container.encode(path, forKey: .path)
             try container.encode(args, forKey: .args)
+        case .slots(let session, let nodes):
+            try container.encode("slots", forKey: .type)
+            try container.encode(session, forKey: .session)
+            try container.encode(nodes, forKey: .nodes)
         case .pop(let session):
             try container.encode("pop", forKey: .type)
             try container.encode(session, forKey: .session)
@@ -190,6 +196,8 @@ public enum HostMessage: Sendable, Equatable, Decodable {
     case pong(id: Int)
     case protocolError(message: String)
     case render(session: String, view: UINode?, depth: Int)
+    /// The answer to `AppMessage.slots`, for the items still mounted.
+    case slots(session: String, items: [ItemSlots])
     case rpc(session: String, id: Int, method: String, params: JSONValue)
     case error(session: String, message: String, stack: String?, fatal: Bool)
     case log(session: String, level: String, message: String)
@@ -200,7 +208,7 @@ public enum HostMessage: Sendable, Equatable, Decodable {
     case unknown(type: String)
 
     enum Keys: String, CodingKey {
-        case type, id, session, view, depth, method, params, message, stack, fatal, level, reason
+        case type, id, session, view, depth, method, params, message, stack, fatal, level, reason, items
     }
 
     public init(from decoder: Decoder) throws {
@@ -217,6 +225,11 @@ public enum HostMessage: Sendable, Equatable, Decodable {
                 view: try container.decodeIfPresent(UINode.self, forKey: .view),
                 depth: try container.decode(Int.self, forKey: .depth)
             )
+        case "slots":
+            let items = try container.decode([JSONValue].self, forKey: .items)
+            self = .slots(
+                session: try container.decode(String.self, forKey: .session),
+                items: items.compactMap(ItemSlots.init(json:)))
         case "rpc":
             self = .rpc(
                 session: try container.decode(String.self, forKey: .session),
@@ -252,11 +265,107 @@ public enum HostMessage: Sendable, Equatable, Decodable {
     /// The session the message is about, if any.
     public var session: String? {
         switch self {
-        case .render(let session, _, _), .rpc(let session, _, _, _), .error(let session, _, _, _),
-            .log(let session, _, _), .eventSettled(let session), .exit(let session, _):
+        case .render(let session, _, _), .slots(let session, _), .rpc(let session, _, _, _),
+            .error(let session, _, _, _), .log(let session, _, _), .eventSettled(let session), .exit(let session, _):
             session
         case .pong, .protocolError, .unknown:
             nil
         }
+    }
+}
+
+extension HostMessage {
+    /// Reads one line from the host. Through `JSONValue.parse`, about ten times faster than `JSONDecoder`, which
+    /// took 750 ms for a 1,000-row list; a line that path can't read goes through `JSONDecoder`.
+    public init(line: Data) throws {
+        if let json = try? JSONValue.parse(line), let message = HostMessage(json: json) {
+            self = message
+        } else {
+            self = try JSONDecoder().decode(HostMessage.self, from: line)
+        }
+    }
+
+    /// The message a parsed line holds, read as `init(from:)` reads it; nil where that would throw.
+    init?(json: JSONValue) {
+        guard case .object(let object) = json, case .string(let type) = object["type"] else { return nil }
+        func string(_ key: String) -> String? { if case .string(let value) = object[key] { value } else { nil } }
+        func int(_ key: String) -> Int? {
+            if case .number(let value) = object[key] { Int(exactly: value) } else { nil }
+        }
+        /// nil when the key holds something else; .some(nil) when it's missing or null.
+        func optionalString(_ key: String) -> String?? {
+            switch object[key] {
+            case nil, .null: .some(nil)
+            case .string(let value): .some(value)
+            default: nil
+            }
+        }
+        switch type {
+        case "pong":
+            guard let id = int("id") else { return nil }
+            self = .pong(id: id)
+        case "protocolError":
+            guard let message = string("message") else { return nil }
+            self = .protocolError(message: message)
+        case "render":
+            guard let session = string("session"), let depth = int("depth") else { return nil }
+            var view: UINode?
+            if let json = object["view"], json != .null {
+                guard let node = UINode(json: json) else { return nil }
+                view = node
+            }
+            self = .render(session: session, view: view, depth: depth)
+        case "slots":
+            guard let session = string("session"), case .array(let items) = object["items"] else { return nil }
+            self = .slots(session: session, items: items.compactMap(ItemSlots.init(json:)))
+        case "rpc":
+            guard let session = string("session"), let id = int("id"), let method = string("method") else { return nil }
+            self = .rpc(session: session, id: id, method: method, params: object["params"] ?? .null)
+        case "error":
+            guard let session = string("session"), let message = string("message"), let stack = optionalString("stack"),
+                case .bool(let fatal) = object["fatal"]
+            else { return nil }
+            self = .error(session: session, message: message, stack: stack, fatal: fatal)
+        case "log":
+            guard let session = string("session"), let level = string("level"), let message = string("message") else {
+                return nil
+            }
+            self = .log(session: session, level: level, message: message)
+        case "eventSettled":
+            guard let session = string("session") else { return nil }
+            self = .eventSettled(session: session)
+        case "exit":
+            guard let session = string("session"), let reason = string("reason") else { return nil }
+            self = .exit(session: session, reason: reason)
+        default:
+            self = .unknown(type: type)
+        }
+    }
+}
+
+/// A List or Grid item's `actions` and `detail`. A render sends them only for the first item and the items the app
+/// last asked for (`AppMessage.slots`); the others hold `{ "$deferred": true }` instead (`ListContent.Item.deferred`).
+public struct ItemSlots: Sendable, Equatable {
+    /// The item's node id.
+    public var id: Int
+    public var actions: UINode?
+    public var detail: UINode?
+
+    public init(id: Int, actions: UINode? = nil, detail: UINode? = nil) {
+        self.id = id
+        self.actions = actions
+        self.detail = detail
+    }
+
+    /// `{ "id": 4, "slots": { "actions": node, "detail": node } }`, as the host sends it.
+    init?(json: JSONValue) {
+        guard case .object(let object) = json, case .number(let id) = object["id"], let id = Int(exactly: id) else {
+            return nil
+        }
+        var slots: [String: JSONValue] = [:]
+        if case .object(let values) = object["slots"] { slots = values }
+        self.init(
+            id: id, actions: slots["actions"].flatMap(UINode.init(json:)),
+            detail: slots["detail"].flatMap(UINode.init(json:)))
     }
 }
