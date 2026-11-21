@@ -316,11 +316,10 @@ public struct MenuItemsSearch<System: MenuSystem>: MenuItemsSource {
         let walk = reader.start(target.pid, cancel: cancel, waitingForCancelledUpTo: deadline)
         guard case .items(let items, let complete) = walk.finish(within: deadline) else { return .noAnswer }
         let reader = reader
-        let places = menuItemPlaces(items)
         let listing = MenuItemsListing(
             rows: items.map { MenuItemsList.Row($0, appName: target.name) }, complete: complete
         ) { row, pid in
-            switch reader.current(items[row], place: places[row].place, count: places[row].count, in: pid) {
+            switch reader.current(items[row], place: items[row].place, count: items[row].count, in: pid) {
             case .ready(let handle): .found(MenuItemPress { reader.system.press(handle) })
             case .disabled: .disabled
             case .gone: .gone
