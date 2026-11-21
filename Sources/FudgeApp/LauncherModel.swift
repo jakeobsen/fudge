@@ -1232,9 +1232,12 @@ final class LauncherModel {
     private func openQuicklink(_ quicklink: Quicklink, item: RootItem) {
         let entered = argumentsItem == item.id ? arguments : ArgumentInput(arguments: item.arguments)
         let template = QuicklinkTemplate(quicklink.link)
-        let pasteboard = NSPasteboard.general
-        let clipboard = QuicklinkTemplate.clipboardText(
-            pasteboard.string(forType: .string), types: (pasteboard.types ?? []).map(\.rawValue))
+        var clipboard: String?
+        if template.usesClipboard {
+            let pasteboard = NSPasteboard.general
+            clipboard = QuicklinkTemplate.clipboardText(
+                pasteboard.string(forType: .string), types: (pasteboard.types ?? []).map(\.rawValue))
+        }
         let filled = template.fill(arguments: entered.launchArguments, context: .init(clipboard: clipboard))
         let target: QuicklinkOpening.Target
         switch QuicklinkOpening.target(for: template, filled: filled) {

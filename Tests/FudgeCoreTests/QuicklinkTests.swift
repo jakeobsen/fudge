@@ -250,6 +250,32 @@ private func context(clipboard: String? = "copied text") -> QuicklinkTemplate.Co
     #expect(QuicklinkTemplate("https://e.com/plain").problem == nil)
 }
 
+@Test func aLinkWithAProblemHasNoFields() {
+    let unsupported = QuicklinkTemplate("https://e.com/{q}/{selection}")
+    #expect(unsupported.problem != nil && unsupported.fields.isEmpty, "↵ shows the problem, not an empty q field")
+    let tooMany = QuicklinkTemplate("https://e.com/{a}/{b}/{c}/{d}")
+    #expect(tooMany.problem != nil && tooMany.arguments.count == 4 && tooMany.fields.isEmpty, "never four fields")
+    let item = RootItem.quicklink(Quicklink(id: "q1", name: "Broken", link: "https://e.com/{q}/{selection}"))
+    #expect(item.arguments.isEmpty)
+}
+
+@Test func dynamicNamesIgnoreLetterCase() {
+    let template = QuicklinkTemplate("https://e.com/?d={Date}&u={UUID}&c={Clipboard}")
+    #expect(template.problem == nil && template.arguments.isEmpty, "not fields named Date, UUID and Clipboard")
+    #expect(
+        template.segments.compactMap { segment -> QuicklinkTemplate.Value? in
+            if case .placeholder(let placeholder) = segment { return placeholder.value }
+            return nil
+        } == [.dynamic(.date), .dynamic(.uuid), .dynamic(.clipboard)])
+    #expect(QuicklinkTemplate("https://e.com/{Query}").arguments.map(\.name) == ["Query"], "other words stay fields")
+}
+
+@Test func onlyALinkWithClipboardReadsIt() {
+    #expect(QuicklinkTemplate("https://e.com/?c={clipboard | raw}").usesClipboard)
+    #expect(QuicklinkTemplate("{CLIPBOARD}").usesClipboard)
+    #expect(!QuicklinkTemplate("https://e.com/?q={q}&d={date}").usesClipboard)
+}
+
 @Test func theClipboardSkipsConcealedAndTransientContent() {
     #expect(QuicklinkTemplate.clipboardText("hello", types: ["public.utf8-plain-text"]) == "hello")
     #expect(

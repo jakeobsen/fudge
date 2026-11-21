@@ -87,9 +87,11 @@ public struct QuicklinkTemplate: Sendable, Equatable {
     }
 
     /// Its arguments as root search's fields after the query (`ArgumentInput`): a dropdown for `options`, the
-    /// default as the placeholder text, and required unless there's a default.
+    /// default as the placeholder text, and required unless there's a default. None when the link has a problem,
+    /// so ↵ shows the problem rather than asking for fields first.
     public var fields: [ExtensionManifest.Argument] {
-        arguments.map { argument in
+        guard problem == nil else { return [] }
+        return arguments.map { argument in
             ExtensionManifest.Argument(
                 name: argument.name,
                 type: argument.options.isEmpty ? "text" : "dropdown",
@@ -98,6 +100,14 @@ public struct QuicklinkTemplate: Sendable, Equatable {
                 data: argument.options.isEmpty
                     ? nil : argument.options.map { ExtensionManifest.Option(title: $0, value: $0) }
             )
+        }
+    }
+
+    /// Whether it uses `{clipboard}`, so opening it reads the clipboard only then.
+    public var usesClipboard: Bool {
+        segments.contains { segment in
+            if case .placeholder(let placeholder) = segment { return placeholder.value == .dynamic(.clipboard) }
+            return false
         }
     }
 
@@ -273,7 +283,7 @@ public struct QuicklinkTemplate: Sendable, Equatable {
                 fail("Fudge doesn't support “\(written)” in a quicklink.")
                 return nil
             }
-            if let dynamic = Dynamic(rawValue: word) {
+            if let dynamic = Dynamic(rawValue: word.lowercased()) {
                 return Placeholder(value: .dynamic(dynamic), modifiers: modifiers)
             }
             // Raycast's older form: a bare word is an argument with that name.
