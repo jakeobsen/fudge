@@ -4,6 +4,7 @@ import * as implementation from "../src/api/index.ts";
 import { createApiModule } from "../src/api/module.ts";
 import { mark, NOT_DRAWN, notAvailable, UNAVAILABLE } from "../src/api/stubs.ts";
 import { RAYCAST_UTILS_PATHS } from "../scripts/compat/raycast-utils.generated.ts";
+import { category } from "../scripts/compat/extension.ts";
 import { apiName, gaps, isExtensionSource, support, toJavaScript, uses } from "../scripts/compat/scan.ts";
 import { raycastDeclarations, vendoredTypes } from "../scripts/raycast-types.ts";
 
@@ -61,6 +62,13 @@ test("a stub is missing wherever the path reaches it, lowercase members included
     assert.equal(support(partial, "pasteText"), "missing", "an implemented export that is a stub");
     assert.equal(support(api, "BrowserExtension.getTabs"), "missing", "a member of an export fudge leaves out");
     assert.equal(support(api, "environment.commandName"), "implemented", "a getter that needs a running command");
+});
+
+test("OAuth stays left out by design, though its client can be built (D-50)", () => {
+    for (const path of ["OAuth", "OAuth.PKCEClient", "OAuth.RedirectMethod.Web", "OAuth.RedirectMethod.AppURI"]) {
+        assert.equal(support(api, path, declared), "missing", path);
+        assert.equal(category({ api: apiName(path), kind: "missing" }), "OAuth", path);
+    }
 });
 
 test("an action that renders but fails when used is render-but-fail", () => {
