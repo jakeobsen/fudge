@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { binaryTransform, describe, type Report } from "../scripts/compat/extension.ts";
+import { createApiModule } from "../src/api/module.ts";
+import { binaryTransform, describe, scanExtension, type Report } from "../scripts/compat/extension.ts";
+import { maxSourceBytes, readRegularFile } from "../scripts/compat/files.ts";
 import { toJavaScript, uses } from "../scripts/compat/scan.ts";
+import { raycastDeclarations, vendoredTypes } from "../scripts/raycast-types.ts";
 
 // `fudge scan <folder> --json`, run the way the fudge tool runs it: with esbuild's binary and Raycast's types given
 // by the environment, never esbuild's JS API.
@@ -122,4 +125,63 @@ test("a source esbuild can't read is unreadable, and the extension isn't called 
     execFileSync("sh", ["-c", `printf 'export default (' > '${path.join(broken, "src/index.ts")}'`]);
     const report = scan(path.join(runtime, "scripts/compat/fudge-scan.ts"), broken) as Record<string, unknown>;
     assert.deepEqual(report, { extension: "scan-supported", supported: false, gaps: [], unreadable: ["src/index.ts"] });
+});
+
+// MARK: - Regular files only
+
+/** An extension in `scratch` whose `src` holds a good source next to a link to /dev/zero, a FIFO, a folder named like
+ * a source and a source over the size cap. */
+function trickyExtension(): string {
+    const folder = path.join(scratch, `tricky-${Date.now()}-${Math.random()}`);
+    mkdirSync(path.join(folder, "src/dir.ts"), { recursive: true });
+    writeFileSync(path.join(folder, "package.json"), JSON.stringify({ name: "tricky", title: "Tricky", commands: [] }));
+    writeFileSync(path.join(folder, "src/ok.ts"), 'import { showHUD } from "@raycast/api";\nshowHUD("hi");\n');
+    symlinkSync("/dev/zero", path.join(folder, "src/zero.ts"));
+    assert.equal(spawnSync("/usr/bin/mkfifo", [path.join(folder, "src/fifo.ts")]).status, 0);
+    writeFileSync(path.join(folder, "src/big.ts"), `// ${"x".repeat(maxSourceBytes)}\n`);
+    return folder;
+}
+
+test("the scan reads regular files only: a link, a FIFO, a folder or a file over the cap is unreadable", async () => {
+    const folder = trickyExtension();
+    const started = Date.now();
+    const result = await scanExtension(folder, {
+        api: createApiModule() as Record<string, unknown>,
+        declared: raycastDeclarations(vendoredTypes()),
+    });
+    assert.ok(Date.now() - started < 10_000, "nothing is waited on or read without end");
+    assert.deepEqual(result.unreadable.sort(), ["src/big.ts", "src/dir.ts", "src/fifo.ts", "src/zero.ts"]);
+    assert.deepEqual(result.gaps, [], "the good file is still scanned");
+});
+
+test("readRegularFile refuses links, FIFOs, folders and big files, and reads the rest", () => {
+    const folder = trickyExtension();
+    assert.match(readRegularFile(path.join(folder, "src/ok.ts"), maxSourceBytes), /showHUD/);
+    for (const name of ["zero.ts", "fifo.ts", "dir.ts", "big.ts"]) {
+        assert.throws(() => readRegularFile(path.join(folder, "src", name), maxSourceBytes), name);
+    }
+});
+
+test("a src that's a link, a file or missing isn't an extension: exit code 2 and one clear line", () => {
+    const script = path.join(runtime, "scripts/compat/fudge-scan.ts");
+    const folder = path.join(scratch, "not-extensions");
+    const cases: Record<string, (dir: string) => void> = {
+        "src-is-a-file": (dir) => writeFileSync(path.join(dir, "src"), "not a folder"),
+        "src-is-missing": () => undefined,
+        "src-is-a-link": (dir) => symlinkSync(path.join(fixtures, "supported/src"), path.join(dir, "src")),
+    };
+    for (const [name, make] of Object.entries(cases)) {
+        const dir = path.join(folder, name);
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(path.join(dir, "package.json"), "{}");
+        make(dir);
+        const result = spawnSync(process.execPath, [script, dir, "--json"], {
+            cwd: scratch,
+            env: { ...process.env, FUDGE_ESBUILD: esbuild, FUDGE_RAYCAST_TYPES: types },
+            encoding: "utf8",
+        });
+        assert.equal(result.status, 2, name);
+        assert.equal(result.stderr.trim(), `${dir} isn't an extension: it needs a package.json file and a src folder`);
+        assert.equal(result.stdout, "");
+    }
 });

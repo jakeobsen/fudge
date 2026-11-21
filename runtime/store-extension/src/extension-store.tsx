@@ -11,7 +11,6 @@ import {
     Toast,
     trash,
 } from "@raycast/api";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -30,6 +29,7 @@ import {
     type StoreEntry,
 } from "./catalog.ts";
 import { gitAvailable, stopRunningGit, StoreRepository } from "./git.ts";
+import { maxReadmeBytes, readRegularFile } from "./files.ts";
 import { detailMarkdown } from "./readme.ts";
 import { install, oneAtATime, readInstalled, uninstall, type StoreContext } from "./store.ts";
 
@@ -148,9 +148,10 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
             let readme = "";
             try {
                 await repo.add(`/extensions/${name}/README.md`);
-                readme = await readFile(path.join(repo.path, "extensions", name, "README.md"), "utf8");
+                readme = await readRegularFile(path.join(repo.path, "extensions", name, "README.md"), maxReadmeBytes);
             } catch {
-                // No README, or it couldn't be fetched: the detail shows the manifest alone.
+                // No README, one that couldn't be fetched, or one that isn't a regular file of at most 1 MB: the
+                // detail shows the manifest alone.
             }
             setReadmes((current) => ({ ...current, [name]: readme }));
         });

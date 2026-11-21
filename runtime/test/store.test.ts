@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
@@ -17,6 +18,7 @@ import {
     status,
     type StoreEntry,
 } from "../store-extension/src/catalog.ts";
+import { maxReadmeBytes, readRegularFile } from "../store-extension/src/files.ts";
 import {
     gitAvailable,
     isValidBranch,
@@ -974,4 +976,41 @@ test("refreshing many times keeps the copy one commit deep: only the newest comm
         "4.0.0",
         "the newest manifest is checked out",
     );
+});
+
+// MARK: - Regular files only
+
+test("the store reads regular files only: links, FIFOs, folders and big files are refused", async () => {
+    const folder = await temporary();
+    await writeFile(path.join(folder, "README.md"), "# Fine\n");
+    await symlink("/dev/zero", path.join(folder, "zero.md"));
+    assert.equal(spawnSync("/usr/bin/mkfifo", [path.join(folder, "fifo.md")]).status, 0);
+    await mkdir(path.join(folder, "dir.md"));
+    await writeFile(path.join(folder, "big.md"), "x".repeat(maxReadmeBytes + 1));
+    assert.equal(await readRegularFile(path.join(folder, "README.md"), maxReadmeBytes), "# Fine\n");
+    const started = Date.now();
+    for (const name of ["zero.md", "fifo.md", "dir.md", "big.md", "missing.md"]) {
+        await assert.rejects(readRegularFile(path.join(folder, name), maxReadmeBytes), name);
+    }
+    assert.ok(Date.now() - started < 2_000, "nothing is waited on");
+});
+
+test("a linked package.json leaves the list, and a linked or missing file fails the package-source check", async () => {
+    const repo = await temporary();
+    await writeJSON(path.join(repo, "extensions/alpha/package.json"), manifest("alpha"));
+    await mkdir(path.join(repo, "extensions/beta"), { recursive: true });
+    await symlink("/dev/zero", path.join(repo, "extensions/beta/package.json"));
+    assert.deepEqual(
+        (await readCatalog(repo)).map((entry) => entry.name),
+        ["alpha"],
+    );
+
+    const source = await temporary();
+    await writeJSON(path.join(source, "package.json"), manifest("gamma"));
+    await symlink("/dev/zero", path.join(source, "package-lock.json"));
+    assert.equal(await sourceProblem(source), "Its package-lock.json isn't a regular file of at most 50 MB");
+    const linkedManifest = await temporary();
+    await symlink(path.join(source, "package.json"), path.join(linkedManifest, "package.json"));
+    assert.equal(await sourceProblem(linkedManifest), "Its package.json isn't a regular file of at most 1 MB");
+    assert.equal(await sourceProblem(await temporary()), "It has no package.json");
 });

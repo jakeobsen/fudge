@@ -2,8 +2,9 @@
 // `fudge scan <folder>` does for one.
 
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { basename, join, relative } from "node:path";
+import { maxManifestBytes, maxSourceBytes, readRegularFile } from "./files.ts";
 import { RAYCAST_UTILS_PATHS } from "./raycast-utils.generated.ts";
 import { gaps, isExtensionSource, toJavaScript, uses, type Gap, type Transform } from "./scan.ts";
 
@@ -61,13 +62,17 @@ function sources(src: string): string[] {
     return (readdirSync(src, { recursive: true }) as string[]).filter(isExtensionSource).map((file) => join(src, file));
 }
 
-/** Scans the extension in `folder`: every source file under its `src/`. Nothing is built or run. */
+/**
+ * Scans the extension in `folder`: every source file under its `src/`. Nothing is built or run. Only regular files of
+ * at most `maxSourceBytes` are read (`readRegularFile`); a link, FIFO, device or folder with a source's name, or a
+ * bigger file, is listed as unreadable.
+ */
 export async function scanExtension(folder: string, options: ScanOptions): Promise<Result> {
     const found = { api: new Set<string>(), utils: new Set<string>() };
     const unreadable: string[] = [];
     for (const file of sources(join(folder, "src"))) {
         try {
-            const used = uses(await toJavaScript(readFileSync(file, "utf8"), file, options.transform));
+            const used = uses(await toJavaScript(readRegularFile(file, maxSourceBytes), file, options.transform));
             for (const path of used.api) found.api.add(path);
             for (const name of used.utils) found.utils.add(name);
         } catch {
@@ -94,7 +99,9 @@ export interface Report {
 export function report(folder: string, result: Result): Report {
     let name = basename(folder);
     try {
-        const manifest = JSON.parse(readFileSync(join(folder, "package.json"), "utf8")) as { name?: unknown };
+        const manifest = JSON.parse(readRegularFile(join(folder, "package.json"), maxManifestBytes)) as {
+            name?: unknown;
+        };
         if (typeof manifest.name === "string" && manifest.name) name = manifest.name;
     } catch {
         // The folder's name will do.
