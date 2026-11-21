@@ -801,6 +801,22 @@ final class SettingsModel {
 final class SnapshotSheet: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+
+    /// A snapshot run's alert, which no one may see: it's laid out without being shown (`layout()` never orders its
+    /// window in), and its content moves to a panel that can't become key and is never ordered in either, transparent
+    /// for good measure. It isn't begun as a sheet: a window a snapshot renders is transparent and off-screen, but a
+    /// sheet on it is a window of its own, which would show on the screen. Nobody answers it: the run saves it and
+    /// quits.
+    static func holding(_ alert: NSAlert) -> SnapshotSheet {
+        alert.layout()
+        let laidOut = alert.window
+        let sheet = SnapshotSheet(
+            contentRect: laidOut.frame, styleMask: laidOut.styleMask, backing: .buffered, defer: false)
+        sheet.alphaValue = 0
+        sheet.ignoresMouseEvents = true
+        sheet.contentView = laidOut.contentView
+        return sheet
+    }
 }
 
 /// The Settings window: extensions on the left, the selected one's preferences on the right.
@@ -905,7 +921,7 @@ final class SettingsWindowController {
                 alert.addButton(withTitle: request.primary).hasDestructiveAction = request.destructive
                 alert.addButton(withTitle: request.dismiss)
                 if window.refusesKey {
-                    self?.snapshotSheet = Self.snapshotSheet(of: alert)
+                    self?.snapshotSheet = SnapshotSheet.holding(alert)
                     return false
                 }
                 return await withCheckedContinuation { continuation in
@@ -940,22 +956,6 @@ final class SettingsWindowController {
     var contentView: NSView? { window?.contentView }
     /// In a snapshot run, the alert a `confirm` would have shown, for the run to save.
     private(set) var snapshotSheet: NSWindow?
-
-    /// A snapshot run's alert, which no one may see: it's laid out without being shown (`layout()` never orders its
-    /// window in), and its content moves to a panel that can't become key and is never ordered in either, transparent
-    /// for good measure. It isn't begun as a sheet: the Settings window a snapshot renders is transparent, but ordering
-    /// it front puts it back on screen, and a sheet on it is a window of its own, which would show there. Nobody answers
-    /// it: the run saves it and quits.
-    private static func snapshotSheet(of alert: NSAlert) -> NSWindow {
-        alert.layout()
-        let laidOut = alert.window
-        let sheet = SnapshotSheet(
-            contentRect: laidOut.frame, styleMask: laidOut.styleMask, backing: .buffered, defer: false)
-        sheet.alphaValue = 0
-        sheet.ignoresMouseEvents = true
-        sheet.contentView = laidOut.contentView
-        return sheet
-    }
 
     /// A sheet's last paragraph, as selectable text with a working link: an alert's own text can't hold one.
     /// Clicking the link opens the browser and leaves the sheet open.
