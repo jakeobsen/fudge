@@ -98,6 +98,8 @@ public enum EscapeAction: Sendable, Equatable {
     case closeDropdown
     /// Closes the action panel's open submenu, or the panel itself.
     case closeActionPanel
+    /// Closes the Quick Look preview, and does nothing else.
+    case closeQuickLook
     case popView
     case clearSearch
     case leaveCommand
@@ -118,20 +120,25 @@ public enum EscapeAction: Sendable, Equatable {
 
         public var dropdownOpen: Bool
         public var actionPanelOpen: Bool
+        public var quickLookOpen: Bool
         public var screen: Screen
 
-        public init(dropdownOpen: Bool = false, actionPanelOpen: Bool = false, screen: Screen) {
+        public init(
+            dropdownOpen: Bool = false, actionPanelOpen: Bool = false, quickLookOpen: Bool = false, screen: Screen
+        ) {
             self.dropdownOpen = dropdownOpen
             self.actionPanelOpen = actionPanelOpen
+            self.quickLookOpen = quickLookOpen
             self.screen = screen
         }
     }
 
-    /// Popovers (the dropdown's panel, the action panel) close first either way. A Form keeps navigating back,
-    /// since Esc belongs to it there.
+    /// Popovers (the dropdown's panel, the action panel) close first either way, then the Quick Look preview. A
+    /// Form keeps navigating back, since Esc belongs to it there.
     public static func next(behavior: EscapeBehavior, state: State) -> EscapeAction {
         if state.dropdownOpen { return .closeDropdown }
         if state.actionPanelOpen { return .closeActionPanel }
+        if state.quickLookOpen { return .closeQuickLook }
         var behavior = behavior
         if case .command(_, _, true) = state.screen { behavior = .back }
         guard behavior == .back else { return .hideAndReset }

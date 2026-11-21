@@ -22,6 +22,8 @@ public struct ListContent: Sendable, Equatable {
         public var detail: UINode?
         /// A Grid item's cell: its `content`. A Grid item's `accessory` is its one accessory.
         public var content: GridItemContent?
+        /// The file Quick Look previews for it (`quickLook`).
+        public var quickLook: QuickLookItem?
         /// The slots the host held back (`ItemSlots`): the item has them, and `filled(with:)` puts them in.
         public var deferred: Deferred = []
 
@@ -283,6 +285,7 @@ public struct ListContent: Sendable, Equatable {
             actions: node.node("actions"),
             detail: node.node("detail"),
             content: GridItemContent(node.props["content"]),
+            quickLook: QuickLookItem.read(node.props["quickLook"]),
             deferred: deferred(node)
         )
     }
