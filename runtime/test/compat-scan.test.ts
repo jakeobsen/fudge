@@ -64,10 +64,11 @@ test("a stub is missing wherever the path reaches it, lowercase members included
 });
 
 test("an action that renders but fails when used is render-but-fail", () => {
-    for (const path of ["Action.CreateQuicklink", "Action.CreateSnippet", "Action.ToggleQuickLook", "Action.PickDate"]) {
+    for (const path of ["Action.CreateQuicklink", "Action.CreateSnippet", "Action.PickDate"]) {
         assert.equal(support(api, path, declared), "render-but-fail", path);
     }
     assert.equal(support(api, "Action.CopyToClipboard", declared), "implemented");
+    assert.equal(support(api, "Action.ToggleQuickLook", declared), "implemented", "the app performs Quick Look");
     assert.equal(support(api, "Action.Paste", declared), "implemented", "Paste works now");
 });
 
