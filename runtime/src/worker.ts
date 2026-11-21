@@ -106,6 +106,10 @@ port.on("message", (message: HostToWorker) => {
             settled();
             return;
         }
+        case "slots":
+            // Always answered, so the app never waits on it; without a root (a no-view command) there are no items.
+            post({ type: "slots", items: root ? root.slots(message.nodes) : [] });
+            return;
         case "pop":
             navigation.current?.pop();
             return;

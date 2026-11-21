@@ -84,13 +84,20 @@ test("Trash and Open ask the app, then report back", async () => {
     assert.deepEqual(reported, [["trashed", "/tmp/a"], ["opened", "/tmp/a"]]);
 });
 
-test("Open With is a submenu of the applications that can open the path", async () => {
+test("Open With is a submenu of the applications that can open the path, looked up when it opens", async () => {
     const { mounted } = await panelWith(h(Action.OpenWith, { path: "/tmp/notes.txt" }));
     await flush();
-    const view = mounted.snapshots.at(-1)!.view!;
-    const submenu = (view.props.actions as unknown as UINode).children[0]!;
-    assert.equal(submenu.type, "ActionPanel.Submenu");
-    assert.equal(submenu.props.title, "Open With");
+    const closed = (mounted.snapshots.at(-1)!.view!.props.actions as unknown as UINode).children[0]!;
+    assert.equal(closed.type, "ActionPanel.Submenu");
+    assert.equal(closed.props.title, "Open With");
+    assert.equal(closed.props.isLoading, true);
+    assert.deepEqual(closed.props.onOpen, { $fn: ["onOpen"] });
+    assert.equal(calls.length, 0, "nothing is asked until the submenu opens");
+
+    mounted.root.dispatch(closed.id, ["onOpen"], []);
+    await flush();
+    const submenu = (mounted.snapshots.at(-1)!.view!.props.actions as unknown as UINode).children[0]!;
+    assert.deepEqual(calls.map((call) => call.method), ["applications.list"]);
     assert.equal(submenu.props.isLoading, false);
     assert.deepEqual(submenu.children.map((child) => [child.props.title, child.props.icon]), [["TextEdit", { fileIcon: "/System/Applications/TextEdit.app" }]]);
     await mounted.root.dispatch(submenu.children[0]!.id, ["onAction"], []);

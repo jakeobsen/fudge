@@ -52,6 +52,17 @@ test("event needs a node and a path of strings; args default to none", () => {
     assert.equal(parse({ type: "event", session: "s", node: 4, path: [1] }).ok, false);
 });
 
+test("slots needs a session and an array of node ids", () => {
+    assert.deepEqual(parse({ type: "slots", session: "s", nodes: [3, 5] }), {
+        ok: true,
+        message: { type: "slots", session: "s", nodes: [3, 5] },
+    });
+    assert.equal(parse({ type: "slots", session: "s", nodes: ["3"] }).ok, false);
+    assert.equal(parse({ type: "slots", session: "s", nodes: [1.5] }).ok, false);
+    assert.equal(parse({ type: "slots", session: "s" }).ok, false);
+    assert.equal(parse({ type: "slots", nodes: [] }).ok, false);
+});
+
 test("rpcResult carries a result or an error", () => {
     assert.deepEqual(parse({ type: "rpcResult", session: "s", id: 2, result: true }), {
         ok: true,
