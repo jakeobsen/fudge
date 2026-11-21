@@ -5,6 +5,8 @@
 // `fudge:app`, for the bundled extensions) and the same React the renderer
 // uses: `require` is intercepted for those names in this thread only.
 
+import http from "node:http";
+import https from "node:https";
 import Module from "node:module";
 import path from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
@@ -15,6 +17,7 @@ import { Toast } from "./api/feedback.ts";
 import { createApiModule } from "./api/module.ts";
 import { explainRenderError } from "./api/oauth.ts";
 import { providersFromEnvironment, rewriteFetch } from "./api/oauth-fetch.ts";
+import { guardConnections, guardRequests } from "./api/oauth-http.ts";
 import { NavigationRoot, type NavigationHandle } from "./api/navigation.ts";
 import { recordRender } from "./api/render.ts";
 import { callApp, connect, holdWhilePending, settle } from "./bridge.ts";
@@ -65,13 +68,20 @@ process.noDeprecation = true;
 process.on("uncaughtException", (error) => report(error, false));
 process.on("unhandledRejection", (reason) => report(reason, false));
 connect((request) => post(request));
-// Sign-in's token and refresh requests go to the relay the user chose, never to Raycast's servers (SPEC-056).
-globalThis.fetch = rewriteFetch(globalThis.fetch, providersFromEnvironment(), (provider) =>
+// Sign-in's token and refresh requests go to the relay the user chose, never to Raycast's servers (SPEC-056), by
+// whatever client the extension uses (SPEC-075): `fetch`, `http` and `https`, and a backstop under every client. All
+// of it is in place before the command loads, so a library that keeps `https.request` at load gets the wrapped one,
+// and `syncBuiltinESMExports` gives `import { request } from "node:https"` the same.
+const providers = providersFromEnvironment();
+const relayServer = (provider: string) =>
     callApp<{ server: string | null; signedIn: boolean }>("oauth.server", { provider }).then((answer) => ({
         server: answer?.server ?? null,
         signedIn: answer?.signedIn === true,
-    })),
-);
+    }));
+globalThis.fetch = rewriteFetch(globalThis.fetch, providers, relayServer);
+guardRequests({ http, https }, providers, relayServer);
+guardConnections();
+Module.syncBuiltinESMExports();
 
 const { entry, mode, launchProps, preferences, environment } = workerData as WorkerData;
 // launchCommand's context carries Dates and Buffers as markers (see protocol.ts `encode`).
