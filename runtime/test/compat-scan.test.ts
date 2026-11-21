@@ -161,16 +161,16 @@ test("paths Raycast doesn't declare are not-raycast, not gaps", () => {
 
 test("an extension using a @raycast/utils export inherits its paths", () => {
     const table = {
-        useThing: ["WindowManagement.getActiveWindow", "Clipboard.copy", "Color.Gray"],
-        useOther: ["WindowManagement.getActiveWindow"],
+        useThing: ["captureMemorySnapshot", "Clipboard.copy", "Color.Gray"],
+        useOther: ["captureMemorySnapshot"],
     };
     assert.deepEqual(gaps({ api: new Set(), utils: new Set(["useThing", "useOther"]) }, api, declared, table).gaps, [
-        { api: "WindowManagement.getActiveWindow", kind: "via @raycast/utils", via: ["useOther", "useThing"] },
+        { api: "captureMemorySnapshot", kind: "via @raycast/utils", via: ["useOther", "useThing"] },
     ]);
     assert.deepEqual(
-        gaps({ api: new Set(["WindowManagement.getActiveWindow"]), utils: new Set(["useThing"]) }, api, declared, table)
+        gaps({ api: new Set(["captureMemorySnapshot"]), utils: new Set(["useThing"]) }, api, declared, table)
             .gaps,
-        [{ api: "WindowManagement.getActiveWindow", kind: "missing" }],
+        [{ api: "captureMemorySnapshot", kind: "missing" }],
         "a direct use counts as direct",
     );
     const oauth = gaps({ api: new Set(), utils: new Set(["OAuthService"]) }, api, declared, RAYCAST_UTILS_PATHS);

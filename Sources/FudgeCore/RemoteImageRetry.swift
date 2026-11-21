@@ -1,7 +1,7 @@
 import Foundation
 
-/// When a remote image is loaded again (SPEC-059). Nothing runs on a timer: `RemoteImages` asks `isDue` each time a
-/// view asks for the source, so a run fetches no more than the views need.
+/// When a remote image is loaded again (SPEC-059). Nothing runs on a timer: `RemoteImageStore` asks `isDue` each time
+/// a view asks for the source, so a run fetches no more than the views need.
 ///
 /// - A retryable failure (`RemoteImageFailure.isRetryable`) is tried again after 1 min, then 5 min, 30 min, and every
 ///   2 h from then on, or after a 429's or 503's `Retry-After` when that's longer, up to 2 h. Any other failure is

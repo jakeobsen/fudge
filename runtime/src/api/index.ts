@@ -48,6 +48,7 @@ export {
 } from "./feedback.ts";
 export { Keyboard } from "./keyboard.ts";
 export { render } from "./render.ts";
+export { WindowManagement } from "./window-management.ts";
 
 // Raycast's old names, still exported by @raycast/api.
 import { Action, ActionPanel, Form, List } from "./components.ts";

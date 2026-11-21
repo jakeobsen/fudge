@@ -87,6 +87,58 @@ test("only the first item and the ones the app asked for carry their actions and
     assert.deepEqual(later[1]!.props.actions, { $deferred: true });
 });
 
+test("the item selectedItemId names carries its actions and detail in the first snapshot, and only it", async () => {
+    const item = (n: number) =>
+        h(List.Item, {
+            key: n,
+            id: `item-${n}`,
+            title: `item ${n}`,
+            actions: h(ActionPanel, null, h(Action, { title: `Open ${n}`, onAction: () => {} })),
+            detail: h(List.Item.Detail, { markdown: `# ${n}` }),
+        });
+    const numbers = Array.from({ length: 1000 }, (_, index) => index + 1);
+    let select: (selected: unknown) => void = () => {};
+    const Selecting = () => {
+        const [selected, setSelected] = useState<unknown>("item-500");
+        select = setSelected;
+        return h(List, { selectedItemId: selected }, numbers.map(item));
+    };
+    const mounted = await mount(h(Selecting));
+    const carried = (view: UINode | null) =>
+        view!.children.filter((child) => (child.props.actions as unknown as UINode).type === "ActionPanel");
+    const titles = (view: UINode | null) => carried(view).map((child) => child.props.title);
+
+    // The first item and item 500, never its neighbours.
+    assert.deepEqual(titles(mounted.first.view), ["item 1", "item 500"]);
+    const five = mounted.first.view!.children[499]!;
+    assert.equal((five.props.detail as unknown as UINode).type, "List.Item.Detail");
+    assert.deepEqual(mounted.first.view!.children[498]!.props.actions, { $deferred: true });
+    assert.deepEqual(mounted.first.view!.children[500]!.props.actions, { $deferred: true });
+
+    // It's read in each snapshot: a controlled selection that moves takes its slots along.
+    const after = async (selected: unknown) => {
+        const next = mounted.next();
+        select(selected);
+        return titles((await next).view);
+    };
+    assert.deepEqual(await after("item-750"), ["item 1", "item 750"]);
+    // An id that names no item, or isn't a string, adds nothing.
+    assert.deepEqual(await after("item-5000"), ["item 1"]);
+    assert.deepEqual(await after(500), ["item 1"]);
+
+    // Only one item, even when two share the id: the first, as the app selects.
+    const twice = await mount(
+        h(List, { selectedItemId: "same" }, item(1), h(List.Item, { key: "a", id: "same", title: "a", actions: h(ActionPanel, null, h(Action, { title: "A", onAction: () => {} })) }), h(List.Item, { key: "b", id: "same", title: "b", actions: h(ActionPanel, null, h(Action, { title: "B", onAction: () => {} })) })),
+    );
+    assert.deepEqual(titles(twice.first.view), ["item 1", "a"]);
+
+    // A Grid too.
+    const cell = (n: number) =>
+        h(Grid.Item, { key: n, id: `cell-${n}`, title: `cell ${n}`, content: "x.png", actions: h(ActionPanel, null, h(Action, { title: `Open ${n}`, onAction: () => {} })) });
+    const grid = await mount(h(Grid, { selectedItemId: "cell-40" }, numbers.slice(0, 100).map(cell)));
+    assert.deepEqual(titles(grid.first.view), ["cell 1", "cell 40"]);
+});
+
 test("the items a render carries in full match what a full render sends", async () => {
     const item = (n: number) =>
         h(List.Item, {

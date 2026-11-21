@@ -1,8 +1,8 @@
 import AppKit
 import FudgeCore
 
-/// Answers the extension API calls that need the system: clipboard, opening, the Trash, Finder, applications and the
-/// selection.
+/// Answers the extension API calls that need the system: clipboard, opening, the Trash, Finder, applications, the
+/// selection and windows.
 @MainActor
 enum SystemCalls {
     struct Failure: Error, CustomStringConvertible {
@@ -19,7 +19,7 @@ enum SystemCalls {
     static let methods: Set<String> = [
         "clipboard.copy", "clipboard.clear", "clipboard.read", "open", "trash", "showInFinder",
         "applications.list", "applications.default", "applications.frontmost", "selection.text",
-        "selection.finderItems",
+        "selection.finderItems", "windows.desktops", "windows.active", "windows.onActiveDesktop", "windows.setBounds",
     ]
 
     /// Offers the Accessibility pane when macOS's prompt didn't help. The app delegate sets it up with the panel;
@@ -93,6 +93,8 @@ enum SystemCalls {
             let paths = try await FinderSelection.read(
                 from: frontmost(), permission: automation, source: finder, origin: origin)
             return .array(paths.map { .object(["path": .string($0)]) })
+        case "windows.desktops", "windows.active", "windows.onActiveDesktop", "windows.setBounds":
+            return try await windows(method, params.values, origin: origin)
         default:
             throw Failure(description: "\(method) isn't available in Fudge yet")
         }
@@ -107,6 +109,30 @@ enum SystemCalls {
         try await paster.paste(
             content, closeMainWindow: params.values["closeMainWindow"] != .bool(false), origin: origin,
             hideWindow: hideWindow, frontmost: frontmost)
+    }
+
+    /// `WindowManagement` (`windows.*`). It needs Accessibility permission, checked as Paste checks it, and runs off
+    /// the main thread, since the Accessibility API waits on other apps.
+    private static func windows(_ method: String, _ params: [String: JSONValue], origin: CallOrigin) async throws
+        -> JSONValue
+    {
+        guard gate.isTrusted(origin: origin) else { throw WindowManagementError.accessibilityNeeded }
+        let manager = WindowManager(system: SystemWindows.current(), ownPid: ProcessInfo.processInfo.processIdentifier)
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(
+                    with: Result {
+                        switch method {
+                        case "windows.desktops": return .array(manager.desktops())
+                        case "windows.active": return try manager.activeWindow()
+                        case "windows.onActiveDesktop": return .array(manager.windowsOnActiveDesktop())
+                        default:
+                            try manager.setBounds(.object(params))
+                            return .null
+                        }
+                    })
+            }
+        }
     }
 
     private static func frontmost() -> FrontmostApplication? {

@@ -144,7 +144,7 @@ struct FudgeScanEndToEnd {
         #expect(
             gaps == [
                 ["api": "AI.ask", "kind": "missing", "byDesign": "AI"],
-                ["api": "WindowManagement.getActiveWindow", "kind": "missing"],
+                ["api": "captureMemorySnapshot", "kind": "missing"],
             ])
 
         let (supportedStatus, text, _) = try Tool.scan([Tool.scanFixtures.appendingPathComponent("supported").path])
@@ -154,7 +154,7 @@ struct FudgeScanEndToEnd {
         #expect(
             gapsText == """
                 scan-gaps uses things Fudge doesn't have yet:
-                  WindowManagement.getActiveWindow (not in Fudge)
+                  captureMemorySnapshot (not in Fudge)
                 scan-gaps uses AI, which Fudge leaves out:
                   AI.ask
 

@@ -88,6 +88,7 @@ final class LauncherModel {
         didSet {
             followQuickLook()
             quicklinkFormLeft()
+            dropHeldKeyIfLeft()
         }
     }
     private(set) var results: [RootItem] = []
@@ -149,6 +150,8 @@ final class LauncherModel {
     /// Whether macOS's Quick Look panel is on screen (SPEC-057); set by the app delegate. Without one (snapshot runs),
     /// the state is taken as it is.
     @ObservationIgnored var quickLookOnScreen: () -> Bool = { true }
+    /// Whether the launcher panel is on screen; the app delegate sets it.
+    @ObservationIgnored var panelOnScreen: () -> Bool = { true }
     /// Whether the launcher panel is on screen; set by the app delegate.
     @ObservationIgnored var isVisible: () -> Bool = { false }
     /// Asks the user to confirm (title, message, primary, dismiss, destructive); set by the app delegate.
@@ -373,6 +376,8 @@ final class LauncherModel {
             guard newValue != searchText else { return }
             switch screen {
             case .command(var command):
+                // Typing after a key that waits for the selected item's actions means the user has moved on.
+                hold(nil)
                 command.searchText = newValue
                 command.searchField.edit(.string(newValue))
                 // The command hears the new text first, so it works on its results while the list is filtered here.
@@ -491,6 +496,12 @@ final class LauncherModel {
     /// answers each one. Requests come each time the panel is shown and after a click on a row: either can leave
     /// AppKit's first responder outside every field, so typing would go nowhere.
     private(set) var keyboardRequests = 0
+
+    /// The panel was just hidden (`AppDelegate.hidePanel`, which every hide goes through). A held key is dropped,
+    /// saying nothing, so it never runs or times out out of sight.
+    func panelHidden() {
+        hold(nil)
+    }
 
     /// The panel was just shown.
     func presented() {
@@ -688,40 +699,71 @@ final class LauncherModel {
         send(.slots(session: command.session, nodes: ids))
     }
 
-    /// What a key pressed before the selected item's actions came does once they come: ↵, ⌘↵ and ⌘K wait for them
-    /// rather than doing nothing, and so does a shortcut of those actions, which the host names with the item
-    /// (`Item.waitsForActions`). Other keys don't wait: they'd hold back the search field's ⌘A or ⌘V.
-    private enum WaitingKey {
-        case primary, secondary, actionPanel
-        case shortcut(KeyShortcut)
-    }
+    /// A key pressed before the selected item's actions came, waiting for them (`HeldKey`), and the timer that
+    /// drops it at its deadline.
+    @ObservationIgnored private var heldKey: HeldKey?
+    @ObservationIgnored private var heldKeyTimer: Task<Void, Never>?
 
-    @ObservationIgnored private var waitingKey: (session: String, node: Int, key: WaitingKey)?
-
-    /// Holds `key` until the selected item's actions come, when they haven't yet; false when they're here.
-    private func waitForActions(_ key: WaitingKey) -> Bool {
+    /// Holds `key` until the selected item's actions come, when they haven't yet; false when they're here. It
+    /// replaces a key already held, and its time starts over.
+    private func waitForActions(_ key: HeldKey.Key) -> Bool {
         guard let command, let item = selectedListItem, item.deferred.contains(.actions) else { return false }
-        waitingKey = (command.session, item.id, key)
+        hold(HeldKey(key, session: command.session, depth: command.depth, node: item.id, pressedAt: .now))
         return true
     }
 
-    /// Runs the key waiting for the selected item's actions once they've come. It's dropped when the selection
-    /// moved or the command changed meanwhile.
-    private func runWaitingKey() {
-        guard let waiting = waitingKey else { return }
-        guard let command, command.session == waiting.session, let item = selectedListItem, item.id == waiting.node
-        else {
-            waitingKey = nil
+    /// What the held key is settled against.
+    private var heldKeyScreen: HeldKey.Screen {
+        let item = selectedListItem
+        return HeldKey.Screen(
+            panelShown: panelOnScreen(), session: command?.session, depth: command?.depth ?? 0, selected: item?.id,
+            actionsCame: item.map { !$0.deferred.contains(.actions) } ?? false)
+    }
+
+    /// Drops the held key, and its timer, once the command or view it was pressed in has gone: a push, a pop,
+    /// another command or root search.
+    private func dropHeldKeyIfLeft() {
+        guard let heldKey else { return }
+        if case .command(let command) = screen, command.session == heldKey.session, command.depth == heldKey.depth {
             return
         }
-        guard !item.deferred.contains(.actions) else { return }
-        waitingKey = nil
-        switch waiting.key {
-        case .primary: if let primaryAction { run(primaryAction) }
-        case .secondary: if let secondaryAction { run(secondaryAction) }
-        case .actionPanel: if actionPanel == nil { toggleActionPanel() }
-        case .shortcut(let pressed):
-            if let entry = ActionPanelReader.action(for: pressed, in: currentActions) { run(entry) }
+        hold(nil)
+    }
+
+    /// Sets the held key, or drops it (nil), with a timer that settles it at its deadline.
+    private func hold(_ key: HeldKey?) {
+        heldKeyTimer?.cancel()
+        heldKeyTimer = nil
+        heldKey = key
+        guard let key else { return }
+        heldKeyTimer = Task { [weak self] in
+            try? await Task.sleep(until: key.deadline, clock: .continuous)
+            guard !Task.isCancelled else { return }
+            self?.settleHeldKey()
+        }
+    }
+
+    /// Runs the held key once the selected item's actions have come. It's dropped when the panel hid, the view
+    /// changed or the selection moved meanwhile, and dropped with a failure toast when they didn't come in time.
+    private func settleHeldKey() {
+        guard let held = heldKey else { return }
+        switch held.outcome(at: .now, on: heldKeyScreen) {
+        case .wait:
+            return
+        case .drop:
+            hold(nil)
+        case .timedOut:
+            hold(nil)
+            showFailureToast(HeldKey.timeoutMessage)
+        case .run(let key):
+            hold(nil)
+            switch key {
+            case .primary: if let primaryAction { run(primaryAction) }
+            case .secondary: if let secondaryAction { run(secondaryAction) }
+            case .actionPanel: if actionPanel == nil { toggleActionPanel() }
+            case .shortcut(let pressed):
+                if let entry = ActionPanelReader.action(for: pressed, in: currentActions) { run(entry) }
+            }
         }
     }
 
@@ -1951,6 +1993,8 @@ final class LauncherModel {
     /// Esc: close a DatePicker's calendar, the dropdown's panel or the action panel (a submenu at a time), pop a pushed view, clear the
     /// search, leave the command, then hide.
     func escape() {
+        // A key waiting for the selected item's actions is dropped first; Esc then does what it always does.
+        hold(nil)
         if signIn != nil {
             answerSignIn(false)
             return
@@ -2644,14 +2688,14 @@ final class LauncherModel {
             syncDatePick()
             requestSlots()
             reportSelection()
-            runWaitingKey()
+            settleHeldKey()
 
         case .slots(let session, let items):
             guard case .command(var command) = screen, command.session == session else { return }
             for item in items { command.slots[item.id] = item }
             command.slotRequests.answered(items.map(\.id))
             screen = .command(command)
-            runWaitingKey()
+            settleHeldKey()
 
         case .error(let session, let message, let stack, let fatal):
             if var quiet = quietSessions[session] {

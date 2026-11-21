@@ -61,6 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onboardingWindow.openLauncher = { [weak self] in self?.showPanel() }
         settingsModel.showOnboarding = { [weak self] in self?.onboardingWindow.showAgain() }
         model.hide = { [weak self] in self?.hidePanel() }
+        model.panelOnScreen = { [weak self] in self?.panel?.isVisible ?? false }
         model.show = { [weak self] in self?.showPanel() }
         model.openSettings = { [weak self] name, origin in self?.settingsWindow.show(extension: name, origin: origin) }
         model.reloadAll = { [weak self] in self?.reloadExtensions() }
@@ -347,6 +348,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func hidePanel() {
         guard panel.isVisible else { return }
         model.closeQuickLook()
+        model.panelHidden()
+        LinkPointer.shared.release()
         panel.orderOut(nil)
         model.panelReset.panelHidden()
         // A FilePicker's open panel, or a click on the Quick Look preview, made Fudge the active app. Give the
