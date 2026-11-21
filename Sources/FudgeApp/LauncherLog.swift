@@ -19,6 +19,15 @@ enum LauncherLog {
         logger.notice("#\(number, privacy: .public) \(message, privacy: .public)")
     }
 
+    /// `message`, then `detail` as private: kept out of the log unless a profile asks for private data.
+    static func note(_ message: String, private detail: String) {
+        let number = counter.withLock { count in
+            count += 1
+            return count
+        }
+        logger.notice("#\(number, privacy: .public) \(message, privacy: .public) \(detail, privacy: .private)")
+    }
+
     /// A window as the log names it: its class and level.
     @MainActor static func name(_ window: NSWindow?) -> String {
         window.map { "\(type(of: $0)) level \($0.level.rawValue)" } ?? "none"

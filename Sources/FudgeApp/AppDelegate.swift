@@ -15,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotKeys = CarbonHotKeys()
     private lazy var registry = HotKeyRegistry(registrar: hotKeys)
     private var settingsModel: SettingsModel!
+    /// Expanding snippets as they're typed (SPEC-078 B). Never in snapshot runs.
+    private var snippetExpansion: SnippetExpansion?
     private var settingsWindow: SettingsWindowController!
     private var onboardingWindow: OnboardingWindowController!
     /// The menu bar item's "Open Fudge (⌥Space)".
@@ -140,7 +142,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A quicklink deleted in Settings takes its hotkey with it.
         settingsModel.quicklinksChanged = { [weak self] in _ = self?.applyCommandHotkeys() }
         model.commandHotkeysChanged = { [weak self] in self?.registerCommandHotkeys() }
-        settingsModel.snippetsChanged = { [weak self] in self?.model.reloadSnippetList() }
+        settingsModel.snippetsChanged = { [weak self] in
+            self?.model.reloadSnippetList()
+            self?.snippetExpansion?.update()
+        }
+        settingsModel.snippetExpansionChanged = { [weak self] in self?.snippetExpansion?.update() }
+        model.snippetsChanged = { [weak self] in self?.snippetExpansion?.update() }
+        if Snapshot.isRequested(CommandLine.arguments) {
+            // Snapshots get a fixed Input Monitoring answer, and no keyboard tap.
+            let allowed = Snapshot(arguments: CommandLine.arguments)?.inputMonitoring ?? false
+            settingsModel.inputMonitoring = InputMonitoringStatus(read: { allowed })
+        } else {
+            let expansion = SnippetExpansion(paths: paths)
+            // Typing into the launcher (a non-activating panel) or a Fudge window never expands.
+            expansion.fudgeHasKeyboard = { [weak self] in NSApp.isActive || self?.panel?.isKeyWindow == true }
+            expansion.showHUD = { [weak self] title in self?.hud.show(title) }
+            expansion.clipboard = { [weak self] in self?.model.templateClipboard() }
+            snippetExpansion = expansion
+            expansion.update()
+        }
         settingsModel.colorFormatChanged = { [weak self] in self?.model.reloadRecentColors() }
         model.windowLayoutsChanged = { [weak self] in self?.settingsModel.loadWindowLayouts() }
         settingsModel.clipboardHistoryChanged = { [weak self] in self?.model.applySettings() }
@@ -691,6 +711,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyCommandHotkeys()
         Task { await exchangeRates.setEnabled(settings.currencyRates, now: Date()) }
         Task { await updates.setSetting(settings.updateCheck, now: Date()) }
+        snippetExpansion?.update()
         hyperkey?.update()
     }
 
@@ -742,6 +763,8 @@ struct Snapshot {
     let loginItem: LoginItemStatus
     /// `--accessibility allowed`: Accessibility shows as allowed (else not allowed).
     let accessibility: Bool
+    /// `--input-monitoring allowed`: the Snippets page shows Input Monitoring as allowed (else not allowed).
+    let inputMonitoring: Bool
     /// `--onboarding [<step>]`: the onboarding window instead, optionally on one step.
     let onboarding: Bool
     let onboardingStep: OnboardingStep?
@@ -799,6 +822,7 @@ struct Snapshot {
         openDate = arguments.contains("--open-date")
         loginItem = value("--login-item").flatMap(LoginItemStatus.init(rawValue:)) ?? .notRegistered
         accessibility = value("--accessibility") == "allowed"
+        inputMonitoring = value("--input-monitoring") == "allowed"
         onboarding = arguments.contains("--onboarding")
         onboardingStep = value("--onboarding").flatMap(OnboardingStep.init(rawValue:))
         signIns = MemorySecretStore()

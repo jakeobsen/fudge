@@ -113,6 +113,8 @@ final class LauncherModel {
     private(set) var arguments = ArgumentInput()
     /// The root item `arguments` belongs to.
     @ObservationIgnored private var argumentsItem: String?
+    /// The alias hand-off's memory of the query it last took (FUD-140).
+    @ObservationIgnored private var aliasHandOff = AliasHandOff()
     /// Counts the times `arguments` started over. Each field's edits carry the count it was drawn with, so a late
     /// write from a field that's gone can't refill the new ones.
     private(set) var argumentsGeneration = 0
@@ -156,6 +158,8 @@ final class LauncherModel {
     @ObservationIgnored var reloadAll: () -> Void = {}
     /// Shows a HUD message; set by the app delegate.
     @ObservationIgnored var showHUD: (String) -> Void = { _ in }
+    /// Snippet expansion reads `snippets.json` again after the launcher changed it; set by the app delegate.
+    @ObservationIgnored var snippetsChanged: () -> Void = {}
     /// Registers the command hotkeys again from the settings last read, after a quicklink and its hotkey went; set
     /// by the app delegate.
     @ObservationIgnored var commandHotkeysChanged: () -> Void = {}
@@ -458,14 +462,20 @@ final class LauncherModel {
                 reportSelection()
             case .root, .failure:
                 if case .failure = screen { screen = .root }
-                // An alias and a space hand the rest of the query to that command's first argument (as in Raycast).
-                if let handed = CommandAliases.handOff(newValue, in: items) {
+                // An alias and a space hand the rest of the query to that command's first argument (as in Raycast),
+                // once: the query coming back as the search field's write-back changes nothing.
+                switch aliasHandOff.answer(newValue, in: items, inArgument: arguments.focus != nil) {
+                case .handOff(let item, let rest):
                     rootQuery = String(newValue.prefix { $0 != " " })
                     refreshResults()
-                    selectedItem = handed.item.id
-                    arguments.set(handed.rest, at: 0)
+                    selectedItem = item.id
+                    arguments.set(rest, at: 0)
                     arguments.focus = 0
                     return
+                case .alreadyHandedOff:
+                    return
+                case .query:
+                    break
                 }
                 rootQuery = newValue
                 refreshResults()
@@ -660,9 +670,15 @@ final class LauncherModel {
         arguments.set(value, at: index)
     }
 
-    /// The user clicked into an argument field (an index) or the search field (nil).
+    /// The user picked a dropdown argument's value.
     func focusArgument(_ index: Int?) {
         if arguments.focus != index { arguments.focus = index }
+    }
+
+    /// SwiftUI says the keyboard moved to argument field `index`, or the search field (nil). Only a move the user
+    /// made counts, which needs the panel to hold the keyboard (`ArgumentInput.follows`, FUD-140).
+    func fieldTookKeyboard(_ index: Int?, panelHoldsKeyboard: Bool) {
+        if arguments.follows(index, panelHoldsKeyboard: panelHoldsKeyboard) { arguments.focus = index }
     }
 
     // MARK: - Command views
@@ -1882,6 +1898,7 @@ final class LauncherModel {
                 return
             }
             saved = "Snippet saved"
+            snippetsChanged()
         case .layout(let draft, _):
             let draft = LayoutForm.draft(draft, with: values)
             let file = paths.windowLayoutsFile
@@ -2020,7 +2037,8 @@ final class LauncherModel {
         Task {
             do {
                 try await SystemCalls.pasteSnippet(
-                    filled.text, leftArrows: filled.afterCursor ?? 0, hideWindow: { await self.hideForPaste() })
+                    filled.text, leftArrows: SnippetTemplate.leftArrows(afterCursor: filled.afterCursor),
+                    hideWindow: { await self.hideForPaste() })
             } catch PasteError.noTarget {
                 showHUD("There is no app to paste into")
             } catch {
@@ -2059,6 +2077,7 @@ final class LauncherModel {
                 return
             }
             reloadSnippetList()
+            snippetsChanged()
         }
     }
 

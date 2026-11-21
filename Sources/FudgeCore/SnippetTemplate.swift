@@ -28,6 +28,17 @@ public struct SnippetTemplate: Sendable, Equatable {
         problem = template.problem ?? (cursors > 1 ? "A snippet can have only one {cursor}." : nil)
     }
 
+    /// The most ← presses that place `{cursor}`. Further from the end than this, the caret stays at the end of the
+    /// pasted text: a long snippet would otherwise have Fudge post tens of thousands of key presses.
+    public static let leftArrowLimit = 2_000
+
+    /// How many ← presses put the caret where `{cursor}` was, after pasting: one per character after it, or none
+    /// without a `{cursor}` or past `leftArrowLimit`.
+    public static func leftArrows(afterCursor: Int?) -> Int {
+        guard let afterCursor, afterCursor <= leftArrowLimit else { return 0 }
+        return afterCursor
+    }
+
     /// Whether it uses `{clipboard}`, so filling it reads the clipboard only then.
     public var usesClipboard: Bool { template.usesClipboard }
 
