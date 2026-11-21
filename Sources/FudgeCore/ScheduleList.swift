@@ -82,6 +82,32 @@ public enum ScheduleList {
         days.flatMap { day in day.events.map { (day, $0) } }
     }
 
+    /// A row's event known apart from the row's position (SPEC-110 §3): its day, its start and a hash of its title,
+    /// held in memory for the selection only, never logged or written anywhere.
+    struct EventKey: Hashable {
+        var day: Date
+        var start: Date
+        var title: Int
+
+        init(day: ScheduleDay, event: CalendarEvent) {
+            self.day = day.interval.start
+            self.start = event.start
+            title = event.title.hashValue
+        }
+    }
+
+    /// The row to select once the calendars are read again (a calendar change, Days Ahead, a refresh): the one with
+    /// the event the selection was on (`selected`, a row id of `old`), else nil, so the list keeps its place.
+    public static func row(after old: Content, selected: String?, in new: Content) -> String? {
+        guard case .days(let before, _, _) = old, case .days(let after, _, _) = new, let selected,
+            selected.hasPrefix("event-"), let index = Int(selected.dropFirst("event-".count))
+        else { return nil }
+        let previous = rows(before)
+        guard previous.indices.contains(index) else { return nil }
+        let key = EventKey(day: previous[index].day, event: previous[index].event)
+        return rows(after).firstIndex { EventKey(day: $0.day, event: $0.event) == key }.map { "event-\($0)" }
+    }
+
     /// The List: a section per day, a row per event with its detail, or the view for asking, refused, or no events.
     /// The rows show each event's time and whether it's on now; the detail pane, which hides those as every List's
     /// does, shows with `showingDetail` (Show Details, ⌘D).

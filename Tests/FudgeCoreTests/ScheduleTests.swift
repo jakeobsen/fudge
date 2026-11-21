@@ -367,6 +367,52 @@ private func content(_ events: [CalendarEvent], daysAhead: Int = 7) -> ScheduleL
     #expect(ScheduleList.target(of: settingsNode, in: none, calendar: utc, locale: british) == .openSettings)
 }
 
+// MARK: - Reloads (SPEC-110 §3)
+
+/// What My Schedule draws from `source`, read as the app reads it.
+private func read(_ source: FixedCalendarSource) -> ScheduleList.Content {
+    let window = Schedule.window(now: now, daysAhead: 7, calendar: utc)
+    let events = source.events(from: window.start, to: window.end, calendars: Set(calendars.map(\.id)))
+    return content(events)
+}
+
+private func fixed(_ events: [CalendarEvent]) -> FixedCalendarSource {
+    FixedCalendarSource(access: .fullAccess, calendars: calendars, events: events)
+}
+
+@Test func aReloadKeepsTheSelectionOnTheSameEvent() throws {
+    let standup = event("Standup", "23T10:00", "23T10:30")
+    let review = event("Review", "23T11:00", "23T12:00")
+    let before = read(fixed([standup, review]))
+    // The selection is on Review, the second row; a reload brings an event above it.
+    let after = read(fixed([event("Early call", "23T09:00", "23T09:30"), standup, review]))
+    let row = try #require(ScheduleList.row(after: before, selected: "event-1", in: after))
+    #expect(row == "event-2")
+    let list = ListContent(ScheduleList.view(after, now: now, calendar: utc, locale: british), searchText: "")
+    #expect(list.items.first { $0.itemId == row }?.title == "Review")
+
+    // An event that's gone gives no row, so the list keeps the same place.
+    #expect(ScheduleList.row(after: before, selected: "event-1", in: read(fixed([standup]))) == nil)
+    // Nothing selected, a row that isn't there, or no list to read: nothing to follow.
+    #expect(ScheduleList.row(after: before, selected: nil, in: after) == nil)
+    #expect(ScheduleList.row(after: before, selected: "event-9", in: after) == nil)
+    #expect(ScheduleList.row(after: .asking, selected: "event-0", in: after) == nil)
+
+    // An event on several days keeps the selection on the same day's row.
+    let trip = event("Trip", "22T18:00", "24T10:00")
+    let twoDays = read(fixed([trip]))
+    let withLunch = read(fixed([trip, event("Lunch", "23T12:00", "23T13:00")]))
+    #expect(ScheduleList.row(after: twoDays, selected: "event-1", in: withLunch) == "event-2", "tomorrow's row")
+    #expect(ScheduleList.row(after: twoDays, selected: "event-0", in: withLunch) == "event-0", "today's row")
+
+    // Two events with the same title are told apart by their start.
+    let first = event("Sync", "23T10:00", "23T10:30")
+    let second = event("Sync", "23T15:00", "23T15:30")
+    let syncs = read(fixed([first, second]))
+    let moved = read(fixed([event("Early call", "23T09:00", "23T09:30"), first, second]))
+    #expect(ScheduleList.row(after: syncs, selected: "event-1", in: moved) == "event-2")
+}
+
 @Test func theCalendarGroupHasMySchedule() {
     let group = BuiltInCommandGroup.calendar
     #expect(group.name == ":calendar" && BuiltInCommandGroup.isValidName(group.name))
