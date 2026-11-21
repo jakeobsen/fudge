@@ -49,6 +49,11 @@ struct SystemWindows: WindowSystem, Sendable {
     }
 
     func listedWindows() -> [ListedWindow] {
+        Self.onScreenWindows()
+    }
+
+    /// The windows on screen, front to back, as the window list has them. Switch Windows reads them too.
+    static func onScreenWindows() -> [ListedWindow] {
         guard
             let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
                 as? [[String: Any]]
