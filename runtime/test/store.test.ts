@@ -42,6 +42,7 @@ import {
 import { maxReadmeBytes, readRegularFile } from "../store-extension/src/files.ts";
 import {
     gitAvailable,
+    GitError,
     isValidBranch,
     spawnProgram,
     stopRunningGit,
@@ -67,6 +68,7 @@ import {
 import {
     buildArguments,
     bundledNames,
+    failureDetails,
     install,
     oneAtATime,
     readInstalled,
@@ -944,9 +946,32 @@ test("an extension with another package source is refused before asking", async 
 });
 
 test("a failed build shows the CLI's message and records nothing", async () => {
-    const { context, supportPath } = await storeContext({ cliCode: 1 });
-    await assert.rejects(install(alphaEntry, context), /esbuild failed/);
+    const { context, supportPath, repoPath, extensionsDir } = await storeContext({ cliCode: 1 });
+    let thrown: unknown;
+    await assert.rejects(install(alphaEntry, context), (error: unknown) => {
+        thrown = error;
+        return /esbuild failed/.test(String(error));
+    });
     assert.deepEqual(await readInstalled(supportPath), {});
+    // The failure view gets the whole output, the command and its exit (SPEC-116).
+    assert.deepEqual(failureDetails(thrown), {
+        output: "error: esbuild failed",
+        command: `fudge build ${path.join(repoPath, "extensions/alpha")} --into ${extensionsDir}`,
+        code: 1,
+    });
+});
+
+test("a failure's details say what failed: a build, a git step, or one of the store's own refusals", () => {
+    assert.deepEqual(failureDetails(new GitError("fatal: unable to access", "git sparse-checkout add /extensions/a/")), {
+        output: "fatal: unable to access",
+        command: "git sparse-checkout add /extensions/a/",
+    });
+    assert.deepEqual(failureDetails(new StoreError("Another extension called a is installed. Uninstall it first.")), {
+        output: "Another extension called a is installed. Uninstall it first.",
+        refused: true,
+    });
+    assert.deepEqual(failureDetails(new Error("boom")), { output: "boom" });
+    assert.deepEqual(failureDetails("text"), { output: "text" });
 });
 
 test("updating an installed extension asks to update and records the new tree", async () => {

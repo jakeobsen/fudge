@@ -821,7 +821,8 @@ Extensions run in a separate Node.js process, the extension host.
     Git isn't run until `xcode-select -p` succeeds, so macOS's offer to install the Command Line Tools never shows.
     Unloading the store ends its running git (`stopRunningGit`, in the command's effect cleanup, which `unload` runs), and turning the store off unloads its sessions and waits for them to exit (`LauncherModel.unloadSessions(ofExtension:)`) before Part A deletes `repo/`.
     A copy that can't be read, such as a clone stopped halfway, is deleted and cloned again.
-    A failure before the list has ever loaded, which can only be the clone, shows in the load-error view, whose Refresh (↵, ⌘R) opens the copy again the same way and then refreshes it.
+    A failure before the list has ever loaded, which can only be the clone, shows in the load-error view (`LoadFailure` in `failure-view.tsx`), whose Refresh (↵, ⌘R) opens the copy again the same way and then refreshes it.
+    That view has the failure view's cause line (a clone that can't reach GitHub says so), ⌘C Copy Error and ⌘D Show Details, which pushes the failure view with the end of git's output.
     A refresh runs only once the list has loaded from the copy, so a failed one, a default branch name `isValidBranch` refuses included, shows as a toast over the list, which stays usable.
   - **Files from the copy are read as regular files only** (`files.ts`, `readRegularFile`: opened with `O_NOFOLLOW` and `O_NONBLOCK`, then `fstat`), each kind with a size cap: every `package.json` for the list, a README, and the package-source check's `package.json` and lockfiles. git checks out a committed link as a link, so `README.md -> /dev/zero` would otherwise read forever.
   - `catalog.ts` gives each row two things, each checked by its own rule before it's used.
@@ -854,6 +855,16 @@ Extensions run in a separate Node.js process, the extension host.
     **Unloading the store doesn't stop a `fudge build` it started** (or npm under it), unlike its git: the worker's timeout goes with it, so the build runs to the end, or until npm's own network timeouts give up.
     That's acceptable because nothing is installed half-way: the build writes into a staging folder and swaps it in only at the end, and the extensions watcher picks the result up like any install.
     The store just doesn't record it, so it counts as installed another way.
+    **A failed install or update** pushes `FailureView` (`failure-view.tsx`, SPEC-116) over the list, and the toast only says where to look.
+    It has the title, the likely cause in plain words (`causeOf` in `failure.ts`: npm or Node.js not found, which, since both come with Fudge, means a damaged app to reinstall, the npm registry or GitHub unreachable, Git missing, the extension's own build error with its first line, or else something went wrong), and the last 40 lines of the step's output.
+    The output is untrusted (package names, build scripts' output), so it's in a code block nothing in it can close (`codeBlock`), and the title and cause are escaped code point by code point (`escapeMarkdown`), so no package can add an image, a link or formatting.
+    Before it's shown or copied, terminal codes, user info in URLs, `_authToken=`, authorization headers and token-shaped strings are masked, and the home folder is written as `~`, as a whole path component only (`cleanOutput`).
+    ↵ Try Again runs the install again, once per view; ⌘C Copy Error copies the title, cause, command, exit, Fudge's version (`fudge version`) and all the output; Open Extension Page on GitHub opens the folder.
+    `failureDetails` (`store.ts`) reads them from `BuildFailed` (all of `fudge build`'s output, its command and exit), a `GitError` (with its command) or one of the store's own refusals, shown as its own sentence.
+    **The Mac's proxy** reaches the store's npm and git (`proxy.ts`): the app reads the proxy set in System Settings → Network (`CFNetworkCopySystemProxySettings`) into `SystemProxy` (core), well-formed hosts and ports only and never a user or password, and hands it to the host as `FUDGE_SYSTEM_PROXY`.
+    `storeEnvironment` adds `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, in both letter cases since git's curl reads only `http_proxy` in lower case, and only where no proxy variable is set, so the user's own wins.
+    That `NO_PROXY` is `localhost`, `127.0.0.1` and the Mac's bypass list, unless the user set their own.
+    A proxy auto-configuration file can't be passed on, so a network failure's cause line says so.
 - **`fudge build <folder>` installs an extension** (`ExtensionBuilder` in `FudgeCore`).
   - It reads `package.json` (`ExtensionManifest`) and compiles every command's `src/<name>.{tsx,ts,jsx,js}` with esbuild into `<extensions>/<name>/dist/<name>.cjs`.
     The modules the host provides (`ExtensionBuilder.providedModules`) stay external.
