@@ -89,12 +89,12 @@ function launch(message: Extract<AppMessage, { type: "launch" }>): void {
     });
     worker.on("error", (error) => {
         if (session.done) return;
-        log(id, session, "error", error.stack ?? error.message);
+        hostLine(id, session, error.stack ?? error.message);
         send({ session: id, type: "error", message: error.message, stack: error.stack, fatal: true });
     });
     worker.on("exit", (code) => {
         if (session.done) return;
-        if (code !== 0) log(id, session, "error", `The command crashed (exit code ${code}).`);
+        if (code !== 0) hostLine(id, session, `The command crashed (exit code ${code}).`);
         sendDropped(id, session);
         finish(id, session);
         send({ session: id, type: "exit", reason: code === 0 ? "finished" : "crashed" });
@@ -126,6 +126,17 @@ function log(id: string, session: Session, level: LogLevel, message: string): vo
     }, 1000 - (now - budget.windowStart));
 }
 
+/**
+ * A line of the host's own about the command (its worker failed, it crashed, it was stopped): always sent, outside the
+ * command's lines per second and after the count of those dropped, so a flood just before can't hide it (SPEC-124 §3).
+ * Each comes at most once per command. It's an error, which every Log level records.
+ */
+function hostLine(id: string, session: Session, message: string): void {
+    if (session.done) return;
+    sendDropped(id, session);
+    send({ session: id, type: "log", level: "error", message, ...session.names });
+}
+
 /** The `… N lines dropped` line for the lines dropped so far, if any. */
 function sendDropped(id: string, session: Session): void {
     const budget = session.log;
@@ -151,8 +162,7 @@ function unload(id: string, session: Session): void {
     session.worker.postMessage({ type: "unload" } satisfies HostToWorker);
     session.unloadTimer ??= setTimeout(() => {
         if (session.done) return;
-        log(id, session, "error", `The command was stopped: it didn't finish within ${UNLOAD_GRACE_MS} ms of being closed.`);
-        sendDropped(id, session);
+        hostLine(id, session, `The command was stopped: it didn't finish within ${UNLOAD_GRACE_MS} ms of being closed.`);
         finish(id, session);
         send({ session: id, type: "exit", reason: "unloaded" });
     }, UNLOAD_GRACE_MS);

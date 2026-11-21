@@ -627,3 +627,28 @@ test("a command printing in a loop is cut at 1,000 lines a second and the count 
     );
     await host.close();
 });
+
+test("a command that floods and then crashes still has its count, then the crash, however many lines were dropped", async () => {
+    const host = start();
+    host.send({ type: "logLevel", level: "error" });
+    host.send({
+        type: "launch",
+        session: "fc",
+        entry: fixture("flood-then-crash-no-view.cjs"),
+        mode: "no-view",
+        environment: { extensionName: "amazon-aws", commandName: "console" },
+    });
+    assert.equal((await host.next(of("fc", "exit"))).reason, "crashed");
+    const lines = logsOf(host, "fc").map((m) => String(m.message));
+    const kept = lines.filter((line) => /^flood /.test(line)).length;
+    const counted = lines.map((line) => /^… (\d+) lines dropped$/.exec(line)).filter((match) => match !== null);
+    assert.ok(counted.length > 0, "lines were dropped");
+    assert.equal(kept + counted.reduce((sum, match) => sum + Number(match[1]), 0), 2000, "every line kept or counted");
+    assert.match(lines.at(-2) ?? "", /^… \d+ lines dropped$/, "the count comes before the crash");
+    const crash = logsOf(host, "fc").at(-1);
+    assert.deepEqual(
+        [crash?.level, crash?.message, crash?.extension, crash?.command],
+        ["error", "The command crashed (exit code 3).", "amazon-aws", "console"],
+    );
+    await host.close();
+});

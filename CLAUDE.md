@@ -439,17 +439,20 @@ Extensions run in a separate Node.js process, the extension host.
       Each file's first line in a run is Fudge's version and commit.
       **What goes in `Fudge.log`:** every `fudge: couldn't …` line, through `FudgeLog`, which also writes it to stderr as before, so `make run` from a terminal still shows them.
       Also the extension host's own stderr, a refused protocol message, a launch that failed, and the host stopping, naming the commands it ended.
+      A command that fails gets one line of Fudge's own, `<extension>/<command> failed` and where its error is (`FudgeLog.commandError`), never the error's text or stack, which go to the extension's file and stderr.
       Also installs, updates and removals as the app sees them when it reads the extensions folder (`InstallStamp`), so the store's and `fudge build`'s alike.
       Also the Extension Store's failed downloads, installs, updates and uninstalls with the build's output (`logToFudge` in `fudge:app`, the `fudge.log` call, answered only for the store), sign-in errors, and failed update checks.
       **What goes in an extension's file:** its `console` (`console.error` an error, `console.warn` a warning, `console.log` and `console.info` info, `console.debug` debug), and what it writes to stdout (info) or stderr (error) itself.
       Also uncaught exceptions and unhandled rejections with their stack, and a command that crashed or was stopped for not finishing after it was closed.
       Also failure toasts with their title and message, including an animated toast that becomes one, logged once with the title and message it ends up with.
       An extension's lines go only to its own file and stderr, never `Fudge.log`.
+      Menu bar commands' lines in `Fudge.log` name an item by its position, never its title, which can be the extension's data.
       **Log level** (`logLevel` in `settings.json`, General's Logs section): Errors (the default), Warnings, Info or Debug; each records its own lines and every level above.
       Lines below it are dropped where they're made: in the worker before they're formatted (`src/log.ts`), in the host for a command's raw output, and in `FudgeLog`; errors and warnings of Fudge's own still go to stderr.
       A change goes to the host as a `logLevel` message, which passes it to every running worker, and the host gets it at each start before any launch.
       **Nothing slows the launcher:** the host stamps each `log` line with the extension's and command's names from the launch, and `ExtensionHost` hands it to `FudgeLog.command` on the thread that reads the host, never through the main actor.
       The host lets a command send 1,000 lines a second, then drops and counts them and sends one `… N lines dropped` line when the second is up, as severe as the worst line it stands for.
+      Its own lines about a command (the worker failed, it crashed, it was stopped) go outside that bound, after the count, so a flood just before can't hide them (`hostLine`).
       `LogWriter` writes on a queue of its own, in order, with a buffer of 2,000 lines per file: a full buffer drops and counts in the same way, and other files are unaffected.
       Past 5 MB (`Fudge.log`) or 1 MB (an extension's), a file becomes `<name>.old.log`, replacing the last one; nothing else is kept.
       A failed write goes to stderr only, and the next line tries again.

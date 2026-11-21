@@ -4121,9 +4121,11 @@ final class LauncherModel {
             case .render, .eventSettled:
                 menuBar.handle(message)
                 return
-            case .error(_, let text, let stack, _, _):
+            case .error(_, let text, let stack, let fatal, _):
                 menuBar.handle(message)
-                log(session, "error", stack ?? text)
+                FudgeLog.commandError(
+                    text, stack: stack, fatal: fatal, session: session, extensionName: sessionExtensions[session],
+                    command: sessionCommands[session])
                 return
             case .exit:
                 sessionExtensions[session] = nil
@@ -4218,7 +4220,9 @@ final class LauncherModel {
                     signIn.map { Failure($0, extensionName: sessionExtensions[session] ?? "") }
                         ?? Failure(title: "\(title) failed", message: message, details: stack, commandTitle: title))
             }
-            log(session, "error", stack ?? message)
+            FudgeLog.commandError(
+                message, stack: stack, fatal: fatal, session: session, extensionName: sessionExtensions[session],
+                command: sessionCommands[session])
 
         case .exit(let session, let reason):
             endSignIn(of: session)

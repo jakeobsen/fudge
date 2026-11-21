@@ -69,21 +69,29 @@ public enum LogLine {
     public static func format(
         date: Date, level: LogLevel, command: String? = nil, message: String, timeZone: TimeZone = .current
     ) -> String {
+        format(date: date, level: level, command: command, message: message, formatter: formatter(timeZone))
+    }
+
+    /// With a formatter made once by `formatter(_:)`, as `LogWriter` keeps one for all its lines.
+    static func format(
+        date: Date, level: LogLevel, command: String?, message: String, formatter: ISO8601DateFormatter
+    ) -> String {
         var text = message
         while text.hasSuffix("\n") || text.hasSuffix("\r") { text.removeLast() }
         let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
         let first = lines.first.map(String.init) ?? ""
         let rest = lines.dropFirst().map { "    \($0)" }
         let named = command.map { "[\($0)] " } ?? ""
-        return ([timestamp(date, timeZone: timeZone) + " \(level.rawValue) \(named)\(first)"] + rest)
+        return ([formatter.string(from: date) + " \(level.rawValue) \(named)\(first)"] + rest)
             .joined(separator: "\n") + "\n"
     }
 
-    static func timestamp(_ date: Date, timeZone: TimeZone) -> String {
+    /// The timestamp's formatter: local time with its offset, and milliseconds.
+    static func formatter(_ timeZone: TimeZone) -> ISO8601DateFormatter {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         formatter.timeZone = timeZone
-        return formatter.string(from: date)
+        return formatter
     }
 }
 
@@ -100,7 +108,8 @@ public final class LogWriter: @unchecked Sendable {
     private let header: String?
     private let pendingLimit: Int
     private let caps: [LogFile: Int]
-    private let timeZone: TimeZone
+    /// One for every line, used only on `queue`.
+    private let formatter: ISO8601DateFormatter
     /// Where the files are written; tests pass a suspended queue to stand in for a slow disk.
     private let queue: DispatchQueue
     private let lock = NSLock()
@@ -132,7 +141,7 @@ public final class LogWriter: @unchecked Sendable {
         self.header = header
         self.pendingLimit = pendingLimit
         self.caps = caps
-        self.timeZone = timeZone
+        formatter = LogLine.formatter(timeZone)
     }
 
     /// Queues a line for `file`, stamped now.
@@ -170,14 +179,14 @@ public final class LogWriter: @unchecked Sendable {
             for (file, entries, droppedCount) in batch {
                 var text = entries.map {
                     LogLine.format(
-                        date: $0.date, level: $0.level, command: $0.command, message: $0.message, timeZone: timeZone)
+                        date: $0.date, level: $0.level, command: $0.command, message: $0.message, formatter: formatter)
                 }
                 if droppedCount > 0 {
                     let noun = droppedCount == 1 ? "line" : "lines"
                     text.append(
                         LogLine.format(
-                            date: Date(), level: .warning, message: "… \(droppedCount) \(noun) dropped",
-                            timeZone: timeZone))
+                            date: Date(), level: .warning, command: nil, message: "… \(droppedCount) \(noun) dropped",
+                            formatter: formatter))
                 }
                 append(text.joined(), to: file)
             }
@@ -189,14 +198,16 @@ public final class LogWriter: @unchecked Sendable {
         guard let url = file.url(in: folder) else { return }
         var text = text
         if !started.contains(file), let header {
-            text = LogLine.format(date: Date(), level: .info, message: header, timeZone: timeZone) + text
+            text =
+                LogLine.format(date: Date(), level: .info, command: nil, message: header, formatter: formatter) + text
         }
         let data = Data(text.utf8)
         do {
             let manager = FileManager.default
             try manager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             var size = try sizes[file] ?? currentSize(of: url)
-            if size > 0, size + data.count > caps[file] ?? file.cap {
+            // A file deleted meanwhile (by the user, say) starts again rather than being moved.
+            if size > 0, size + data.count > caps[file] ?? file.cap, manager.fileExists(atPath: url.path) {
                 let old = LogFile.old(url)
                 try? manager.removeItem(at: old)
                 try manager.moveItem(at: url, to: old)
@@ -279,6 +290,19 @@ public enum FudgeLog {
         FileHandle.standardError.write(Data("[\(session)] \(level.rawValue): \(message)\n".utf8))
         guard setting.records(level), let extensionName else { return }
         writer?.write(level, message, command: command, to: .extensionNamed(extensionName))
+    }
+
+    /// What the app does with a command's error from the host (`HostMessage.error`). Its message and stack are the
+    /// extension's own text, which the worker has already written to the extension's file, so they go to stderr only,
+    /// as `[session] error: …`. A fatal one also gets a line of Fudge's own in `Fudge.log`: the extension and command,
+    /// and that they failed, never the command's text (SPEC-124 §2).
+    public static func commandError(
+        _ message: String, stack: String?, fatal: Bool, session: String, extensionName: String?, command: String?
+    ) {
+        FileHandle.standardError.write(Data("[\(session)] error: \(stack ?? message)\n".utf8))
+        guard fatal else { return }
+        let named = "\(extensionName ?? "an extension")/\(command ?? "a command") failed"
+        write(.error, extensionName.map { "\(named); its error is in Extensions/\($0).log" } ?? named)
     }
 }
 

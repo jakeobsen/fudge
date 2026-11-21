@@ -95,6 +95,30 @@ private func lines(_ url: URL) -> [String] { read(url).split(separator: "\n").ma
     #expect(!current.contains(" error 1 ") && !old.contains(" error 1 "), "older ones are gone")
 }
 
+/// A file deleted while Fudge runs (by the user, in Finder) starts again with the next line, which isn't lost to a
+/// rotation of a file that's gone, and the old file is kept.
+@Test func aFileDeletedMeanwhileStartsAgainWithTheNextLine() throws {
+    let folder = try Fixtures.temporaryDirectory().appendingPathComponent("Logs")
+    let writer = LogWriter(folder: folder, header: nil, caps: [.fudge: 400])
+    let line = String(repeating: "x", count: 60)
+    for index in 1...8 {
+        writer.write(.error, "\(index) \(line)", to: .fudge)
+        writer.flush()
+    }
+    let current = folder.appendingPathComponent("Fudge.log")
+    #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("Fudge.old.log").path))
+    let old = read(folder.appendingPathComponent("Fudge.old.log"))
+    try FileManager.default.removeItem(at: current)
+    // Past the cap by the size the writer last knew: a rotation would try to move the file that's gone.
+    for index in 9...10 {
+        writer.write(.error, "\(index) \(line)", to: .fudge)
+        writer.flush()
+    }
+    let after = read(current)
+    #expect(after.contains(" error 9 ") && after.contains(" error 10 "), "the lines after the deletion: \(after)")
+    #expect(read(folder.appendingPathComponent("Fudge.old.log")) == old, "the old file is kept")
+}
+
 @Test func aFloodFillsOnlyItsOwnBufferAndTheDroppedCountFollowsWhenItDrains() throws {
     let folder = try Fixtures.temporaryDirectory().appendingPathComponent("Logs")
     // A suspended queue stands in for a disk that's slow to take the lines.
@@ -243,6 +267,8 @@ struct FudgeLogTests {
 
     /// Through the real host: what a command logs at the default level lands in its extension's file with the
     /// command's name, and the launch's typed argument and password preference are in neither file, at any level.
+    /// Its errors, handled as `LauncherModel` handles them (`FudgeLog.commandError`), leave only a line of Fudge's own
+    /// in `Fudge.log`.
     @Test(
         .enabled(if: HostFixture.node != nil && HostFixture.runtimeInstalled, "needs Fudge's Node.js: run `make test`"),
         arguments: [LogLevel.error, .debug])
@@ -273,8 +299,22 @@ struct FudgeLogTests {
                 session: "s-logs", entry: HostFixture.runtimeFixture("logs-no-view.cjs").path, mode: "no-view",
                 launchProps: LaunchProps(arguments: ["query": seeds["typed"]!]),
                 preferences: ["apiKey": .string(seeds["password"]!)], environment: environment))
-        _ = try await next(&messages) { if case .exit = $0 { true } else { false } }
+        // Each error the command reports goes where `LauncherModel` sends it, until the command exits.
+        var errors: [Bool] = []
+        while true {
+            let message = try await next(&messages) {
+                switch $0 {
+                case .error, .exit: true
+                default: false
+                }
+            }
+            guard case .error(let session, let text, let stack, let fatal, _) = message else { break }
+            errors.append(fatal)
+            FudgeLog.commandError(
+                text, stack: stack, fatal: fatal, session: session, extensionName: "amazon-aws", command: "console")
+        }
         writer.flush()
+        #expect(errors.contains(true), "the throw at the end is a fatal error: \(errors)")
 
         let aws = read(folder.appendingPathComponent("Extensions/amazon-aws.log"))
         #expect(aws.contains(" error [console] an error line, with something typed and a key"))
@@ -286,6 +326,11 @@ struct FudgeLogTests {
         #expect(aws.contains("a debug line") == (level == .debug))
         let fudge = read(folder.appendingPathComponent("Fudge.log"))
         #expect(!fudge.contains("an error line"), "an extension's lines are never in Fudge.log")
+        // MUST 1: the command's error, its text and its stack, is in its own file only. Fudge.log has a line of
+        // Fudge's own, naming the command and that it failed.
+        #expect(!fudge.contains("thrown at the end") && !fudge.contains("rejected"), "Fudge.log: \(fudge)")
+        #expect(fudge.contains(" error amazon-aws/console failed; its error is in Extensions/amazon-aws.log\n"))
+        #expect(!fudge.contains("    at "), "no stack in Fudge.log")
         for seed in seeds.values {
             #expect(!aws.contains(seed) && !fudge.contains(seed), "\(seed) was logged")
         }
