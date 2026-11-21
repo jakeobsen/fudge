@@ -10,7 +10,7 @@ Fudge is an independent project. It is not affiliated with or endorsed by Raycas
 - `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for Fudge; `--into <folder>` installs it in that extensions folder instead. A running Fudge picks up an extension you install, rebuild or remove within a second, with nothing to reload.
 - `Sources/FudgeCore`: code shared by the app and the tool.
 - `runtime/`: the extension host. This is the Node.js program that runs extensions. The app talks to it over stdin/stdout.
-- `runtime/store-extension/`: the Extension Store, an extension bundled with fudge that lists and installs the extensions published in github.com/raycast/extensions.
+- `runtime/store-extension/`: the Extension Store, an extension bundled with Fudge that lists and installs the extensions published in github.com/raycast/extensions.
 
 ## Building
 
