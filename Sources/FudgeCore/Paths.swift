@@ -21,6 +21,11 @@ public struct FudgePaths: Sendable, Equatable {
     }
 
     /// fudge's own settings.
+    /// The certificates the Mac trusts, for a Node without `--use-system-ca` (`NodeTrust`).
+    public var trustRootsFile: URL {
+        supportDirectory.appendingPathComponent("trust/roots.pem")
+    }
+
     public var settingsFile: URL {
         supportDirectory.appendingPathComponent("settings.json")
     }

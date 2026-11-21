@@ -158,6 +158,8 @@ In the **Extension Store** command, search the extensions, or pick a category in
 
 Some extensions sign in to a service, such as GitHub or Linear. Pick a sign-in server under **Settings… → Sign-in**: **Fudge's sign-in server**, or **Your own server…**. A company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth). When an extension needs to sign in, Fudge shows **Sign in to** the service, and ↵ continues in your browser. Sign-ins are kept in your Keychain, and the Sign-in page lists them, each with **Sign Out**. Changing the server signs you out of everything.
 
+Extensions trust the certificates your Mac trusts, so a server behind your company's own certificate works as it does in Safari.
+
 An extension that takes a token in its settings (⌘⇧,) works without signing in.
 
 ### Menu bar commands
