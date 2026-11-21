@@ -58,6 +58,7 @@ test("environment.canAccess is false for APIs fudge doesn't have", () => {
     const api = createApiModule();
     assert.equal(environment.canAccess(api.Clipboard), true);
     assert.equal(environment.canAccess(api.AI), false);
+    assert.equal(environment.canAccess(api.BrowserExtension), false, "Raycast's own check for the Browser Extension");
     assert.equal(environment.canAccess(undefined), false);
 });
 
