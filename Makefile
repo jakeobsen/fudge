@@ -10,6 +10,8 @@ SHELL := /bin/bash
 VERSION   := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 CONFIG    ?= debug
 APP       := build/Fudge.app
+# The disk image a release ships, named after the version without its leading v (Fudge-0.3.0.dmg).
+DMG       := build/Fudge-$(patsubst v%,%,$(VERSION)).dmg
 # The extensions bundled with the app, as BundledExtensions.folders lists them.
 BUNDLED_EXTENSIONS := store-extension file-search-extension emoji-extension
 SWIFT_BIN  =$(shell swift build -c $(CONFIG) --show-bin-path)
@@ -31,7 +33,7 @@ SIGN_IDENTITY ?= $(shell security find-identity -v -p codesigning 2>/dev/null | 
 # The @raycast/api release whose type definitions live in runtime/vendor/raycast-api.
 RAYCAST_API_VERSION ?= 2.13.1
 
-.PHONY: help app run install-extension build runtime test test-swift test-runtime lint fmt raycast-types compat-scan clean
+.PHONY: help app dmg run install-extension build runtime test test-swift test-runtime lint fmt raycast-types compat-scan clean
 
 help:
 	@printf 'fudge — a keyboard launcher for macOS, built to run Raycast extensions\n\n'
@@ -39,6 +41,7 @@ help:
 	@printf '  help           Show this help (default).\n'
 	@printf '  app            Build %s (CONFIG=debug|release, now: %s). Signs with SIGN_IDENTITY: by default\n' '$(APP)' '$(CONFIG)'
 	@printf '                 "fudge local signing", else an Apple Development identity, else ad hoc (-). See README.md.\n'
+	@printf '  dmg            Build the app, then %s: the app and a link to Applications (VERSION=<tag>).\n' '$(DMG)'
 	@printf '  run            Build the app and open it, quitting a running copy first.\n'
 	@printf '  install-extension DIR=<folder>  Build the app, then compile and install the extension in <folder>.\n'
 	@printf '  build          Build the Swift targets and the extension host.\n'
@@ -113,6 +116,16 @@ USER_FUDGE_PIDS = for pid in $$(pgrep -x Fudge); do \
 		[ "$$(ps -o ppid= -p $$pid | tr -d ' ')" = 1 ] && [ "$$(ps -o args= -p $$pid)" = "$$(ps -o comm= -p $$pid)" ] \
 			&& echo $$pid; \
 	done; true
+
+# A release's disk image: the app as `make app` built it, and a link to /Applications to drag it onto, compressed
+# (UDZO), with the volume name Fudge. The staging folder is gone afterwards.
+dmg: app
+	@rm -rf build/dmg '$(DMG)' && mkdir -p build/dmg
+	@ditto '$(APP)' build/dmg/Fudge.app && ln -s /Applications build/dmg/Applications
+	@hdiutil create -volname Fudge -srcfolder build/dmg -format UDZO -ov '$(DMG)' >/dev/null \
+		|| { echo 'make dmg: hdiutil could not create $(DMG)'; rm -rf build/dmg; exit 1; }
+	@rm -rf build/dmg
+	@printf '→ built %s\n' '$(DMG)'
 
 run: app
 	@# Quit the user's fudge and wait for exactly those processes: open hands off to a Fudge that's still quitting

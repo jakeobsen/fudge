@@ -14,12 +14,17 @@ Fudge is an independent project. It is not affiliated with or endorsed by Raycas
 - `runtime/file-search-extension/`: Search Files, an extension bundled with Fudge that finds files and folders by name.
 - `runtime/emoji-extension/`: Search Emoji & Symbols, an extension bundled with Fudge that finds emoji by name and pastes them.
 
+## Installing
+
+Each release on GitHub has a disk image, `Fudge-<version>.dmg`: open it and drag Fudge to Applications. Fudge isn't notarized yet, so macOS blocks it the first time: open it, then go to System Settings → Privacy & Security and click Open Anyway (on macOS 14, Control-click Fudge and choose Open instead).
+
 ## Building
 
 You need macOS 14 or later, Xcode 26 or later and Node.js 22.18 or later. The app runs on macOS 14 and later.
 
 ```bash
 make app     # build build/Fudge.app
+make dmg     # build it into a disk image, build/Fudge-<version>.dmg
 make run     # build it and open it
 make test    # run the Swift and extension host tests
 make lint    # check formatting and types
