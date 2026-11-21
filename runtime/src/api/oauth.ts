@@ -115,9 +115,11 @@ class TokenSet {
         this.updatedAt = new Date(stored.updatedAt);
     }
 
-    /** True from 10 seconds before the access token expires; never without `expiresIn`. */
+    /** True from 10 seconds before the access token expires. Never without `expiresIn`, which 0 counts as: Raycast's
+     * types say `isExpired()` needs it set, and `@raycast/utils` refreshes whenever this is true, so a token whose
+     * provider sends `expires_in: 0` would otherwise be refreshed on every call. */
     isExpired(): boolean {
-        if (typeof this.expiresIn !== "number" || !Number.isFinite(this.expiresIn)) return false;
+        if (typeof this.expiresIn !== "number" || !Number.isFinite(this.expiresIn) || this.expiresIn === 0) return false;
         return Date.now() >= this.updatedAt.getTime() + (this.expiresIn - 10) * 1000;
     }
 }

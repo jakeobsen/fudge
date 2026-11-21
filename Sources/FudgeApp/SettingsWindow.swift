@@ -659,6 +659,12 @@ final class SettingsModel {
     }
 }
 
+/// A sheet in a snapshot run, which never takes the keyboard.
+final class SnapshotSheet: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
 /// The Settings window: extensions on the left, the selected one's preferences on the right.
 /// The Settings window, which can refuse the keyboard: snapshots render it without taking anyone's typing.
 final class SettingsNSWindow: NSWindow {
@@ -754,6 +760,10 @@ final class SettingsWindowController {
                 if let footnote = request.footnote { alert.accessoryView = Self.footnoteView(footnote) }
                 alert.addButton(withTitle: request.primary).hasDestructiveAction = request.destructive
                 alert.addButton(withTitle: request.dismiss)
+                if window.refusesKey {
+                    Self.beginSnapshotSheet(alert, on: window)
+                    return false
+                }
                 return await withCheckedContinuation { continuation in
                     alert.beginSheetModal(for: window) { continuation.resume(returning: $0 == .alertFirstButtonReturn) }
                 }
@@ -785,6 +795,19 @@ final class SettingsWindowController {
     var contentView: NSView? { window?.contentView }
     /// A sheet on the window, for snapshot runs.
     var attachedSheet: NSWindow? { window?.attachedSheet }
+
+    /// A snapshot run's sheet: the alert laid out as the sheet it is (a sheet leaves out the app's icon), then its
+    /// content moved to a panel that can't become key, like every window in a snapshot run; an alert's own panel can.
+    /// Nobody answers it: the run saves it and quits.
+    private static func beginSnapshotSheet(_ alert: NSAlert, on window: NSWindow) {
+        alert.beginSheetModal(for: window) { _ in }
+        let laidOut = alert.window
+        window.endSheet(laidOut)
+        let sheet = SnapshotSheet(
+            contentRect: laidOut.frame, styleMask: laidOut.styleMask, backing: .buffered, defer: false)
+        sheet.contentView = laidOut.contentView
+        window.beginSheet(sheet)
+    }
 
     /// A sheet's last paragraph, as selectable text with a working link: an alert's own text can't hold one.
     /// Clicking the link opens the browser and leaves the sheet open.
