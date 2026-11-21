@@ -344,13 +344,19 @@ struct ExtensionsWatcherTests {
     }
 
     /// FUD-156: a stream that starts late, as with a slow `fseventsd` (here its queue runs 2 s after `start`), is
-    /// waited for before the watcher settles. Without the wait, `settle`'s quiet second ends first, the install comes
+    /// waited for before the watcher settles. Without the wait, `settle`'s quiet second ends first, the change comes
     /// before the stream exists, and it's never reported.
+    /// The change is an edit inside an install, in place: it leaves the folder's own entries as they were, so the
+    /// folder's stamp can't see it, and only the wait makes it count. An install or a removal would change the stamp,
+    /// which reports it once the late stream starts, wait or no wait.
     @Test func aStreamThatStartsLateIsWaitedForBeforeTheChange() async throws {
         let late = DispatchQueue(label: "a slow fseventsd")
         late.suspend()
         OffThePool.after(.seconds(2)) { late.resume() }
-        expectOnce(try await reloads(queue: late) { extensions in try install(in: extensions) })
+        expectOnce(
+            try await reloads(preparing: { extensions in try install(in: extensions) }, queue: late) { extensions in
+                try write(#"{"name":"x","title":"X"}"#, to: extensions.appendingPathComponent("x/package.json"))
+            })
     }
 
     /// FUD-156: FSEvents never reports a change made before the stream exists, so one made after `start` while the
