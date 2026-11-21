@@ -25,10 +25,12 @@ public enum Backup {
     /// Single files at the top of the support folder.
     static let rootFiles = [
         "settings.json", "launch-permissions.json", "history.json", "dropdown-values.json", "command-metadata.json",
-        "quicklinks.json", "snippets.json", "window-layouts.json",
+        "quicklinks.json", "snippets.json", "window-layouts.json", "colors.json",
     ]
     /// Root files that must be a JSON object to be imported.
-    static let objectFiles: Set<String> = ["settings.json", "quicklinks.json", "snippets.json", "window-layouts.json"]
+    static let objectFiles: Set<String> = [
+        "settings.json", "quicklinks.json", "snippets.json", "window-layouts.json", "colors.json",
+    ]
     /// Of those, the ones keyed by `<extension>/…`, which an import merges extension by extension.
     static let keyedFiles: Set<String> = ["dropdown-values.json", "command-metadata.json"]
     /// Folders holding one `<extension>.json` each.

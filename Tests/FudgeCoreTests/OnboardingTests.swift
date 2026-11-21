@@ -184,6 +184,7 @@ import Testing
         "resetAfter": "a choice that's on by default",
         "showOnScreen": "a choice, not a feature",
         "escapeBehavior": "a choice, not a feature",
+        "colorFormat": "the Color Picker's format, not a feature",
     ]
     let defaults = FudgeSettings()
     let properties = Mirror(reflecting: defaults).children.compactMap { child in child.label.map { ($0, child.value) } }

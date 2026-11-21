@@ -169,6 +169,8 @@ final class LauncherModel {
     @ObservationIgnored var panelOnScreen: () -> Bool = { true }
     /// Whether the launcher panel is on screen; set by the app delegate.
     @ObservationIgnored var isVisible: () -> Bool = { false }
+    /// Pick Color's loupe. `AppDelegate` gives snapshot runs one that never shows it.
+    @ObservationIgnored var colorSampler: any ColorSampling = ScreenColorSampler()
     /// Asks the user to confirm (title, message, primary, dismiss, destructive); set by the app delegate.
     /// Asks the user, for a call from `origin`; a background call gets `CallOrigin.unaskedAnswer` without an alert.
     @ObservationIgnored var confirm: (AlertRequest, CallOrigin) async -> Bool = { _, _ in false }
@@ -1739,11 +1741,11 @@ final class LauncherModel {
         }
     }
 
-    /// The sessions of Fudge's own views, its forms, Search Snippets, Switch Windows and Search Menu Items, which
-    /// never reach the host.
+    /// The sessions of Fudge's own views, its forms, Search Snippets, Switch Windows, Search Menu Items and Recent Colors,
+    /// which never reach the host.
     static let builtInSessions: Set<String> = [
         QuicklinkForm.session, SnippetForm.session, SnippetList.session, SwitchWindowsList.session, LayoutForm.session,
-        MenuItemsList.session,
+        MenuItemsList.session, RecentColorsGrid.session,
     ]
 
     @ObservationIgnored private var builtInForm: BuiltInFormState?
@@ -2043,6 +2045,136 @@ final class LauncherModel {
             }
             reloadSnippetList()
         }
+    }
+
+    // MARK: - Color Picker
+
+    /// One of the Tools group's commands (SPEC-090).
+    private func runTool(_ command: ToolCommand, fromHotkey: Bool) {
+        switch command {
+        case .pickColor:
+            // The loupe needs the screen, so the panel goes first, as for window commands; it never shows.
+            if !fromHotkey { searchText = "" }
+            if isVisible() { hide() }
+            pickColor()
+        case .recentColors:
+            guard fromHotkey else {
+                showRecentColors()
+                return
+            }
+            // As a view command's hotkey does: it hides the panel when Recent Colors is already on screen.
+            resettingFirst {
+                if isVisible(), case .command(let command) = screen, command.session == RecentColorsGrid.session {
+                    hide()
+                    return
+                }
+                if case .command = screen { leaveCommand() }
+                showRecentColors()
+                show()
+            }
+        }
+    }
+
+    /// Whether the loupe is open: a second Pick Color meanwhile (its hotkey again) does nothing.
+    @ObservationIgnored private var pickingColor = false
+
+    /// Pick Color: macOS's loupe, then the color copied in the Copy Format, with a HUD, and added to Recent Colors.
+    /// Esc copies nothing. Recent Colors, if it's the screen under the hidden panel, is drawn again.
+    private func pickColor() {
+        guard !pickingColor else { return }
+        pickingColor = true
+        let format = FudgeSettings.load(from: paths.settingsFile).colorFormat
+        let pick = ColorPick(sampler: colorSampler, copy: { await Self.copyText($0) }, file: paths.colorsFile)
+        Task {
+            let message = await pick.run(format: format)
+            pickingColor = false
+            if let message { showHUD(message) }
+            reloadRecentColors()
+        }
+    }
+
+    /// Puts `text` on the clipboard as `Clipboard.copy` does.
+    private static func copyText(_ text: String) async -> Bool {
+        (try? await SystemCalls.handle("clipboard.copy", .object(["text": .string(text)]), origin: .userInitiated))
+            != nil
+    }
+
+    /// The colors Recent Colors was last drawn from, which its actions' nodes are read in (`RecentColorsGrid.target`).
+    @ObservationIgnored private var listedColors: [RecentColor] = []
+
+    /// Shows Recent Colors (SPEC-090), from root search or its hotkey.
+    private func showRecentColors() {
+        actionPanel = nil
+        dropdownPanel = nil
+        datePanel = nil
+        var command = CommandScreen(session: RecentColorsGrid.session, title: RecentColorsGrid.title)
+        renderRecentColors(&command)
+        screen = .command(command)
+    }
+
+    /// Reads `colors.json` and the Copy Format again and draws the grid, keeping the search text and the selection
+    /// on the same color where it can.
+    private func renderRecentColors(_ command: inout CommandScreen) {
+        let colors = RecentColorStore.load(from: paths.colorsFile).colors
+        listedColors = colors
+        command.view = RecentColorsGrid.view(
+            colors: colors, format: FudgeSettings.load(from: paths.settingsFile).colorFormat)
+        refreshList(&command, selectFirst: false)
+    }
+
+    /// Draws Recent Colors again, if it's on screen: after a pick, a removal, or a new Copy Format in Settings.
+    func reloadRecentColors() {
+        guard case .command(var command) = screen, command.session == RecentColorsGrid.session else { return }
+        renderRecentColors(&command)
+        screen = .command(command)
+    }
+
+    /// One of its actions, as `send` hands it over.
+    private func recentColorsAction(node: Int) {
+        guard let target = RecentColorsGrid.target(of: node, in: listedColors),
+            case .command(let grid) = screen, grid.session == RecentColorsGrid.session
+        else { return }
+        switch target {
+        case .copy(let id, let format):
+            guard let color = listedColors.first(where: { $0.id == id }) else { return }
+            let text = format.string(for: color.color)
+            Task {
+                guard await Self.copyText(text) else {
+                    showFailureToast("Couldn't copy \(text)")
+                    return
+                }
+                hide()
+                showHUD("Copied \(text)")
+            }
+        case .remove(let id):
+            changeRecentColors("Can't remove the color") { $0.remove(id: id) }
+        case .clear:
+            let count = listedColors.count
+            let request = AlertRequest(
+                title: "Clear Recent Colors?",
+                message: count == 1 ? "The color is removed." : "All \(count) colors are removed.", primary: "Clear",
+                dismiss: "Cancel", destructive: true)
+            Task {
+                guard await confirm(request, .userInitiated) else { return }
+                changeRecentColors("Can't clear Recent Colors") { $0.clear() }
+            }
+        case .pick:
+            hide()
+            pickColor()
+        }
+    }
+
+    /// Changes `colors.json` and draws the grid again. A file Fudge can't read stays as it is, and a toast says why.
+    private func changeRecentColors(_ failure: String, _ edit: (inout RecentColorStore) -> Void) {
+        let file = paths.colorsFile
+        var store = RecentColorStore.load(from: file)
+        edit(&store)
+        do {
+            try store.save(to: file)
+        } catch {
+            showFailureToast(failure, message: String(describing: error))
+        }
+        reloadRecentColors()
     }
 
     /// Delete Quicklink…: asks, then removes it from `quicklinks.json`. A file Fudge can't read stays as it is,
@@ -3068,6 +3200,8 @@ final class LauncherModel {
                 }
                 if let message { showHUD(message) }
             }
+        } else if group == BuiltInCommandGroup.tools.name, let command = ToolCommand(rawValue: command) {
+            runTool(command, fromHotkey: fromHotkey)
         }
     }
 
@@ -3532,6 +3666,8 @@ final class LauncherModel {
                 switchWindowsAction(node: node)
             } else if session == MenuItemsList.session, path == ["onAction"] {
                 menuItemsAction(node: node)
+            } else if session == RecentColorsGrid.session, path == ["onAction"] {
+                recentColorsAction(node: node)
             }
             return
         }

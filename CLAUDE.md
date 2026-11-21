@@ -128,6 +128,19 @@ Extensions run in a separate Node.js process, the extension host.
       Hiding the panel drops the read on screen, and showing it reads the frontmost app's menus again.
       Without Accessibility the list says so, after the gate's prompt or offer.
       Snapshot runs never read a real app's menus (`FixedMenuSystem`).
+    - **The Color Picker** (SPEC-090) is the Tools group (`BuiltInCommandGroup.tools`, one command per `ToolCommand`), a group for utilities.
+      **Pick Color** hides the panel as the window commands do, then shows macOS's loupe through `ColorSampling` (the app's `ScreenColorSampler` is `NSColorSampler`, which needs no Screen Recording permission; snapshot runs get `InertColorSampler`, which picks nothing, and tests a fake).
+      `ColorPick` (core) copies the picked color in the **Copy Format** (`colorFormat` in `settings.json`, `ColorFormat`: HEX by default, RGB, HSL, SwiftUI or UIColor) with a HUD ("Copied #3A7BD5") and adds it to Recent Colors; Esc copies and keeps nothing, and a color `colors.json` can't take is still copied, with the HUD saying so.
+      `PickedColor(cgColor:)` converts the loupe's color, which is in the display's color space (often Display P3), to sRGB with `CGColor.converted(to:)` (what `NSColor.usingColorSpace(.sRGB)` gives), and every component is clamped to 0…1.
+      Each format is written from the components rounded to bytes.
+      HEX, RGB, SwiftUI and UIColor name exactly the color the HEX does; HSL is in whole degrees and percent, as CSS writes it, so it's rounded: `#3A7BD5`, `rgb(58, 123, 213)`, `hsl(215, 65%, 53%)`, `Color(red: 0.227, green: 0.482, blue: 0.835)`, `UIColor(red: 0.227, green: 0.482, blue: 0.835, alpha: 1)`, and with alpha `#3A7BD580`, `rgba(…, 0.502)`, `hsla(…)` and `opacity:`.
+      `RecentColorStore` (core) keeps `colors.json`, `{ "colors": [ { id, red, green, blue, alpha, pickedAt } ] }`, newest first, through `EntryFile` as snippets are kept: at most 32, the oldest dropped, and a color picked again (the same bytes) moves to the top.
+      **Recent Colors** (`RecentColorsGrid`, core) is a Grid of 8 columns built in core and shown like Search Snippets, under its own session (`RecentColorsGrid.session`, in `LauncherModel.builtInSessions`): a swatch per color titled with its HEX.
+      ↵ copies in the Copy Format, ⌘K lists every format with that one first, ⌃X removes a color, and ⌃⇧X (Clear Recent Colors…) asks through `confirm` first;
+      each copy hides the panel with a HUD.
+      Its empty view offers Pick Color.
+      Its hotkey shows it as a view command's does, or hides the panel when it's already on screen.
+      **The Color Picker page** (`ColorPickerPage.swift`, after Sign-in) has Copy Format, a `SettingsPopupRow`; changing it draws Recent Colors again if it's open.
     - **Arguments.**
       A selected command's `arguments` get fields after the query, which then shrinks to its text.
       `ArgumentInput` (core) holds what's entered and which field has the keyboard, and takes the keys: Tab and ⇧Tab between the fields, Esc back to the query, ⌫ in an empty field back one, ↑↓ on a dropdown argument. ↵ with a required argument empty moves the keyboard there and outlines it.
@@ -326,6 +339,7 @@ Extensions run in a separate Node.js process, the extension host.
       **Clear Search History…** confirms in a sheet, then `LauncherModel.clearHistory()` empties `LaunchHistory` and `history.json`.
     - **Import / Export** (`BackupSection.swift`, at the bottom of General) writes and reads a `.fudgebackup` (declared in `App/Info.plist`).
       `Backup` (core) collects the parts from the support folder:
+      - `colors.json`
       - `command-metadata.json`
       - `dropdown-values.json`
       - `history.json`
@@ -344,6 +358,7 @@ Extensions run in a separate Node.js process, the extension host.
       Each path is checked as it's read (`Backup.part(of:)`: a path Fudge doesn't write, an invalid extension name, the Extension Store's folder), and the manifest's format as soon as it's read.
       `Backup.contents` also refuses a duplicate, and any of these that isn't a JSON object:
       - a keyed file
+      - `colors.json`
       - `quicklinks.json`
       - `settings.json`
       - `snippets.json`
@@ -529,6 +544,7 @@ Extensions run in a separate Node.js process, the extension host.
     The app handles a host message only when it names no session, or one the app started in the running host and hasn't seen exit (`HostSessions`, checked in `LauncherModel.receive`).
     Anything else is dropped and logged once per id, the sessions of Fudge's own views included (`LauncherModel.builtInSessions`):
     - its forms
+    - Recent Colors
     - Search Menu Items
     - Search Snippets
     - Switch Windows
@@ -840,6 +856,7 @@ Extensions run in a separate Node.js process, the extension host.
   - `--menu-items <file>` gives Search Menu Items a made-up app and menus (`FixedMenuFile`: `{ "app", "path"?, "menus": [{ "title", "key"?, "modifiers"?, "glyph"?, "enabled"?, "items"? }] }`, the app's own menu first), and without it there's no app to search; snapshots never read another app's menus.
   - `--onboarding [<step>]` renders the onboarding window.
   - `--settings` renders the Settings window instead, and `--settings <page>` one of these pages:
+    - `:color-picker`
     - `:commands --search text`, the Commands page searched for that text
     - `:permissions`
     - `:quicklinks`

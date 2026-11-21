@@ -16,6 +16,7 @@ final class SettingsModel {
     static let permissionsPage = ":permissions"
     static let quicklinksPage = ":quicklinks"
     static let snippetsPage = ":snippets"
+    static let colorPickerPage = ":color-picker"
     static let windowManagementPage = ":window-management"
     static let signInPage = ":sign-in"
     /// Every installed extension, for the Commands page.
@@ -78,7 +79,7 @@ final class SettingsModel {
         loadSignIns()
         if selected != Self.generalPage, selected != Self.commandsPage, selected != Self.permissionsPage,
             selected != Self.quicklinksPage, selected != Self.snippetsPage, selected != Self.signInPage,
-            selected != Self.windowManagementPage,
+            selected != Self.colorPickerPage, selected != Self.windowManagementPage,
             !extensions.contains(where: { $0.manifest.name == selected })
         {
             select(Self.generalPage)
@@ -130,6 +131,16 @@ final class SettingsModel {
         guard FudgeSettings.load(from: paths.settingsFile).currencyRates != on, change({ $0.currencyRates = on })
         else { return }
         currencyRatesChanged(on)
+    }
+
+    /// The Color Picker's Copy Format (`colorFormat` in `settings.json`).
+    var colorFormat: ColorFormat { fudgeSettings.colorFormat }
+    /// Recent Colors, if it's open in the launcher, is drawn again with the new format first; set by the app delegate.
+    @ObservationIgnored var colorFormatChanged: () -> Void = {}
+
+    func setColorFormat(_ format: ColorFormat) {
+        guard format != colorFormat, change({ $0.colorFormat = format }) else { return }
+        colorFormatChanged()
     }
 
     /// How the calculator reads and shows numbers (`numberFormat` in `settings.json`).
@@ -1117,6 +1128,7 @@ struct SettingsView: View {
                 Label("Snippets", systemImage: "doc.text").tag(SettingsModel.snippetsPage)
                 Label("Window Management", systemImage: "macwindow").tag(SettingsModel.windowManagementPage)
                 Label("Sign-in", systemImage: "person.badge.key").tag(SettingsModel.signInPage)
+                Label("Color Picker", systemImage: "eyedropper").tag(SettingsModel.colorPickerPage)
                 Section("Extensions") {
                     ForEach(model.extensions, id: \.manifest.name) { installed in
                         Text(installed.manifest.title).tag(installed.manifest.name)
@@ -1143,6 +1155,8 @@ struct SettingsView: View {
                     WindowManagementPage(model: model)
                 } else if model.selected == SettingsModel.signInPage {
                     SignInPage(model: model)
+                } else if model.selected == SettingsModel.colorPickerPage {
+                    ColorPickerPage(model: model)
                 } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {
                     ExtensionPreferencesForm(model: model, installed: installed)
                 } else {
