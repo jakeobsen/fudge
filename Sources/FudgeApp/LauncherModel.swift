@@ -167,6 +167,8 @@ final class LauncherModel {
     /// Asks the user to confirm (title, message, primary, dismiss, destructive); set by the app delegate.
     /// Asks the user, for a call from `origin`; a background call gets `CallOrigin.unaskedAnswer` without an alert.
     @ObservationIgnored var confirm: (AlertRequest, CallOrigin) async -> Bool = { _, _ in false }
+    /// The system's part of the System commands. `AppDelegate` gives snapshot runs inert ones, which do nothing.
+    @ObservationIgnored var systemActions: any SystemActions = MacSystemActions()
 
     /// "Sign in to <provider>" on screen, over whatever the command shows (SPEC-056).
     private(set) var signIn: SignInPrompt?
@@ -2546,7 +2548,25 @@ final class LauncherModel {
             Task {
                 if let message = await SystemCalls.windowCommand(command) { showHUD(message) }
             }
+        } else if group == BuiltInCommandGroup.system.name, let command = SystemCommand(rawValue: command) {
+            // As the window commands do: the panel goes first, so Hide All Apps, Lock Screen and the rest act on
+            // the Mac as the user left it. A command that asks does it in an alert of its own.
+            if !fromHotkey { searchText = "" }
+            if isVisible() { hide() }
+            let runner = SystemCommandRunner(actions: systemActions, ownPid: ProcessInfo.processInfo.processIdentifier)
+            Task {
+                let message = await runner.run(command) { [weak self] confirmation in
+                    await self?.confirm(Self.alertRequest(confirmation), .userInitiated) ?? false
+                }
+                if let message { showHUD(message) }
+            }
         }
+    }
+
+    private static func alertRequest(_ confirmation: SystemConfirmation) -> AlertRequest {
+        AlertRequest(
+            title: confirmation.title, message: confirmation.message, primary: confirmation.primary,
+            dismiss: confirmation.dismiss, destructive: true)
     }
 
     private func recordLaunch(_ item: RootItem) {
