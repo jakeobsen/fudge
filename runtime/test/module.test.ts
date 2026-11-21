@@ -56,7 +56,7 @@ test("frozen constants come through the module exactly as they are", () => {
 
 test("a missing member of an implemented component names itself", () => {
     const api = createApiModule() as { Action: Record<string, unknown>; List: { Item: Record<string, unknown> } };
-    assert.throws(() => (api.Action.Teleport as () => void)(), /^NotAvailableError: Action\.Teleport isn't available in fudge yet$/);
+    assert.throws(() => (api.Action.Teleport as () => void)(), /^NotAvailableError: Action\.Teleport isn't available in Fudge yet$/);
     assert.throws(() => (api.List.Item.Accessory as () => void)(), /List\.Item\.Accessory isn't available/);
     assert.equal(api.Action.displayName, "Action", "lowercase members aren't stubbed");
 });
@@ -65,13 +65,13 @@ test("a missing export throws NotAvailableError naming it when called", () => {
     const api = createApiModule({});
     const showHUD = api.showHUD as () => void;
     assert.throws(showHUD, (error: unknown) => error instanceof NotAvailableError && error.api === "showHUD");
-    assert.throws(() => new (api.Cache as new () => object)(), /Cache isn't available in fudge yet/);
+    assert.throws(() => new (api.Cache as new () => object)(), /Cache isn't available in Fudge yet/);
 });
 
 test("reading a member of a missing export throws, naming it in full", () => {
     const api = createApiModule({}) as { Clipboard: { copy(text: string): void }; environment: { supportPath: string } };
-    assert.throws(() => api.Clipboard.copy("x"), /^NotAvailableError: Clipboard\.copy isn't available in fudge yet$/);
-    assert.throws(() => api.environment.supportPath, /environment\.supportPath isn't available in fudge yet/);
+    assert.throws(() => api.Clipboard.copy("x"), /^NotAvailableError: Clipboard\.copy isn't available in Fudge yet$/);
+    assert.throws(() => api.environment.supportPath, /environment\.supportPath isn't available in Fudge yet/);
 });
 
 test("stubs don't look like promises or React types", () => {

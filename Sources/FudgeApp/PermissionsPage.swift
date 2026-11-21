@@ -103,7 +103,7 @@ struct AccessibilityControls: View {
                 }
             }
             if !status.isTrusted, status.promptShown {
-                Text("If macOS didn't ask, click again to open the Accessibility settings, then turn fudge on.")
+                Text("If macOS didn't ask, click again to open the Accessibility settings, then turn Fudge on.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -124,9 +124,9 @@ struct PermissionsPage: View {
             LaunchPermissionsSection(model: model)
             Section {
                 LabeledContent {
-                    Button("Show Onboarding Again") { model.showOnboarding() }
+                    Button("Show Onboarding Again") { model.showOnboardingAgain() }
                 } label: {
-                    Text("Go through fudge's first-run choices again, starting from what's set now.")
+                    Text("Go through Fudge's first-run choices again, starting from what's set now.")
                 }
             }
         }

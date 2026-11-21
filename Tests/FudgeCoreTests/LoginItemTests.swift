@@ -43,7 +43,7 @@ private struct Refused: LocalizedError {
     #expect(LoginItemState(.notFound) == LoginItemState(isOn: false, note: nil, offersLoginItemsSettings: false))
     let approval = LoginItemState(.requiresApproval)
     #expect(approval.isOn, "on, waiting for the user's approval")
-    #expect(approval.note == "Allow fudge in System Settings → General → Login Items")
+    #expect(approval.note == "Allow Fudge in System Settings → General → Login Items")
     #expect(approval.offersLoginItemsSettings)
 }
 

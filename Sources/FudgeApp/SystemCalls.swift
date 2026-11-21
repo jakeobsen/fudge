@@ -83,7 +83,7 @@ enum SystemCalls {
                 from: frontmost(), permission: automation, source: finder, origin: origin)
             return .array(paths.map { .object(["path": .string($0)]) })
         default:
-            throw Failure(description: "\(method) isn't available in fudge yet")
+            throw Failure(description: "\(method) isn't available in Fudge yet")
         }
     }
 

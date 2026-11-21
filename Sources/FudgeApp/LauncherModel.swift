@@ -175,6 +175,27 @@ final class LauncherModel {
     }
     /// The extension each session belongs to.
     @ObservationIgnored private var sessionExtensions: [String: String] = [:]
+
+    /// Unloads every running session of `extensionName`'s commands and waits until each has exited (the host stops a
+    /// worker 1 s after `unload` at the latest), or 2 s. Turning the Extension Store off calls it before deleting the
+    /// copy the store's git works in; the store ends its git when it's unloaded. A view of it on screen goes back to
+    /// root search.
+    func unloadSessions(ofExtension extensionName: String) async {
+        let sessions = sessionExtensions.filter { $0.value == extensionName }.map(\.key)
+        guard !sessions.isEmpty else { return }
+        for session in sessions {
+            if case .command(let command) = screen, command.session == session {
+                leaveCommand()
+                refreshResults()
+            } else {
+                send(.unload(session: session))
+            }
+        }
+        let deadline = ContinuousClock.now + .seconds(2)
+        while sessions.contains(where: { sessionExtensions[$0] != nil }), ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
     /// The command each session runs, by name.
     @ObservationIgnored private var sessionCommands: [String: String] = [:]
     /// The subtitles commands set for themselves (`updateCommandMetadata`).
@@ -197,7 +218,7 @@ final class LauncherModel {
         menuBar.host = MenuBarController.Host(
             launch: { [weak self] installed, command, userInitiated in
                 self?.launchMenuBarCommand(installed, command: command, userInitiated: userInitiated)
-                    ?? .failure(MenuBarController.LaunchFailed(message: "fudge is quitting"))
+                    ?? .failure(MenuBarController.LaunchFailed(message: "Fudge is quitting"))
             },
             send: { [weak self] message in self?.send(message) },
             showHUD: { [weak self] title in self?.showHUD(title) },
@@ -1607,9 +1628,9 @@ final class LauncherModel {
         if item.recordsLaunch { recordLaunch(item.id) }
     }
 
-    /// "Quit fudge" asks first: its hotkeys stop working until fudge is opened again.
+    /// "Quit Fudge" asks first: its hotkeys stop working until Fudge is opened again.
     private static let quitRequest = AlertRequest(
-        title: "Quit fudge?",
+        title: "Quit Fudge?",
         message: "Its hotkeys stop working until you open it again.",
         primary: "Quit",
         dismiss: "Cancel",
@@ -1927,7 +1948,7 @@ final class LauncherModel {
         guard let node = Runtime.locateNode() else {
             throw HostUnavailable(
                 description:
-                    "fudge needs Node.js 22.18 or later. Install it with `brew install node`, or set FUDGE_NODE."
+                    "Fudge needs Node.js 22.18 or later. Install it with `brew install node`, or set FUDGE_NODE."
             )
         }
         guard let script = Runtime.locateHostScript() else {

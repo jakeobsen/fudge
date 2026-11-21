@@ -37,7 +37,7 @@ public struct MenuBarStore: Sendable, Equatable {
     public struct LimitReached: Error, Equatable, CustomStringConvertible {
         public init() {}
         public var description: String {
-            "fudge shows at most \(MenuBarStore.limit) menu bar items. Deactivate one first."
+            "Fudge shows at most \(MenuBarStore.limit) menu bar items. Deactivate one first."
         }
     }
 
@@ -86,7 +86,7 @@ public struct MenuBarStore: Sendable, Equatable {
     public struct Unreadable: Error, Equatable, CustomStringConvertible {
         public init() {}
         public var description: String {
-            "fudge can't read menu-bar.json, so it leaves the file as it is. Fix or remove it, then try again."
+            "Fudge can't read menu-bar.json, so it leaves the file as it is. Fix or remove it, then try again."
         }
     }
 

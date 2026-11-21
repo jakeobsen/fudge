@@ -285,12 +285,12 @@ private func reader(
         String(describing: SelectionError.noSelectedText) == "Unable to get selected text from frontmost application")
     #expect(
         String(describing: SelectionError.accessibilityNeeded)
-            == "fudge needs Accessibility permission to read the selected text. Allow fudge in System Settings → "
+            == "Fudge needs Accessibility permission to read the selected text. Allow Fudge in System Settings → "
             + "Privacy & Security → Accessibility.")
     #expect(String(describing: SelectionError.finderNotFrontmost) == "Finder isn't the frontmost application")
     #expect(
         String(describing: SelectionError.finderAutomationDenied)
-            == "fudge needs permission to control Finder. Allow it in System Settings → Privacy & Security → Automation."
+            == "Fudge needs permission to control Finder. Allow it in System Settings → Privacy & Security → Automation."
     )
     #expect(String(describing: SelectionError.finderTimedOut) == "Finder didn't answer in time")
 }

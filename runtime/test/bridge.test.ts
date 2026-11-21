@@ -23,7 +23,7 @@ test("an error from the app rejects the call", async () => {
 });
 
 test("calls fail cleanly when the bridge isn't connected", async () => {
-    await assert.rejects(callApp("toast.show"), /toast\.show: not connected to the fudge app/);
+    await assert.rejects(callApp("toast.show"), /toast\.show: not connected to the Fudge app/);
 });
 
 test("answers for unknown ids are ignored", () => {

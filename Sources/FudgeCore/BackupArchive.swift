@@ -43,25 +43,25 @@ public enum BackupError: Error, Equatable, CustomStringConvertible {
 
     public var description: String {
         switch self {
-        case .unreadable: "This file isn't a fudge backup, or it's damaged."
+        case .unreadable: "This file isn't a Fudge backup, or it's damaged."
         case .wrongPassword: "That password doesn't open this backup."
-        case .newerFormat: "This backup was made by a newer version of fudge. Update fudge to import it."
+        case .newerFormat: "This backup was made by a newer version of Fudge. Update Fudge to import it."
         case .refused(let refusal):
             switch refusal {
             case .link: "This backup contains a link, so it wasn't imported."
             case .notAFile: "This backup contains something that isn't a file, so it wasn't imported."
-            case .path(let path): "This backup contains a file fudge doesn't write (\(path)), so it wasn't imported."
+            case .path(let path): "This backup contains a file Fudge doesn't write (\(path)), so it wasn't imported."
             case .extensionName(let name):
                 "This backup names an extension \"\(name)\" that isn't valid, so it wasn't imported."
-            case .tooBig: "This backup is bigger than fudge imports, so it wasn't imported."
+            case .tooBig: "This backup is bigger than Fudge imports, so it wasn't imported."
             case .duplicate(let path): "This backup contains \(path) twice, so it wasn't imported."
-            case .noManifest: "This file isn't a fudge backup, or it's damaged."
+            case .noManifest: "This file isn't a Fudge backup, or it's damaged."
             case .invalidPart(let name): "This backup's \(name) isn't valid, so it wasn't imported."
             }
         case .writeFailed(let reason): "The backup couldn't be written: \(reason)"
         case .importFailed(let reason): "The import failed, and nothing was changed: \(reason)"
         case .restoreFailed(let file):
-            "The import failed partway, and fudge couldn't put everything back. Your settings before the import are "
+            "The import failed partway, and Fudge couldn't put everything back. Your settings before the import are "
                 + "in \(file)."
         }
     }

@@ -193,7 +193,7 @@ test("a missing API fails with an error naming it", async () => {
     const host = start();
     host.send({ type: "launch", session: "m", entry: fixture("missing-api.cjs"), mode: "no-view" });
     const error = await host.next(of("m", "error"));
-    assert.equal(error.message, "WindowManagement.getActiveWindow isn't available in fudge yet");
+    assert.equal(error.message, "WindowManagement.getActiveWindow isn't available in Fudge yet");
     assert.equal(error.fatal, true);
     assert.equal((await host.next(of("m", "exit"))).reason, "crashed");
     await host.close();
