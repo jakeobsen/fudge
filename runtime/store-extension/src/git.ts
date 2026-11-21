@@ -38,12 +38,14 @@ export function storeEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.
     return { ...base, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
 }
 
-/** `spawn` with no shell, a timeout, and `storeEnvironment()`. */
+/** `spawn` with no shell, a timeout that sends SIGTERM, and `storeEnvironment()`. */
 export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable, input }) =>
     new Promise((resolve) => {
         const child = spawn(program, args, {
             cwd,
             timeout,
+            // SIGTERM, not SIGKILL: `fudge scan` and `fudge build` pass it on to everything they started.
+            killSignal: "SIGTERM",
             stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
             env: storeEnvironment(),
         });
