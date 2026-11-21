@@ -53,11 +53,8 @@ final class SettingsModel {
     }
 
     func reload() {
-        let installed = InstalledExtension.all(
-            paths: paths, settings: FudgeSettings.load(from: paths.settingsFile), resources: Bundle.main.resourceURL)
-        extensions = installed.filter { installed in
-            !installed.manifest.preferences.isEmpty || installed.manifest.commands.contains { !$0.preferences.isEmpty }
-        }
+        let installed = InstalledExtension.all(paths: paths, resources: Bundle.main.resourceURL)
+        extensions = InstalledExtension.settingsPages(of: installed)
         stored = Dictionary(uniqueKeysWithValues: extensions.map { ($0.manifest.name, store.load($0.manifest.name)) })
         allExtensions = installed.sorted {
             $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending
@@ -208,25 +205,23 @@ final class SettingsModel {
 
     // MARK: - Extension Store
 
-    /// Whether the Extension Store is on: switched on through its consent sheet.
+    /// Whether the Extension Store is on: switched on through its consent sheet. Whether it's in fudge at all is
+    /// its Enabled on the Commands page, which the switch leaves alone.
     var extensionStore: Bool { fudgeSettings.isExtensionStoreOn }
     /// Asks the user with a sheet on the Settings window; set by the window controller.
     @ObservationIgnored var confirm: (LauncherModel.AlertRequest) async -> Bool = { _ in false }
-    /// Tells the launcher to list or drop the store's commands; set by the app delegate.
+    /// Tells the launcher the store was turned on or off; set by the app delegate.
     @ObservationIgnored var extensionStoreChanged: () -> Void = {}
 
-    /// The switch: on only after the consent sheet's Turn On, which records the date; off after its own sheet,
-    /// which deletes the store's downloaded repository but keeps its record of what it installed.
+    /// The switch on the store's Settings page: on only after the consent sheet's Turn On, which records the date;
+    /// off after its own sheet, which deletes the store's downloaded repository but keeps its record of what it
+    /// installed.
     func setExtensionStore(_ on: Bool) {
         guard on != extensionStore else { return }
         Task {
             let sheet = on ? ExtensionStore.consentRequest : ExtensionStore.turnOffRequest
             guard await confirm(sheet) else { return }
-            let saved = change { settings in
-                settings.extensionStore = on
-                settings.extensionStoreConsentAt = on ? ISO8601DateFormatter().string(from: Date()) : nil
-            }
-            guard saved else { return }
+            guard change({ $0.setExtensionStore(on, now: Date()) }) else { return }
             if !on {
                 do {
                     try ExtensionStore.deleteRepository(paths)
@@ -374,8 +369,9 @@ final class SettingsModel {
         fudgeSettings.commands[commandID]?.enabled != false
     }
 
+    /// The Extension Store is off unless enabled (`FudgeSettings.isEnabled(extension:)`).
     func isEnabled(extension name: String) -> Bool {
-        fudgeSettings.extensions[name]?.enabled != false
+        fudgeSettings.isEnabled(extension: name)
     }
 
     /// Enables or disables a command: a disabled one leaves root search, and its hotkey stops working.
@@ -386,7 +382,7 @@ final class SettingsModel {
 
     /// Enables or disables every command of an extension.
     func setEnabled(_ enabled: Bool, extension name: String) {
-        change { $0.extensions[name, default: .init()].enabled = enabled ? nil : false }
+        change { $0.setEnabled(enabled, extension: name) }
         _ = applyHotkeys()
     }
 
@@ -651,6 +647,9 @@ private struct ExtensionPreferencesForm: View {
     var body: some View {
         let manifest = installed.manifest
         Form {
+            if manifest.name == ExtensionStore.extensionName {
+                ExtensionStoreSwitch(model: model)
+            }
             if !manifest.preferences.isEmpty {
                 Section(manifest.title) {
                     ForEach(manifest.preferences, id: \.name) { preference in
@@ -673,6 +672,26 @@ private struct ExtensionPreferencesForm: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// The first row of the Extension Store's page: its switch, which asks with the consent sheet before turning on.
+private struct ExtensionStoreSwitch: View {
+    let model: SettingsModel
+
+    var body: some View {
+        if let problem = model.settingsProblem {
+            Label(problem, systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.red)
+        }
+        Section {
+            Toggle(isOn: Binding(get: { model.extensionStore }, set: { model.setExtensionStore($0) })) {
+                Text(ExtensionStore.Switch.title)
+                Text(ExtensionStore.Switch.help)
+            }
+            .toggleStyle(.switch)
+        }
     }
 }
 

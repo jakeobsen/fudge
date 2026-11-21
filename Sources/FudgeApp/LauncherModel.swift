@@ -10,6 +10,21 @@ final class LauncherModel {
         var title: String
         var message: String
         var details: String?
+        /// Set when it's a notice rather than an error, like the Extension Store's "off" view.
+        var notice: Notice?
+
+        /// A notice is drawn like an empty view. Its actions take Back's place (↵ runs the first, ⌘K lists them),
+        /// and ⌘⇧, opens `extensionName`'s settings.
+        struct Notice: Equatable {
+            var extensionName: String
+            var actions: [ActionSection]
+        }
+
+        /// What opening the Extension Store shows while it's off (`ExtensionStore.isOff`), in place of the store.
+        static let extensionStoreOff = Failure(
+            title: ExtensionStore.Off.title, message: "",
+            notice: Notice(
+                extensionName: ExtensionStore.extensionName, actions: RootActions.extensionStoreOffSections))
     }
 
     /// A running view command.
@@ -222,9 +237,8 @@ final class LauncherModel {
     }
 
     private func readInstalledExtensions() {
-        // The bundled Extension Store is listed with them while it's on.
-        installedExtensions = InstalledExtension.all(
-            paths: paths, settings: FudgeSettings.load(from: paths.settingsFile), resources: Bundle.main.resourceURL)
+        // The bundled Extension Store is listed with them; its Enabled is off by default (`FudgeSettings`).
+        installedExtensions = InstalledExtension.all(paths: paths, resources: Bundle.main.resourceURL)
         extensions = Dictionary(
             installedExtensions.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
         loadCommandMetadata(installedExtensions)
@@ -518,6 +532,7 @@ final class LauncherModel {
     /// command, the selected item's; with no items, the empty view's or the List's own; for other views, the
     /// view's own.
     var currentActions: [ActionSection] {
+        if case .failure(let failure) = screen { return failure.notice?.actions ?? [] }
         if case .root = screen {
             if selectedItem == Self.calculatorID {
                 return RootActions.calculatorSections(for: calculator?.enter ?? .copy)
@@ -1135,8 +1150,10 @@ final class LauncherModel {
             guard case .command(let command) = screen else { return }
             send(.event(session: command.session, node: node, path: ["onAction"], args: []))
         case .root(let action):
-            guard case .root = screen else { return }
-            perform(action)
+            switch screen {
+            case .root, .failure: perform(action)  // a failure's are its notice's
+            case .command: return
+            }
         }
     }
 
@@ -1195,8 +1212,8 @@ final class LauncherModel {
             return nil
         case .command(let command):
             return command.extensionName
-        case .failure:
-            return nil
+        case .failure(let failure):
+            return failure.notice?.extensionName
         }
     }
 
@@ -1357,7 +1374,8 @@ final class LauncherModel {
         case .command:
             if let primaryAction { run(primaryAction) }
         case .failure:
-            screen = .root
+            // A notice's first action, else back to root search.
+            if let primaryAction { run(primaryAction) } else { screen = .root }
         }
     }
 
@@ -1641,6 +1659,11 @@ final class LauncherModel {
         quiet: Bool = false
     ) -> String? {
         let extensionName = installed.manifest.name
+        // The app decides whether the store is on, from settings.json as it is now, before any of its code runs.
+        if ExtensionStore.isOff(extensionName, settings: FudgeSettings.load(from: paths.settingsFile)) {
+            if !quiet { screen = .failure(.extensionStoreOff) }
+            return ExtensionStore.Off.title
+        }
         let host: ExtensionHost
         do {
             host = try ensureHost()
