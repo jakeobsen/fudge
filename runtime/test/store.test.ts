@@ -30,6 +30,7 @@ import {
     fromReport,
     isNotCompatible,
     isPartlyCompatible,
+    isRefusedWant,
     isScanned,
     maxCachedResults,
     maxScanBytes,
@@ -1847,7 +1848,7 @@ async function partialClone(files: Record<string, string | Buffer>) {
     const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}` });
     await repo.clone();
     const { context, cli } = await storeContext();
-    return { repo, context: { ...context, repo }, cli };
+    return { repo, context: { ...context, repo }, cli, root, bare };
 }
 
 test("a check downloads no source file over the cap: that folder isn't checked, and its blob never comes", async () => {
@@ -1933,6 +1934,136 @@ test("only source files decide: an asset over the per-file cap never comes and t
     assert.deepEqual(await notDownloaded(repo.path, "gen"), ["src/table.js/rows.bin"]);
     assert.deepEqual(await patterns(), ["/extensions/*/package.json"], "nothing was checked out");
     assert.equal(cli.calls.length, 1, "nor scanned");
+});
+
+test("only git's own words for a refused want count as a refusal", () => {
+    const tree = "6014216c10952458a5426363594df848e6a3b8b5";
+    for (const text of [
+        // Protocol v0, a server that allows only its refs' tips in a want.
+        `error: git upload-pack: not our ref ${tree}\nfatal: remote error: upload-pack: not our ref ${tree}`,
+        // Protocol v0, a server that allows no unadvertised want at all (git's own check, before asking).
+        `error: Server does not allow request for unadvertised object ${tree}`,
+    ]) {
+        assert.ok(isRefusedWant(new GitError(text, "git fetch")), text);
+    }
+    for (const text of [
+        "\ngit stopped after 120 s",
+        "fatal: unable to access 'https://github.com/raycast/extensions.git/': Could not resolve host: github.com",
+        "fetch-pack: unexpected disconnect while reading sideband packet\nfatal: protocol error: bad pack header",
+        "fatal: the remote end hung up unexpectedly",
+        "git cancelled",
+    ]) {
+        assert.ok(!isRefusedWant(new GitError(text, "git fetch")), text);
+    }
+});
+
+/** The real git runner, recording each call: its arguments, its environment, and how it ended. */
+function recording(around: Run = spawnProgram) {
+    const calls: { args: string[]; env?: NodeJS.ProcessEnv; code: number; stderr: string }[] = [];
+    const run: Run = async (program, args, options) => {
+        const result = await around(program, args, options);
+        calls.push({ args, env: options.env, code: result.code, stderr: result.stderr });
+        return result;
+    };
+    const steps = () => calls.map((call) => `${call.args.slice(0, 2).join(" ")}${call.env ? " (no lazy fetch)" : ""}`);
+    return { run, calls, steps };
+}
+
+test("a server that refuses the folder's tree gets the fetch as before: each source file by its id, whatever its size", async () => {
+    // Real git on protocol v0, against a server that allows only its refs' tips: it refuses the tree with "not our
+    // ref", and the check takes the fetch as before. That server refuses the source files' ids too, so it fails.
+    const refusing = await partialClone({
+        "extensions/small/package.json": JSON.stringify(manifest("small")),
+        "extensions/small/src/index.ts": "export {};\n",
+    });
+    await sh(refusing.bare, "config", "uploadpack.allowTipSHA1InWant", "true");
+    await sh(refusing.repo.path, "config", "protocol.version", "0");
+    const v0 = recording();
+    await assert.rejects(
+        checkFolder("small", { ...refusing.context, repo: new StoreRepository(refusing.repo.path, { run: v0.run }) }, () => false),
+        /not our ref/,
+    );
+    const fetch = v0.calls.find((call) => call.args[0] === "fetch")!;
+    assert.match(fetch.stderr, /not our ref/, "git's own refusal");
+    assert.deepEqual(
+        v0.steps().filter((step) => step.startsWith("fetch") || step.startsWith("sparse-checkout")),
+        ["fetch --refetch", "sparse-checkout add"],
+        "the fetch as before (the checkout with the lazy fetch on) came after the refusal",
+    );
+
+    // On a server that sends source files by their ids (protocol v2) but, here, refuses the tree as v0's would.
+    const big = Buffer.alloc(maxScanBytes + 1024, "a");
+    const { repo, context, cli } = await partialClone({
+        "extensions/art/package.json": JSON.stringify(manifest("art")),
+        "extensions/art/src/index.ts": "export const art = 1;\n",
+        "extensions/art/src/logo.png": "an asset\n",
+        "extensions/huge/package.json": JSON.stringify(manifest("huge")),
+        "extensions/huge/src/index.ts": "export const huge = 1;\n",
+        "extensions/huge/src/generated.ts": big,
+    });
+    const refuseTrees: Run = async (program, args, options) => {
+        if (args[0] !== "fetch" || !args.includes("--refetch")) return spawnProgram(program, args, options);
+        const tree = args.at(-1)!;
+        return { code: 128, stdout: "", stderr: `error: git upload-pack: not our ref ${tree}\nfatal: remote error: upload-pack: not our ref ${tree}` };
+    };
+    const v2 = recording(refuseTrees);
+    const refused = { ...context, repo: new StoreRepository(repo.path, { run: v2.run }) };
+    assert.deepEqual(await checkFolder("art", refused, () => false), fromReport(supportedScan));
+    assert.deepEqual(await notDownloaded(repo.path, "art"), ["src/logo.png"], "only the source file came, not the asset");
+    assert.ok(v2.steps().includes("sparse-checkout add"), "with the lazy fetch on");
+
+    // A source file over the per-file cap comes all the same, and the total's check makes the row "Not checked".
+    assert.deepEqual(await checkFolder("huge", refused, () => false), { notChecked: true });
+    assert.deepEqual(await notDownloaded(repo.path, "huge"), [], "every source file came, whatever its size");
+    assert.equal(cli.calls.length, 1, "huge wasn't scanned");
+    assert.deepEqual(
+        (await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean),
+        ["/extensions/*/package.json"],
+        "the scan's patterns went again",
+    );
+});
+
+test("any other failure of the tree fetch fails the check: no fetch as before, nothing more downloaded", async () => {
+    const { repo, context, cli, root } = await partialClone({
+        "extensions/small/package.json": JSON.stringify(manifest("small")),
+        "extensions/small/src/index.ts": "export {};\n",
+        "extensions/small/src/data.json": "{}\n",
+    });
+    const patterns = async () => (await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean);
+    const unchanged = async (why: string, calls: ReturnType<typeof recording>) => {
+        assert.deepEqual(
+            calls.steps().filter((step) => step.startsWith("fetch") || step.startsWith("sparse-checkout")),
+            ["fetch --refetch"],
+            `${why}: no checkout, and no fetch as before`,
+        );
+        assert.deepEqual(await notDownloaded(repo.path, "small"), ["src/data.json", "src/index.ts"], `${why}: nothing came`);
+        assert.deepEqual(await patterns(), ["/extensions/*/package.json"], `${why}: nothing checked out`);
+        assert.deepEqual(await locks(repo.path), [], `${why}: no lock left`);
+        assert.equal(cli.calls.length, 0, `${why}: not scanned`);
+    };
+
+    // A timeout: a remote that takes 30 s to answer, and a fetch given half a second.
+    await sh(repo.path, "config", "remote.origin.uploadpack", "sleep 30; git-upload-pack");
+    const slow = recording((program, args, options) =>
+        spawnProgram(program, args, args[0] === "fetch" ? { ...options, timeout: 500 } : options),
+    );
+    const started = Date.now();
+    await assert.rejects(
+        checkFolder("small", { ...context, repo: new StoreRepository(repo.path, { run: slow.run }) }, () => false, new AbortController().signal),
+        /git stopped after 0\.5 s/,
+    );
+    assert.ok(Date.now() - started < 10_000, `the check ended with the fetch (${Date.now() - started} ms)`);
+    await unchanged("a timeout", slow);
+    await sh(repo.path, "config", "--unset", "remote.origin.uploadpack");
+
+    // A remote that can't be reached.
+    await sh(repo.path, "config", "remote.origin.url", `file://${path.join(root, "nowhere.git")}`);
+    const unreachable = recording();
+    await assert.rejects(
+        checkFolder("small", { ...context, repo: new StoreRepository(repo.path, { run: unreachable.run }) }, () => false),
+        /Could not read from remote repository/,
+    );
+    await unchanged("an unreachable remote", unreachable);
 });
 
 /** Every `*.lock` file under the copy's `.git`: a git ended while writing leaves one, and later git calls then fail. */

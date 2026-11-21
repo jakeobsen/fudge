@@ -884,7 +884,8 @@ Extensions run in a separate Node.js process, the extension host.
     Blobs asked for by their own ids would come whatever their size.
     A source file left out for its size means the row isn't checked (`missingObjects`, `rev-list --missing=print`, which downloads nothing on any git); an asset left out isn't read, so it doesn't matter.
     It then checks out the source files with git's lazy fetch off (`addFetched`, `GIT_NO_LAZY_FETCH`), checks their total (more than `maxScanBytes`, 5 MiB, isn't checked), scans with `fudge scan`, caches the result, and always takes its patterns out again.
-    A server that won't send a folder's tree gets the fetch as before, with the size checked after the download.
+    Only a server that refuses the tree's id, in git's own words (`isRefusedWant`: "not our ref", or "Server does not allow request for unadvertised object"), gets the fetch as before: `add`'s lazy fetch, which downloads each source file by its id whatever its size, with the total checked after the download.
+    Any other failure of the tree fetch (a timeout, the network) fails the check, and nothing more is downloaded.
     A blobless clone has no sizes before a download, so the first cap is on the number of files.
     Install shares the cache both ways.
   - `store.ts` installs with `$FUDGE_CLI build <source> --into $FUDGE_EXTENSIONS_DIR`.

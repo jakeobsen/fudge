@@ -370,6 +370,17 @@ async function sourceBytes(folder: string): Promise<number> {
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /**
+ * Whether git's error says the server refused to send an object it didn't advertise, by git's own words: protocol v0's
+ * "not our ref" (`remote error: upload-pack: not our ref <id>`), and "Server does not allow request for unadvertised
+ * object" when the server allows no such request at all. Protocol v2, which GitHub speaks, takes any id. Anything
+ * else (a timeout, a network failure, a protocol error) isn't a refusal.
+ */
+export function isRefusedWant(error: unknown): boolean {
+    const text = errorText(error);
+    return /\bnot our ref\b/.test(text) || text.includes("Server does not allow request for unadvertised object");
+}
+
+/**
  * Fetches `dir`'s source files, scans them with `fudge scan`, and takes the patterns out again. Resolves undefined
  * when `cancelled()` turns true before the fetch or before the scan; throws when git or the scan fails. Call it in
  * the store's git queue (`oneAtATime`). `dir` is a checked folder.
@@ -401,8 +412,14 @@ export async function checkFolder(
             await context.repo.fetchSource(dir, maxScanBytes, signal);
         } catch (error) {
             if (cancelled()) return undefined;
-            // A server that won't send a folder's tree: the source comes as before, its size checked after it's here.
-            console.error(`The store's bounded fetch failed, so it fetches as before: ${errorText(error)}`);
+            // Only a server that won't send a folder's tree gets the fetch as before (`add`'s lazy fetch: each source
+            // file by its id, whatever its size), with the size checked after it's here. Any other failure fails the
+            // check, since falling back would drop the per-file cap for a timeout or a network error.
+            if (!isRefusedWant(error)) {
+                console.error(`The store's bounded fetch failed: ${errorText(error)}`);
+                throw error;
+            }
+            console.error(`The server won't send the folder's tree, so the store fetches its source as before: ${errorText(error)}`);
             bounded = false;
         }
         if (cancelled()) return undefined;
