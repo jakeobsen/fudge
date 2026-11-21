@@ -15,6 +15,7 @@ import { Toast } from "./api/feedback.ts";
 import { createApiModule } from "./api/module.ts";
 import { explainRenderError } from "./api/oauth.ts";
 import { NavigationRoot, type NavigationHandle } from "./api/navigation.ts";
+import { recordRender } from "./api/render.ts";
 import { connect, settle } from "./bridge.ts";
 import { revive, type CommandMode, type HostToWorker, type LaunchProps, type WorkerMessage } from "./protocol.ts";
 import { createRoot, StaleCallbackError, type Root } from "./renderer/root.ts";
@@ -133,10 +134,16 @@ port.on("message", (message: HostToWorker) => {
 });
 
 try {
-    const exported = Module.createRequire(entry)(entry) as unknown;
-    const command =
+    // An old command module calls the deprecated `render(<Command />)` while it loads, and exports nothing.
+    const { result: exported, rendered } = recordRender(() => Module.createRequire(entry)(entry) as unknown);
+    const exportedCommand =
         typeof exported === "function" ? exported : (exported as { default?: unknown } | null | undefined)?.default;
+    // The default export wins. Without one, the element `render` got is the root, as if the default export were
+    // `() => element`. The app shows nothing a no-view command renders, so that one fails, saying why.
+    const fromRender = typeof exportedCommand !== "function" && rendered !== undefined;
+    const command = fromRender ? () => rendered?.element : exportedCommand;
     if (typeof command !== "function") throw new Error(`${entry} has no default export to run`);
+    if (fromRender && mode === "no-view") throw new Error(`${entry} shows a view with render(), but it's a no-view command`);
 
     // A menu-bar command renders like a view command: its MenuBarExtra is the view.
     if (mode === "view" || mode === "menu-bar") {

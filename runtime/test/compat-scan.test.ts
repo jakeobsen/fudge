@@ -39,6 +39,7 @@ test("finds what a module uses from @raycast/api, however it's imported", async 
 
 test("decides whether fudge provides an API path", () => {
     assert.equal(support(api, "Clipboard.copy"), "implemented");
+    assert.equal(support(api, "render", declared), "implemented", "the deprecated top-level render()");
     assert.equal(support(api, "Action.CopyToClipboard"), "implemented");
     assert.equal(support(api, "Toast.Style.Failure"), "implemented");
     assert.equal(support(api, "environment.commandName.length"), "implemented", "past the API, it's the value");
