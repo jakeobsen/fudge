@@ -72,8 +72,13 @@ export function isNotAvailable(value: unknown): boolean {
 
 /** On a component that renders but fails when used: an action Fudge can't perform yet (`Action.CreateQuicklink`). */
 export const UNAVAILABLE = Symbol.for("fudge.unavailable");
-/** On a component the extension host renders but the app can't draw yet (`Form.LinkAccessory`). */
+/** On a component the extension host renders but the app can't draw yet (listed at the end of `components.ts`). */
 export const NOT_DRAWN = Symbol.for("fudge.notDrawn");
+/**
+ * On an export that's there but left out by design: `OAuth`, whose client can be built but can't sign in (D-50).
+ * The scan counts it, and everything under it, as missing, so it stays among the APIs left out on purpose.
+ */
+export const LEFT_OUT = Symbol.for("fudge.leftOut");
 
 /** Sets `marker` on `component`, naming the API it stands for. */
 export function mark(component: object, marker: symbol, name: string): void {

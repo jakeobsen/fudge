@@ -25,13 +25,25 @@ export function host(type: string): FunctionComponent<Props> {
         const slots: ReactNode[] = [];
         for (const [key, value] of Object.entries(props)) {
             if (isValidElement(value)) slots.push(createElement(SLOT, { key: `$slot:${key}`, name: key }, value));
-            else plain[key] = value;
+            else plain[key] = key === "quickLook" ? quickLookProp(value) : value;
         }
         plain.children = slots.length === 0 ? children : [...slots, children];
         return createElement(type, plain);
     };
     component.displayName = type;
     return component;
+}
+
+/**
+ * A List or Grid item's `quickLook`, with its `path` (a `PathLike`) as text: a `URL` as its `href`, a `Buffer` as
+ * UTF-8. The app reads paths and `file://` URLs.
+ */
+export function quickLookProp(value: unknown): unknown {
+    if (typeof value !== "object" || value === null || !("path" in value)) return value;
+    const { path } = value as { path: unknown };
+    if (path instanceof URL) return { ...value, path: path.href };
+    if (path instanceof Uint8Array) return { ...value, path: new TextDecoder().decode(path) };
+    return value;
 }
 
 // Constants, with @raycast/api's own values (generated from its type definitions).
@@ -175,12 +187,8 @@ export const Form = Object.assign(FormView, {
 
 // Components the extension host renders but the app can't draw yet. The compat scan counts every use of one, or
 // of a member of one, as missing ("not-drawn"). Whoever teaches the app to draw one removes it from this list in
-// the same PR. Where the app would draw them:
-// - Form.LinkAccessory: `FormContent` (Sources/FudgeCore/FormContent.swift) skips it, and nothing reads a Form's
-//   `searchBarAccessory`.
-const notDrawn: Record<string, object> = {
-    "Form.LinkAccessory": Form.LinkAccessory,
-};
+// the same PR, and whoever adds one says here where the app would draw it. The app draws every component today.
+const notDrawn: Record<string, object> = {};
 for (const [name, component] of Object.entries(notDrawn)) markNotDrawn(component, name);
 
 /** Marks a component and its sub-components, which old names also reach directly (`FormDropdownItem`). */

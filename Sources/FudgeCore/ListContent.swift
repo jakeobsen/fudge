@@ -22,6 +22,8 @@ public struct ListContent: Sendable, Equatable {
         public var detail: UINode?
         /// A Grid item's cell: its `content`. A Grid item's `accessory` is its one accessory.
         public var content: GridItemContent?
+        /// The file Quick Look previews for it (`quickLook`).
+        public var quickLook: QuickLookItem?
     }
 
     /// One accessory on the right of an item: text, a date or a tag, with an optional icon.
@@ -245,7 +247,8 @@ public struct ListContent: Sendable, Equatable {
             accessories: accessories,
             actions: node.node("actions"),
             detail: node.node("detail"),
-            content: GridItemContent(node.props["content"])
+            content: GridItemContent(node.props["content"]),
+            quickLook: QuickLookItem.read(node.props["quickLook"])
         )
     }
 
