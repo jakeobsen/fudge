@@ -75,7 +75,8 @@ Extensions run in a separate Node.js process, the extension host.
       Its hotkey opens it as a view command's does, or hides the panel when it's on screen.
       `WindowSwitcher` (core) reads through `WindowSwitchSystem`: the regular apps but Fudge, each app's AX windows (title, frame, minimized, subrole, focused), the window list's order, the screens' names, and the apps most recently active (`RecentApps`, which `SystemWindowSwitching` keeps from `didActivateApplicationNotification` from launch).
       Every app is read at once, each on its own thread with FUD-93's AX timeout, and the read waits about 1 s for them all.
-      An app that hasn't answered by then, or answers `kAXErrorCannotComplete`, is left out and named in the bottom bar ("Some apps didn't answer: …", the List's `navigationTitle`); one still being read isn't asked again until that read ends (`WindowReadsInFlight`), so a hung app holds one thread: a later read waits on that read, holding no thread of its own, and takes its answer if it comes within its own deadline, and the answer goes to no read after it.
+      An app that hasn't answered by then, or answers `kAXErrorCannotComplete`, is left out and named in the bottom bar ("Some apps didn't answer: …", the List's `navigationTitle`); one still being read isn't asked again until that read ends (`WindowReadsInFlight`), so a hung app holds one thread.
+      A later read waits on that read, holding no thread of its own, and takes its answer if it comes within its own deadline; the answer goes to no read after it.
       Only standard windows are listed (`kAXStandardWindowSubrole`).
       **The order** (`WindowSwitcher.order`): the windows on screen front to back, each the AX window `WindowMatch.pairs` pairs it with; then the rest by app, most recently active first; then the window the user was in (the frontmost app's focused window, else its front window on screen) moves to second, so the list is `[z2, z1, z3, …]` and ↵ goes back as ⌘Tab does.
       A row is the app's icon (`fileIcon`), the title or else the app's name, the app's name as subtitle and keyword (so search matches it), and "Minimized" or, with several screens, the screen's name. ↵ Switch to Window hides the panel, then, off the main thread, un-minimizes, performs `kAXRaiseAction` (and sets `kAXMainAttribute`),
@@ -848,7 +849,8 @@ Extensions run in a separate Node.js process, the extension host.
     - `:window-management`
   - `--settings --clipboard-consent` saves Clipboard History's consent sheet, laid out off-screen like the sign-in one.
   - `--update-available <version>` shows that version as found by an update check (General's line and Download…); no snapshot run asks GitHub.
-  - `--windows <file>` gives Switch Windows made-up windows (`FixedWindowSystem`: a JSON array of `{ app, path?, title?, screen?, minimized?, answers? }`, front to back; made-up pids never take the run's own, and the windows step ten times down their screen, then start again at its corner), and without it Switch Windows shows that it needs Accessibility; snapshots never read the window list or the Accessibility API.
+  - `--windows <file>` gives Switch Windows made-up windows (`FixedWindowSystem`: a JSON array of `{ app, path?, title?, screen?, minimized?, answers? }`, front to back), and without it Switch Windows shows that it needs Accessibility; snapshots never read the window list or the Accessibility API.
+    Made-up pids never take the run's own, and the windows step ten times down their screen, then start again at its corner.
 - **Permission grants need a signing identity.** macOS ties Accessibility and Automation grants to the app's designated requirement.
   An ad hoc signature's is its cdhash, which changes with every build, so each ad hoc `make run` drops them; builds signed with an identity keep them.
   **The first signing with an identity shows a keychain prompt** that only a person can answer (Always Allow).
