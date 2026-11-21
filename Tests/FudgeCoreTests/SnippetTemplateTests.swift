@@ -43,3 +43,15 @@ private let context = QuicklinkTemplate.Context(
     #expect(QuicklinkTemplate("https://x.test/{cursor}").problem == "Fudge doesn't support “{cursor}” in a quicklink.")
     #expect(QuicklinkTemplate("https://x.test/{q}").arguments.map(\.name) == ["q"], "bare words stay arguments")
 }
+
+@Test func theCursorIsPlacedOnlyWithinTheLimit() {
+    #expect(SnippetTemplate.leftArrows(afterCursor: nil) == 0, "no {cursor}")
+    #expect(SnippetTemplate.leftArrows(afterCursor: 0) == 0)
+    #expect(SnippetTemplate.leftArrows(afterCursor: 12) == 12)
+    #expect(SnippetTemplate.leftArrows(afterCursor: SnippetTemplate.leftArrowLimit) == SnippetTemplate.leftArrowLimit)
+    // A 100,000-character snippet with {cursor} at the start: the caret stays at the end instead of 100,000 presses.
+    let long = SnippetTemplate("{cursor}" + String(repeating: "x", count: 100_000))
+    let filled = long.fill(context: .init(clipboard: nil))
+    #expect(filled.afterCursor == 100_000)
+    #expect(SnippetTemplate.leftArrows(afterCursor: filled.afterCursor) == 0)
+}

@@ -41,6 +41,10 @@ private final class FakePasteKeys: PasteKeyPoster {
     func postLeftArrow(_ count: Int, to pid: Int32) {
         log.events.append("← ×\(count) to \(pid)")
     }
+
+    func postDelete(_ count: Int, to pid: Int32) {
+        log.events.append("⌫ ×\(count) to \(pid)")
+    }
 }
 
 @MainActor
@@ -115,12 +119,12 @@ private struct Rig {
     }
 
     func run(
-        _ text: String, closeMainWindow: Bool = true, leftArrows: Int = 0,
+        _ text: String, closeMainWindow: Bool = true, backspaces: Int = 0, leftArrows: Int = 0,
         frontmost: FrontmostApplication? = textEdit
     ) async throws {
         try await paste.paste(
             PasteboardContents.forPaste(text: text, html: nil, file: nil), closeMainWindow: closeMainWindow,
-            origin: .userInitiated, leftArrows: leftArrows,
+            origin: .userInitiated, backspaces: backspaces, leftArrows: leftArrows,
             hideWindow: {
                 log.events.append("hide")
                 // The panel is really gone a moment later; ⌘V must wait for that.
@@ -165,6 +169,15 @@ private struct Rig {
     #expect(rig.pasteboard.plainText() == "user's clipboard")
     #expect(rig.turns.isOwn(rig.pasteboard.changeCount), "the restore's write")
     #expect(!rig.turns.isBusy)
+}
+
+@Test @MainActor func anExpansionDeletesItsKeywordJustBeforeThePaste() async throws {
+    let rig = Rig()
+    try await rig.run("Best, me", closeMainWindow: false, backspaces: 4, leftArrows: 2)
+    #expect(rig.log.events == ["snapshot", "write Best, me", "trust", "⌫ ×4 to 200", "post", "← ×2 to 200"])
+    let none = Rig()
+    await #expect(throws: PasteError.noTarget) { try await none.run("x", backspaces: 3, frontmost: nil) }
+    #expect(!none.log.events.contains { $0.hasPrefix("⌫") }, "with no app to paste into, nothing is deleted")
 }
 
 @Test @MainActor func keepsThePanelWhenAskedTo() async throws {

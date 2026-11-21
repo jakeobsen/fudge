@@ -62,13 +62,21 @@ final class SystemCopyKey: CopyKeyPoster, PasteKeyPoster {
         }
     }
 
+    func postDelete(_ count: Int, to pid: Int32) {
+        // ⌫ is the same key in every layout (kVK_Delete).
+        for _ in 0..<count { post(CGKeyCode(kVK_Delete), flags: [], to: pid) }
+    }
+
     private func post(_ key: CGKeyCode, flags: CGEventFlags, to pid: Int32) {
         // A private source with explicit flags: modifiers the user is still holding (⌥ from ⌥Space, ⇧ from a ⌘⇧
-        // shortcut) don't merge in and turn it into ⌥⌘C or ⇧⌘V, or ← into ⇧← selecting text.
+        // shortcut) don't merge in and turn it into ⌥⌘C or ⇧⌘V, ← into ⇧← selecting text, or ⌫ into ⌥⌫. Every key
+        // carries Fudge's marker, so snippet expansion never reads it as typing.
         let source = CGEventSource(stateID: .privateState)
+        source?.userData = SnippetExpander.marker
         for down in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: down) else { continue }
             event.flags = flags
+            event.setIntegerValueField(.eventSourceUserData, value: SnippetExpander.marker)
             event.postToPid(pid)
         }
     }

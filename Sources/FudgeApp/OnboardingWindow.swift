@@ -323,6 +323,17 @@ struct OnboardingView: View {
                         .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
+        case .snippetExpansion:
+            VStack(alignment: .leading, spacing: 14) {
+                title("Expand snippets as you type")
+                Text(ExpandSnippetsRow.explanation)
+                if settings.expandSnippets {
+                    Text("It's on. You can turn it off in Settings → Snippets.").foregroundStyle(.secondary)
+                } else {
+                    Text(SnippetExpander.inputMonitoringExplanation)
+                        .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
         case .updates:
             VStack(alignment: .leading, spacing: 14) {
                 title("Updates")
@@ -341,6 +352,7 @@ struct OnboardingView: View {
                     summary("Extension Store") { Text(storeOn ? "On" : "Off") }
                     summary("Sign-in") { Text(settings.signInServer.host ?? "Off") }
                     summary("Clipboard history") { Text(settings.clipboardHistory ? "On" : "Off") }
+                    summary("Expand snippets") { Text(settings.expandSnippets ? "On" : "Off") }
                     summary("Check for updates") { Text(settings.updateCheck?.onboardingTitle ?? "Off") }
                 }
                 Text("Change any of these in Settings.").foregroundStyle(.secondary)
@@ -366,6 +378,13 @@ struct OnboardingView: View {
             // An opt-in that records everything copied: ↵ is Not Now, never Keep.
             Button("Keep Clipboard History") {
                 settings.keepClipboardHistory()
+                model.next()
+            }
+            Button("Not Now") { model.next() }.keyboardShortcut(.defaultAction)
+        case .snippetExpansion where !settings.expandSnippets:
+            // An opt-in that watches typing: ↵ is Not Now, never Turn On.
+            Button("Turn On") {
+                settings.turnOnSnippetExpansion()
                 model.next()
             }
             Button("Not Now") { model.next() }.keyboardShortcut(.defaultAction)

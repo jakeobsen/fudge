@@ -26,6 +26,8 @@ public protocol PasteKeyPoster: AnyObject {
     func postPaste(to pid: Int32)
     /// Posts ←, key down then key up, `count` times, to the application `pid`.
     func postLeftArrow(_ count: Int, to pid: Int32)
+    /// Posts ⌫, key down then key up, `count` times, to the application `pid`: an expanded keyword's characters.
+    func postDelete(_ count: Int, to pid: Int32)
 }
 
 extension PasteboardContents {
@@ -90,20 +92,22 @@ public final class Paste {
     /// Pastes `content`. With `closeMainWindow`, `hideWindow` hides fudge's panel and returns once it's really gone,
     /// so key status is back with the target app. `frontmost` is read after that. Resolves once ⌘V is posted; the
     /// restore follows on its own. A paste that starts while another paste or a ⌘C fallback is running waits for it.
-    /// It doesn't wait for a pending restore: it keeps that restore's snapshot instead. `leftArrows` ← presses follow
-    /// ⌘V to the same app, so the caret ends up where a snippet's `{cursor}` was.
+    /// It doesn't wait for a pending restore: it keeps that restore's snapshot instead. `backspaces` ⌫ presses go to
+    /// the same app just before ⌘V, deleting an expanded keyword, and `leftArrows` ← presses follow it, so the caret
+    /// ends up where a snippet's `{cursor}` was.
     public func paste(
         _ content: PasteboardContents,
         closeMainWindow: Bool,
         origin: CallOrigin,
+        backspaces: Int = 0,
         leftArrows: Int = 0,
         hideWindow: () async -> Void,
         frontmost: () -> FrontmostApplication?
     ) async throws {
         try await turns.run {
             try await pasteNow(
-                content, closeMainWindow: closeMainWindow, origin: origin, leftArrows: leftArrows,
-                hideWindow: hideWindow, frontmost: frontmost)
+                content, closeMainWindow: closeMainWindow, origin: origin, backspaces: backspaces,
+                leftArrows: leftArrows, hideWindow: hideWindow, frontmost: frontmost)
         }
     }
 
@@ -111,6 +115,7 @@ public final class Paste {
         _ content: PasteboardContents,
         closeMainWindow: Bool,
         origin: CallOrigin,
+        backspaces: Int,
         leftArrows: Int,
         hideWindow: () async -> Void,
         frontmost: () -> FrontmostApplication?
@@ -133,6 +138,7 @@ public final class Paste {
             restore(snapshot, ifStill: written)
             throw PasteError.noTarget
         }
+        if backspaces > 0 { keys.postDelete(backspaces, to: target.pid) }
         keys.postPaste(to: target.pid)
         if leftArrows > 0 { keys.postLeftArrow(leftArrows, to: target.pid) }
         let delay = restoreDelay

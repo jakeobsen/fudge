@@ -119,6 +119,18 @@ enum SystemCalls {
             origin: .userInitiated, leftArrows: leftArrows, hideWindow: hideWindow, frontmost: frontmost)
     }
 
+    /// Expands a snippet's keyword (SPEC-078 §6): `keywordLength` ⌫ presses delete the keyword just typed, then the
+    /// text is pasted as `Clipboard.paste` does, in its turn, the clipboard put back, and `leftArrows` ← presses place
+    /// `{cursor}`. Accessibility is checked first, without a prompt, since typing isn't a request to show one: without
+    /// it, nothing is deleted and the clipboard isn't touched.
+    static func expandSnippet(_ text: String, keywordLength: Int, leftArrows: Int) async throws {
+        guard gate.isTrusted(origin: .background) else { throw PasteError.accessibilityNeeded }
+        try await paster.paste(
+            PasteboardContents.forPaste(text: text, html: nil, file: nil), closeMainWindow: false,
+            origin: .background, backspaces: keywordLength, leftArrows: leftArrows, hideWindow: {},
+            frontmost: frontmost)
+    }
+
     /// Pastes `contents` into the frontmost app as `clipboard.paste` does: clipboard history's Paste.
     static func paste(
         _ contents: PasteboardContents, origin: CallOrigin, hideWindow: () async -> Void

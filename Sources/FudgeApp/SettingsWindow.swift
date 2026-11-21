@@ -303,8 +303,30 @@ final class SettingsModel {
     private(set) var snippets: [Snippet] = []
     /// `snippets.json` holds something Fudge can't read, so the page can't change it.
     private(set) var snippetsUnreadable = false
-    /// Search Snippets, if it's open in the launcher, reads the snippets again; set by the app delegate.
+    /// Search Snippets, if it's open in the launcher, and snippet expansion read the snippets again; set by the app
+    /// delegate.
     @ObservationIgnored var snippetsChanged: () -> Void = {}
+
+    /// **Expand Snippets as You Type** (`expandSnippets` in `settings.json`, SPEC-078 §5).
+    var expandSnippets: Bool { fudgeSettings.expandSnippets }
+    /// Starts or stops snippet expansion's keyboard tap; set by the app delegate.
+    @ObservationIgnored var snippetExpansionChanged: () -> Void = {}
+    /// Input Monitoring's status for the Snippets page. Snapshot runs get a fixed one.
+    @ObservationIgnored var inputMonitoring = InputMonitoringStatus()
+
+    /// Turns expansion on, the switch's way and onboarding's: saved, then macOS is asked for Input Monitoring when
+    /// it isn't allowed (its prompt the first time, the pane after that).
+    func turnOnSnippetExpansion() {
+        setExpandSnippets(true)
+        if expandSnippets, !inputMonitoring.isAllowed { InputMonitoring.request() }
+    }
+
+    func setExpandSnippets(_ on: Bool) {
+        // A settings.json that can't be written is refused, with the banner, and nothing is turned on.
+        guard FudgeSettings.load(from: paths.settingsFile).expandSnippets != on, change({ $0.expandSnippets = on })
+        else { return }
+        snippetExpansionChanged()
+    }
 
     func loadSnippets() {
         let file = paths.snippetsFile
