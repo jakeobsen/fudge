@@ -53,13 +53,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.showOnboarding = { [weak self] in self?.onboardingWindow.showAgain() }
         model.hide = { [weak self] in self?.hidePanel() }
         model.show = { [weak self] in self?.showPanel() }
-        model.openSettings = { [weak self] name in self?.settingsWindow.show(extension: name) }
+        model.openSettings = { [weak self] name, origin in self?.settingsWindow.show(extension: name, origin: origin) }
         model.reloadAll = { [weak self] in self?.reloadExtensions() }
         settingsModel.clearSearchHistory = { [weak self] in self?.model.clearHistory() }
         settingsModel.imported = { [weak self] in self?.afterImport() }
         model.showHUD = { [weak self] title in self?.hud.show(title) }
         model.isVisible = { [weak self] in self?.panel.isVisible ?? false }
-        model.confirm = { [weak self] request in await self?.confirm(request) ?? false }
+        model.confirm = { [weak self] request, origin in await self?.confirm(request, origin: origin) ?? false }
         model.openPanel = { [weak self] options in await self?.chooseFiles(options) }
         // The calculator's exchange rates: the cached ones now, downloads only while the setting is on.
         exchangeRates = ExchangeRateUpdater(
@@ -362,8 +362,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyCode: event.keyCode, characters: unmodified ?? event.charactersIgnoringModifiers, modifiers: modifiers)
     }
 
-    /// confirmAlert: a sheet on the panel when it's open, otherwise a standalone alert.
-    private func confirm(_ request: LauncherModel.AlertRequest) async -> Bool {
+    /// confirmAlert: a sheet on the panel when it's open, otherwise a standalone alert brought to the front. Only a
+    /// user-initiated call gets one (SPEC-045); the model answers background calls without asking.
+    private func confirm(_ request: LauncherModel.AlertRequest, origin: CallOrigin) async -> Bool {
+        if let answer = origin.unaskedAnswer { return answer }
         let alert = NSAlert()
         alert.messageText = request.title
         alert.informativeText = request.message ?? ""
@@ -379,7 +381,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
-        NSApp.activate()
+        // The plain `activate()` can be declined since macOS 14, which would leave the alert behind the app in front.
+        NSApp.activateFromUserAction(origin: origin)
         return alert.runModal() == .alertFirstButtonReturn
     }
 
@@ -400,7 +403,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showSettings() {
-        settingsWindow.show()
+        settingsWindow.show(origin: .userInitiated)
     }
 }
 

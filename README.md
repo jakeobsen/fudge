@@ -89,6 +89,8 @@ Root search ranks what you open often first. **Clear Search History…** on the 
 
 The first time an extension opens another extension's command, Fudge asks whether to allow it, and remembers the answer. To change or forget an answer, open **Settings…** → **Permissions** → **Extensions that open other extensions**: pick **Allowed** or **Not allowed**, or click × to be asked again next time.
 
+An extension running in the background, such as a menu bar refresh, never interrupts you to ask: Fudge says so once, and asks the next time you open that extension.
+
 ### Backup: import and export
 
 **Settings… → General → Import / Export** saves everything you've set up in Fudge to one file, and brings it back, on this Mac or another one.

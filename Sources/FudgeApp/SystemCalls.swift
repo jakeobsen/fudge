@@ -22,7 +22,7 @@ enum SystemCalls {
     /// Shared by reading the selection and pasting, so macOS's Accessibility prompt shows at most once per run, and
     /// fudge's own offer too.
     private static let gate = AccessibilityGate(
-        access: accessibility, offerSettings: { accessibilitySettingsOffer?.offer() })
+        access: accessibility, offerSettings: { accessibilitySettingsOffer?.offer(origin: $0) })
     private static let keys = SystemCopyKey()
     private static let pasteboard = SystemPasteboard()
     private static let selectedText = SelectedText(
@@ -33,8 +33,9 @@ enum SystemCalls {
     private static let automation = SystemAutomationPermission()
     private static let finder = FinderEvents()
 
-    /// Runs `method`. Unknown methods throw.
-    static func handle(_ method: String, _ params: JSONValue) async throws -> JSONValue {
+    /// Runs `method` for a call from `origin`, which decides whether reading the selection may ask for macOS's
+    /// Accessibility prompt or Fudge's offer. Unknown methods throw.
+    static func handle(_ method: String, _ params: JSONValue, origin: CallOrigin) async throws -> JSONValue {
         let params = Params(params)
         switch method {
         case "clipboard.copy":
@@ -76,9 +77,10 @@ enum SystemCalls {
             }
             return ApplicationResolver.application(at: url)
         case "selection.text":
-            return .string(try await selectedText.read(from: frontmost()))
+            return .string(try await selectedText.read(from: frontmost(), origin: origin))
         case "selection.finderItems":
-            let paths = try await FinderSelection.read(from: frontmost(), permission: automation, source: finder)
+            let paths = try await FinderSelection.read(
+                from: frontmost(), permission: automation, source: finder, origin: origin)
             return .array(paths.map { .object(["path": .string($0)]) })
         default:
             throw Failure(description: "\(method) isn't available in Fudge yet")
@@ -87,13 +89,13 @@ enum SystemCalls {
 
     /// `Clipboard.paste` (`clipboard.paste`): the content as `Clipboard.copy` takes it, pasted into the frontmost app.
     /// `hideWindow` hides fudge's panel and returns once it's really gone; the model supplies it.
-    static func paste(_ json: JSONValue, hideWindow: () async -> Void) async throws {
+    static func paste(_ json: JSONValue, origin: CallOrigin, hideWindow: () async -> Void) async throws {
         let params = Params(json)
         let content = PasteboardContents.forPaste(
             text: params.string("text"), html: params.string("html"), file: params.string("file"))
         try await paster.paste(
-            content, closeMainWindow: params.values["closeMainWindow"] != .bool(false), hideWindow: hideWindow,
-            frontmost: frontmost)
+            content, closeMainWindow: params.values["closeMainWindow"] != .bool(false), origin: origin,
+            hideWindow: hideWindow, frontmost: frontmost)
     }
 
     private static func frontmost() -> FrontmostApplication? {

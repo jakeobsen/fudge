@@ -535,12 +535,13 @@ final class SettingsWindowController {
     /// comes here. **Only for entries the user starts** (⌘,, Settings…, Configure Extension, a command's
     /// `openExtensionPreferences`, an unset required preference): it takes focus from the app in front, so no
     /// background path may reach it; `CommandLocator.checkMode` keeps background launches from opening Settings.
-    func show(extension name: String? = nil) {
+    func show(extension name: String? = nil, origin: CallOrigin) {
+        guard origin.mayComeForward else { return }
         prepare(extension: name)
         guard let window else { return }
         window.collectionBehavior.insert(.moveToActiveSpace)
         if window.isMiniaturized { window.deminiaturize(nil) }
-        NSApp.activateFromUserAction()
+        NSApp.activateFromUserAction(origin: origin)
         window.orderFrontRegardless()
         window.makeKeyAndOrderFront(nil)
     }

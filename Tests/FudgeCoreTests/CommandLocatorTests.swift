@@ -305,3 +305,39 @@ private func request(_ params: String) throws -> LaunchRequest {
         settings: FudgeSettings())
     #expect(enabled.command.name == "refresh")
 }
+
+@Test func aBackgroundCallersUserInitiatedRequestRunsAsBackground() throws {
+    // SPEC-045: a menu-bar command's interval refresh (or a background launch) asking for UserInitiated must not
+    // bring Fudge forward, so it gets no panel, no argument fields and no Settings.
+    let asked = LaunchRequest(name: "list", type: .userInitiated, arguments: ["mode": "all"])
+    #expect(asked.asCalled(from: .userInitiated) == asked)
+    let downgraded = asked.asCalled(from: .background)
+    #expect(downgraded.type == .background)
+    #expect(downgraded.name == "list" && downgraded.arguments == ["mode": "all"], "only the type changes")
+    let background = LaunchRequest(name: "refresh", type: .background)
+    #expect(background.asCalled(from: .userInitiated) == background, "a Background request stays Background")
+    #expect(background.asCalled(from: .background) == background)
+
+    // It then fails where a Background launch would, instead of showing anything.
+    let commands = try extensions()[0].manifest.commands
+    #expect(throws: LaunchCommandError.notInBackground(command: "list")) {
+        try CommandLocator.checkMode(commands[0], type: downgraded.type)
+    }
+    #expect(throws: LaunchCommandError.notActiveInMenuBar(command: "status")) {
+        try CommandLocator.checkMode(
+            commands[2], type: LaunchRequest(name: "status", type: .userInitiated).asCalled(from: .background).type)
+    }
+    let target = try CommandLocator.locate(downgraded, caller: "tools", in: extensions())
+    #expect(target.launchProps.launchType == "background", "the launched command sees how it really runs")
+    #expect(throws: LaunchCommandError.missingArgument(argument: "query", command: "list")) {
+        try CommandLocator.checkArguments(target, type: downgraded.type)
+    }
+    let token = try JSONDecoder().decode(
+        ExtensionManifest.Preference.self, from: Data(#"{"name":"token","type":"password","required":true}"#.utf8))
+    let refresh = try CommandLocator.locate(
+        LaunchRequest(name: "refresh", type: .userInitiated).asCalled(from: .background), caller: "tools",
+        in: extensions())
+    #expect(throws: LaunchCommandError.missingPreferences(extensionTitle: "Tools", names: ["token"])) {
+        try CommandLocator.checkPreferences([token], of: refresh, type: .background)
+    }
+}
