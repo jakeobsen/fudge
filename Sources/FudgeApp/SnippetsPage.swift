@@ -127,7 +127,9 @@ private struct ExpandSnippetsRow: View {
                     Text(Self.explanation).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Toggle("", isOn: Binding(get: { model.expandSnippets }, set: switched))
+                // A closure, not the method itself: Swift 6.3's compiler crashes on the thunk a method reference
+                // needs here.
+                Toggle("", isOn: Binding(get: { model.expandSnippets }, set: { on in switched(on) }))
                     .toggleStyle(.switch)
                     .labelsHidden()
             }
