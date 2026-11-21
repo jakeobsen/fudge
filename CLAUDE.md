@@ -869,6 +869,7 @@ Extensions run in a separate Node.js process, the extension host.
     That needs Xcode 26 or later.
   - the bundled extensions (`BUNDLED_EXTENSIONS`, as `BundledExtensions.folders` lists them) are built with `fudge build` from `runtime/<folder>` into `Contents/Resources/<folder>`
   - the host and worker bundles go into `Contents/Resources/runtime/`, with `fudge scan`'s `compat-scan.js` and Raycast's types beside it (`raycast-api.d.ts`, with its MIT notice as `raycast-api.LICENSE`)
+  - with `CONFIG=release`, `strip -S -x` takes the debug and local symbols out of `Contents/MacOS/Fudge` and `Contents/Helpers/fudge`, which otherwise name the builder's folders (`/Users/…`, about 300 paths each) and double their size
   - `scripts/sign-app.sh` signs it inside-out, each executable in `Contents/Helpers` (the `fudge` tool and esbuild), then the app with `App/Fudge.entitlements`, all with the hardened runtime (FUD-44).
     Any other executable added to the bundle (a helper, a dylib, a `.node` addon) must be signed there too, or notarization refuses the release.
     The identity is `SIGN_IDENTITY`: from what `security find-identity -v -p codesigning` lists, the default is "fudge local signing", else the first `Apple Development:` identity, else ad hoc (see the README).

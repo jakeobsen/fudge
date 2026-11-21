@@ -95,6 +95,13 @@ app: build
 		mv "$$scratch"/* "$(APP)/Contents/Resources/$$folder" && rm -rf "$$scratch" \
 		|| { echo "make app: building runtime/$$folder failed"; exit 1; }; \
 	done
+	@# A release ships without the binaries' debug and local symbols, which name the builder's folders (/Users/…).
+	@# strip warns that it invalidates the linker's signature, which the signing below replaces, so its output shows
+	@# only when it fails.
+	@if [ '$(CONFIG)' = release ]; then \
+		out=$$(strip -S -x '$(APP)/Contents/MacOS/Fudge' '$(APP)/Contents/Helpers/fudge' 2>&1) || \
+			{ printf '%s\nmake app: strip failed\n' "$$out"; exit 1; }; \
+	fi
 	@# Signed inside-out with the hardened runtime and App/Fudge.entitlements (scripts/sign-app.sh), with no timestamp
 	@# unless it's a Developer ID. Each failure exits explicitly: make 3.81, the one macOS ships, ignores .SHELLFLAGS.
 	@signed=$$(scripts/sign-app.sh '$(APP)' '$(SIGN_IDENTITY)') && \
