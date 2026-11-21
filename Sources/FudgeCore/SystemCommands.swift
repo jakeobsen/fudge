@@ -31,8 +31,8 @@ public enum SystemCommand: String, CaseIterable, Sendable {
         switch self {
         case .lockScreen: ("Lock Screen", ["lock", "away"], "lock")
         case .sleep: ("Sleep", ["sleep", "suspend"], "moon.zzz")
-        case .restart: ("Restart", ["reboot", "restart"], "restart")
-        case .shutDown: ("Shut Down", ["shutdown", "power off", "turn off"], "poweroff")
+        case .restart: ("Restart", ["reboot", "restart"], "arrow.counterclockwise.circle")
+        case .shutDown: ("Shut Down", ["shutdown", "power off", "turn off"], "power.circle")
         case .logOut: ("Log Out", ["logout", "sign out"], "rectangle.portrait.and.arrow.right")
         case .emptyTrash: ("Empty Trash", ["trash", "bin", "delete"], "trash")
         case .ejectAllDisks: ("Eject All Disks", ["eject", "unmount", "drive", "volume"], "eject")
