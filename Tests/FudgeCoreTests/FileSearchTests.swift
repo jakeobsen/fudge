@@ -350,7 +350,7 @@ private let homeOptions = FileSearchOptions(scope: .home, leaveOut: [home + "/Li
         FileSearch.extensionName, title: "Impostor", in: paths.extensionsDirectory.appendingPathComponent("impostor"))
     try write("weather", title: "Weather", in: paths.extensionsDirectory.appendingPathComponent("weather"))
 
-    #expect(BundledExtensions.folders == ["store-extension", "file-search-extension"])
+    #expect(BundledExtensions.folders == ["store-extension", "file-search-extension", "clipboard-history-extension"])
     let installed = InstalledExtension.all(paths: paths, resources: resources)
     #expect(
         installed.map(\.manifest.title) == ["Extension Store", "Search Files", "Weather"], "the impostor gives way")

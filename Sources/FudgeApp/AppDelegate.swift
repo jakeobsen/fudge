@@ -31,6 +31,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The Quick Look preview (SPEC-049). Never in snapshot runs.
     private var quickLook: QuickLookPreview?
 
+    func applicationWillTerminate(_ notification: Notification) {
+        // Clipboard History's decrypted image copies don't outlive the run.
+        model?.clipboardHistory.clearPreviews()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = Self.mainMenu()
         model = LauncherModel(paths: paths)
@@ -38,6 +43,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let snapshot = Snapshot(arguments: CommandLine.arguments) {
             let files = snapshot.foundFiles.map { FixedFileQuery.load($0, home: FileSearchOptions.home()) } ?? []
             model.fileSearch = FileSearch { FixedFileQuery(files) }
+            // Nor the clipboard or the Keychain: Clipboard History gets `--clipboard-entries`' made-up entries.
+            if let file = snapshot.clipboardEntries {
+                model.clipboardHistory = ClipboardHistoryService(
+                    paths: paths, secrets: MemorySecretStore(), turns: SystemCalls.pasteboardTurns,
+                    fixed: ClipboardHistoryService.fixedHistory(from: file))
+            }
         }
         panel = LauncherPanel(content: LauncherView(model: model))
         settingsModel = SettingsModel(paths: paths)
@@ -93,6 +104,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The store stays installed either way; the launcher reads settings.json again.
         settingsModel.extensionStoreChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.quicklinksChanged = { [weak self] in self?.model.applySettings() }
+        settingsModel.clipboardHistoryChanged = { [weak self] in self?.model.applySettings() }
+        settingsModel.deleteClipboardHistory = { [weak self] in self?.model.clipboardHistory.deleteAll() }
         settingsModel.stopExtensionStore = { [weak self] in
             await self?.model.unloadSessions(ofExtension: ExtensionStore.extensionName)
         }
@@ -611,6 +624,9 @@ struct Snapshot {
     /// `--found-files <file>`: Search Files' results, a JSON array of `files.search` entries (`~/` paths are in the
     /// home folder). Snapshots never ask Spotlight, so without it there are none.
     let foundFiles: URL?
+    /// `--clipboard-entries <file>`: Clipboard History's made-up entries, a JSON array of `clipboardHistory.list`
+    /// entries. Snapshots never read the clipboard.
+    let clipboardEntries: URL?
 
     init?(arguments: [String]) {
         guard let index = arguments.firstIndex(of: "--snapshot"), index + 1 < arguments.count else { return nil }
@@ -647,6 +663,7 @@ struct Snapshot {
         }
         signInConsent = arguments.contains("--sign-in-consent")
         foundFiles = value("--found-files").map { URL(fileURLWithPath: $0) }
+        clipboardEntries = value("--clipboard-entries").map { URL(fileURLWithPath: $0) }
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1

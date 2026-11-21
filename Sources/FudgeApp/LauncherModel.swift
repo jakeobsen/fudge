@@ -203,6 +203,13 @@ final class LauncherModel {
     @ObservationIgnored private var hostSessions = HostSessions()
     /// Answers Search Files' `files.search` through Spotlight. `AppDelegate` gives snapshot runs fixed results.
     @ObservationIgnored var fileSearch = FileSearch { SpotlightFileQuery() }
+    /// Clipboard history (SPEC-077): its watcher, its encrypted store and its calls. `AppDelegate` gives snapshot
+    /// runs a fixed history, never the real clipboard or Keychain.
+    @ObservationIgnored lazy var clipboardHistory = ClipboardHistoryService(
+        paths: paths, secrets: KeychainSecretStore(service: ClipboardHistoryStore.keychainService),
+        turns: SystemCalls.pasteboardTurns)
+    /// Whether clipboard history may watch the pasteboard: never in snapshot runs.
+    @ObservationIgnored let watchesClipboard = !Snapshot.isRequested(CommandLine.arguments)
     /// No-view commands still running, by session.
     @ObservationIgnored private var background: [String: String] = [:]
     /// No-view commands that `launchCommand` started in the background, by session. They leave the panel alone.
@@ -326,6 +333,7 @@ final class LauncherModel {
             RootSearch.applying(settings, to: commands + BuiltInCommandGroup.all.flatMap(RootItem.builtInCommands))
             + RootSearch.builtInItems + loadQuicklinks() + applications
         menuBar.update(installed: installedExtensions, settings: settings)
+        clipboardHistory.apply(settings, watch: watchesClipboard)
         refreshResults(keepingSelection: keepingSelection)
         refreshCommandHotkeys()
     }
@@ -2793,6 +2801,7 @@ final class LauncherModel {
 
         case .exit(let session, let reason):
             endSignIn(of: session)
+            if sessionExtensions[session] == ClipboardHistory.extensionName { clipboardHistory.clearPreviews() }
             sessionExtensions[session] = nil
             sessionCommands[session] = nil
             if let quiet = quietSessions.removeValue(forKey: session) {
@@ -2827,6 +2836,25 @@ final class LauncherModel {
                 }
                 if let extensionName = sessionExtensions[session] { openSettings(extensionName, origin) }
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
+            case let method where method.hasPrefix("clipboardHistory."):
+                // Clipboard History's own calls (SPEC-077), refused for any other extension.
+                let caller = sessionExtensions[session]
+                let origin = origin(of: session)
+                Task {
+                    do {
+                        let result = try await clipboardHistory.handle(
+                            method, params, caller: caller, origin: origin, hideWindow: { await self.hideForPaste() })
+                        send(.rpcResult(session: session, id: id, result: result, error: nil))
+                    } catch {
+                        send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
+                    }
+                }
+            case "clipboard.read" where Self.clipboardOffset(params) > 0:
+                // Raycast's `offset`: the nth previous copy, from clipboard history, for any extension.
+                send(
+                    .rpcResult(
+                        session: session, id: id, result: clipboardHistory.read(offset: Self.clipboardOffset(params)),
+                        error: nil))
             case "form.storeValues":
                 storeFormValues(params, session: session)
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
@@ -2966,6 +2994,14 @@ final class LauncherModel {
 
     /// `Clipboard.paste` hides the panel first, as `closeMainWindow()` does, and waits until it's really gone: key
     /// status goes back to the app the user was in asynchronously, so ⌘V waits a run-loop turn plus about 50 ms.
+    /// `Clipboard.read`'s and `readText`'s `offset`, 0 when it's missing or not a whole number.
+    private static func clipboardOffset(_ params: JSONValue) -> Int {
+        guard case .object(let object) = params, case .number(let offset) = object["offset"], offset.isFinite else {
+            return 0
+        }
+        return max(Int(offset), 0)
+    }
+
     private func hideForPaste() async {
         closeWindow(clearRootSearch: false, popToRootType: nil)
         await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }
