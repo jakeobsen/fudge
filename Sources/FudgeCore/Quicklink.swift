@@ -77,20 +77,18 @@ public struct QuicklinkStore: Sendable, Equatable {
 
     /// The quicklinks, in the file's order. Of two with the same id, the first counts.
     public var quicklinks: [Quicklink] {
-        var seen = Set<String>()
-        return entries.compactMap(Quicklink.init(json:)).filter { seen.insert($0.id).inserted }
+        EntryFile.valid(entries, Quicklink.init(json:), id: \.id)
     }
 
     public func quicklink(id: String) -> Quicklink? {
         quicklinks.first { $0.id == id }
     }
 
-    /// Adds one at the end.
     public mutating func add(_ quicklink: Quicklink) {
         entries.append(quicklink.json())
     }
 
-    /// Removes the quicklink with `id`. Returns whether there was one.
+    /// Removes the quicklink with `id`; false when there's none.
     @discardableResult
     public mutating func remove(id: String) -> Bool {
         let before = entries.count
@@ -98,18 +96,15 @@ public struct QuicklinkStore: Sendable, Equatable {
         return entries.count != before
     }
 
-    /// Replaces the quicklink with the same id, keeping the keys Fudge doesn't know on it. Returns whether there
-    /// was one.
+    /// Replaces the quicklink with the same `id`, keeping keys Fudge doesn't know on its entry; false when there's
+    /// none.
     @discardableResult
     public mutating func replace(_ quicklink: Quicklink) -> Bool {
-        guard let index = entries.firstIndex(where: { Quicklink(json: $0)?.id == quicklink.id }) else { return false }
-        var existing: [String: JSONValue] = [:]
-        if case .object(let object) = entries[index] { existing = object }
-        entries[index] = quicklink.json(over: existing)
-        return true
+        EntryFile.replace(
+            in: &entries, id: quicklink.id, matching: { Quicklink(json: $0)?.id }, with: { quicklink.json(over: $0) })
     }
 
-    /// The file holds something Fudge can't read, so it leaves it as it is rather than overwrite it.
+    /// `quicklinks.json` exists but isn't a quicklinks object: Fudge never overwrites it.
     public struct Unreadable: Error, Equatable, CustomStringConvertible {
         public init() {}
         public var description: String {
@@ -117,43 +112,25 @@ public struct QuicklinkStore: Sendable, Equatable {
         }
     }
 
-    /// Whether `save(to:)` may write `file`: it's missing or blank, or a JSON object whose `quicklinks`, if any, is
-    /// a list.
+    static let fileKey = "quicklinks"
+
+    /// Whether `file` can be saved over: missing, blank, or a quicklinks object.
     public static func isWritable(_ file: URL) -> Bool {
-        (try? existingObject(at: file)) != nil
+        (try? EntryFile.object(at: file, key: fileKey)) != nil
     }
 
-    /// The JSON object in `file`; empty when the file is missing or blank. Throws `Unreadable` for anything else.
-    private static func existingObject(at file: URL) throws -> [String: JSONValue] {
-        guard FileManager.default.fileExists(atPath: file.path) else { return [:] }
-        guard let data = try? Data(contentsOf: file) else { throw Unreadable() }
-        if String(decoding: data, as: UTF8.self).allSatisfy(\.isWhitespace) { return [:] }
-        guard case .object(let object) = try? JSONDecoder().decode(JSONValue.self, from: data) else {
+    /// The quicklinks in `file`; none when it's missing or can't be read.
+    public static func load(from file: URL) -> QuicklinkStore {
+        QuicklinkStore(entries: EntryFile.entries(at: file, key: fileKey))
+    }
+
+    /// Writes the quicklinks over the file's other keys. Throws `Unreadable` rather than overwrite a file it can't
+    /// read.
+    public func save(to file: URL) throws {
+        do {
+            try EntryFile.save(entries, to: file, key: Self.fileKey)
+        } catch is EntryFile.Unreadable {
             throw Unreadable()
         }
-        switch object["quicklinks"] {
-        case nil, .array: return object
-        default: throw Unreadable()
-        }
-    }
-
-    /// Reads the file tolerantly: one that's missing or can't be read has no quicklinks.
-    public static func load(from file: URL) -> QuicklinkStore {
-        guard let object = try? existingObject(at: file), case .array(let entries) = object["quicklinks"] else {
-            return QuicklinkStore()
-        }
-        return QuicklinkStore(entries: entries)
-    }
-
-    /// Writes the file atomically, keeping keys it doesn't know. Throws `Unreadable`, leaving the file as it is,
-    /// when it holds something `load` couldn't read.
-    public func save(to file: URL) throws {
-        var object = try Self.existingObject(at: file)
-        object["quicklinks"] = .array(entries)
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(JSONValue.object(object))
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: file, options: .atomic)
     }
 }

@@ -25,10 +25,10 @@ public enum Backup {
     /// Single files at the top of the support folder.
     static let rootFiles = [
         "settings.json", "launch-permissions.json", "history.json", "dropdown-values.json", "command-metadata.json",
-        "quicklinks.json",
+        "quicklinks.json", "snippets.json",
     ]
     /// Root files that must be a JSON object to be imported.
-    static let objectFiles: Set<String> = ["settings.json", "quicklinks.json"]
+    static let objectFiles: Set<String> = ["settings.json", "quicklinks.json", "snippets.json"]
     /// Of those, the ones keyed by `<extension>/…`, which an import merges extension by extension.
     static let keyedFiles: Set<String> = ["dropdown-values.json", "command-metadata.json"]
     /// Folders holding one `<extension>.json` each.
@@ -71,12 +71,15 @@ public enum Backup {
         public var listed: [Listed]
         /// How many quicklinks `quicklinks.json` holds.
         public var quicklinks = 0
+        /// How many snippets `snippets.json` holds.
+        public var snippets = 0
 
         /// "Settings, 2 quicklinks, 7 extensions' preferences, 3 extensions' data, 9 installed extensions listed".
         public var text: String {
             var parts: [String] = []
             if settings { parts.append("Settings") }
             if quicklinks > 0 { parts.append(Self.count(quicklinks, "quicklink", "quicklinks")) }
+            if snippets > 0 { parts.append(Self.count(snippets, "snippet", "snippets")) }
             parts.append(Self.count(preferences.count, "extension's preferences", "extensions' preferences"))
             parts.append(Self.count(data.count, "extension's data", "extensions' data"))
             parts.append(Self.count(listed.count, "installed extension listed", "installed extensions listed"))
@@ -148,7 +151,8 @@ public enum Backup {
         let summary = Summary(
             settings: entries.contains { $0.path == "settings.json" }, preferences: preferences.sorted(),
             data: sizes.keys.sorted(), listed: listed,
-            quicklinks: Self.quicklinkCount(entries.first { $0.path == "quicklinks.json" }?.data))
+            quicklinks: Self.quicklinkCount(entries.first { $0.path == "quicklinks.json" }?.data),
+            snippets: Self.snippetCount(entries.first { $0.path == "snippets.json" }?.data))
         return Export(
             manifest: manifest, entries: entries, leftOut: leftOut, skipped: reader.skipped, summary: summary)
     }
@@ -194,7 +198,8 @@ public enum Backup {
             Summary(
                 settings: root["settings.json"] != nil, preferences: (perExtension["preferences"] ?? [:]).keys.sorted(),
                 data: Set(data.keys).union((perExtension["local-storage"] ?? [:]).keys).sorted(),
-                listed: manifest.extensions, quicklinks: Backup.quicklinkCount(root["quicklinks.json"]))
+                listed: manifest.extensions, quicklinks: Backup.quicklinkCount(root["quicklinks.json"]),
+                snippets: Backup.snippetCount(root["snippets.json"]))
         }
     }
 
@@ -286,6 +291,14 @@ public enum Backup {
             case .array(let entries) = object["quicklinks"]
         else { return 0 }
         return QuicklinkStore(entries: entries).quicklinks.count
+    }
+
+    /// The snippets in a `snippets.json`, for the summary.
+    static func snippetCount(_ data: Data?) -> Int {
+        guard let data, case .object(let object) = try? JSONDecoder().decode(JSONValue.self, from: data),
+            case .array(let entries) = object["snippets"]
+        else { return 0 }
+        return SnippetStore(entries: entries).snippets.count
     }
 
     /// A path segment fudge could have written: not empty, `.` or `..`, and without a NUL.

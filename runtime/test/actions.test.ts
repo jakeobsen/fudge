@@ -105,11 +105,37 @@ test("Open With is a submenu of the applications that can open the path, looked 
 });
 
 test("an action fudge can't perform still shows, and says so when picked", async () => {
-    const { mounted, entries } = await panelWith(h(Action.CreateSnippet, { snippet: { text: "hi" } }));
-    assert.equal(entries[0]!.props.title, "Create Snippet");
+    const { mounted, entries } = await panelWith(h(Action.InstallMCPServer, { server: { name: "x", command: "x" } }));
+    assert.equal(entries[0]!.props.title, "Install MCP Server");
     await mounted.root.dispatch(entries[0]!.id, ["onAction"], []);
     const toast = calls.find((call) => call.method === "toast.show")!.params as { title: string; style: string };
-    assert.equal(toast.title, "Action.CreateSnippet isn't available in Fudge yet");
+    assert.equal(toast.title, "Action.InstallMCPServer isn't available in Fudge yet");
+    assert.equal(toast.style, "FAILURE");
+});
+
+test("Action.CreateSnippet renders an Action the app opens its form for, with Raycast's defaults", async () => {
+    const shortcut = { modifiers: ["cmd"], key: "s" };
+    const { entries } = await panelWith(
+        h(Action.CreateSnippet, { snippet: { text: "Hi {cursor}" } }),
+        h(Action.CreateSnippet, { title: "Save Reply", icon: Icon.Star, shortcut, snippet: { text: "Thanks!", name: "Thanks", keyword: ";ty", extra: 1 } }),
+    );
+    assert.deepEqual(
+        entries.map((entry) => [entry.props.title, entry.props.icon, entry.props.fudgeBuiltIn, entry.props.snippet]),
+        [
+            ["Create Snippet", Icon.Text, "createSnippet", { text: "Hi {cursor}" }],
+            ["Save Reply", Icon.Star, "createSnippet", { text: "Thanks!", name: "Thanks", keyword: ";ty" }],
+        ],
+    );
+    assert.deepEqual(entries[1]!.props.shortcut, shortcut);
+    assert.equal(entries[0]!.props.onAction, undefined, "the app opens the form; nothing runs in the command");
+});
+
+test("Action.CreateSnippet without a text says so when picked", async () => {
+    const { mounted, entries } = await panelWith(h(Action.CreateSnippet, { snippet: { name: "No Text" } }));
+    assert.equal(entries[0]!.props.fudgeBuiltIn, undefined);
+    await mounted.root.dispatch(entries[0]!.id, ["onAction"], []);
+    const toast = calls.find((call) => call.method === "toast.show")!.params as { title: string; style: string };
+    assert.equal(toast.title, "Action.CreateSnippet needs a snippet with a text");
     assert.equal(toast.style, "FAILURE");
 });
 
