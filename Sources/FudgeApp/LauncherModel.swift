@@ -2671,6 +2671,8 @@ final class LauncherModel {
     @ObservationIgnored private var menuCache = MenuItemsCache<MenuItemsListing>()
     /// Counts reads, so only the latest one is drawn.
     @ObservationIgnored private var menuReads = 0
+    /// Stops the read running for the list on screen when the list goes, so the next read of that app needn't wait.
+    @ObservationIgnored private var menuReadCancel = MenuReadCancel()
     /// The panel hid with Search Menu Items on screen: the menus are read again when it shows.
     @ObservationIgnored private var menuItemsStale = false
     /// A row's item is being found to run: another ↵ meanwhile (a key repeat) runs nothing, so it's pressed once.
@@ -2742,8 +2744,11 @@ final class LauncherModel {
             drawMenuItems(MenuItemsList.loading())
         }
         let source = menuItemsAccess.source
+        menuReadCancel.cancel()
+        let cancel = MenuReadCancel()
+        menuReadCancel = cancel
         Task {
-            let result = await Self.offMain { source.read(target, deadline: .milliseconds(1500)) }
+            let result = await Self.offMain { source.read(target, deadline: .milliseconds(1500), cancel: cancel) }
             guard read == menuReads, menuItemsOnScreen else { return }
             switch result {
             case .listing(let listing):
@@ -2790,6 +2795,7 @@ final class LauncherModel {
     private func menuItemsHidden() {
         guard menuItemsOnScreen else { return }
         menuItemsGeneration.dismissed()
+        menuReadCancel.cancel()
         menuItemsStale = true
         menuReads += 1
         menuTarget = nil
@@ -2801,6 +2807,7 @@ final class LauncherModel {
     private func menuItemsLeft() {
         guard !menuItemsOnScreen, menuListing != nil || menuTarget != nil || menuItemsStale else { return }
         menuItemsGeneration.dismissed()
+        menuReadCancel.cancel()
         menuReads += 1
         menuTarget = nil
         menuListing = nil
@@ -2847,6 +2854,8 @@ final class LauncherModel {
                     showHUD(MenuItemsList.gone)
                 case .pressed(.failed):
                     showHUD("\(target.name) didn't run that menu item.")
+                case .disabled:
+                    showFailureToast(MenuItemsList.turnedOff)
                 case .gone:
                     showFailureToast(MenuItemsList.gone)
                     if menuListing === listing { readMenuItems() }

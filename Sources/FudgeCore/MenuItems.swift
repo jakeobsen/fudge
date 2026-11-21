@@ -148,6 +148,28 @@ public enum MenuAnswer<Value> {
     case noAnswer
 }
 
+/// What finding a menu item again gave (`MenuReader.current`).
+public enum MenuLookup<Handle> {
+    case ready(Handle)
+    /// It's there, but turned off now.
+    case disabled
+    case gone
+    case noAnswer
+}
+
+/// The place of each item among the items with the same path and title, and how many there are: what
+/// `MenuReader.current` tells alike items apart by.
+public func menuItemPlaces<Handle>(_ items: [FoundMenuItem<Handle>]) -> [(place: Int, count: Int)] {
+    var counts: [[String]: Int] = [:]
+    var places: [Int] = []
+    for item in items {
+        let key = item.path + [item.title]
+        places.append(counts[key, default: 0])
+        counts[key, default: 0] += 1
+    }
+    return zip(items, places).map { item, place in (place, counts[item.path + [item.title]]!) }
+}
+
 /// What pressing a menu item gave.
 public enum MenuPress: Sendable, Equatable {
     case pressed
@@ -194,14 +216,64 @@ public enum MenuReadResult<Handle> {
 /// The apps whose menus are being read, across reads. An app that's still being read isn't asked again until that
 /// read ends, so a hung app holds one thread at most.
 public final class MenuReadsInFlight: @unchecked Sendable {
-    private let lock = NSLock()
-    private var pids: Set<Int32> = []
+    private let condition = NSCondition()
+    /// Each app being read, and whether its read was cancelled (its list went).
+    private var reads: [Int32: Bool] = [:]
 
     public init() {}
 
-    func start(_ pid: Int32) -> Bool { lock.withLock { pids.insert(pid).inserted } }
+    /// Marks `pid` as being read; false when it already is. A read that was cancelled ends at its next step, so a new
+    /// one waits up to `wait` for it; one still running (a hung app) is never waited for.
+    func start(_ pid: Int32, waitingForCancelledUpTo wait: Duration = .zero) -> Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        let deadline = Date().addingTimeInterval(Double(wait / .milliseconds(1)) / 1000)
+        while reads[pid] == true, condition.wait(until: deadline) {}
+        guard reads[pid] == nil else { return false }
+        reads[pid] = false
+        return true
+    }
 
-    func end(_ pid: Int32) { lock.withLock { _ = pids.remove(pid) } }
+    func cancel(_ pid: Int32) {
+        condition.lock()
+        if reads[pid] != nil { reads[pid] = true }
+        condition.unlock()
+    }
+
+    func end(_ pid: Int32) {
+        condition.lock()
+        reads[pid] = nil
+        condition.broadcast()
+        condition.unlock()
+    }
+}
+
+/// Cancels a read whose list went (`MenuItemsSource.read`), so it stops at its next step and the app's next read
+/// needn't wait on it. Cancelling before the read starts cancels it as soon as it does.
+public final class MenuReadCancel: @unchecked Sendable {
+    private let lock = NSLock()
+    private var cancelled = false
+    private var action: (() -> Void)?
+
+    public init() {}
+
+    public func cancel() {
+        let run: (() -> Void)? = lock.withLock {
+            cancelled = true
+            defer { action = nil }
+            return action
+        }
+        run?()
+    }
+
+    func onCancel(_ run: @escaping () -> Void) {
+        let now = lock.withLock {
+            if cancelled { return true }
+            action = run
+            return false
+        }
+        if now { run() }
+    }
 }
 
 /// A read running on a thread of its own, which collects items as it finds them, in menu order, so what it found by
@@ -235,9 +307,10 @@ public final class MenuWalk<Handle>: @unchecked Sendable {
         }
     }
 
-    /// Stops the read at its next step, keeping what it found.
+    /// Stops the read at its next step, keeping what it found, and lets `finish` return at once.
     public func cancel() {
         lock.withLock { stopped = true }
+        ended.signal()
     }
 
     var isStopped: Bool { lock.withLock { stopped } }
@@ -288,9 +361,15 @@ public struct MenuReader<System: MenuSystem>: Sendable {
     /// none of the Apple menu's (the menu bar's first item). An item with a submenu isn't one itself: its submenu's
     /// items are. A disabled item, or one without a title (a separator), is left out with what's under it. Call
     /// `finish(within:)` for the result.
-    public func start(_ pid: Int32) -> MenuWalk<System.Handle> {
-        guard inFlight.start(pid) else { return .noAnswer() }
+    public func start(
+        _ pid: Int32, cancel: MenuReadCancel = MenuReadCancel(), waitingForCancelledUpTo wait: Duration = .zero
+    ) -> MenuWalk<System.Handle> {
+        guard inFlight.start(pid, waitingForCancelledUpTo: wait) else { return .noAnswer() }
         let walk = MenuWalk<System.Handle>()
+        cancel.onCancel { [inFlight] in
+            inFlight.cancel(pid)
+            walk.cancel()
+        }
         let thread = Thread { [system, inFlight] in
             Self.walk(pid, system: system, into: walk)
             inFlight.end(pid)
@@ -366,47 +445,56 @@ public struct MenuReader<System: MenuSystem>: Sendable {
     }
 
     /// The item `item` names, now: the element read, if it still answers as an item with that title; else the item
-    /// found again in `pid` by its whole path and title (`locate`). The app may have rebuilt its menus since, or been
-    /// started again with another pid. Blocks.
-    public func current(_ item: FoundMenuItem<System.Handle>, in pid: Int32) -> MenuAnswer<System.Handle> {
+    /// found again in `pid` by its whole path and title (`locate`), as the `place`th of the `count` items the read
+    /// saw with that path and title. The app may have rebuilt its menus since, or been started again with another
+    /// pid. An item that's turned off now is `.disabled`, never pressed. Blocks.
+    public func current(_ item: FoundMenuItem<System.Handle>, place: Int = 0, count: Int = 1, in pid: Int32)
+        -> MenuLookup<System.Handle>
+    {
         switch system.node(item.handle) {
         case .answered(let node) where node.role == .item && node.title == item.title && node.children.isEmpty:
-            return .answered(item.handle)
+            return node.enabled ? .ready(item.handle) : .disabled
         case .noAnswer:
             return .noAnswer
         default:
-            return locate(path: item.path, title: item.title, in: pid)
+            return locate(path: item.path, title: item.title, place: place, count: count, in: pid)
         }
     }
 
-    /// Finds the leaf item titled `title` under the menus titled `path`, walking down from the menu bar, every
-    /// title matching exactly; `.gone` when there's none. Menus with the same title are each tried.
-    public func locate(path: [String], title: String, in pid: Int32) -> MenuAnswer<System.Handle> {
+    /// Finds the leaf item titled `title` under the menus titled `path`, walking down from the menu bar, every title
+    /// matching exactly, as the `place`th of the items found so (menus with the same title are each searched). Items
+    /// alike are told apart only by their place, so when the number found isn't `count`, the number the read saw (one
+    /// of two alike windows closed, say), the item is `.gone`, never pressed by a place that now means another. Any
+    /// menu that doesn't answer makes it `.noAnswer`, since the number can't be known.
+    public func locate(path: [String], title: String, place: Int = 0, count: Int = 1, in pid: Int32)
+        -> MenuLookup<System.Handle>
+    {
         guard let first = path.first else { return .gone }
         guard case .answered(let bar) = system.menuBar(of: pid) else { return .noAnswer }
+        var matches: [(handle: System.Handle, enabled: Bool)] = []
         var silent = false
         for item in bar.dropFirst() {
             switch system.node(item) {
             case .answered(let node) where node.title == first:
-                switch find(Array(path.dropFirst()), title: title, below: node) {
-                case .answered(let handle): return .answered(handle)
-                case .noAnswer: silent = true
-                case .gone: continue
-                }
+                if !collect(Array(path.dropFirst()), title: title, below: node, into: &matches) { silent = true }
             case .noAnswer: silent = true
             default: continue
             }
         }
-        return silent ? .noAnswer : .gone
+        if silent { return .noAnswer }
+        guard matches.count == count, matches.indices.contains(place) else { return .gone }
+        return matches[place].enabled ? .ready(matches[place].handle) : .disabled
     }
 
-    private func find(_ path: [String], title: String, below parent: MenuNode<System.Handle>) -> MenuAnswer<
-        System.Handle
-    > {
-        var silent = false
+    /// Adds every leaf titled `title` under `path` below `parent`, in menu order; false when some menu didn't answer.
+    private func collect(
+        _ path: [String], title: String, below parent: MenuNode<System.Handle>,
+        into matches: inout [(handle: System.Handle, enabled: Bool)]
+    ) -> Bool {
+        var answered = true
         for child in parent.children {
             guard case .answered(let menu) = system.node(child) else {
-                silent = true
+                answered = false
                 continue
             }
             guard menu.role == .menu else { continue }
@@ -414,20 +502,18 @@ public struct MenuReader<System: MenuSystem>: Sendable {
                 switch system.node(entry) {
                 case .answered(let item) where item.role == .item:
                     if path.isEmpty {
-                        if item.title == title, item.children.isEmpty { return .answered(entry) }
+                        if item.title == title, item.children.isEmpty { matches.append((entry, item.enabled)) }
                     } else if item.title == path[0], !item.children.isEmpty {
-                        switch find(Array(path.dropFirst()), title: title, below: item) {
-                        case .answered(let handle): return .answered(handle)
-                        case .noAnswer: silent = true
-                        case .gone: continue
+                        if !collect(Array(path.dropFirst()), title: title, below: item, into: &matches) {
+                            answered = false
                         }
                     }
-                case .noAnswer: silent = true
+                case .noAnswer: answered = false
                 default: continue
                 }
             }
         }
-        return silent ? .noAnswer : .gone
+        return answered
     }
 }
 

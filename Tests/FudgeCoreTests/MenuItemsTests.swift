@@ -540,3 +540,79 @@ private func runItem(_ row: Int, of listing: MenuItemsListing, probe: RunProbe) 
     hidden.dismissed()
     #expect(hidden != before)
 }
+
+// MARK: - Alike items, items turned off, and a dropped read (SPEC-107 §1)
+
+/// Two windows titled alike under Window, as Terminal shows them.
+private let alike: [FixedMenu] = [
+    FixedMenu("Terminal", items: [FixedMenu("Settings…")]),
+    FixedMenu("Window", items: [FixedMenu("Minimize"), FixedMenu("bash"), FixedMenu("bash")]),
+]
+
+@MainActor
+@Test func alikeItemsArePressedByTheirPlaceAmongThem() async throws {
+    let system = FixedMenuSystem(menus: alike)
+    let listing = try read(system)
+    let rows = listing.rows.indices.filter { listing.rows[$0].title == "bash" }
+    #expect(rows.count == 2)
+    // The app rebuilds its menus (new elements, same items): the second row presses the second "bash".
+    system.rebuild(alike)
+    #expect(await runItem(rows[1], of: listing, probe: RunProbe()) == .pressed(.pressed))
+    #expect(system.pressedElements == [system.items(titled: "bash")[1]])
+}
+
+@MainActor
+@Test func whenAlikeItemsChangeInNumberNoneIsPressed() async throws {
+    let system = FixedMenuSystem(menus: alike)
+    let listing = try read(system)
+    let rows = listing.rows.indices.filter { listing.rows[$0].title == "bash" }
+    // The first of the two windows closed: the second row's place now points at nothing, and the first's at
+    // another window.
+    system.rebuild([alike[0], FixedMenu("Window", items: [FixedMenu("Minimize"), FixedMenu("bash")])])
+    #expect(await runItem(rows[1], of: listing, probe: RunProbe()) == .gone)
+    #expect(await runItem(rows[0], of: listing, probe: RunProbe()) == .gone)
+    #expect(system.pressed.isEmpty)
+}
+
+@MainActor
+@Test func anItemTurnedOffSinceTheReadIsntPressed() async throws {
+    let system = FixedMenuSystem(menus: menus)
+    let listing = try read(system)
+    let row = try #require(listing.rows.firstIndex { $0.title == "As PDF…" })
+    system.setEnabled(false, titled: "As PDF…")
+    let probe = RunProbe()
+    #expect(await runItem(row, of: listing, probe: probe) == .disabled)
+    #expect(probe.done.isEmpty, "nothing hidden, activated or pressed")
+    // Found again by its path after a rebuild, still off.
+    system.rebuild(menus)
+    system.setEnabled(false, titled: "As PDF…")
+    #expect(await runItem(row, of: listing, probe: probe) == .disabled)
+    #expect(system.pressed.isEmpty)
+    #expect(MenuItemsList.turnedOff == "That menu item is turned off right now.")
+}
+
+@Test func aCancelledReadDoesntHoldUpTheNextOne() throws {
+    let system = FixedMenuSystem(menus: menus)
+    let reached = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    system.onRead = { title in
+        if title == "File" {
+            reached.signal()
+            release.wait()
+        }
+    }
+    let search = MenuItemsSearch(reader: MenuReader(system: system))
+    let cancel = MenuReadCancel()
+    let dropped = Thread { _ = search.read(app, deadline: .seconds(30), cancel: cancel) }
+    dropped.start()
+    #expect(reached.wait(timeout: .now() + 30) == .success)
+    // The list goes while the app is mid-answer: the read is cancelled. The list opens again at once.
+    cancel.cancel()
+    system.onRead = nil
+    DispatchQueue.global().asyncAfter(deadline: .now() + 0.2) { release.signal() }
+    guard case .listing(let listing) = search.read(app, deadline: .seconds(30)) else {
+        Issue.record("the new read waited for the cancelled one, rather than saying the app didn't answer")
+        return
+    }
+    #expect(listing.rows.map(\.title).contains("As PDF…"))
+}
