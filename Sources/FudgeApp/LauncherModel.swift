@@ -3024,6 +3024,8 @@ final class LauncherModel {
             session: session, providerName: text("providerName") ?? prepared.request.provider.name,
             description: text("description"), icon: values["providerIcon"].flatMap { $0 == .null ? nil : $0 })
         actionPanel = nil
+        // Nothing reaches the command while the prompt is up, a key held for the selected item's actions included.
+        hold(nil)
         if !isVisible() { show() }
         let proceed = await withCheckedContinuation { signInAnswer = $0 }
         guard proceed, signIn?.session == session else {
