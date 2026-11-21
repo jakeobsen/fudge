@@ -8,6 +8,7 @@
 
 import type { LaunchEnvironment } from "./api/launch.ts";
 import type { RpcRequest } from "./bridge.ts";
+import type { ItemSlots } from "./renderer/root.ts";
 import type { UINode } from "./renderer/serialize.ts";
 
 export type CommandMode = "view" | "no-view" | "menu-bar";
@@ -35,6 +36,8 @@ export type AppMessage =
           environment?: Partial<LaunchEnvironment>;
       }
     | { type: "event"; session: string; node: number; path: string[]; args: unknown[] }
+    /** Asks for these List or Grid items' `actions` and `detail`, which renders send only for some (`$deferred`). */
+    | { type: "slots"; session: string; nodes: number[] }
     | { type: "pop"; session: string }
     | { type: "unload"; session: string }
     | { type: "rpcResult"; session: string; id: number; result?: unknown; error?: string }
@@ -43,6 +46,8 @@ export type AppMessage =
 /** Worker → host; the host forwards these to the app with the session added. */
 export type WorkerMessage =
     | { type: "render"; view: UINode | null; depth: number }
+    /** Answers `slots`, with an entry for every node asked for. */
+    | { type: "slots"; items: ItemSlots[] }
     | RpcRequest
     | { type: "error"; message: string; stack?: string; fatal: boolean }
     | { type: "log"; level: "info" | "error"; message: string }
@@ -53,6 +58,7 @@ export type WorkerMessage =
 /** Host → worker. */
 export type HostToWorker =
     | { type: "event"; node: number; path: string[]; args: unknown[] }
+    | { type: "slots"; nodes: number[] }
     | { type: "pop" }
     | { type: "unload" }
     | { type: "rpcResult"; id: number; result?: unknown; error?: string }
@@ -110,6 +116,14 @@ export function parseAppMessage(line: string): Parsed {
             }
             const args = Array.isArray(value.args) ? value.args : [];
             return { ok: true, message: { type: "event", session: session!, node: value.node, path: value.path, args } };
+        }
+        case "slots": {
+            const problem = needsSession();
+            if (problem) return problem;
+            if (!Array.isArray(value.nodes) || !value.nodes.every((node) => Number.isInteger(node))) {
+                return protocolError("`slots` needs `nodes`, an array of node ids");
+            }
+            return { ok: true, message: { type: "slots", session: session!, nodes: value.nodes as number[] } };
         }
         case "pop":
         case "unload": {

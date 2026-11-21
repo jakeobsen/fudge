@@ -38,3 +38,37 @@ public enum JSONValue: Sendable, Equatable, Codable {
         }
     }
 }
+
+extension JSONValue {
+    /// Parses JSON text through `JSONSerialization`, about ten times faster than `JSONDecoder`, whose path goes
+    /// through `init(from:)` above, trying each type in turn. Throws for what `JSONSerialization` refuses.
+    public static func parse(_ data: Data) throws -> JSONValue {
+        JSONValue(foundation: try JSONSerialization.jsonObject(with: data))
+    }
+
+    /// Converts what `JSONSerialization` returns.
+    init(foundation object: Any) {
+        if let object = object as? [String: Any] {
+            self = .object(object.mapValues(JSONValue.init(foundation:)))
+        } else if let string = object as? String {
+            self = .string(string)
+        } else if let number = object as? NSNumber {
+            self = Self.value(of: number)
+        } else if let array = object as? [Any] {
+            self = .array(array.map(JSONValue.init(foundation:)))
+        } else {
+            self = .null
+        }
+    }
+
+    /// A number as `JSONDecoder` reads it. `JSONSerialization` gives an `NSDecimalNumber` for 16 or more significant
+    /// digits and for integers past `Int64`; its digits are exact, but its `doubleValue` can be a step off the
+    /// correctly rounded `Double`, so it's read from its text. Other numbers are an `Int64`, `UInt64` or `Double`
+    /// already, and their `doubleValue` is exact. (`-0` reads as 0 here and -0 in `JSONDecoder`, but
+    /// `JSON.stringify` never writes it.)
+    private static func value(of number: NSNumber) -> JSONValue {
+        if CFGetTypeID(number) == CFBooleanGetTypeID() { return .bool(number.boolValue) }
+        if number is NSDecimalNumber, let exact = Double(number.stringValue) { return .number(exact) }
+        return .number(number.doubleValue)
+    }
+}

@@ -23,7 +23,6 @@ public final class ExtensionHost: Sendable {
 
         let (messages, continuation) = AsyncStream.makeStream(of: HostMessage.self)
         let lines = LineSplitter()
-        let decoder = JSONDecoder()
         stdout.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
@@ -32,9 +31,7 @@ public final class ExtensionHost: Sendable {
                 return
             }
             for line in lines.append(data) {
-                if let message = try? decoder.decode(HostMessage.self, from: line) {
-                    continuation.yield(message)
-                }
+                if let message = try? HostMessage(line: line) { continuation.yield(message) }
             }
         }
         process.terminationHandler = { _ in continuation.finish() }
@@ -64,17 +61,30 @@ public final class ExtensionHost: Sendable {
 }
 
 /// Splits a byte stream into lines. Used from one readability handler at a time.
+///
+/// Each byte is searched once. A big list's render can be a line of several megabytes arriving in 64 KB chunks, and
+/// searching the whole buffer again on every chunk made reading it quadratic: 18 s for 10 MB.
 final class LineSplitter: @unchecked Sendable {
     private var buffer = Data()
+    /// How many bytes at the start of `buffer` are known to hold no newline.
+    private var scanned = 0
 
     func append(_ data: Data) -> [Data] {
         buffer.append(data)
         var lines: [Data] = []
-        while let newline = buffer.firstIndex(of: 0x0A) {
-            let line = buffer[buffer.startIndex..<newline]
-            if !line.isEmpty { lines.append(Data(line)) }
-            buffer.removeSubrange(buffer.startIndex...newline)
+        var start = 0
+        buffer.withUnsafeBytes { bytes in
+            guard let base = bytes.baseAddress else { return }
+            var from = scanned
+            while from < bytes.count, let found = memchr(base + from, 0x0A, bytes.count - from) {
+                let newline = UnsafeRawPointer(found) - base
+                if newline > start { lines.append(Data(bytes[start..<newline])) }
+                start = newline + 1
+                from = start
+            }
         }
+        if start > 0 { buffer.removeSubrange(buffer.startIndex..<buffer.startIndex + start) }
+        scanned = buffer.count
         return lines
     }
 }

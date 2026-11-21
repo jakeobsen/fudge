@@ -103,6 +103,9 @@ input.on("line", (line) => {
         case "event":
             session.worker.postMessage({ type: "event", node: message.node, path: message.path, args: message.args } satisfies HostToWorker);
             return;
+        case "slots":
+            session.worker.postMessage({ type: "slots", nodes: message.nodes } satisfies HostToWorker);
+            return;
         case "pop":
             session.worker.postMessage({ type: "pop" } satisfies HostToWorker);
             return;
