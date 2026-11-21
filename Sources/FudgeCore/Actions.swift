@@ -331,11 +331,22 @@ public enum ActionPanelReader {
 
     public static func secondary(_ sections: [ActionSection]) -> ActionEntry? { flat(sections).dropFirst().first }
 
-    /// The action whose shortcut is `pressed`, searching submenus too.
+    /// The action whose shortcut is `pressed`, searching submenus too. A submenu's own shortcut (`Action.OpenWith`'s
+    /// ⌘O) finds the submenu, which running opens in the action panel.
     public static func action(for pressed: KeyShortcut, in sections: [ActionSection]) -> ActionEntry? {
         for entry in flat(sections) {
-            if entry.shortcut == pressed, !entry.isSubmenu { return entry }
+            if entry.shortcut == pressed { return entry }
             if let submenu = entry.submenu, let found = action(for: pressed, in: submenu) { return found }
+        }
+        return nil
+    }
+
+    /// The ids of the submenus leading to the entry `id`, outermost first and ending with `id`, or nil when it isn't
+    /// in `sections`: the action panel's path to open a submenu, wherever it was run from.
+    public static func path(to id: Int, in sections: [ActionSection]) -> [Int]? {
+        for entry in flat(sections) {
+            if entry.id == id { return [id] }
+            if let submenu = entry.submenu, let rest = path(to: id, in: submenu) { return [entry.id] + rest }
         }
         return nil
     }

@@ -76,8 +76,11 @@ public enum BuildError: Error, Equatable, CustomStringConvertible {
 /// aren't installed there, they're installed into a temporary folder that
 /// esbuild finds through `NODE_PATH`.
 public struct ExtensionBuilder: Sendable {
-    /// Modules the extension host provides, so they stay out of the bundle.
-    public static let providedModules = ["@raycast/api", "react", "react/jsx-runtime", "react/jsx-dev-runtime"]
+    /// Modules the extension host provides, so they stay out of the bundle. `fudge:app` is Fudge's own calls for its
+    /// bundled extensions (Search Files' `searchFiles`), not part of Raycast's API.
+    public static let providedModules = [
+        "@raycast/api", "react", "react/jsx-runtime", "react/jsx-dev-runtime", "fudge:app",
+    ]
     static let sourceExtensions = ["tsx", "ts", "jsx", "js"]
 
     public var esbuild: URL

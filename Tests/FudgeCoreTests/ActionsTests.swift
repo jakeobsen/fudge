@@ -164,6 +164,27 @@ private let applicationItem = RootItem.application(
     #expect(ActionPanelReader.action(for: KeyShortcut(key: "z", modifiers: ["cmd"]), in: sections) == nil)
 }
 
+@Test func aSubmenusShortcutFindsTheSubmenuWithItsPath() throws {
+    let json = #"""
+        {"id":20,"type":"ActionPanel","props":{},"children":[
+          {"id":1,"type":"Action","props":{"title":"Open","onAction":{"$fn":["onAction"]}},"children":[]},
+          {"id":11,"type":"ActionPanel.Submenu","props":{"title":"More","shortcut":{"modifiers":["cmd"],"key":"m"}},"children":[
+            {"id":12,"type":"ActionPanel.Submenu","props":{"title":"Open With","shortcut":{"modifiers":["cmd"],"key":"o"}},"children":[
+              {"id":4,"type":"Action","props":{"title":"TextEdit"},"children":[]}
+            ]}
+          ]}
+        ]}
+        """#
+    let sections = ActionPanelReader.sections(of: try node(json))
+    let openWith = try #require(ActionPanelReader.action(for: KeyShortcut(key: "o", modifiers: ["cmd"]), in: sections))
+    #expect(openWith.title == "Open With" && openWith.isSubmenu, "⌘O opens Open With, as in Raycast")
+    #expect(ActionPanelReader.action(for: KeyShortcut(key: "m", modifiers: ["cmd"]), in: sections)?.id == 11)
+    #expect(ActionPanelReader.path(to: 12, in: sections) == [11, 12], "the panel opens through More")
+    #expect(ActionPanelReader.path(to: 11, in: sections) == [11])
+    #expect(ActionPanelReader.path(to: 4, in: sections) == [11, 12, 4])
+    #expect(ActionPanelReader.path(to: 99, in: sections) == nil)
+}
+
 @Test func filtersActionsByTitle() throws {
     let sections = ActionPanelReader.sections(of: try node(panel))
     let filtered = ActionPanelReader.filter(sections, query: "trash")
