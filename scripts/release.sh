@@ -18,8 +18,8 @@
 #
 # The certificate goes into a keychain of its own, in a temporary folder, deleted at the end however the script
 # ends; nothing else is written to disk. Every executable is signed again inside-out with the hardened runtime and a
-# timestamp (scripts/sign-app.sh), the app is notarized and stapled, then the disk image is made from it, signed,
-# notarized and stapled. Gatekeeper's assessment of both is the last check.
+# timestamp (scripts/sign-app.sh), with the identity from that keychain alone, the app is notarized and stapled, then
+# the disk image is made from it, signed, notarized and stapled. Gatekeeper's assessment of both is the last check.
 #
 # Without any of the five, --ad-hoc-without-secrets (the tag workflow, so a fork can still build) makes the ad hoc
 # image instead and says so; otherwise that's a failure, as some of them without the others always is.
@@ -239,7 +239,9 @@ assess() {
 	esac
 }
 
-signed=$("${without_secrets[@]}" scripts/sign-app.sh "$app" "$identity")
+# Both signings take the identity from this keychain alone, so a Mac that also has the Developer ID in its login
+# keychain (`make release`) neither finds it twice nor asks for that key's password.
+signed=$("${without_secrets[@]}" scripts/sign-app.sh "$app" "$identity" "$keychain")
 printf '→ signed %s %s, hardened runtime\n' "$app" "$signed"
 codesign --verify --deep --strict "$app"
 ditto -c -k --keepParent "$app" "$work/Fudge.zip"
@@ -247,7 +249,7 @@ notarize "$work/Fudge.zip"
 staple "$app"
 
 "${without_secrets[@]}" make --no-print-directory dmg-image "${version_args[@]}"
-if ! out=$(codesign --force --timestamp --sign "$identity" "$dmg" 2>&1); then
+if ! out=$(codesign --force --timestamp --keychain "$keychain" --sign "$identity" "$dmg" 2>&1); then
 	redact <<<"$out" >&2
 	fail "couldn't sign $dmg"
 fi
