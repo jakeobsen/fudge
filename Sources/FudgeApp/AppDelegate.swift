@@ -621,6 +621,8 @@ struct Snapshot {
     let signIns: MemorySecretStore
     /// `--sign-in-consent`: picks Fudge's sign-in server on the Sign-in page and saves its consent sheet instead.
     let signInConsent: Bool
+    /// `--clipboard-consent`: turns on Clipboard History's switch and saves its consent sheet instead.
+    let clipboardConsent: Bool
     /// `--found-files <file>`: Search Files' results, a JSON array of `files.search` entries (`~/` paths are in the
     /// home folder). Snapshots never ask Spotlight, so without it there are none.
     let foundFiles: URL?
@@ -662,6 +664,7 @@ struct Snapshot {
             try? signIns.write(JSONEncoder().encode(tokens), account: parts[0])
         }
         signInConsent = arguments.contains("--sign-in-consent")
+        clipboardConsent = arguments.contains("--clipboard-consent")
         foundFiles = value("--found-files").map { URL(fileURLWithPath: $0) }
         clipboardEntries = value("--clipboard-entries").map { URL(fileURLWithPath: $0) }
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
@@ -675,9 +678,18 @@ struct Snapshot {
     }
 
     func take(of controller: SettingsWindowController) {
-        controller.renderOffscreen(extension: signInConsent ? SettingsModel.signInPage : settingsExtension)
-        if signInConsent {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { controller.model.setSignInServer(.fudge) }
+        let page =
+            signInConsent
+            ? SettingsModel.signInPage : clipboardConsent ? ClipboardHistory.extensionName : settingsExtension
+        controller.renderOffscreen(extension: page)
+        if signInConsent || clipboardConsent {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [signInConsent] in
+                if signInConsent {
+                    controller.model.setSignInServer(.fudge)
+                } else {
+                    controller.model.setClipboardHistory(true)
+                }
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                 guard let view = controller.snapshotSheet?.contentView else { exit(1) }
                 save(view)
