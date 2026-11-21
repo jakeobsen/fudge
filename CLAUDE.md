@@ -153,6 +153,8 @@ Extensions run in a separate Node.js process, the extension host.
       `HyperkeyMapping` (core) reads `hidutil`'s output (`(null)`, or CoreFoundation's description of the list), adds or removes only Fudge's entry and writes the whole list back.
       It refuses, naming the key, when Caps Lock is mapped elsewhere: in the mapping every keyboard gets, in a keyboard's own (`--matching keyboard`), or in System Settings → Keyboard → Modifier Keys (`HIDKeyboardModifierMappingPairs`, per keyboard; Caps Lock left as itself there isn't a mapping).
       It also refuses when any of them can't be read.
+      A Caps Lock → Caps Lock entry, which some tools write, isn't a mapping, but Fudge's entry takes its place rather than adding a second one for Caps Lock (`HyperkeyMapping.capsLockItself`, SPEC-118 §1).
+      Removing Fudge's entry puts it back where it was, the launch cleanup after a crash included, since `HidutilKeyMapping` remembers it in `hyperkey.json` in the support folder (written before the mapping, never in a backup).
       Turning it on needs Accessibility (`SystemCalls.mayPostKeysForUser`, the usual prompt and offer) and is saved only once the tap runs and the mapping is in; a refusal shows under the switch (`hyperkeyProblem`).
       An active `CGEventTap` at the HID level runs on a thread and run loop of its own (`HyperTapThread`), and sees only the keyboard's own events (`eventSourceStateID` is the HID system's, so keys Fudge or another app posts are left alone).
       It hands each key's code, kind, repeat flag and time to `HyperTap` (core): F18's own events are swallowed, and any other key gets ⌘⌥⌃⇧ while F18 is down in the HID system.

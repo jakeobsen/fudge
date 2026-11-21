@@ -31,9 +31,11 @@ final class HyperkeyService {
     /// The switch's turn-on is under way: it isn't saved yet, so the 2 s check leaves it alone meanwhile.
     private var turningOn = false
 
-    init(paths: FudgePaths, mapping: any KeyMappingSystem = HidutilKeyMapping()) {
+    init(paths: FudgePaths, mapping: (any KeyMappingSystem)? = nil) {
         self.paths = paths
-        self.mapping = mapping
+        self.mapping =
+            mapping
+            ?? HidutilKeyMapping(state: paths.supportDirectory.appendingPathComponent(HidutilKeyMapping.stateFile))
     }
 
     /// Follows `settings.json` and Accessibility: at launch, after an import, when Quick press changes, and every
@@ -146,6 +148,28 @@ struct HidutilKeyMapping: KeyMappingSystem {
     struct Failed: Error, CustomStringConvertible {
         let status: Int32
         var description: String { "hidutil ended with status \(status)" }
+    }
+
+    /// Where it remembers that Fudge's entry replaced a Caps Lock → Caps Lock one: this Mac's, never in a backup.
+    static let stateFile = "hyperkey.json"
+    /// `hyperkey.json` in the support folder.
+    let state: URL
+
+    func replacedCapsLock() -> Bool {
+        guard let data = try? Data(contentsOf: state),
+            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return false }
+        return object["replacedCapsLock"] as? Bool == true
+    }
+
+    func setReplacedCapsLock(_ replaced: Bool) throws {
+        guard replaced else {
+            if FileManager.default.fileExists(atPath: state.path) { try FileManager.default.removeItem(at: state) }
+            return
+        }
+        try FileManager.default.createDirectory(
+            at: state.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONSerialization.data(withJSONObject: ["replacedCapsLock": true]).write(to: state, options: .atomic)
     }
 
     func readMapping() throws -> String {
