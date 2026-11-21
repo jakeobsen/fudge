@@ -179,7 +179,8 @@ final class LauncherModel {
     @ObservationIgnored private var extensions: [String: InstalledExtension] = [:]
     @ObservationIgnored private var history: LaunchHistory
     @ObservationIgnored private var host: ExtensionHost?
-    @ObservationIgnored private var nextSession = 1
+    /// The sessions host messages may name (SPEC-067).
+    @ObservationIgnored private var hostSessions = HostSessions()
     /// No-view commands still running, by session.
     @ObservationIgnored private var background: [String: String] = [:]
     /// No-view commands that `launchCommand` started in the background, by session. They leave the panel alone.
@@ -2288,8 +2289,8 @@ final class LauncherModel {
             if !quiet { screen = .failure(Failure(title: "Can't run extensions", message: String(describing: error))) }
             return String(describing: error)
         }
-        let session = "s\(nextSession)"
-        nextSession += 1
+        let session = SessionID.make()
+        hostSessions.started(session)
         sessionExtensions[session] = extensionName
         sessionCommands[session] = command.name
         if command.mode == "view" {
@@ -2312,6 +2313,7 @@ final class LauncherModel {
                     environment: prepared.environment)
             )
         } catch {
+            hostSessions.ended(session)
             sessionExtensions[session] = nil
             sessionCommands[session] = nil
             quietSessions[session] = nil
@@ -2340,8 +2342,8 @@ final class LauncherModel {
         } catch {
             return .failure(.init(message: String(describing: error)))
         }
-        let session = "s\(nextSession)"
-        nextSession += 1
+        let session = SessionID.make()
+        hostSessions.started(session)
         sessionExtensions[session] = installed.manifest.name
         sessionCommands[session] = command.name
         let launchProps = LaunchProps(launchType: userInitiated ? "userInitiated" : "background")
@@ -2352,6 +2354,7 @@ final class LauncherModel {
                     launchProps: launchProps, preferences: prepared.preferences.values,
                     environment: prepared.environment))
         } catch {
+            hostSessions.ended(session)
             sessionExtensions[session] = nil
             sessionCommands[session] = nil
             return .failure(.init(message: String(describing: error)))
@@ -2550,7 +2553,7 @@ final class LauncherModel {
                 cli: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil, paths: paths))
         self.host = host
         Task { [weak self] in
-            for await message in host.messages { self?.handle(message) }
+            for await message in host.messages { self?.receive(message) }
             self?.hostStopped(host)
         }
         return host
@@ -2579,6 +2582,7 @@ final class LauncherModel {
     private func hostStopped(_ stopped: ExtensionHost) {
         guard host === stopped else { return }
         host = nil
+        hostSessions.endAll()
         background.removeAll()
         quietSessions.removeAll()
         menuBar.hostStopped()
@@ -2590,6 +2594,20 @@ final class LauncherModel {
         if var covered = quicklinkForm?.returnTo, covered.failure == nil {
             covered.failure = Failure(title: "\(covered.title) stopped", message: "The extension host exited.")
             quicklinkForm?.returnTo = covered
+        }
+    }
+
+    /// A message from the host. One naming a session Fudge didn't start in this host, or one that has exited, is
+    /// dropped, and logged once (`HostSessions`), so it can't reach another command's screen or calls, or Fudge's own
+    /// Create Quicklink form. Messages put aside meanwhile (the form's `deferred`) go to `handle` straight.
+    private func receive(_ message: HostMessage) {
+        switch hostSessions.admit(message) {
+        case .handle:
+            handle(message)
+        case .drop(let logIt):
+            if logIt, let session = message.session {
+                log(session, "debug", "dropped a host message for a session Fudge isn't running")
+            }
         }
     }
 

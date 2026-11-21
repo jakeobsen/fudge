@@ -51,6 +51,8 @@ Release builds are signed ad hoc. Until Fudge has a Developer ID, you grant its 
 
 Open Fudge with ⌥Space, type to search applications and extension commands, and press ↵. Esc goes back, then hides the window.
 
+Extensions run with your permissions, and while they run they can reach each other's data, as in Raycast. Install the ones you trust.
+
 When you open Fudge again within 90 seconds, it's as you left it. After longer, it starts over on an empty root search. **Pop to Root Search** on the **General** page of **Settings…** sets how long: Immediately, after 30 seconds, 1 minute or 90 seconds, or Never. Only the time the window is closed counts.
 
 **Show Fudge on**, on the same page, picks the screen Fudge opens on: the one with the mouse (the default), the primary screen, or the one with the app you're using. **Escape Key Behavior** picks what Esc does: by default it clears the search, then goes back, then closes the window; with "Close window and pop to root", Esc closes the window at once, and Fudge opens on an empty root search next time.
