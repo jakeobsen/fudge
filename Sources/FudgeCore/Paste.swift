@@ -130,6 +130,8 @@ public final class Paste {
     /// is unknown or Fudge itself, or when `secureInput` says a protected password field has the keyboard by the time the
     /// paste's turn comes (it may wait on a ⌘C fallback); the clipboard is put back then. `deletedUTF16` is the
     /// keyword's length in UTF-16 units, which the ⌫s delete and the caret's placement counts (`PastedText`).
+    /// Only an expansion with a `{cursor}` (`leftArrows` above 0) reads the field: a plain one has no caret to place,
+    /// so its keys go at once, and its restore waits the plain `restoreDelay` after ⌘V (SPEC-118 §3).
     public func expand(
         _ content: PasteboardContents,
         target: Int32?,
@@ -141,7 +143,8 @@ public final class Paste {
         try await turns.run {
             try await pasteNow(
                 content, closeMainWindow: false, origin: .background, backspaces: backspaces,
-                deletedBefore: deletedUTF16, leftArrows: leftArrows, hideWindow: {}, secureInput: secureInput,
+                deletedBefore: deletedUTF16, leftArrows: leftArrows, readsField: leftArrows > 0, hideWindow: {},
+                secureInput: secureInput,
                 frontmost: { target.map { FrontmostApplication(pid: $0, bundleIdentifier: nil) } })
         }
     }
@@ -153,6 +156,7 @@ public final class Paste {
         backspaces: Int,
         deletedBefore: Int = 0,
         leftArrows: Int,
+        readsField: Bool = true,
         hideWindow: () async -> Void,
         secureInput: () -> Bool,
         frontmost: () -> FrontmostApplication?
@@ -183,7 +187,7 @@ public final class Paste {
         do {
             landing = try await postPaste(
                 content, to: target.pid, backspaces: backspaces, deletedBefore: deletedBefore, leftArrows: leftArrows,
-                secureInput: secureInput)
+                readsField: readsField, secureInput: secureInput)
         } catch {
             // Secure input came on while the field was being read: nothing was posted.
             restore(snapshot, ifStill: written)
@@ -201,14 +205,17 @@ public final class Paste {
     /// Posts ⌘V to `pid`, reading the focused field before it, and, for a `{cursor}`, places the caret once the paste
     /// has landed. The field is watched off the main actor, and the result is what the restore waits for. Secure input
     /// is checked again right before the first key, since the read can take seconds: then nothing is posted and it
-    /// throws `PasteError.secureInput`.
+    /// throws `PasteError.secureInput`. Without `readsField` the field is neither read nor watched, the keys go at
+    /// once, and the restore waits only its delay; secure input is still checked right before the first key.
     private func postPaste(
         _ content: PasteboardContents, to pid: Int32, backspaces: Int, deletedBefore: Int, leftArrows: Int,
-        secureInput: () -> Bool
+        readsField: Bool, secureInput: () -> Bool
     ) async throws -> PasteWatch {
-        let pasted = Self.plainText(of: content).map {
-            PastedText(text: $0, afterCursor: leftArrows, deletedBefore: deletedBefore)
-        }
+        let pasted =
+            readsField
+            ? Self.plainText(of: content).map {
+                PastedText(text: $0, afterCursor: leftArrows, deletedBefore: deletedBefore)
+            } : nil
         let placer = caret
         // The field is read before any key goes out, so before an expansion's ⌫s, which `deletedBefore` counts.
         let before = pasted == nil ? nil : await placer.read(pid)

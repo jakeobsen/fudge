@@ -87,11 +87,16 @@ private final class ExpansionAccess: AccessibilityAccess {
 private final class ExpansionKeys: PasteKeyPoster {
     let field: ExpansionField
     let length: Int
+    /// When ⌘V went out.
+    var pastedAt: ContinuousClock.Instant?
     init(_ field: ExpansionField, length: Int) {
         self.field = field
         self.length = length
     }
-    func postPaste(to pid: Int32) { field.pasted(length, pid: pid) }
+    func postPaste(to pid: Int32) {
+        pastedAt = .now
+        field.pasted(length, pid: pid)
+    }
     func postDelete(_ count: Int, to pid: Int32) { field.deleted(count, pid: pid) }
 }
 
@@ -99,10 +104,13 @@ private final class ExpansionKeys: PasteKeyPoster {
 private final class ExpansionPasteboard: PasteboardAccess {
     var changeCount = 1
     var current = PasteboardContents(items: [])
+    /// When each write happened: Fudge's, then the restore.
+    var writes: [ContinuousClock.Instant] = []
     func contents() -> PasteboardContents { current }
     func replace(with contents: PasteboardContents) {
         current = contents
         changeCount += 1
+        writes.append(.now)
     }
     func plainText() -> String? { nil }
 }
@@ -173,7 +181,8 @@ private func expandInSpotlight(
     #expect(field?.events == [], "no read, no key: \(String(describing: field?.events))")
 }
 
-/// Secure input comes on while the pre-⌫ field read is in flight (focus moves to a password field in the same app).
+/// Secure input comes on while the pre-⌫ field read of a `{cursor}` expansion is in flight (focus moves to a password
+/// field in the same app).
 @Test @MainActor func secureInputComingOnDuringTheReadStopsTheExpansionBeforeAnyKey() async throws {
     let keyword = ";a😀"
     let field = ExpansionField(count: 20, caret: 20, keyword: keyword, settable: true)
@@ -187,9 +196,93 @@ private func expandInSpotlight(
     await #expect(throws: PasteError.secureInput) {
         try await paste.expand(
             PasteboardContents.forPaste(text: "Best, me", html: nil, file: nil), target: expansionSpotlight,
-            backspaces: keyword.count, deletedUTF16: keyword.utf16.count, leftArrows: 0,
+            backspaces: keyword.count, deletedUTF16: keyword.utf16.count, leftArrows: 2,
             secureInput: { !field.events.isEmpty })  // on once the field has been read
     }
+    #expect(field.events.first?.hasPrefix("read ") == true, "\(field.events)")
     #expect(!field.events.contains { $0.hasPrefix("⌫") || $0.hasPrefix("⌘V") }, "\(field.events)")
     #expect(pasteboard.current.items.isEmpty, "the clipboard is put back")
+}
+
+// MARK: - A plain expansion doesn't wait on the field (SPEC-118 §3)
+
+/// The user's clipboard before the expansion.
+private let usersClipboard = PasteboardContents(items: [
+    [PasteboardContents.Representation(type: "public.utf8-plain-text", data: Data("the user's".utf8))]
+])
+
+/// A plain expansion (no `{cursor}`) of "Best, me" for the keyword ";sig", typed in Spotlight's field. The `Paste` is
+/// returned to be kept: its restore holds it weakly.
+@MainActor
+private func expandPlainly(
+    field: ExpansionField, keys: ExpansionKeys, pasteboard: ExpansionPasteboard,
+    restoreDelay: Duration = .milliseconds(1), secureInput: @escaping () -> Bool = { false }
+) async throws -> Paste {
+    let clock = CaretClock()
+    let paste = Paste(
+        gate: AccessibilityGate(access: ExpansionAccess()), keys: keys, pasteboard: pasteboard, ownPid: expansionMe,
+        turns: PasteboardTurns(), restoreDelay: restoreDelay,
+        caret: CaretPlacer(system: field, sleep: { clock.advance($0) }, now: clock.now))
+    try await paste.expand(
+        PasteboardContents.forPaste(text: "Best, me", html: nil, file: nil), target: expansionSpotlight,
+        backspaces: 4, deletedUTF16: 4, leftArrows: 0, secureInput: secureInput)
+    return paste
+}
+
+/// Waits until the user's clipboard is back, for at most 30 s (a stalled CI runner).
+@MainActor
+private func restored(_ pasteboard: ExpansionPasteboard) async -> Bool {
+    let deadline = ContinuousClock.now + .seconds(30)
+    while pasteboard.current != usersClipboard {
+        guard ContinuousClock.now < deadline else { return false }
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    return true
+}
+
+@Test @MainActor func aPlainExpansionNeverReadsTheFieldAndPostsAtOnce() async throws {
+    let field = ExpansionField(count: 20, caret: 20, keyword: ";sig", settable: true)
+    let keys = ExpansionKeys(field, length: 8)
+    let pasteboard = ExpansionPasteboard()
+    pasteboard.current = usersClipboard
+    let paste = try await expandPlainly(field: field, keys: keys, pasteboard: pasteboard)
+    #expect(await restored(pasteboard), "the clipboard is put back")
+    withExtendedLifetime(paste) {}
+    // No read before the ⌫s, nor after ⌘V for the restore: only the keys, all to Spotlight.
+    #expect(field.events == ["⌫×4 300", "⌘V 300"], "\(field.events)")
+}
+
+@Test @MainActor func aPlainExpansionsRestoreWaitsAtLeastItsDelayAfterThePaste() async throws {
+    let field = ExpansionField(count: 20, caret: 20, keyword: ";sig", settable: true)
+    let keys = ExpansionKeys(field, length: 8)
+    let pasteboard = ExpansionPasteboard()
+    pasteboard.current = usersClipboard
+    let delay = Duration.milliseconds(300)
+    let paste = try await expandPlainly(field: field, keys: keys, pasteboard: pasteboard, restoreDelay: delay)
+    #expect(await restored(pasteboard))
+    withExtendedLifetime(paste) {}
+    let pastedAt = try #require(keys.pastedAt)
+    let restoredAt = try #require(pasteboard.writes.last)
+    #expect(pasteboard.writes.count == 2, "Fudge's write, then the restore")
+    #expect(pastedAt.duration(to: restoredAt) >= delay, "not before the plain restore delay after ⌘V")
+}
+
+/// #114's MUST, on the plain path too: secure input that comes on after the turn's check, right before the first
+/// key, posts nothing and puts the clipboard back.
+@Test @MainActor func secureInputComingOnRightBeforeAPlainExpansionsFirstKeyPostsNothing() async throws {
+    let field = ExpansionField(count: 20, caret: 20, keyword: ";sig", settable: true)
+    let keys = ExpansionKeys(field, length: 8)
+    let pasteboard = ExpansionPasteboard()
+    pasteboard.current = usersClipboard
+    var checks = 0
+    await #expect(throws: PasteError.secureInput) {
+        // Off at the turn's check, on by the next: the one right before the first key.
+        _ = try await expandPlainly(field: field, keys: keys, pasteboard: pasteboard) {
+            checks += 1
+            return checks >= 2
+        }
+    }
+    #expect(checks == 2, "checked in its turn, and again right before the first key")
+    #expect(field.events.isEmpty, "no read and no key: \(field.events)")
+    #expect(pasteboard.current == usersClipboard, "the clipboard is put back")
 }
