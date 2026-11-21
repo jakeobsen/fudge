@@ -76,8 +76,36 @@ final class LauncherPanel: NSPanel {
         onResign()
     }
 
+    override func becomeKey() {
+        super.becomeKey()
+        LauncherLog.note("launcher became key: \(LauncherLog.keyboard)")
+    }
+
+    /// Why `AppDelegate.hidePanel` is about to order the panel out, for the log; nil means AppKit did it.
+    var hideReason: String?
+
+    // Logged, since every hide should come through `AppDelegate.hidePanel`; one that doesn't says "AppKit".
+    override func orderOut(_ sender: Any?) {
+        let reason = hideReason ?? "AppKit"
+        LauncherLog.note("launcher orderOut by \(reason) visible=\(isVisible) hidesOnDeactivate=\(hidesOnDeactivate)")
+        hideReason = nil
+        super.orderOut(sender)
+    }
+
+    override func close() {
+        LauncherLog.note("launcher close by \(hideReason ?? "AppKit") hidesOnDeactivate=\(hidesOnDeactivate)")
+        hideReason = nil
+        super.close()
+    }
+
+    override func orderFrontRegardless() {
+        LauncherLog.note("launcher orderFrontRegardless")
+        super.orderFrontRegardless()
+    }
+
     /// Shows the panel on `screen` ("Show Fudge on", `PanelScreen`), a little above the middle.
     func present(on screen: NSScreen?) {
+        LauncherLog.note("launcher present: \(LauncherLog.keyboard)")
         if let visible = (screen ?? NSScreen.main)?.visibleFrame {
             let origin = NSPoint(
                 x: visible.midX - Self.size.width / 2,

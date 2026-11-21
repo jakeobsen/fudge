@@ -35,16 +35,25 @@ final class QuickLookPreview: NSObject, @preconcurrency QLPreviewPanelDataSource
             panel.reloadData()
         } else {
             // Not `makeKeyAndOrderFront`: the launcher keeps the keyboard, and Fudge isn't activated.
+            LauncherLog.note(
+                "preview orderFront behavior=\(panel.collectionBehavior.rawValue): \(LauncherLog.keyboard)")
             panel.orderFront(nil)
         }
         // Quick Look sets its own level as it opens; it shows just above the launcher.
         panel.level = NSWindow.Level(rawValue: launcherLevel.rawValue + 1)
+        LauncherLog.note(
+            "preview shown key=\(panel.isKeyWindow) level=\(panel.level.rawValue) "
+                + "behavior=\(panel.collectionBehavior.rawValue): \(LauncherLog.keyboard)")
+        DispatchQueue.main.async {
+            LauncherLog.note("preview a turn later key=\(panel.isKeyWindow): \(LauncherLog.keyboard)")
+        }
     }
 
     private func close() {
         guard QLPreviewPanel.sharedPreviewPanelExists(), let panel = QLPreviewPanel.shared(), panel.isVisible
         else { return }
         closing = true
+        LauncherLog.note("preview orderOut by Fudge: \(LauncherLog.keyboard)")
         panel.orderOut(nil)
         closing = false
     }
@@ -105,6 +114,7 @@ final class QuickLookPreview: NSObject, @preconcurrency QLPreviewPanelDataSource
     }
 
     func windowWillClose(_ notification: Notification) {
+        LauncherLog.note("preview willClose byFudge=\(closing) open=\(item != nil): \(LauncherLog.keyboard)")
         guard !closing, item != nil else { return }
         item = nil
         closedByUser()

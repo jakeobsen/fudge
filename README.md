@@ -157,6 +157,10 @@ An extension that takes a token in its settings (⌘⇧,) works without signing 
 
 An extension's menu bar command puts its own item in the menu bar. Run it from root search to turn it on, and the item stays there, across restarts, until you select the command in root search and pick **Deactivate Menu Bar Item** from ⌘K. Running it again from root search refreshes it and opens its menu. The command refreshes itself in the background at Fudge's start and as often as its extension asks, and again each time you open its menu. When a background refresh fails, the item keeps what it showed last and its menu ends with "⚠ Last refresh failed". Fudge shows at most 50 of these items.
 
+### Window management
+
+Fudge can move and resize the window you're using: halves, quarters, thirds and two thirds, Maximize (also Almost Maximize, Maximize Width and Maximize Height), Center, Reasonable Size, Make Larger and Make Smaller, Next and Previous Display, and Toggle Full Screen. **Restore** puts a window back where it was before Fudge last moved it. Search for them, or give them hotkeys under **Settings… → Commands → Window Management**. They need Accessibility permission (**Settings… → Permissions**).
+
 ### Selected text and Finder items
 
 Extensions can read the text selected in the app you were in, and the items selected in Finder. The first time, macOS asks you to allow Fudge under **Privacy & Security → Accessibility** or **Automation**.

@@ -135,6 +135,32 @@ enum SystemCalls {
         }
     }
 
+    /// One of Fudge's own window commands (SPEC-066): Accessibility is checked as for a user-initiated call, and the
+    /// command runs off the main thread like `windows.*`. Commands run one at a time, in order, on one queue that
+    /// also holds Restore's memory, so a quick Left Half then Restore sees the frame Left Half kept. Returns what the
+    /// HUD says, if anything.
+    static func windowCommand(_ command: WindowCommand) async -> String? {
+        guard gate.isTrusted(origin: .userInitiated) else {
+            return "Fudge needs Accessibility permission to manage windows."
+        }
+        let manager = WindowManager(system: SystemWindows.current(), ownPid: ProcessInfo.processInfo.processIdentifier)
+        let result = await withCheckedContinuation { continuation in
+            windowCommandQueue.async {
+                continuation.resume(returning: manager.run(command, frames: &windowFrames.frames))
+            }
+        }
+        if case .message(let text) = result { return text }
+        return nil
+    }
+
+    /// The frames Restore goes back to, touched only on `windowCommandQueue`.
+    private final class WindowFramesBox: @unchecked Sendable {
+        var frames = WindowFrames()
+    }
+
+    nonisolated private static let windowFrames = WindowFramesBox()
+    private static let windowCommandQueue = DispatchQueue(label: "fudge.window-commands", qos: .userInitiated)
+
     private static func frontmost() -> FrontmostApplication? {
         NSWorkspace.shared.frontmostApplication.map {
             FrontmostApplication(pid: $0.processIdentifier, bundleIdentifier: $0.bundleIdentifier)
