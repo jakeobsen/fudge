@@ -1,0 +1,12 @@
+{
+  "name": "own-files",
+  "title": "Own Files",
+  "description": "A fixture extension whose commands read their own files through __dirname, as Raycast's layout allows.",
+  "commands": [
+    { "name": "read", "title": "Read", "mode": "no-view" },
+    { "name": "plain", "title": "Plain", "mode": "no-view" }
+  ],
+  "preferences": [
+    { "name": "greeting", "type": "textfield", "title": "Greeting", "description": "", "required": false, "default": "hello" }
+  ]
+}

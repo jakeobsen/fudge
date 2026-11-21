@@ -8,7 +8,6 @@
 import http from "node:http";
 import https from "node:https";
 import Module from "node:module";
-import path from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
 import React, { createElement, type FunctionComponent } from "react";
 import * as jsxRuntime from "react/jsx-runtime";
@@ -91,8 +90,8 @@ if (launchProps.launchContext !== undefined) {
 }
 setLaunchContext({
     preferences,
-    // `fudge build` installs each command as `<extension>/dist/<command>.cjs`, with the manifest beside `dist/`.
-    manifestFile: path.join(path.dirname(path.dirname(entry)), "package.json"),
+    // From the app, never from the entry's folder: an install from before SPEC-123 may still keep it in `dist/`.
+    manifestFile: environment.manifestPath || undefined,
     environment: { ...placeholderEnvironment, commandMode: mode, ...environment },
     launchProps,
 });

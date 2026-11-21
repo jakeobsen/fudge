@@ -36,6 +36,7 @@ import Testing
     #expect(environment.commandName == "greet")
     #expect(environment.commandMode == "view")
     #expect(environment.assetsPath == "/ext/greeter/assets")
+    #expect(environment.manifestPath == "/ext/greeter/package.json")
     #expect(environment.supportPath == paths.supportDirectory.appendingPathComponent("extension-data/greeter").path)
     #expect(FileManager.default.fileExists(atPath: environment.supportPath), "the support folder is created")
     #expect(environment.localStoragePath.hasSuffix("local-storage/greeter.json"))

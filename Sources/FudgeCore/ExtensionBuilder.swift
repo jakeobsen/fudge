@@ -13,9 +13,15 @@ public struct InstalledExtension: Sendable, Equatable {
         self.compatibility = compatibility
     }
 
-    /// The compiled command, a CommonJS file the extension host can load.
+    /// The compiled command, a CommonJS file the extension host can load: `<command>.cjs` beside `package.json`, as
+    /// Raycast installs it (`ExtensionLayout`). An install from before keeps it in `dist/` until `ExtensionLayout.moveUp`
+    /// moves it, so a command that isn't at the root yet is found there.
     public func entry(for command: String) -> URL {
-        directory.appendingPathComponent("dist").appendingPathComponent("\(command).cjs")
+        let file = ExtensionLayout.file(for: command)
+        let entry = directory.appendingPathComponent(file)
+        let old = directory.appendingPathComponent(ExtensionLayout.oldFolder).appendingPathComponent(file)
+        let files = FileManager.default
+        return !files.fileExists(atPath: entry.path) && files.fileExists(atPath: old.path) ? old : entry
     }
 
     public var assetsDirectory: URL {
@@ -154,14 +160,23 @@ public struct ExtensionBuilder: Sendable {
         try files.createDirectory(at: staging, withIntermediateDirectories: true)
 
         log("compiling \(entries.count) command\(entries.count == 1 ? "" : "s")")
+        // esbuild writes into a folder of its own, and only the commands move up beside `package.json`
+        // (`ExtensionLayout`): anything else it writes, such as a stylesheet an import pulled in, no command loads, and
+        // at the root it would make the next build refuse to replace the install (`holdsOnlyABuild`).
+        let output = staging.appendingPathComponent(".compiled", isDirectory: true)
         let compiled = try Shell.run(
             esbuild,
-            Self.esbuildArguments(entries: entries, source: source, output: staging.appendingPathComponent("dist")),
+            Self.esbuildArguments(entries: entries, source: source, output: output),
             in: source,
             environment: environment
         )
         let warnings = compiled.output.trimmingCharacters(in: .whitespacesAndNewlines)
         if !warnings.isEmpty { log(warnings) }
+        for command in manifest.commands {
+            let file = ExtensionLayout.file(for: command.name)
+            try files.moveItem(at: output.appendingPathComponent(file), to: staging.appendingPathComponent(file))
+        }
+        try files.removeItem(at: output)
 
         var compatibility = CommandCompatibility()
         if let scanCommands {
@@ -237,9 +252,26 @@ public struct ExtensionBuilder: Sendable {
         return project.appendingPathComponent("node_modules", isDirectory: true)
     }
 
-    /// Moves `staging` to `destination`, replacing what's there.
-    /// What an install folder holds: `build` writes exactly these, and nothing else may be replaced.
-    static let installedItems: Set<String> = ["package.json", "dist", "assets", CommandCompatibility.fileName]
+    /// What an install folder holds besides its commands' `<command>.cjs` files (`holdsOnlyABuild`). `dist` is where
+    /// builds from before SPEC-123 put the commands, so a rebuild still replaces such an install.
+    static let installedItems: Set<String> = [
+        "package.json", ExtensionLayout.oldFolder, "assets", CommandCompatibility.fileName,
+    ]
+
+    /// Whether `directory` holds only what a build writes, hidden files aside: `installedItems`, and `<command>.cjs` for
+    /// each command its own `package.json` names (`manifest`, read from there when it isn't given). A folder that
+    /// doesn't exist holds nothing, so it does.
+    static func holdsOnlyABuild(_ directory: URL, manifest: ExtensionManifest? = nil) -> Bool {
+        let names = ((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? [])
+            .filter { !$0.hasPrefix(".") && !installedItems.contains($0) }
+        guard !names.isEmpty else { return true }
+        guard
+            let manifest = manifest
+                ?? (try? ExtensionManifest.load(from: directory.appendingPathComponent("package.json")))
+        else { return false }
+        let commands = Set(manifest.commands.map { ExtensionLayout.file(for: $0.name) })
+        return names.allSatisfy(commands.contains)
+    }
 
     /// Refuses a destination that is the source folder, holds it or sits inside it, compared after resolving
     /// symlinks and ignoring case (the file system does), since replacing it would delete the source. Refuses
@@ -251,10 +283,7 @@ public struct ExtensionBuilder: Sendable {
         if origin == target || origin.hasPrefix(target + "/") || target.hasPrefix(origin + "/") {
             throw BuildError.sourceIsDestination(destination.path)
         }
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: destination.path)) ?? []
-        if names.contains(where: { !$0.hasPrefix(".") && !installedItems.contains($0) }) {
-            throw BuildError.notAnInstall(destination.path)
-        }
+        if !holdsOnlyABuild(destination) { throw BuildError.notAnInstall(destination.path) }
     }
 
     /// Where the build's scratch folder goes: an absolute `$TMPDIR` when it's set, as for any command-line tool, else
@@ -266,6 +295,7 @@ public struct ExtensionBuilder: Sendable {
         return URL(fileURLWithPath: path, isDirectory: true)
     }
 
+    /// Moves `staging` to `destination`, replacing what's there.
     static func replace(_ destination: URL, with staging: URL) throws {
         let files = FileManager.default
         guard files.fileExists(atPath: destination.path) else {

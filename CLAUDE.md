@@ -832,7 +832,7 @@ Extensions run in a separate Node.js process, the extension host.
   - **The launch context.**
     `src/api/launch.ts` holds what the app sent with the launch: preferences, `LaunchEnvironment` (built by `LaunchEnvironment.make`) and launch props.
     `environment` reads it through getters.
-    Raycast's deprecated `preferences` record (`src/api/deprecated.ts`) is built from it when first read: the declarations in the installed extension's `package.json` (beside `dist/`; the extension's, then the command's, which win), each with its resolved value.
+    Raycast's deprecated `preferences` record (`src/api/deprecated.ts`) is built from it when first read: the declarations in the installed extension's `package.json` (`manifestPath`, which the app sends in the launch's `LaunchEnvironment`, never worked out from where the command's file is; the extension's, then the command's, which win), each with its resolved value.
     `createApiModule` leaves its members alone (`plainRecords`).
     The deprecated `randomId` is nanoid's: 21 URL-safe characters from `crypto.getRandomValues`.
     `LocalStorage` (one JSON file) and `Cache` (one `cache.json` per namespace, least recently used dropped beyond its capacity) read and write in the worker, under the paths the environment names in Fudge's support folder.
@@ -908,10 +908,20 @@ Extensions run in a separate Node.js process, the extension host.
     That `NO_PROXY` is `localhost`, `127.0.0.1` and the Mac's bypass list, unless the user set their own.
     A proxy auto-configuration file can't be passed on, so a network failure's cause line says so.
 - **`fudge build <folder>` installs an extension** (`ExtensionBuilder` in `FudgeCore`).
-  - It reads `package.json` (`ExtensionManifest`) and compiles every command's `src/<name>.{tsx,ts,jsx,js}` with esbuild into `<extensions>/<name>/dist/<name>.cjs`.
+  - It reads `package.json` (`ExtensionManifest`) and compiles every command's `src/<command>.{tsx,ts,jsx,js}` with esbuild into `<extensions>/<name>/<command>.cjs`, beside `package.json` and `assets/`, as Raycast installs it (SPEC-123).
+    So a command's `__dirname` is the extension's folder, and `${__dirname}/assets/…` and `${__dirname}/package.json` are its own, as extensions such as the store's amazon-aws expect.
+    esbuild writes into a folder of its own inside the staging folder, and only the commands' files move up, so anything else it writes (a stylesheet an import pulls in) never reaches the install.
     The modules the host provides (`ExtensionBuilder.providedModules`) stay external.
     Extension and command names are lowercase letters, digits, `-` and `_`, starting with a letter or digit, as Raycast's rule allows (`notion_researcher`): `ExtensionManifest.isValidName` is the one name rule, which every check of an extension's name uses (the build, backups and their paths, settings keys, built-in group names) and the store's `catalog.ts` mirrors.
   - It writes the build into `.staging-<name>-<uuid>` with `package.json` and `assets/` alongside, then swaps the whole folder into place (a previous install is moved to `.old-<name>-<uuid>` first, then deleted).
+    It replaces only a folder that holds what a build writes, hidden files aside (`ExtensionBuilder.holdsOnlyABuild`): `package.json`, `assets/`, `compatibility.json`, `dist/` (the old layout), and `<command>.cjs` for each command that folder's own `package.json` names, so an update that renames a command still replaces it; anything else is `BuildError.notAnInstall`.
+  - **Installs from before SPEC-123** have their commands in `dist/`.
+    At launch, before the extensions first load and before the watcher starts, the app moves each such install in the extensions folder over (`ExtensionLayout.moveUp`, from `AppDelegate`; never in a snapshot run, and never the bundled extensions inside the app).
+    Each `dist/<command>.cjs` is renamed up with `RENAME_EXCL`, never copied, so a command is whole in one place or the other, and then `dist/` goes with `rmdir`, only when it's empty.
+    The compiled files are self-contained bundles, so moving them needs no rebuild.
+    An install isn't touched unless it passes `holdsOnlyABuild`, and one whose `dist/` holds anything but regular `<command>.cjs` files its manifest names, or a command in both places, is left as it is, with one line in the unified log (category `extensions`, the extension's name private).
+    `InstalledExtension.entry(for:)` finds a command at the root first, then in `dist/`, so a move stopped halfway or refused still launches every command, and the next launch finishes a stopped one.
+    When a command is in both places, the root's wins and the `dist/` copy stays.
   - Before the swap it scans the source (`ExtensionBuilder.scanCommands`: the CLI runs `fudge scan --json` through `CompatScanner.commands`, reading its stdout alone) and writes which commands use Raycast AI or the Browser Extension into the install as `compatibility.json`.
     A scan that can't run or fails leaves it out, and every command is on.
   - It never writes into the source folder.

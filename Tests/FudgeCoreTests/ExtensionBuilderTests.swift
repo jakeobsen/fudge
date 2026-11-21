@@ -49,6 +49,12 @@ struct ExtensionBuilderTests {
 
         #expect(installed.directory == extensions.appendingPathComponent("greeter", isDirectory: true))
         #expect(installed.manifest.name == "greeter")
+        // Each command beside the manifest and assets, as Raycast installs it (SPEC-123).
+        #expect(installed.entry(for: "greet") == installed.directory.appendingPathComponent("greet.cjs"))
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: installed.directory.path).sorted() == [
+                "assets", "greet.cjs", "package.json", "quiet.cjs",
+            ])
         let greet = try String(contentsOf: installed.entry(for: "greet"), encoding: .utf8)
         #expect(greet.contains("require(\"@raycast/api\")"))
         #expect(greet.contains("require(\"react/jsx-runtime\")"))

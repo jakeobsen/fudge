@@ -14,7 +14,7 @@ func pathsUnderADotFolderOrFileDontCount(_ relative: String) {
     #expect(!ExtensionsWatcher.counts(path: root.path + "/" + relative, in: root))
 }
 
-@Test(arguments: ["x", "x/package.json", "x/dist/x.cjs", "x/.DS_Store"])
+@Test(arguments: ["x", "x/package.json", "x/x.cjs", "x/dist/x.cjs", "x/.DS_Store"])
 func pathsUnderAnExtensionFolderCount(_ relative: String) {
     #expect(ExtensionsWatcher.counts(path: root.path + "/" + relative, in: root))
 }
@@ -122,16 +122,21 @@ private func settle(_ watcher: ExtensionsWatcher, _ reloads: Reloads) async {
 /// returns how long after the change each reload came. It waits for a first reload, up to `noHang` when one is
 /// expected, so the wait ends when it comes, or for `watching` when none is (a window a stall can only lengthen),
 /// then 1 s more for any further one.
+/// `onReload` runs on each reload, before it's recorded, as the launcher's own reload would.
 @MainActor
 private func reloads(
     preparing prepare: (URL) async throws -> Void = { _ in }, watching: Duration = noHang,
+    onReload: @escaping @MainActor (URL) -> Void = { _ in },
     after change: (URL) async throws -> Void
 ) async throws -> [Duration] {
     let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
     try FileManager.default.createDirectory(at: extensions, withIntermediateDirectories: true)
     try await prepare(extensions)
     let reloads = Reloads()
-    let watcher = ExtensionsWatcher(directory: extensions) { reloads.record() }
+    let watcher = ExtensionsWatcher(directory: extensions) {
+        onReload(extensions)
+        reloads.record()
+    }
     try watcher.start()
     defer { watcher.stop() }
     await settle(watcher, reloads)
@@ -158,6 +163,27 @@ private func stage(in extensions: URL) throws -> URL {
 
 private func install(in extensions: URL) throws {
     try FileManager.default.moveItem(at: try stage(in: extensions), to: extensions.appendingPathComponent("x"))
+}
+
+/// An install as builds from before SPEC-123 wrote it, with its command in `dist/`.
+private func oldInstall(in extensions: URL) throws {
+    let installed = extensions.appendingPathComponent("x")
+    try write(
+        #"{"name":"x","title":"X","commands":[{"name":"x","title":"X","mode":"no-view"}]}"#,
+        to: installed.appendingPathComponent("package.json"))
+    try write("module.exports = {}", to: installed.appendingPathComponent("dist/x.cjs"))
+}
+
+/// What each reload's `ExtensionLayout.moveUp` did, once armed: a reload while the watcher settles (FSEvents can
+/// report what `prepare` made) mustn't move the install before the test does.
+@MainActor
+private final class Moves {
+    var armed = false
+    var outcomes: [[String: ExtensionLayout.Outcome]] = []
+
+    func reload(_ extensions: URL) {
+        if armed { outcomes.append(ExtensionLayout.moveUp(in: extensions)) }
+    }
 }
 
 /// Exactly one reload.
@@ -204,6 +230,21 @@ struct ExtensionsWatcherTests {
                 try await Task.sleep(for: .milliseconds(900))
                 try FileManager.default.removeItem(at: old)
             })
+    }
+
+    /// SPEC-123: moving an install from before up is a change the watcher sees. Each reload moves what's left, as the
+    /// launcher's does, and with nothing left it changes nothing, so the move is one reload and never a loop.
+    @Test func movingAnOldInstallUpReloadsOnceAndNeverLoops() async throws {
+        let moves = Moves()
+        expectOnce(
+            try await reloads(
+                preparing: oldInstall,
+                onReload: moves.reload
+            ) { extensions in
+                moves.armed = true
+                #expect(ExtensionLayout.moveUp(in: extensions) == ["x": .moved])
+            })
+        #expect(moves.outcomes == [[:]], "the reload found nothing more to move")
     }
 
     @Test func removingAFolderReloadsOnce() async throws {
