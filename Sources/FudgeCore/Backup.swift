@@ -51,6 +51,9 @@ public enum Backup {
         public var title: String
         public var version: String?
         public var source: Source
+        /// For an extension the Extension Store installed, the git tree id its `installed.json` records, which
+        /// changes when the store updates it. `nil` for local builds, and in backups made before it was recorded.
+        public var storeTree: String?
     }
 
     /// What a backup holds, for the export's and the import's sheets.
@@ -129,13 +132,7 @@ public enum Backup {
         }
         for name in sizes.keys.sorted() { entries.append(contentsOf: data[name] ?? []) }
 
-        let storeInstalled = storeInstalledNames(paths)
-        let listed = installed.map { installed in
-            Listed(
-                name: installed.manifest.name, title: installed.manifest.title, version: installed.manifest.version,
-                source: storeInstalled.contains(installed.manifest.name) ? .store : .local)
-        }
-        .sorted { $0.name < $1.name }
+        let listed = Self.listed(installed, paths: paths)
         let manifest = Manifest(format: formatVersion, fudgeVersion: fudgeVersion, created: now, extensions: listed)
         entries.insert(BackupEntry(path: manifestFile, data: encode(manifest)), at: 0)
         let summary = Summary(
@@ -275,6 +272,69 @@ public enum Backup {
     /// A path segment fudge could have written: not empty, `.` or `..`, and without a NUL.
     static func isPlainSegment(_ segment: String) -> Bool {
         !segment.isEmpty && segment != "." && segment != ".." && !segment.contains("\0")
+    }
+
+    // MARK: - Import: what changed since the backup
+
+    /// An extension the backup lists that's installed now, but not as the backup recorded it. The import summary
+    /// only says so: the import restores its settings and data like any other's, and an extension that
+    /// updated does its own migration.
+    public struct Changed: Equatable, Sendable {
+        public enum Reason: Equatable, Sendable {
+            /// Both have a version, and they differ.
+            case version(backup: String, now: String)
+            /// Both were installed from the Extension Store, from different trees.
+            case storeUpdated
+            /// Installed from the other source now.
+            case source(now: Listed.Source)
+        }
+
+        public var name: String
+        /// The current install's title.
+        public var title: String
+        public var reason: Reason
+
+        /// "version 1.2.0 in the backup, 1.3.0 now".
+        public var text: String {
+            switch reason {
+            case .version(let backup, let now): "version \(backup) in the backup, \(now) now"
+            case .storeUpdated: "updated in the Extension Store since the backup"
+            case .source(.local): "installed from a local folder now"
+            case .source(.store): "installed from the Extension Store now"
+            }
+        }
+    }
+
+    /// The backup's extensions that are installed now but changed since it was made, sorted by title. They're
+    /// matched by name, and the first rule that applies says why: a different version when both have one, a
+    /// different Extension Store tree when both have one, or a different source. What it can't tell isn't listed,
+    /// and neither is the bundled Extension Store, nor an extension that isn't installed (the import lists those).
+    public static func changedExtensions(
+        _ contents: Contents, installed: [InstalledExtension], paths: FudgePaths
+    ) -> [Changed] {
+        let current = Dictionary(
+            listed(installed, paths: paths).map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        var seen: Set<String> = []
+        return contents.manifest.extensions.compactMap { backup in
+            guard backup.name != ExtensionStore.extensionName, seen.insert(backup.name).inserted,
+                let now = current[backup.name], let reason = changeReason(from: backup, to: now)
+            else { return nil }
+            return Changed(name: backup.name, title: now.title, reason: reason)
+        }
+        .sorted { first, second in
+            let order = first.title.localizedStandardCompare(second.title)
+            return order == .orderedSame ? first.name < second.name : order == .orderedAscending
+        }
+    }
+
+    /// Why `now` differs from what the backup listed, by the first rule that applies, or `nil` when it can't tell.
+    static func changeReason(from backup: Listed, to now: Listed) -> Changed.Reason? {
+        if let then = backup.version, let current = now.version, then != current {
+            return .version(backup: then, now: current)
+        }
+        if let then = backup.storeTree, let current = now.storeTree, then != current { return .storeUpdated }
+        if backup.source != now.source { return .source(now: now.source) }
+        return nil
     }
 
     // MARK: - Import: applying it
@@ -447,14 +507,38 @@ public enum Backup {
             ?? imported
     }
 
-    /// The names the Extension Store recorded as its installs.
-    static func storeInstalledNames(_ paths: FudgePaths) -> Set<String> {
+    /// The installed extensions as a backup lists them, by name: each one's source, and for the Extension Store's
+    /// installs the tree it recorded.
+    static func listed(_ installed: [InstalledExtension], paths: FudgePaths) -> [Listed] {
+        let store = storeInstalls(paths)
+        return installed.map { installed in
+            let record = store[installed.manifest.name]
+            return Listed(
+                name: installed.manifest.name, title: installed.manifest.title, version: installed.manifest.version,
+                source: record == nil ? .local : .store, storeTree: record?.tree)
+        }
+        .sorted { $0.name < $1.name }
+    }
+
+    /// One of the Extension Store's installs, as its `installed.json` records it.
+    struct StoreInstall: Equatable {
+        /// The git tree id of the extension's folder when it was installed, if the record has one.
+        var tree: String?
+    }
+
+    /// What the Extension Store recorded as its installs (`installed.json`: `{ "<name>": { "tree", "commit",
+    /// "installedAt" } }`), by name. A missing or broken file reads as none.
+    static func storeInstalls(_ paths: FudgePaths) -> [String: StoreInstall] {
         let file = paths.supportDirectory(forExtension: ExtensionStore.extensionName)
             .appendingPathComponent("installed.json")
         guard let data = try? Data(contentsOf: file),
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return [] }
-        return Set(object.keys.filter(ExtensionManifest.isValidName))
+        else { return [:] }
+        var installs: [String: StoreInstall] = [:]
+        for (name, record) in object where ExtensionManifest.isValidName(name) {
+            installs[name] = StoreInstall(tree: (record as? [String: Any])?["tree"] as? String)
+        }
+        return installs
     }
 
     static func encode(_ manifest: Manifest) -> Data {
