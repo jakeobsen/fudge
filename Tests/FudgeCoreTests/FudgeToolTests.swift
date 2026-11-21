@@ -159,7 +159,7 @@ struct FudgeScanEndToEnd {
             gapsText == """
                 scan-gaps uses things Fudge doesn't have yet:
                   captureMemorySnapshot (not in Fudge)
-                scan-gaps uses AI, which Fudge leaves out:
+                scan-gaps uses Raycast AI, which Fudge doesn't support:
                   AI.ask
 
                 """)

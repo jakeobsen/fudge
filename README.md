@@ -7,7 +7,7 @@ Fudge is an independent project. It is not affiliated with or endorsed by Raycas
 ## What's here
 
 - `Sources/FudgeApp`: the macOS app. It runs in the menu bar, without a Dock icon.
-- `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for Fudge; `--into <folder>` installs it in that extensions folder instead. `fudge scan <folder>` says what the extension uses that Fudge doesn't have yet, without building it (`--json` for a script). A running Fudge picks up an extension you install, rebuild or remove within a second, with nothing to reload.
+- `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for Fudge; `--into <folder>` installs it in that extensions folder instead. `fudge scan <folder>` says what the extension uses that Fudge doesn't have yet or doesn't support, without building it (`--json` for a script). A running Fudge picks up an extension you install, rebuild or remove within a second, with nothing to reload.
 - `Sources/FudgeCore`: code shared by the app and the tool.
 - `runtime/`: the extension host. This is the Node.js program that runs extensions. The app talks to it over stdin/stdout.
 - `runtime/store-extension/`: the Extension Store, an extension bundled with Fudge that lists and installs the extensions published in github.com/raycast/extensions.
@@ -124,6 +124,8 @@ A link can have fields, filled in after its name like a command's arguments: `ht
 
 ⌘K on a quicklink offers **Copy Link** (⇧⌘C), **Edit Quicklink…** (⌘E) and **Delete Quicklink…** (⌃X).
 
+Quicklinks are listed on **Settings → Commands** too, under **Quicklinks**, so each one can have an alias, a hotkey and **Enabled** like a command. Its hotkey opens it straight away, or shows root search with its fields when one has no default. Typing its alias and a space moves to its first field.
+
 ### Snippets
 
 A snippet is text you use often, such as an address or a reply, saved to paste anywhere. Open **Search Snippets** from root search, pick one and press ↵: Fudge pastes it into the app you were in. ⌘↵ copies it instead, ⌘E edits it and ⌃X deletes it.
@@ -182,8 +184,8 @@ Turning it off removes the store's downloaded list; the extensions you installed
 
 In the **Extension Store** command, search the extensions, or pick a category in the dropdown; **Installed** shows the ones you installed from it.
 
-- ↵ installs one, after saying whether Fudge supports everything it uses. ⌘U updates one marked **Update available**, and ⌃X uninstalls it, to the Trash.
-- ⌘D shows an extension's details, with each command and whether it opens a view, runs without one, or sits in the menu bar, and its README. ⌘R updates the list, which otherwise happens when you open the store and the list is a day old. If the list couldn't be downloaded, ⌘R tries again.
+- ↵ installs one, after saying whether Fudge supports everything it uses. Fudge doesn't support Raycast AI or the Raycast Browser Extension, so an extension that uses either is marked **Not compatible**: the commands that use them won't work. ⌘U updates one marked **Update available**, and ⌃X uninstalls it, to the Trash.
+- ⌘D shows an extension's details: whether it's compatible (checked once you stay on it for a moment), each command and whether it opens a view, runs without one, or sits in the menu bar, and its README. ⌘R updates the list, which otherwise happens when you open the store and the list is a day old. If the list couldn't be downloaded, ⌘R tries again.
 - The store needs Git. If it's missing, install Apple's Command Line Tools: run `xcode-select --install` in Terminal.
 - It never touches extensions you installed with `fudge build` yourself. An extension installs under its own name, so it can't be installed while another extension of that name is: uninstall that one first.
 
@@ -211,7 +213,11 @@ Fudge can move and resize the window you're using: halves, quarters, thirds and 
 
 ### System commands
 
-Fudge's System commands are **Lock Screen**, **Sleep**, **Restart**, **Shut Down**, **Log Out**, **Empty Trash**, **Eject All Disks**, **Toggle Dark Mode**, **Hide All Apps** and **Quit All Apps**. Restart, Shut Down, Log Out, Empty Trash and Quit All Apps ask first, and apps with unsaved work ask about it as they quit. Search for them, or give them hotkeys under **Settings… → Commands → System**. The first time, macOS asks you to let Fudge control Finder, System Events or the login window (**Privacy & Security → Automation**). Lock Screen needs Accessibility permission.
+Fudge's System commands are **Lock Screen**, **Sleep**, **Restart**, **Shut Down**, **Log Out**, **Empty Trash**, **Eject All Disks**, **Toggle Dark Mode**, **Hide All Apps** and **Quit All Apps**. Restart, Shut Down, Log Out, Empty Trash and Quit All Apps ask first, and apps with unsaved work ask about it as they quit. Empty Trash says how many items it will delete when Finder can count them. Search for them, or give them hotkeys under **Settings… → Commands → System**. The first time, macOS asks you to let Fudge control Finder, System Events or the login window (**Privacy & Security → Automation**). Lock Screen needs Accessibility permission.
+
+### Search Menu Items
+
+**Search Menu Items** lists the menu commands of the app you're in, with their menus and shortcuts. Type to find one, such as "export" or "show fonts", and press ↵ to run it. Give it a hotkey under **Settings… → Commands → Apps**. It needs Accessibility permission (**Settings… → Permissions**).
 
 ### Selected text and Finder items
 

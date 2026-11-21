@@ -28,12 +28,27 @@ import {
     type Installed,
     type StoreEntry,
 } from "./catalog.ts";
+import {
+    checkFolder,
+    CompatibilityChecks,
+    compatibilityText,
+    isNotCompatible,
+    readCompatibility,
+    rememberCompatibility,
+    scannerIdentity,
+    type Compatibility,
+} from "./compatibility.ts";
 import { gitAvailable, stopRunningGit, StoreRepository } from "./git.ts";
 import { maxReadmeBytes, readRegularFile } from "./files.ts";
 import { detailMarkdown } from "./readme.ts";
 import { install, oneAtATime, readInstalled, uninstall, type StoreContext } from "./store.ts";
 
 type Loaded = { entries: StoreEntry[]; installed: Installed; trees: Map<string, string>; commit: string };
+/** The cached scans this Fudge's scanner wrote, by tree id, and the trees whose check failed in this run. */
+type Checked = { scanner: string; results: Map<string, Compatibility>; failed: Set<string> };
+
+const tagColor = (tag: string) =>
+    tag === "Not compatible" ? Color.Red : tag === "Update available" ? Color.Orange : Color.Green;
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -65,18 +80,25 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     const [showingDetail, setShowingDetail] = useState(false);
     const [selected, setSelected] = useState<string | null>(null);
     const [readmes, setReadmes] = useState<Record<string, string>>({});
+    const [checked, setChecked] = useState<Checked>({ scanner: "", results: new Map(), failed: new Set() });
+    // The latest, for the checks' callbacks, which outlive a render.
+    const checkedNow = useRef(checked);
+    checkedNow.current = checked;
 
     const load = useCallback(async () => {
-        const [entries, installed, trees, commit] = await Promise.all([
+        const scanner = await scannerIdentity(cli);
+        const [entries, installed, trees, commit, results] = await Promise.all([
             readCatalog(repo.path),
             readInstalled(environment.supportPath),
             repo.trees(),
             repo.commit(),
+            readCompatibility(environment.supportPath, scanner),
         ]);
         setLoaded({ entries, installed, trees, commit });
+        setChecked((current) => ({ scanner, results, failed: current.scanner === scanner ? current.failed : new Set() }));
         hasLoaded.current = true;
         setLoadError(undefined);
-    }, [repo]);
+    }, [repo, cli]);
 
     /**
      * Clones the first time, refreshes after that; the list stays usable meanwhile. Like every git operation of the
@@ -158,14 +180,42 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
         });
     }, [showingDetail, selected, loaded, readmes, repo]);
 
-    const context: StoreContext = {
-        repo,
-        supportPath: environment.supportPath,
-        cli,
-        extensionsDir,
-        confirm: (title, text, primary) => confirmAlert({ title, message: text, primaryAction: { title: primary } }),
-        trash: (target) => trash(target),
-    };
+    const context: StoreContext = useMemo(
+        () => ({
+            repo,
+            supportPath: environment.supportPath,
+            cli,
+            extensionsDir,
+            confirm: (title, text, primary) => confirmAlert({ title, message: text, primaryAction: { title: primary } }),
+            trash: (target) => trash(target),
+        }),
+        [repo, cli, extensionsDir],
+    );
+
+    // The detail's Compatibility line: the selected row is scanned once the selection rests on it, in the git queue,
+    // and its result is cached by tree. Moving on cancels it.
+    const checks = useMemo(
+        () =>
+            new CompatibilityChecks({
+                cached: (tree) => checkedNow.current.results.get(tree),
+                check: (dir, tree, cancelled) =>
+                    oneAtATime(async () => {
+                        const result = await checkFolder(dir, context, cancelled);
+                        if (!result) return undefined;
+                        await rememberCompatibility(environment.supportPath, checkedNow.current.scanner, tree, result);
+                        return result;
+                    }),
+                changed: (_dir, tree, result) =>
+                    setChecked((current) => {
+                        if (result === "failed") return { ...current, failed: new Set(current.failed).add(tree) };
+                        const results = new Map(current.results);
+                        results.delete(tree);
+                        return { ...current, results: results.set(tree, result) };
+                    }),
+            }),
+        [context],
+    );
+    useEffect(() => () => checks.stop(), [checks]);
 
     const runInstall = (entry: StoreEntry, updating: boolean) =>
         oneAtATime(async () => {
@@ -203,6 +253,15 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
             }
         });
 
+    const shown = loaded ? filterEntries(loaded.entries, filter, loaded.installed) : [];
+    const { installed: installedRows, other } = sections(shown, loaded?.installed ?? {});
+    // Only the selected row carries its actions (the first row until something is selected): 3,500 action panels
+    // would make every render take seconds. Moving the selection renders the new row's.
+    const actionsFor = selected ?? (installedRows[0] ?? other[0])?.dir;
+    const checking = showingDetail ? actionsFor : undefined;
+    const checkingTree = checking ? loaded?.trees.get(checking) : undefined;
+    useEffect(() => checks.select(checking, checkingTree), [checks, checking, checkingTree]);
+
     if (noGit) {
         return (
             <List>
@@ -215,14 +274,17 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
         );
     }
 
-    const shown = loaded ? filterEntries(loaded.entries, filter, loaded.installed) : [];
-    const { installed: installedRows, other } = sections(shown, loaded?.installed ?? {});
-    // Only the selected row carries its actions (the first row until something is selected): 3,500 action panels
-    // would make every render take seconds. Moving the selection renders the new row's.
-    const actionsFor = selected ?? (installedRows[0] ?? other[0])?.dir;
+    /** The detail's Compatibility line for a row: its cached result, or the check waiting, running or failed. */
+    const compatibilityFor = (tree: string | undefined) => {
+        if (!tree) return undefined;
+        const result = checked.results.get(tree);
+        return compatibilityText(result ?? (checked.failed.has(tree) ? "failed" : "checking"));
+    };
     const item = (entry: StoreEntry) => {
         const state = loaded ? status(entry, loaded.installed, loaded.trees) : "available";
         const icon = loaded ? iconURL(entry, loaded.commit) : undefined;
+        const tree = loaded?.trees.get(entry.dir);
+        const notCompatible = tree !== undefined && isNotCompatible(checked.results.get(tree));
         return (
             <List.Item
                 key={entry.dir}
@@ -234,21 +296,23 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                 accessories={
                     showingDetail
                         ? undefined
-                        : accessoryTexts(entry, state).map((accessory) =>
+                        : accessoryTexts(entry, state, notCompatible).map((accessory) =>
                               "tag" in accessory
-                                  ? {
-                                        tag: {
-                                            value: accessory.tag,
-                                            color: state === "update" ? Color.Orange : Color.Green,
-                                        },
-                                    }
+                                  ? { tag: { value: accessory.tag, color: tagColor(accessory.tag) } }
                                   : { text: accessory.text },
                           )
                 }
                 detail={
                     // Built only while the pane is open: 3,500 rows' markdown would slow every render.
                     showingDetail ? (
-                        <List.Item.Detail markdown={detailMarkdown(entry, loaded?.commit ?? "", readmes[entry.dir])} />
+                        <List.Item.Detail
+                            markdown={detailMarkdown(
+                                entry,
+                                loaded?.commit ?? "",
+                                readmes[entry.dir],
+                                compatibilityFor(tree),
+                            )}
+                        />
                     ) : undefined
                 }
                 actions={

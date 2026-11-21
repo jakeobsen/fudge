@@ -223,9 +223,33 @@ export class StoreRepository {
         return branch;
     }
 
-    /** Adds a pattern to the checkout, fetching its files. `pattern` is built from a checked name. */
-    async add(pattern: string): Promise<void> {
-        await this.#exec(["sparse-checkout", "add", pattern], longTimeout);
+    /** Adds patterns to the checkout, fetching their files. Each pattern is built from a checked name. */
+    async add(...patterns: string[]): Promise<void> {
+        await this.#exec(["sparse-checkout", "add", ...patterns], longTimeout);
+    }
+
+    /**
+     * Takes these exact patterns out of the checkout again, keeping every other, so a later refresh doesn't fetch
+     * their files' changes. Their files leave the working tree; what's downloaded stays until a refresh prunes it.
+     */
+    async drop(patterns: string[]): Promise<void> {
+        const current = (await this.#exec(["sparse-checkout", "list"])).split("\n").filter(Boolean);
+        const kept = current.filter((line) => !patterns.includes(line));
+        if (kept.length === current.length) return;
+        await this.#exec(["sparse-checkout", "set", "--no-cone", "--stdin"], longTimeout, this.path, `${kept.join("\n")}\n`);
+    }
+
+    /**
+     * The files under `extensions/<dir>/src/`, relative to it, read from the trees alone: a blobless clone has every
+     * tree, so nothing is downloaded. `dir` is a checked folder.
+     */
+    async sourceFiles(dir: string): Promise<string[]> {
+        const prefix = `extensions/${dir}/src/`;
+        const output = await this.#exec(["ls-tree", "-r", "-z", "--name-only", "HEAD", "--", prefix]);
+        return output
+            .split("\0")
+            .filter((name) => name.startsWith(prefix))
+            .map((name) => name.slice(prefix.length));
     }
 
     async commit(): Promise<string> {
