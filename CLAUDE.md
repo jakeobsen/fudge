@@ -76,6 +76,7 @@ Extensions run in a separate Node.js process, the extension host.
       `WindowSwitcher` (core) reads through `WindowSwitchSystem`: the regular apps but Fudge, each app's AX windows (title, frame, minimized, subrole, focused), the window list's order, the screens' names, and the apps most recently active (`RecentApps`, which `SystemWindowSwitching` keeps from `didActivateApplicationNotification` from launch).
       Every app is read at once, each on its own thread with FUD-93's AX timeout, and the read waits about 1 s for them all.
       An app that hasn't answered by then, or answers `kAXErrorCannotComplete`, is left out and named in the bottom bar ("Some apps didn't answer: …", the List's `navigationTitle`); one still being read isn't asked again until that read ends (`WindowReadsInFlight`), so a hung app holds one thread.
+      A later read waits on that read, holding no thread of its own, and takes its answer if it comes within its own deadline; the answer goes to no read after it.
       Only standard windows are listed (`kAXStandardWindowSubrole`).
       **The order** (`WindowSwitcher.order`): the windows on screen front to back, each the AX window `WindowMatch.pairs` pairs it with; then the rest by app, most recently active first; then the window the user was in (the frontmost app's focused window, else its front window on screen) moves to second, so the list is `[z2, z1, z3, …]` and ↵ goes back as ⌘Tab does.
       A row is the app's icon (`fileIcon`), the title or else the app's name, the app's name as subtitle and keyword (so search matches it), and "Minimized" or, with several screens, the screen's name. ↵ Switch to Window hides the panel, then, off the main thread, un-minimizes, performs `kAXRaiseAction` (and sets `kAXMainAttribute`),
@@ -88,11 +89,12 @@ Extensions run in a separate Node.js process, the extension host.
       Snapshot runs use `FixedWindowSwitching`, never the system.
     - **Custom positions and saved layouts** (SPEC-094) are the user's own commands in that group, kept in `window-layouts.json` by `WindowLayoutStore` (core):
       `{ "positions": [ { id, name, x, y, width, height } ], "layouts": [ { id, name, createdAt, windows: [ { bundleId, index, screen: { name, index }, x, y, width, height } ] } ] }`, through `EntryFile` (read tolerantly, written atomically, keys it doesn't know kept, an `Unreadable` file never overwritten), and in backups.
-      Frames are `WindowFractions` of a screen's visible frame, valid only within 0–1 with a size above 0 and inside the screen; an entry that isn't valid (or a layout window that isn't) is left out and kept in the file.
+      Frames are `WindowFractions` of a screen's visible frame, valid only within 0–1, with a width and height of at least 5% (`WindowFractions.minimum`, the same on any screen) and inside the screen; an entry that isn't valid (or a layout window that isn't) is left out and kept in the file.
+      Placing one grows a side under 100 pt to 100 pt (`minimumPoints`, or the whole side of a smaller screen) and moves it back inside the visible frame, and a window saved smaller than 5% is kept at 5%.
       `BuiltInCommandGroup.all(with:)` adds Save Layout…, then each position (`position-<id>`, titled by its name) and each layout (`layout-<id>`, "Apply <name>"), each by name, after the group's own commands; the app's root search, hotkeys and Commands page use that list, never `all` alone.
       `WindowManager.run(position:)` moves the front window exactly as Left Half does (`place`, shared with the commands).
       `captureLayout` keeps every standard window (`AXWindow.standard`, `kAXStandardWindowSubrole`) of the regular apps on the screens: its app's bundle id, its place among that app's standard windows front to back (a full-screen window counts but isn't kept), its screen (`WindowScreen.name`, `NSScreen.localizedName`, and its place in the screen list) and its fractions; never a title.
-      `apply` places each saved window by app and place on its screen (`SavedScreen.match`: by name, then place, then the primary), skips what isn't there (an app that isn't running is never launched), and the HUD says `LayoutPlacement.message` ("Placed 5 windows; skipped 2").
+      `apply` places each saved window by app and place on its screen (`SavedScreen.match`: by name, then place, then the primary), once (a hand-edited file's second entry for the same app and place is skipped), skips what isn't there (an app that isn't running is never launched), and the HUD says `LayoutPlacement.message` ("Placed 5 windows; skipped 2").
       Save Layout… reads the windows (`WindowLayoutActions`; a snapshot run's are `--layout-windows`' made-up ones, and it moves nothing), then asks for the name in the Save Layout form (`LayoutForm`, `LayoutDraft`), shown like Create Snippet.
       **The Window Management page** (`WindowManagementPage.swift`, after Snippets) lists the positions (+, Edit…, −; the sheet takes x, y, width and height in percent, checked by `PositionDraft.problems`, with a drawing) and the layouts (Rename…, −).
       Deleting one also removes its command's alias, hotkey and Enabled from `settings.json`.
@@ -109,8 +111,10 @@ Extensions run in a separate Node.js process, the extension host.
       Automation of Finder, System Events and `loginwindow` is asked for as user-initiated (`AEDeterminePermissionToAutomateTarget`), and a refusal's HUD says where to allow it.
       Lock Screen posts ⌃⌘Q at the HID level, on the key that types "q" (`LockScreenKey`), after `AccessibilityGate`'s check.
       Sleep is `IOPMSleepSystem`.
-      Eject All Disks unmounts ejectable, removable and network volumes, never the one macOS started from (`MountedVolume.toEject`), off the main thread, and the HUD names what it ejected and what it couldn't, with why.
-      Hide All Apps hides every regular app but Fudge; Quit All Apps asks every regular app but Fudge and Finder to quit, reading the list again once confirmed (`RunningApp.toHide`, `toQuit`).
+      Eject All Disks unmounts ejectable, removable and network volumes, never the one macOS started from (`MountedVolume.toEject`, which puts each disk's volumes together, by DiskArbitration's whole disk, read only), off the main thread, and the HUD names what it ejected and what it couldn't, with why.
+      Ejecting a volume ejects its whole disk, so each volume is checked before its turn (`SystemActions.isMounted`, the mounted volumes read afresh): one that's gone went with its disk and counts as ejected.
+      Whether an eject worked is read from the mounts afterwards, never from the call's error.
+      Hide All Apps hides every regular app but Fudge; Quit All Apps asks every regular app but Fudge and Finder that has finished launching to quit, counting and reading the list the same way, again once confirmed (`RunningApp.toHide`, `toQuit`).
       `LauncherModel.runBuiltIn` hides the panel first, as for window commands, and a command that asks does it in an alert of its own.
       In a snapshot run, `confirm` lays the alert out off-screen (`SnapshotSheet.laidOut`) and answers no, and the run saves the alert instead of the panel (`--query "empty trash" --activate`; `--trash-count <n>` sets the made-up count, 12 by default, and anything but a number is a count Finder couldn't give).
     - **Search Menu Items** (FUD-121, `BuiltInCommandGroup.apps`, `:apps/search-menu-items`) lists the menu items of the app the user was in: the frontmost one, never Fudge (`MenuTarget.searched`).
@@ -205,7 +209,7 @@ Extensions run in a separate Node.js process, the extension host.
       `fill` gives the text and how many grapheme clusters follow `{cursor}`.
     - **Search Snippets** (`SnippetList`, core) is a List built in core and shown like Fudge's forms, under its own session (`SnippetList.session`), so nothing of it reaches the host.
       Snippets are listed by name, and Raycast's filtering matches the name, the keyword and the text's first 200 characters.
-      The detail shows the text in a code block whose fence no line of it can close, what it pastes as when it has placeholders, and the keyword. ↵ pastes through `Paste`, in its turn, with the panel hidden and the clipboard put back, and `Paste`'s `leftArrows` ← presses follow ⌘V to the same app to put the caret where `{cursor}` was; ⌘↵ copies with a HUD;
+      The detail shows the text in a code block whose fence no line of it can close, what it pastes as when it has placeholders, and the keyword. ↵ pastes through `Paste`, in its turn, with the panel hidden and the clipboard put back, and `Paste` then puts the caret where `{cursor}` was (`leftArrows`, the grapheme clusters after it; `CaretPlacer`, below); ⌘↵ copies with a HUD;
       ⌘E opens the form over the list, which is drawn again when the form closes; ⌃X deletes after `confirm`; ⌘N creates one.
       An action is read back from its node id (`SnippetList.target`).
       The clipboard is read for `{clipboard}` only when a snippet uses it (`LauncherModel.templateClipboard`, which reads none in snapshot runs).
@@ -689,8 +693,18 @@ Extensions run in a separate Node.js process, the extension host.
       Then it sends Finder `core/getd` of `selection` as an alias list with a 5 s timeout.
       It resolves POSIX paths in Finder's order, folders without a trailing slash.
     - `Paste` (`Clipboard.paste`, `Action.Paste`, `clipboard.paste`) snapshots the pasteboard the same way, writes the content as `Clipboard.copy` does, marked `org.nspasteboard.TransientType` and `AutoGeneratedType`, hides the panel unless `closeMainWindow` is false, waiting a run-loop turn plus 50 ms after hiding it so key status is back with the target app,
-      and posts ⌘V to the frontmost app on the key that types "v", then any ← presses it was given (`leftArrows`, Search Snippets' `{cursor}`), to the same app, from a private event source with only the arrow keys' own flags.
-      About a second later it writes the snapshot back if `changeCount` is still its own; a concealed snapshot is cleared instead.
+      and posts ⌘V to the frontmost app on the key that types "v".
+      **The caret** (SPEC-101, FUD-133): an app takes ⌘V on a later turn of its run loop, so ← presses sent at once can arrive before the pasted text.
+      Before ⌘V, `Paste` reads the focused field's `kAXNumberOfCharactersAttribute` and `kAXSelectedTextRangeAttribute` (`CaretSystem`, the app's `SystemCaret`), never its value.
+      After it, `CaretPlacer` (core) polls them every 15 ms until they show the paste, until a second after ⌘V by the clock (each read can take its 2 s timeout, so polls aren't counted); a read that fails ends the wait at once.
+      The paste has landed (`PasteLanding`, in UTF-16 units) when the caret is just after the pasted text, or, where the caret isn't reported, when the length is what the paste gives, counting the selection the paste replaces or the text ⌫ presses deleted before it.
+      A paste no longer than what the ⌫ presses delete can't be told apart from them, so it isn't watched.
+      Then, for a `{cursor}`, it sets an empty `kAXSelectedTextRangeAttribute` before the text after it and reads it back (a set the field took is trusted when the read-back fails).
+      Where the field doesn't take that, or stops partway, ← presses go from where the caret is, 10 at a time, 10 ms apart, from a private event source with only the arrow keys' own flags.
+      A field that reports nothing, or never shows the paste, gets the ← presses after 150 ms more.
+      Every call into the app runs on a dispatch queue with FUD-93's 2 s timeout, never the main actor, and a `{cursor}` paste resolves once the caret is placed.
+      Each one logs one line (`CaretReport`: the path taken, the wait, the counts; no text or app).
+      About a second after ⌘V, and not before the paste has landed or the wait has ended (`PasteWatch`), it writes the snapshot back if `changeCount` is still its own; a concealed snapshot is cleared instead.
       Pastes take the same turns as the ⌘C fallback (`PasteboardTurns`).
       A paste while a restore is pending keeps that restore's snapshot, unless the pasteboard has changed since Fudge's last write.
       Without Accessibility permission the content stays on the pasteboard and the call rejects; it never pastes into Fudge itself.
@@ -885,6 +899,7 @@ Extensions run in a separate Node.js process, the extension host.
   - `--settings --clipboard-consent` saves Clipboard History's consent sheet, laid out off-screen like the sign-in one.
   - `--update-available <version>` shows that version as found by an update check (General's line and Download…); no snapshot run asks GitHub.
   - `--windows <file>` gives Switch Windows made-up windows (`FixedWindowSystem`: a JSON array of `{ app, path?, title?, screen?, minimized?, answers? }`, front to back), and without it Switch Windows shows that it needs Accessibility; snapshots never read the window list or the Accessibility API.
+    Made-up pids never take the run's own, and the windows step ten times down their screen, then start again at its corner.
 - **Permission grants need a signing identity.** macOS ties Accessibility and Automation grants to the app's designated requirement.
   An ad hoc signature's is its cdhash, which changes with every build, so each ad hoc `make run` drops them; builds signed with an identity keep them.
   **The first signing with an identity shows a keychain prompt** that only a person can answer (Always Allow).

@@ -18,23 +18,43 @@ public struct WindowFractions: Sendable, Equatable {
         self.height = height
     }
 
-    /// Every value finite and within 0–1, a size above 0, and the frame inside the screen (`x + width` and
-    /// `y + height` at most 1), to within rounding.
+    /// Every value finite and within 0–1, a width and height of at least 5% (`minimum`), and the frame inside the
+    /// screen (`x + width` and `y + height` at most 1), to within rounding. The minimum doesn't depend on the screen,
+    /// so an entry valid on one screen is valid on any (SPEC-102 §3).
     public var isValid: Bool {
         let values = [x, y, width, height]
-        guard values.allSatisfy({ $0.isFinite && $0 >= 0 && $0 <= 1 }), width > 0, height > 0 else { return false }
+        guard values.allSatisfy({ $0.isFinite && $0 >= 0 && $0 <= 1 }),
+            width >= Self.minimum - Self.tolerance, height >= Self.minimum - Self.tolerance
+        else { return false }
         return x + width <= 1 + Self.tolerance && y + height <= 1 + Self.tolerance
     }
 
     static let tolerance = 1e-9
+    /// The smallest width or height, as a fraction of the screen's visible frame.
+    public static let minimum = 0.05
+    /// The smallest a window is placed, in points, however small the screen makes 5%.
+    public static let minimumPoints: CGFloat = 100
 
     /// The frame in `visible`, a screen's visible frame, with each edge rounded to a whole point as Fudge's own
-    /// commands are (`WindowLayout`).
+    /// commands are (`WindowLayout`). A side under 100 pt (`minimumPoints`, or the whole side on a smaller screen)
+    /// grows to it, and the frame moves back inside `visible` when that takes it past the edge.
     public func frame(in visible: CGRect) -> CGRect {
-        let left = (visible.minX + visible.width * x).rounded()
-        let top = (visible.minY + visible.height * y).rounded()
-        let right = (visible.minX + visible.width * min(x + width, 1)).rounded()
-        let bottom = (visible.minY + visible.height * min(y + height, 1)).rounded()
+        func side(_ start: Double, _ length: Double, _ min: CGFloat, _ size: CGFloat) -> (CGFloat, CGFloat) {
+            var low = (min + size * start).rounded()
+            var high = (min + size * Swift.min(start + length, 1)).rounded()
+            let least = Swift.min(Self.minimumPoints, size.rounded(.down))
+            if high - low < least {
+                high = low + least
+                let edge = (min + size).rounded(.down)
+                if high > edge {
+                    high = edge
+                    low = edge - least
+                }
+            }
+            return (low, high)
+        }
+        let (left, right) = side(x, width, visible.minX, visible.width)
+        let (top, bottom) = side(y, height, visible.minY, visible.height)
         return CGRect(x: left, y: top, width: right - left, height: bottom - top)
     }
 
@@ -45,10 +65,12 @@ public struct WindowFractions: Sendable, Equatable {
         guard !inside.isNull, inside.width > 0, inside.height > 0, visible.width > 0, visible.height > 0 else {
             return nil
         }
+        // A window smaller than the minimum is kept at the minimum, inside the screen, so saving never leaves it out.
+        let width = max(Double(inside.width / visible.width), Self.minimum)
+        let height = max(Double(inside.height / visible.height), Self.minimum)
         self.init(
-            x: Double((inside.minX - visible.minX) / visible.width),
-            y: Double((inside.minY - visible.minY) / visible.height),
-            width: Double(inside.width / visible.width), height: Double(inside.height / visible.height))
+            x: min(Double((inside.minX - visible.minX) / visible.width), 1 - width),
+            y: min(Double((inside.minY - visible.minY) / visible.height), 1 - height), width: width, height: height)
         guard isValid else { return nil }
     }
 

@@ -366,13 +366,13 @@ final class LauncherModel {
     @ObservationIgnored private var installedExtensions: [InstalledExtension] = []
     @ObservationIgnored private var applications: [RootItem] = []
 
-    /// Reads `quicklinks.json` for root search. Their icons are looked up again, since an app may have changed.
     /// The user's custom window positions and saved layouts (SPEC-094), read again with the settings.
     @ObservationIgnored private var windowLayouts = WindowLayoutStore()
 
     /// Fudge's command groups, with the user's own window commands (`BuiltInCommandGroup.all(with:)`).
     var builtInGroups: [BuiltInCommandGroup] { BuiltInCommandGroup.all(with: windowLayouts) }
 
+    /// Reads `quicklinks.json` for root search. Their icons are looked up again, since an app may have changed.
     private func loadQuicklinks() -> [RootItem] {
         icons = icons.filter { !$0.key.hasPrefix("quicklink:") }
         quicklinks = QuicklinkStore.load(from: paths.quicklinksFile).quicklinks
@@ -4417,16 +4417,8 @@ final class LauncherModel {
             image = NSWorkspace.shared.icon(forFile: url.path)
         case .settings:
             image = NSApp.applicationIconImage
-        case .reloadExtensions:
-            image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)!
-        case .quit:
-            image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)!
-        case .createQuicklink:
-            image = NSImage(systemSymbolName: "link.badge.plus", accessibilityDescription: nil)!
-        case .searchSnippets:
-            image = NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)!
-        case .createSnippet:
-            image = NSImage(systemSymbolName: "text.badge.plus", accessibilityDescription: nil)!
+        case .reloadExtensions, .quit, .createQuicklink, .searchSnippets, .createSnippet:
+            image = NSImage(systemSymbolName: item.kind.symbol!, accessibilityDescription: nil)!
         case .builtInCommand(let group, let command):
             let symbol = BuiltInCommandGroup.command(group: group, command: command, in: builtInGroups)?.command
                 .symbol

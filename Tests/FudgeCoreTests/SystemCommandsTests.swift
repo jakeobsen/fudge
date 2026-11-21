@@ -15,9 +15,16 @@ private final class FakeSystem: SystemActions {
     var permission: [AutomationTarget: Int32] = [:]
     var trash: Result<Int, AppleEventError> = .success(3)
     var dark = false
-    var volumes: [MountedVolume] = []
-    /// Volume names that won't eject, with the reason.
+    var volumes: [MountedVolume] = [] {
+        didSet { mounted = Set(volumes.map(\.url)) }
+    }
+    /// What's mounted now: the volumes, less what was ejected.
+    private(set) var mounted: Set<URL> = []
+    /// Volume names that can't be unmounted (busy), with the reason: they stay mounted when their disk is ejected, and
+    /// their own eject throws.
     var ejectFailures: [String: String] = [:]
+    /// Volume names whose eject unmounts them, and the disk, but then throws this reason anyway.
+    var ejectErrorsAfterUnmount: [String: String] = [:]
     var apps: [RunningApp] = []
     /// What everything asked or did, in order.
     private(set) var done: [String] = []
@@ -38,11 +45,18 @@ private final class FakeSystem: SystemActions {
     func darkMode() async throws -> Bool { dark }
     func setDarkMode(_ on: Bool) async throws { done.append("dark \(on)") }
     func mountedVolumes() async -> [MountedVolume] { volumes }
+    /// Ejects the volume's whole disk, as `unmountAndEjectDevice` does, but for busy volumes.
     func eject(_ volume: MountedVolume) async throws {
-        if let reason = ejectFailures[volume.name] {
+        done.append("eject \(volume.name)")
+        let disk = volumes.filter { $0.url == volume.url || ($0.wholeDisk != nil && $0.wholeDisk == volume.wholeDisk) }
+        mounted.subtract(disk.filter { ejectFailures[$0.name] == nil }.map(\.url))
+        if let reason = ejectFailures[volume.name] ?? ejectErrorsAfterUnmount[volume.name] {
             throw NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
         }
-        done.append("eject \(volume.name)")
+    }
+    func isMounted(_ volume: MountedVolume) async -> Bool {
+        done.append("mounted? \(volume.name)")
+        return mounted.contains(volume.url)
     }
     func runningApps() -> [RunningApp] { apps }
     func hide(_ app: RunningApp) { done.append("hide \(app.pid)") }
@@ -65,13 +79,14 @@ private func run(
 }
 
 private func volume(
-    _ name: String, ejectable: Bool = false, removable: Bool = false, local: Bool = true, root: Bool = false
+    _ name: String, ejectable: Bool = false, removable: Bool = false, local: Bool = true, root: Bool = false,
+    disk: String? = nil
 )
     -> MountedVolume
 {
     MountedVolume(
         url: URL(fileURLWithPath: "/Volumes/\(name)"), name: name, isEjectable: ejectable, isRemovable: removable,
-        isLocal: local, isRootFileSystem: root)
+        isLocal: local, isRootFileSystem: root, wholeDisk: disk)
 }
 
 @Test func theSystemGroupListsTheCommands() {
@@ -92,6 +107,22 @@ private func volume(
         #expect(command.keywords.contains("system"))
     }
     #expect(group.commands.first { $0.title == "Toggle Dark Mode" }?.keywords.contains("appearance") == true)
+}
+
+@Test func theSystemCommandsIconsAreTheirOwn() {
+    let system = BuiltInCommandGroup.system.commands.map(\.symbol)
+    #expect(Set(system).count == system.count, "no two System commands share one")
+    // Nor with another of Fudge's commands, Window Management's included, or Reload Extensions and Quit Fudge.
+    let others = BuiltInCommandGroup.all.filter { $0 != .system }.flatMap(\.commands).map(\.symbol)
+    let fudgeItems: [RootItem.Kind] = [.reloadExtensions, .quit, .createQuicklink, .searchSnippets, .createSnippet]
+    for symbol in system {
+        #expect(!others.contains(symbol), "\(symbol)")
+        #expect(!fudgeItems.compactMap(\.symbol).contains(symbol), "\(symbol)")
+    }
+    for kind in fudgeItems {
+        let symbol = kind.symbol
+        #expect(symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) } != nil, "\(kind)")
+    }
 }
 
 @Test func onlyTheCommandsThatCantBeUndoneAskFirst() {
@@ -261,7 +292,7 @@ private func volume(
         volume("Macintosh HD", root: true), volume("Stick", ejectable: true), volume("Share", local: false),
     ]
     #expect(await run(.ejectAllDisks, on: system).message == "Ejected Stick and Share.")
-    #expect(system.done == ["eject Stick", "eject Share"])
+    #expect(system.done.filter { $0.hasPrefix("eject") } == ["eject Stick", "eject Share"])
 
     let busy = FakeSystem()
     busy.volumes = [
@@ -277,6 +308,43 @@ private func volume(
     #expect(await run(.ejectAllDisks, on: none).message == "There's nothing to eject.")
     #expect(none.done.isEmpty)
     #expect(SystemCommandMessage.ejected(["A", "B", "C"], failed: []) == "Ejected A, B and C.")
+}
+
+@Test func aDisksVolumesAreEjectedTogetherInTheirFirstOnesPlace() {
+    let volumes = [
+        volume("Photos", removable: true, disk: "disk4"), volume("Card", removable: true, disk: "disk5"),
+        volume("Share", local: false), volume("Backup", removable: true, disk: "disk4"),
+    ]
+    #expect(MountedVolume.toEject(volumes).map(\.name) == ["Photos", "Backup", "Card", "Share"])
+}
+
+@MainActor
+@Test func aVolumeGoneWithItsDiskCountsAsEjected() async {
+    // Ejecting Photos ejects its whole disk, so Backup is gone by its turn: both ejected, the disk once.
+    let system = FakeSystem()
+    system.volumes = [
+        volume("Photos", removable: true, disk: "disk4"), volume("Card", removable: true, disk: "disk5"),
+        volume("Backup", removable: true, disk: "disk4"),
+    ]
+    #expect(await run(.ejectAllDisks, on: system).message == "Ejected Photos, Backup and Card.")
+    #expect(system.done.filter { $0.hasPrefix("eject") } == ["eject Photos", "eject Card"])
+}
+
+@MainActor
+@Test func whetherAVolumeEjectedIsReadFromTheMountsNotTheError() async {
+    // The review's MUST: two volumes on one disk; the second is busy, so it stays mounted and its own eject fails.
+    let busy = FakeSystem()
+    busy.volumes = [volume("Photos", removable: true, disk: "disk4"), volume("Backup", removable: true, disk: "disk4")]
+    busy.ejectFailures = ["Backup": "The volume is in use"]
+    #expect(
+        await run(.ejectAllDisks, on: busy).message == "Ejected Photos. Couldn't eject Backup: The volume is in use.")
+    #expect(busy.done.filter { $0.hasPrefix("eject") } == ["eject Photos", "eject Backup"])
+
+    // An eject that throws but did unmount the volume ejected it.
+    let late = FakeSystem()
+    late.volumes = [volume("Stick", ejectable: true, disk: "disk6")]
+    late.ejectErrorsAfterUnmount = ["Stick": "The disk was busy"]
+    #expect(await run(.ejectAllDisks, on: late).message == "Ejected Stick.")
 }
 
 @Test func hideAndQuitListsLeaveOutFudgeFinderAndBackgroundApps() {
@@ -322,6 +390,33 @@ private func volume(
     alone.apps = [RunningApp(pid: 1, bundleIdentifier: "com.apple.finder", isRegular: true)]
     let (none, askedNone) = await run(.quitAllApps, on: alone)
     #expect(none == "There are no apps to quit." && askedNone.isEmpty)
+}
+
+@MainActor
+@Test func quitAllAppsSkipsAppsStillLaunching() async {
+    let system = FakeSystem()
+    let textEdit = RunningApp(pid: 2, bundleIdentifier: "com.apple.TextEdit", isRegular: true)
+    let starting = RunningApp(pid: 6, bundleIdentifier: "com.example.slow", isRegular: true, isFinishedLaunching: false)
+    system.apps = [textEdit, starting]
+    // Still launching when the alert opens and when it's confirmed: neither counted nor quit.
+    let (message, asked) = await run(.quitAllApps, on: system)
+    #expect(message == nil)
+    #expect(asked == [.quitAllApps(1)], "the count leaves it out")
+    #expect(system.done == ["quit 2"])
+
+    // One that finishes launching while the alert is up is quit with the rest, as the list is read again then.
+    let later = FakeSystem()
+    later.apps = [textEdit, starting]
+    var finished = starting
+    finished.isFinishedLaunching = true
+    _ = await run(.quitAllApps, on: later) { later.apps = [textEdit, finished] }
+    #expect(later.done == ["quit 2", "quit 6"])
+
+    let onlyStarting = FakeSystem()
+    onlyStarting.apps = [starting]
+    let (none, askedNone) = await run(.quitAllApps, on: onlyStarting)
+    #expect(none == "There are no apps to quit." && askedNone.isEmpty)
+    #expect(onlyStarting.done.isEmpty)
 }
 
 @MainActor
