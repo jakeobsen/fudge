@@ -8,6 +8,14 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 VERSION   := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# The release workflow names the tag it builds (RELEASE_TAG=v0.3.0): that's the version, and it must be on this commit.
+ifdef RELEASE_TAG
+VERSION := $(RELEASE_TAG)
+endif
+# What Fudge.app's Info.plist says: the version tag's major, minor and patch (0.3.0, as macOS expects), a build number
+# that only goes up, and VERSION itself in FudgeGitDescribe, which Fudge shows its own form of and the update check reads.
+SHORT_VERSION = $(shell '$(NODE)' runtime/scripts/bundle-version.ts '$(VERSION)')
+BUILD_NUMBER := $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
 CONFIG    ?= debug
 APP       := build/Fudge.app
 # The disk image a release ships, named after the version without its leading v (Fudge-0.3.0.dmg).
@@ -49,15 +57,15 @@ NODE              := $(NODE_HOME)/bin/node
 # Every recipe's node, npm and npx are that Node.js's, whatever else is on PATH.
 export PATH := $(NODE_HOME)/bin:$(PATH)
 
-.PHONY: help app dmg dmg-image release run install-extension build runtime node test test-swift test-runtime lint fmt raycast-types compat-scan clean
+.PHONY: help release-check app dmg dmg-image release run install-extension build runtime node test test-swift test-runtime lint fmt raycast-types compat-scan clean
 
 help:
-	@printf 'fudge — a keyboard launcher for macOS, built to run Raycast extensions\n\n'
+	@printf 'Fudge — a keyboard launcher for macOS, built to run Raycast extensions\n\n'
 	@printf 'Usage: make <target>\n\n'
 	@printf '  help           Show this help (default).\n'
 	@printf '  app            Build %s (CONFIG=debug|release, now: %s). Signs with SIGN_IDENTITY: by default\n' '$(APP)' '$(CONFIG)'
 	@printf '                 "fudge local signing", else an Apple Development identity, else ad hoc (-). See README.md.\n'
-	@printf '  dmg            Build the app, then %s: the app and a link to Applications (VERSION=<tag>).\n' '$(DMG)'
+	@printf '  dmg            Build the app, then %s: the app and a link to Applications (RELEASE_TAG=<tag> for a release).\n' '$(DMG)'
 	@printf '  dmg-image      Make %s from the app as it is, without building it.\n' '$(DMG)'
 	@printf '  release        Build %s signed with Developer ID, notarized and stapled, after secret env apple.\n' '$(DMG)'
 	@printf '  run            Build the app and open it, quitting a running copy first.\n'
@@ -68,7 +76,7 @@ help:
 	@printf '  lint           Check Swift formatting and type-check the extension host.\n'
 	@printf '  fmt            Format all Swift code.\n'
 	@printf '  raycast-types  Copy the type definitions of @raycast/api %s into runtime/vendor and regenerate what is derived from them.\n' '$(RAYCAST_API_VERSION)'
-	@printf '  compat-scan DIR=<folder>  Report which @raycast/api uses of the extensions in <folder> fudge lacks.\n'
+	@printf '  compat-scan DIR=<folder>  Report which @raycast/api uses of the extensions in <folder> Fudge lacks.\n'
 	@printf '  clean          Remove build output.\n'
 
 # Downloads, checks and unpacks the pinned Node.js. The tarball is unpacked into a fresh folder of its own under
@@ -107,7 +115,19 @@ runtime: runtime/node_modules
 build: runtime
 	@swift build -c $(CONFIG)
 
-app: build
+# A release build stops rather than number itself wrong (SPEC-113): a shallow clone has no tags and would make the
+# build number 1, and RELEASE_TAG must be a tag on this commit. Checked before anything is built.
+release-check:
+	@if [ '$(CONFIG)' = release ] && [ "$$(git rev-parse --is-shallow-repository 2>/dev/null)" = true ]; then \
+		echo "make: a release build needs the whole history and its tags, but this is a shallow clone: check it out with fetch-depth: 0"; \
+		exit 1; \
+	fi
+	@if [ -n '$(RELEASE_TAG)' ] && ! git tag --points-at HEAD 2>/dev/null | grep -qxF '$(RELEASE_TAG)'; then \
+		echo "make: RELEASE_TAG $(RELEASE_TAG) isn't a tag on this commit"; \
+		exit 1; \
+	fi
+
+app: release-check build
 	@rm -rf '$(APP)'
 	@mkdir -p '$(APP)/Contents/MacOS' '$(APP)/Contents/Helpers' '$(APP)/Contents/Resources/runtime'
 	@cp '$(SWIFT_BIN)/FudgeApp' '$(APP)/Contents/MacOS/Fudge'
@@ -127,12 +147,17 @@ app: build
 		--output-format human-readable-text --output-partial-info-plist '$(CURDIR)/build/AppIcon.plist' \
 		>'$(CURDIR)/build/actool.log' && test -f '$(APP)/Contents/Resources/Assets.car' \
 		|| { cat build/actool.log; printf 'actool did not write %s (it needs Xcode 26 or later; see its output above, also in build/actool.log)\n' '$(APP)/Contents/Resources/Assets.car'; exit 1; }
-	@plutil -replace CFBundleShortVersionString -string '$(VERSION)' '$(APP)/Contents/Info.plist'
+	@plutil -replace CFBundleShortVersionString -string '$(SHORT_VERSION)' '$(APP)/Contents/Info.plist'
+	@plutil -replace CFBundleVersion -string '$(BUILD_NUMBER)' '$(APP)/Contents/Info.plist'
+	@plutil -replace FudgeGitDescribe -string '$(VERSION)' '$(APP)/Contents/Info.plist'
 	@cp runtime/dist/host.js runtime/dist/worker.js '$(APP)/Contents/Resources/runtime/'
 	@# `fudge scan`'s scanner, and Raycast's types it reads, with their MIT notice.
 	@cp runtime/dist/compat-scan.js '$(APP)/Contents/Resources/runtime/'
 	@cp runtime/vendor/raycast-api/index.d.ts '$(APP)/Contents/Resources/runtime/raycast-api.d.ts'
 	@cp runtime/vendor/raycast-api/LICENSE '$(APP)/Contents/Resources/runtime/raycast-api.LICENSE'
+	@# Fudge's own license, and the notices of the third-party code and data it ships, from their own license files.
+	@cp LICENSE '$(APP)/Contents/Resources/LICENSE.txt'
+	@cd runtime && node scripts/notices.ts --text '$(abspath $(APP))/Contents/Resources/Third-Party Notices.txt'
 	@# The bundled extensions (BundledExtensions in core), each built like any other into a scratch folder and
 	@# moved to Contents/Resources/<folder>. Their sources are runtime/<folder>; no source, no extension.
 	@for folder in $(BUNDLED_EXTENSIONS); do \

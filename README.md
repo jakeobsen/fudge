@@ -313,6 +313,8 @@ In the **Extension Store** command, search the extensions, or pick a category in
   Fudge doesn't support Raycast AI or the Raycast Browser Extension, so an extension that uses either is marked **Not compatible**: the commands that use them won't work. ⌘U updates one marked **Update available**, and ⌃X uninstalls it, to the Trash.
 - ⌘D shows an extension's details: whether it's compatible (checked once you stay on it for a moment), each command and whether it opens a view, runs without one, or sits in the menu bar, and its README. ⌘R updates the list, which otherwise happens when you open the store and the list is a day old.
   If the list couldn't be downloaded, ⌘R tries again.
+- If an install or update fails, the store shows the whole error and its likely cause, such as npm not found or the npm registry not reachable. ↵ tries again, and ⌘C copies the error, to send with an issue.
+  It uses the proxy set in **System Settings → Network** for npm and Git, unless you've set one yourself (`HTTPS_PROXY`); a proxy configuration file (PAC) can't be passed on.
 - The store needs Git.
   If it's missing, install Apple's Command Line Tools: run `xcode-select --install` in Terminal.
 - It never touches extensions you installed with `fudge build` yourself.
@@ -442,6 +444,8 @@ Copyright (C) 2026 Morten Jakobsen.
 
 Licensed under the GNU Affero General Public License, version 3 or (at your option) any later version (`AGPL-3.0-or-later`).
 See [LICENSE](LICENSE).
+
+The app also ships third-party code and data, each under its own license: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) lists them, and Fudge.app carries the same as `Third-Party Notices.txt`, linked from **About Fudge**.
 
 `runtime/vendor/unicode/` holds Unicode's emoji data and CLDR's English annotations, under the Unicode License v3; see [the license next to them](runtime/vendor/unicode/LICENSE).
 

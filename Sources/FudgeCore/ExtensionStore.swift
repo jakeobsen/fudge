@@ -46,11 +46,14 @@ public enum ExtensionStore {
         try FileManager.default.removeItem(at: folder)
     }
 
-    /// What the extension host tells the store: where the `fudge` tool is, and the folder it installs into
-    /// (`fudge build --into`). Every worker sees these.
-    public static func hostEnvironment(cli: URL?, paths: FudgePaths) -> [String: String] {
+    /// What the extension host tells the store: where the `fudge` tool is, the folder it installs into
+    /// (`fudge build --into`), and the Mac's proxy for its npm and git (`SystemProxy`). Every worker sees these.
+    public static func hostEnvironment(cli: URL?, paths: FudgePaths, proxy: SystemProxy = SystemProxy())
+        -> [String: String]
+    {
         var environment = ["FUDGE_EXTENSIONS_DIR": paths.extensionsDirectory.path]
         if let cli { environment["FUDGE_CLI"] = cli.path }
+        if let value = proxy.environmentValue { environment[SystemProxy.environmentKey] = value }
         return environment
     }
 

@@ -12,13 +12,27 @@ import {
     scannerIdentity,
     type Compatibility,
 } from "./compatibility.ts";
+import type { FailureDetails } from "./failure.ts";
 import { maxManifestBytes, readRegularFile } from "./files.ts";
-import { spawnProgram, type Run, type StoreRepository } from "./git.ts";
+import { GitError, spawnProgram, type Run, type StoreRepository } from "./git.ts";
 import { sourceProblem } from "./sources.ts";
 import { buildTimeout } from "./timeouts.ts";
 
 /** A step that refused or failed; its message is shown in a failure toast. */
 export class StoreError extends Error {}
+
+/** `fudge build` failed: its whole output, stdout then stderr, the command and the exit code, for the failure view. */
+export class BuildFailed extends StoreError {
+    readonly output: string;
+    readonly command: string;
+    readonly code: number;
+    constructor(output: string, command: string, code: number) {
+        super((output.trim() || "fudge build failed").slice(-500));
+        this.output = output;
+        this.command = command;
+        this.code = code;
+    }
+}
 
 export type StoreContext = {
     repo: StoreRepository;
@@ -161,9 +175,11 @@ export async function install(entry: StoreEntry, context: StoreContext): Promise
     if (!confirmed) return false;
 
     const run = context.run ?? spawnProgram;
-    const result = await run(context.cli, buildArguments(source, context.extensionsDir), { timeout: buildTimeout });
+    const args = buildArguments(source, context.extensionsDir);
+    const result = await run(context.cli, args, { timeout: buildTimeout });
     if (result.code !== 0) {
-        throw new StoreError((result.stderr.trim() || result.stdout.trim() || "fudge build failed").slice(-500));
+        const output = [result.stdout, result.stderr].filter((part) => part.trim().length > 0).join("\n");
+        throw new BuildFailed(output, ["fudge", ...args].join(" "), result.code);
     }
     if (!tree) throw new StoreError(`Couldn't read ${name}'s version in the store's copy`);
     const recorded: InstallRecord = { tree, commit, installedAt: (context.now?.() ?? new Date()).toISOString(), dir };
@@ -193,6 +209,17 @@ export async function uninstall(entry: StoreEntry, context: StoreContext): Promi
     delete remaining[name];
     await writeInstalled(context.supportPath, remaining);
     return true;
+}
+
+/**
+ * What the failure view needs from a failed install: `fudge build`'s whole output with its command and exit, git's
+ * stderr with its command, or one of the store's own refusals, whose message is the store's own words.
+ */
+export function failureDetails(error: unknown): FailureDetails {
+    if (error instanceof BuildFailed) return { output: error.output, command: error.command, code: error.code };
+    if (error instanceof GitError) return { output: error.message, command: error.command };
+    if (error instanceof StoreError) return { output: error.message, refused: true };
+    return { output: error instanceof Error ? error.message : String(error) };
 }
 
 /** One install at a time: each call waits for the one before it. */

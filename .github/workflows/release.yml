@@ -35,9 +35,12 @@ jobs:
             exit 1
           fi
 
+      # The whole history, so the build number (`git rev-list --count HEAD`) counts every commit and a run by hand
+      # finds the tags `git describe` names.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0
 
       # No setup-node: the Makefile downloads the Node.js Fudge bundles, checks it against its pinned checksum, and
       # runs every Node step with it, the release build's included.

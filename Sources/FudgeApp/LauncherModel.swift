@@ -1962,6 +1962,15 @@ final class LauncherModel {
         send(.unload(session: covered))
     }
 
+    /// The proxy set in System Settings → Network, for the Extension Store's npm and git (SPEC-116 §3). Snapshot runs
+    /// never read it.
+    static func systemProxy() -> SystemProxy {
+        guard !Snapshot.isRequested(CommandLine.arguments),
+            let settings = CFNetworkCopySystemProxySettings()?.takeRetainedValue() as? [String: Any]
+        else { return SystemProxy() }
+        return SystemProxy(settings: settings)
+    }
+
     // MARK: - My Schedule
 
     /// What My Schedule was last drawn from, which its actions' nodes are read in (`ScheduleList.target`). It's in
@@ -2020,8 +2029,10 @@ final class LauncherModel {
                 Self.scheduleContent(from: source, chosen: chosen, now: Date(), calendar: .current)
             }.value
             guard !Task.isCancelled else { return }
+            // The selection stays on the event it was on, wherever the read puts it (SPEC-110 §3).
+            let previous = scheduleContent
             scheduleContent = content
-            drawSchedule()
+            drawSchedule(after: previous)
         }
     }
 
@@ -2054,10 +2065,17 @@ final class LauncherModel {
         refreshList(&command, selectFirst: false)
     }
 
-    /// Draws My Schedule again from what was last read, if it's on screen.
-    private func drawSchedule() {
+    /// Draws My Schedule again from what was last read, if it's on screen. After a new read (`previous` is what was
+    /// drawn before it), the selection moves to the row with the event it was on, else the list keeps its place.
+    private func drawSchedule(after previous: ScheduleList.Content? = nil) {
         guard case .command(var command) = screen, command.session == ScheduleList.session else { return }
+        let selected = command.list?.items.first { $0.id == command.selectedNode }?.itemId
         renderSchedule(&command)
+        if let previous, let row = ScheduleList.row(after: previous, selected: selected, in: scheduleContent),
+            let item = command.list?.items.first(where: { $0.itemId == row })
+        {
+            command.selectedNode = item.id
+        }
         screen = .command(command)
     }
 
@@ -3920,7 +3938,8 @@ final class LauncherModel {
         let host = try ExtensionHost(
             node: node, script: script, nodeArguments: trust.arguments,
             environment: ExtensionStore.hostEnvironment(
-                cli: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil, paths: paths
+                cli: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil, paths: paths,
+                proxy: Self.systemProxy()
             ).merging([OAuthProviders.environmentKey: OAuthProviders.environmentValue]) { _, new in new }
                 .merging(trust.environment) { _, new in new })
         self.host = host

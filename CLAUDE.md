@@ -16,7 +16,10 @@ Extensions run in a separate Node.js process, the extension host.
     The item's glyph is `MenuBarIcon`, a fudge cube drawn in code as a template image.
     Its autosave name is `fudge` (`AppDelegate.statusItemName`), because macOS keeps whether a status item is shown in the app's preferences under that name, and an unnamed item's `Item-0` was once saved as hidden.
     It's shown at every launch, and its `behavior` is `[]`, so ⌘-dragging can't remove it.
-    Its menu ends with the running version (`AppVersion.current`, what `Info.plist` holds), and has Check for Updates… and, at the top while a newer release is known, `Fudge <version> Is Available…` (see the update check).
+    Its menu ends with the running version (`FudgeVersion.current`, Fudge's form of the `Info.plist`'s `FudgeGitDescribe`), About Fudge and Quit Fudge, and has Check for Updates… and, at the top while a newer release is known, `Fudge <version> Is Available…` (see the update check).
+    **About Fudge** (SPEC-113 §3) brings Fudge forward, then opens the standard About panel with the version shown, the build number (`CFBundleVersion`), `NSHumanReadableCopyright` (`AboutFudge.copyright`) and `AboutFudge.credits` (core): the license notice and links to the source (at the tag for a release build), `LICENSE.txt` and `Third-Party Notices.txt` in the app.
+    The GPL family calls these the Appropriate Legal Notices (v3 §0, §5(d)), so they stay in the panel.
+    Esc, ⌘W and ⌘Q close it (`AboutFudge.closesPanel`), since an accessory app has no File menu; snapshot runs have no menu, so they never open it.
     - **Global hotkeys** go through Carbon (`CarbonHotKeys` in `HotKey.swift`), which needs no Accessibility permission: one event handler, one id per registration.
       `HotKeyRegistry` (core) decides what's registered: the launcher's hotkey (`hotkey` in `settings.json`, default ⌥Space, read and written through `FudgeSettings.launcherHotkey`) and each installed command's (`commands` in `settings.json`, by `<extension>/<command>`), registering only what changed.
       A refused change of the launcher's hotkey registers the old one again (`setLauncher`); one refused at launch stays wanted, marked `launcherRefused`, and is tried again on every `resume`.
@@ -196,7 +199,9 @@ Extensions run in a separate Node.js process, the extension host.
       Nothing from an event is logged or written anywhere, its row id is its position (`event-<n>`), and only the command counts in `LaunchHistory`.
       ↵ is Join Meeting when there's a link, else Open in Calendar (⌘O, `ical://ekevent/<id>?method=show&options=more`), then Copy Meeting Link (⌘⇧C) and Copy Details; Show Details (⌘D) shows the detail pane, which hides the rows' times.
       Calendar access (`NSCalendarsFullAccessUsageDescription`) is asked for only when My Schedule runs, the first time; refused, it shows an empty view with Open Privacy Settings.
+      A search that matches none of the events listed says "No events match", with no action; "No upcoming events", with Open Calendar Settings, is for days with no events.
       Its hotkey hides it again when it's on screen, and `EKEventStoreChanged` draws it again.
+      After a new read (a calendar change, Days Ahead, a refresh), the selection stays on the event it was on (`ScheduleList.row(after:selected:in:)`), known by its day, its start and a hash of its title held in memory only, or keeps its place when that event is gone.
       The calendars are read off the main thread (`LauncherModel.readSchedule`, and the Calendar page's `loadCalendars`), since every EventKit call waits on the calendar agent: the list shows as loading until the read lands, and ⌘D draws again from it without reading again.
       `EventKitCalendarSource` runs every call on one serial queue, and makes its store on first use.
       **Settings → Calendar** (`CalendarPage.swift`, after Sign-in) has Days Ahead and a checkbox per calendar.
@@ -308,13 +313,15 @@ Extensions run in a separate Node.js process, the extension host.
       Check Now (General, and the menu's Check for Updates…, which opens General first) always runs; its failures don't count.
       One check runs at a time.
       `update-check.json` (`UpdateCheckState`) keeps the last check, the last success, the latest release's tag, the last failure, the failed scheduled checks and the version the HUD announced; it's read tolerantly and written atomically.
-      **The running version** (`RunningVersion`) is what the Makefile writes into `Info.plist`, `git describe --tags --always --dirty`: a trailing `-dirty`, then `-<n>-g<hex>`, then a leading `v` come off by their exact shapes, and the rest is a `SemanticVersion` (semver 2.0.0, compared by precedence, build metadata dropped).
+      **The running version** (`RunningVersion`) is what the Makefile writes into `Info.plist`'s `FudgeGitDescribe` (`FudgeVersion.describe`), `git describe --tags --always --dirty`: a trailing `-dirty`, then `-<n>-g<hex>`, then a leading `v` come off by their exact shapes, and the rest is a `SemanticVersion` (semver 2.0.0, compared by precedence, build metadata dropped).
+      It reads `FudgeVersion.display`'s form too (`0.2.0-dev+14.51ba5a2` is 0.2.0): a last pre-release identifier `dev` with build metadata is a build after that version.
       Anything else, such as a bare commit or `dev`, is untagged and older than any release.
       So a dev build after `v0.2.0` is told about `v0.2.1` but not `v0.2.0`, and `v1.2.0-rc.1-3-gabc1234` about `v1.2.0`.
       **GitHub's answer** (`UpdateCheck.parseLatest`): `tag_name`, and `draft` and `prerelease`, which must be JSON booleans; a draft, a pre-release or a pre-release tag counts as no release, as does GitHub's 404 when there's none yet.
       The tag must be `v` and a semantic version, and the release page is built from it (`Release.pageURL`), never from `html_url`.
       The app's `GitHubReleaseFetcher` sends one GET of `releases/latest` with `User-Agent: Fudge/<version>` (`UpdateCheck.userAgent`), `Accept: application/vnd.github+json` and `Accept-Language: en` (else URLSession adds the Mac's languages), on an ephemeral `URLSession` (no cookies, credentials or cache; 15 s), and reads at most 1 MB (`UpdateCheck.readBody`; `parseLatest` refuses more too).
-      A newer release shows as General's `Fudge <version> is available` with Download…, the menu's `Fudge <version> Is Available…`, and, once per version, the HUD; Download… and the menu item open the release page.
+      General's update row names the running version (`UpdateStatus.headline(version:)`): `Fudge 0.3.0 is up to date`, `Fudge 0.3.0: not checked for updates yet` or `Fudge 0.3.0: couldn't check for updates`.
+      A newer release shows as General's `Fudge <version> is available` with Download…, `You have Fudge <running version>` under it, the menu's `Fudge <version> Is Available…`, and, once per version, the HUD; Download… and the menu item open the release page.
       A failure shows on General only.
       Nothing is downloaded or installed.
       Snapshot runs and tests never ask GitHub: tests use fake fetchers, and a snapshot run uses `SnapshotReleaseFetcher`, keeps the state in memory and counts as untagged, so `--update-available <version>` shows that version as found.
@@ -819,7 +826,8 @@ Extensions run in a separate Node.js process, the extension host.
     Git isn't run until `xcode-select -p` succeeds, so macOS's offer to install the Command Line Tools never shows.
     Unloading the store ends its running git (`stopRunningGit`, in the command's effect cleanup, which `unload` runs), and turning the store off unloads its sessions and waits for them to exit (`LauncherModel.unloadSessions(ofExtension:)`) before Part A deletes `repo/`.
     A copy that can't be read, such as a clone stopped halfway, is deleted and cloned again.
-    A failure before the list has ever loaded, which can only be the clone, shows in the load-error view, whose Refresh (↵, ⌘R) opens the copy again the same way and then refreshes it.
+    A failure before the list has ever loaded, which can only be the clone, shows in the load-error view (`LoadFailure` in `failure-view.tsx`), whose Refresh (↵, ⌘R) opens the copy again the same way and then refreshes it.
+    That view has the failure view's cause line (a clone that can't reach GitHub says so), ⌘C Copy Error and ⌘D Show Details, which pushes the failure view with the end of git's output.
     A refresh runs only once the list has loaded from the copy, so a failed one, a default branch name `isValidBranch` refuses included, shows as a toast over the list, which stays usable.
   - **Files from the copy are read as regular files only** (`files.ts`, `readRegularFile`: opened with `O_NOFOLLOW` and `O_NONBLOCK`, then `fstat`), each kind with a size cap: every `package.json` for the list, a README, and the package-source check's `package.json` and lockfiles. git checks out a committed link as a link, so `README.md -> /dev/zero` would otherwise read forever.
   - `catalog.ts` gives each row two things, each checked by its own rule before it's used.
@@ -852,6 +860,16 @@ Extensions run in a separate Node.js process, the extension host.
     **Unloading the store doesn't stop a `fudge build` it started** (or npm under it), unlike its git: the worker's timeout goes with it, so the build runs to the end, or until npm's own network timeouts give up.
     That's acceptable because nothing is installed half-way: the build writes into a staging folder and swaps it in only at the end, and the extensions watcher picks the result up like any install.
     The store just doesn't record it, so it counts as installed another way.
+    **A failed install or update** pushes `FailureView` (`failure-view.tsx`, SPEC-116) over the list, and the toast only says where to look.
+    It has the title, the likely cause in plain words (`causeOf` in `failure.ts`: npm or Node.js not found, which, since both come with Fudge, means a damaged app to reinstall, the npm registry or GitHub unreachable, Git missing, the extension's own build error with its first line, or else something went wrong), and the last 40 lines of the step's output.
+    The output is untrusted (package names, build scripts' output), so it's in a code block nothing in it can close (`codeBlock`), and the title and cause are escaped code point by code point (`escapeMarkdown`), so no package can add an image, a link or formatting.
+    Before it's shown or copied, terminal codes, user info in URLs, `_authToken=`, authorization headers and token-shaped strings are masked, and the home folder is written as `~`, as a whole path component only (`cleanOutput`).
+    ↵ Try Again runs the install again, once per view; ⌘C Copy Error copies the title, cause, command, exit, Fudge's version (`fudge version`) and all the output; Open Extension Page on GitHub opens the folder.
+    `failureDetails` (`store.ts`) reads them from `BuildFailed` (all of `fudge build`'s output, its command and exit), a `GitError` (with its command) or one of the store's own refusals, shown as its own sentence.
+    **The Mac's proxy** reaches the store's npm and git (`proxy.ts`): the app reads the proxy set in System Settings → Network (`CFNetworkCopySystemProxySettings`) into `SystemProxy` (core), well-formed hosts and ports only and never a user or password, and hands it to the host as `FUDGE_SYSTEM_PROXY`.
+    `storeEnvironment` adds `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, in both letter cases since git's curl reads only `http_proxy` in lower case, and only where no proxy variable is set, so the user's own wins.
+    That `NO_PROXY` is `localhost`, `127.0.0.1` and the Mac's bypass list, unless the user set their own.
+    A proxy auto-configuration file can't be passed on, so a network failure's cause line says so.
 - **`fudge build <folder>` installs an extension** (`ExtensionBuilder` in `FudgeCore`).
   - It reads `package.json` (`ExtensionManifest`) and compiles every command's `src/<name>.{tsx,ts,jsx,js}` with esbuild into `<extensions>/<name>/dist/<name>.cjs`.
     The modules the host provides (`ExtensionBuilder.providedModules`) stay external.
@@ -879,11 +897,20 @@ Extensions run in a separate Node.js process, the extension host.
     The bundle gets the binary as `Contents/Helpers/node`, npm from the same distribution as `Contents/Resources/node/npm`, and its `LICENSE` (Node.js's, with what it bundles) as `Contents/Resources/node/LICENSE`.
     `fudge build` runs npm as `node npm-cli.js` (`BundledNode.npm`), with the helpers first on `PATH` so whatever npm starts gets the same Node.js.
     Its entitlements are in `App/Helpers/node.entitlements`, which `scripts/sign-app.sh` gives it (below), so a release's Developer ID signature keeps them: `allow-jit`, without which V8 can't start, and `disable-library-validation`, without which an extension's native addon (`.node`), signed by whoever built it, is refused ("different Team IDs").
-  - `App/Info.plist` gets the version from `git describe`
+  - `App/Info.plist` gets three versions from `git describe --tags --always --dirty` (`VERSION`, or the release workflow's `RELEASE_TAG`):
+    `CFBundleShortVersionString` is the version tag's major, minor and patch, as macOS expects (`runtime/scripts/bundle-version.ts`: `v0.3.0-14-ga539cdd` is `0.3.0`, and with no version tag `0.0.0`), `CFBundleVersion` is `git rev-list --count HEAD`, and `FudgeGitDescribe` is the describe itself.
+    Fudge shows its own form of the describe (`FudgeVersion.display`: `0.3.0`, `1.2.0-rc.1`, or after a tag `0.3.0-dev+14.a539cdd.dirty`), in the menu, General's update row, About, `fudge version` and its `User-Agent`s.
+    `FudgeVersion` (core) reads the keys in the app, and in the `fudge` tool from the app's `Info.plist` beside `Contents/Helpers` (through a symlink too), only when its bundle id is Fudge's; anywhere else it's `0.0.0-dev`.
+    **A release build stops rather than number itself wrong** (`make release-check`, before anything is built): with `CONFIG=release`, a shallow clone, which has no tags and would make the build number 1; with `RELEASE_TAG`, a tag that isn't on this commit.
+    The release workflow checks out the whole history and its tags, and passes `RELEASE_TAG` for a tag's build.
   - `App/AppIcon.icon` (an Icon Composer icon) is compiled by `actool` into `Assets.car` and an `AppIcon.icns` fallback.
     That needs Xcode 26 or later.
   - the bundled extensions (`BUNDLED_EXTENSIONS`, as `BundledExtensions.folders` lists them) are built with `fudge build` from `runtime/<folder>` into `Contents/Resources/<folder>`
   - the host and worker bundles go into `Contents/Resources/runtime/`, with `fudge scan`'s `compat-scan.js` and Raycast's types beside it (`raycast-api.d.ts`, with its MIT notice as `raycast-api.LICENSE`)
+  - Fudge's `LICENSE` goes into `Contents/Resources/LICENSE.txt`, and `runtime/scripts/notices.ts --text` writes `Contents/Resources/Third-Party Notices.txt`: each third-party component the app ships, with its version and its own license file's text.
+    Its `components` list is the one place they're named, and the repo's `THIRD-PARTY-NOTICES.md` is the same, written by `npm run generate`.
+    Node.js's entry is the `LICENSE` of the Node.js the `Makefile` pins (`NODE_VERSION`), read from `.cache/node`: the same file `make app` copies to `Contents/Resources/node/LICENSE`.
+    `npm run typecheck` fails while that file is stale, or when a bundle Fudge ships (the host, the worker, `compat-scan.js`, a bundled extension) takes in an npm package the list doesn't have; anything else the app ships, such as a binary in `Helpers/`, adds its entry by hand.
   - with `CONFIG=release`, `strip -S -x` takes the debug and local symbols out of `Contents/MacOS/Fudge` and `Contents/Helpers/fudge`, which otherwise name the builder's folders (`/Users/…`, about 300 paths each) and double their size
   - `scripts/sign-app.sh` signs it inside-out, each executable in `Contents/Helpers` (the `fudge` tool, esbuild and Node.js), then the app with `App/Fudge.entitlements`, all with the hardened runtime (FUD-44).
     A helper that needs entitlements of its own has them in `App/Helpers/<its file name>.entitlements`, so a release's signing with the Developer ID gives them too.
