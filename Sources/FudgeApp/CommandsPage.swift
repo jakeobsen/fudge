@@ -3,8 +3,9 @@ import Carbon.HIToolbox
 import FudgeCore
 import SwiftUI
 
-/// The Settings window's Commands page: every installed extension, expanded to its commands, with each command's
-/// alias, hotkey and enabled state. Clicking "Record Hotkey" records the next key press.
+/// The Settings window's Commands page: Fudge's own command groups, then every installed extension, each expanded to
+/// its commands, with each command's alias, hotkey and enabled state. Clicking "Record Hotkey" records the next key
+/// press.
 struct CommandsPage: View {
     @Bindable var model: SettingsModel
     @State private var search = ""
@@ -37,11 +38,11 @@ struct CommandsPage: View {
             Divider()
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(rows, id: \.installed.manifest.name) { row in
-                        extensionRow(row.installed)
-                        if !collapsed.contains(row.installed.manifest.name) {
+                    ForEach(rows, id: \.name) { row in
+                        groupRow(row)
+                        if !collapsed.contains(row.name) {
                             ForEach(row.commands, id: \.name) { command in
-                                commandRow(command, of: row.installed)
+                                commandRow(command, of: row)
                             }
                         }
                     }
@@ -51,31 +52,70 @@ struct CommandsPage: View {
         }
     }
 
-    /// The extensions and commands that match the search; an extension that matches keeps all its commands.
-    private var rows: [(installed: InstalledExtension, commands: [ExtensionManifest.Command])] {
+    /// One group of rows: a group of Fudge's own commands, or an installed extension. `name` keys its Enabled.
+    private struct GroupRow {
+        var name: String
+        var title: String
+        var type: String
+        var icon: RowIcon
+        var commands: [CommandRow]
+    }
+
+    private struct CommandRow {
+        var name: String
+        var title: String
+        var icon: RowIcon
+    }
+
+    /// Read only when the row is drawn, so the search doesn't load every extension's icon on each keystroke.
+    private enum RowIcon {
+        case app
+        case symbol(String)
+        case asset(String?, InstalledExtension)
+    }
+
+    /// Fudge's own groups first, then the extensions, as far as they match the search. A group or extension that
+    /// matches keeps all its commands.
+    private var rows: [GroupRow] {
+        let groups = BuiltInCommandGroup.all.map { group in
+            GroupRow(
+                name: group.name, title: group.title, type: "Built-in", icon: .app,
+                commands: group.commands.map { CommandRow(name: $0.name, title: $0.title, icon: .symbol($0.symbol)) })
+        }
+        let extensions = model.allExtensions.map { installed in
+            GroupRow(
+                name: installed.manifest.name, title: installed.manifest.title, type: "Extension",
+                icon: .asset(installed.manifest.icon, installed),
+                commands: installed.manifest.commands.filter { ["view", "no-view", "menu-bar"].contains($0.mode) }
+                    .map { command in
+                        CommandRow(
+                            name: command.name, title: command.title,
+                            icon: .asset(command.icon ?? installed.manifest.icon, installed))
+                    })
+        }
         let query = search.trimmingCharacters(in: .whitespaces).lowercased()
-        return model.allExtensions.compactMap { installed in
-            let commands = installed.manifest.commands.filter { ["view", "no-view", "menu-bar"].contains($0.mode) }
-            guard !query.isEmpty else { return (installed, commands) }
-            if installed.manifest.title.lowercased().contains(query) { return (installed, commands) }
-            let matching = commands.filter { $0.title.lowercased().contains(query) }
-            return matching.isEmpty ? nil : (installed, matching)
+        guard !query.isEmpty else { return groups + extensions }
+        return (groups + extensions).compactMap { row in
+            if row.title.lowercased().contains(query) { return row }
+            var row = row
+            row.commands = row.commands.filter { $0.title.lowercased().contains(query) }
+            return row.commands.isEmpty ? nil : row
         }
     }
 
-    private func extensionRow(_ installed: InstalledExtension) -> some View {
-        let name = installed.manifest.name
+    private func groupRow(_ row: GroupRow) -> some View {
+        let name = row.name
         return HStack(spacing: 0) {
             HStack(spacing: 6) {
                 Image(systemName: collapsed.contains(name) ? "chevron.right" : "chevron.down")
                     .font(.system(size: 9, weight: .semibold))
                     .foregroundStyle(.secondary)
                     .frame(width: 12)
-                icon(installed.manifest.icon, in: installed)
-                Text(installed.manifest.title).fontWeight(.medium)
+                iconView(row.icon)
+                Text(row.title).fontWeight(.medium)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text("Extension").foregroundStyle(.secondary).frame(width: 80, alignment: .leading)
+            Text(row.type).foregroundStyle(.secondary).frame(width: 80, alignment: .leading)
             Text("--").foregroundStyle(.tertiary).frame(width: 110, alignment: .leading)
             Text("--").foregroundStyle(.tertiary).frame(width: 150, alignment: .leading)
             Toggle(
@@ -83,7 +123,7 @@ struct CommandsPage: View {
                 isOn: Binding(get: { model.isEnabled(extension: name) }, set: { model.setEnabled($0, extension: name) })
             )
             .labelsHidden()
-            .accessibilityLabel("Enabled, \(installed.manifest.title)")
+            .accessibilityLabel("Enabled, \(row.title)")
             .frame(width: 60)
         }
         .opacity(model.isEnabled(extension: name) ? 1 : 0.45)
@@ -94,15 +134,15 @@ struct CommandsPage: View {
         }
     }
 
-    private func commandRow(_ command: ExtensionManifest.Command, of installed: InstalledExtension) -> some View {
-        let id = FudgeSettings.commandID(extension: installed.manifest.name, command: command.name)
-        let enabled = model.isEnabled(command: id) && model.isEnabled(extension: installed.manifest.name)
+    private func commandRow(_ command: CommandRow, of row: GroupRow) -> some View {
+        let id = FudgeSettings.commandID(extension: row.name, command: command.name)
+        let enabled = model.isEnabled(command: id) && model.isEnabled(extension: row.name)
         return HStack(spacing: 0) {
             HStack(spacing: 6) {
-                icon(command.icon ?? installed.manifest.icon, in: installed)
+                iconView(command.icon)
                 // The extension's name gives way first when the column is narrow.
                 Text(command.title).layoutPriority(1)
-                Text(installed.manifest.title).foregroundStyle(.secondary)
+                Text(row.title).foregroundStyle(.secondary)
             }
             .lineLimit(1)
             .padding(.leading, 18)
@@ -122,10 +162,18 @@ struct CommandsPage: View {
         .rowStyle()
     }
 
-    private func icon(_ file: String?, in installed: InstalledExtension) -> some View {
+    private func iconView(_ icon: RowIcon) -> some View {
+        let placeholder = NSImage(systemSymbolName: "puzzlepiece.extension", accessibilityDescription: nil)!
         let image =
-            file.map { installed.assetsDirectory.appendingPathComponent($0) }.flatMap(NSImage.init(contentsOf:))
-            ?? NSImage(systemSymbolName: "puzzlepiece.extension", accessibilityDescription: nil)!
+            switch icon {
+            case .app:
+                NSApp.applicationIconImage!
+            case .symbol(let name):
+                NSImage(systemSymbolName: name, accessibilityDescription: nil) ?? placeholder
+            case .asset(let file, let installed):
+                file.map { installed.assetsDirectory.appendingPathComponent($0) }.flatMap(NSImage.init(contentsOf:))
+                    ?? placeholder
+            }
         return Image(nsImage: image).resizable().aspectRatio(contentMode: .fit).frame(width: 16, height: 16)
     }
 }

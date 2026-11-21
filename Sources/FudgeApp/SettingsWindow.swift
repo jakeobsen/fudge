@@ -90,12 +90,13 @@ final class SettingsModel {
         showOnboarding()
     }
 
-    /// The ids of every installed command, menu-bar ones included. Only their hotkeys block a key.
+    /// The ids of every installed command, menu-bar ones included, and of Fudge's own (`BuiltInCommandGroup`). Only
+    /// their hotkeys block a key.
     private var installedCommandIDs: Set<String> {
         Set(
             allExtensions.flatMap { item in
                 item.manifest.commands.map { FudgeSettings.commandID(extension: item.manifest.name, command: $0.name) }
-            })
+            } + BuiltInCommandGroup.commandIDs())
     }
 
     // MARK: - General
@@ -530,8 +531,11 @@ final class SettingsModel {
         }
     }
 
-    /// A command's title, from its id.
+    /// A command's title, from its id: an installed command's or one of Fudge's own.
     func title(ofCommand commandID: String) -> String {
+        for group in BuiltInCommandGroup.all {
+            for command in group.commands where group.commandID(command) == commandID { return command.title }
+        }
         for installed in allExtensions {
             for command in installed.manifest.commands
             where FudgeSettings.commandID(extension: installed.manifest.name, command: command.name) == commandID {
