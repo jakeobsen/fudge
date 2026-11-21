@@ -113,6 +113,8 @@ final class LauncherModel {
     private(set) var arguments = ArgumentInput()
     /// The root item `arguments` belongs to.
     @ObservationIgnored private var argumentsItem: String?
+    /// The alias hand-off's memory of the query it last took (FUD-140).
+    @ObservationIgnored private var aliasHandOff = AliasHandOff()
     /// Counts the times `arguments` started over. Each field's edits carry the count it was drawn with, so a late
     /// write from a field that's gone can't refill the new ones.
     private(set) var argumentsGeneration = 0
@@ -458,14 +460,20 @@ final class LauncherModel {
                 reportSelection()
             case .root, .failure:
                 if case .failure = screen { screen = .root }
-                // An alias and a space hand the rest of the query to that command's first argument (as in Raycast).
-                if let handed = CommandAliases.handOff(newValue, in: items) {
+                // An alias and a space hand the rest of the query to that command's first argument (as in Raycast),
+                // once: the query coming back as the search field's write-back changes nothing.
+                switch aliasHandOff.answer(newValue, in: items, inArgument: arguments.focus != nil) {
+                case .handOff(let item, let rest):
                     rootQuery = String(newValue.prefix { $0 != " " })
                     refreshResults()
-                    selectedItem = handed.item.id
-                    arguments.set(handed.rest, at: 0)
+                    selectedItem = item.id
+                    arguments.set(rest, at: 0)
                     arguments.focus = 0
                     return
+                case .alreadyHandedOff:
+                    return
+                case .query:
+                    break
                 }
                 rootQuery = newValue
                 refreshResults()
@@ -660,9 +668,15 @@ final class LauncherModel {
         arguments.set(value, at: index)
     }
 
-    /// The user clicked into an argument field (an index) or the search field (nil).
+    /// The user picked a dropdown argument's value.
     func focusArgument(_ index: Int?) {
         if arguments.focus != index { arguments.focus = index }
+    }
+
+    /// SwiftUI says the keyboard moved to argument field `index`, or the search field (nil). Only a move the user
+    /// made counts, which needs the panel to hold the keyboard (`ArgumentInput.follows`, FUD-140).
+    func fieldTookKeyboard(_ index: Int?, panelHoldsKeyboard: Bool) {
+        if arguments.follows(index, panelHoldsKeyboard: panelHoldsKeyboard) { arguments.focus = index }
     }
 
     // MARK: - Command views

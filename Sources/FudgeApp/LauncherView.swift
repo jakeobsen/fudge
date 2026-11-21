@@ -78,7 +78,8 @@ struct LauncherView: View {
         }
         .onChange(of: model.dropdownPanel == nil) { _, closed in focus = closed ? .search : .dropdown }
         // The model decides which argument field has the keyboard (Tab, ⇧Tab, a required one left empty); a click
-        // into a field tells it.
+        // into a field tells it. SwiftUI's answers while the panel doesn't hold the keyboard aren't the user's, and
+        // the model doesn't take them (FUD-140).
         .onChange(of: model.arguments.focus) { _, index in
             let field = argumentField(index)
             focus = field
@@ -91,8 +92,9 @@ struct LauncherView: View {
         }
         .onChange(of: focus) { _, field in
             switch field {
-            case .search: model.focusArgument(nil)
-            case .argument(let index): model.focusArgument(index)
+            case .search: model.fieldTookKeyboard(nil, panelHoldsKeyboard: launcherPanel?.holdsKeyboard == true)
+            case .argument(let index):
+                model.fieldTookKeyboard(index, panelHoldsKeyboard: launcherPanel?.holdsKeyboard == true)
             case .pickTime: model.focusDatePick(.time)
             default: break
             }
@@ -169,8 +171,8 @@ struct LauncherView: View {
 
     /// The panel this view is in. Not NSApp.keyWindow: the panel doesn't activate fudge, and that's nil while fudge
     /// isn't the active app.
-    private var launcherPanel: NSWindow? {
-        NSApp.windows.first { $0 is LauncherPanel }
+    private var launcherPanel: LauncherPanel? {
+        NSApp.windows.lazy.compactMap { $0 as? LauncherPanel }.first
     }
 
     /// Root search shows the selected command's argument fields after the query.

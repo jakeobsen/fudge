@@ -36,3 +36,42 @@ public enum CommandAliases {
         return (item, String(query[query.index(after: space)...]))
     }
 }
+
+/// Root search's hand-off (`CommandAliases.handOff`), once per query (FUD-140).
+///
+/// The hand-off moves the keyboard to the argument field, and SwiftUI's search field writes its text back when it
+/// loses the keyboard, so the query just handed off can come back while the keyboard is in the field. Handed off
+/// again, its rest would replace what the user has typed in the field since.
+public struct AliasHandOff: Sendable, Equatable {
+    public enum Answer: Sendable, Equatable {
+        /// Select `item` and move `rest` into its first argument field.
+        case handOff(item: RootItem, rest: String)
+        /// The query the last hand-off took, back while an argument field has the keyboard: nothing changes.
+        case alreadyHandedOff
+        /// An ordinary query.
+        case query
+    }
+
+    private struct Taken: Sendable, Equatable {
+        var query: String
+        var item: RootItem.ID
+    }
+
+    /// The query the last hand-off took, and the row it selected, until another query is typed.
+    private var last: Taken?
+
+    public init() {}
+
+    /// `query` was typed in root search, where `inArgument` says whether an argument field has the keyboard.
+    /// The same query for the same row is handed off again only from the search field: the user typed it again.
+    public mutating func answer(_ query: String, in items: [RootItem], inArgument: Bool) -> Answer {
+        guard let handed = CommandAliases.handOff(query, in: items) else {
+            last = nil
+            return .query
+        }
+        let taken = Taken(query: query, item: handed.item.id)
+        if inArgument, taken == last { return .alreadyHandedOff }
+        last = taken
+        return .handOff(item: handed.item, rest: handed.rest)
+    }
+}

@@ -54,6 +54,7 @@ Extensions run in a separate Node.js process, the extension host.
       An exact alias (case-insensitive) outranks everything (`exactAliasScore`), and `RootSearch.rows` puts it above the calculator card: that's the one row order the panel draws and ↑↓ follows.
       An alias prefix ranks next.
       For a command with arguments, "alias, space, rest" in the search field selects it and moves the rest into its first argument field (`CommandAliases.handOff`); one of Fudge's own commands can have a hand-off word that does the same (`define`), unless a command has it as its alias.
+      It does that once per query (`AliasHandOff`): the same query coming back while an argument field has the keyboard is the search field writing its text back as it loses the keyboard, and changes nothing.
       `CommandAliases.problem` holds the alias rules (1–32 characters, no whitespace, unique ignoring case).
       A disabled command's hotkey isn't registered (`FudgeSettings.availableHotkeys`), and `CommandLocator` refuses `launchCommand` for it (`LaunchCommandError.disabled`).
     - **Built-in command groups** (`BuiltInCommandGroup`, core) are Fudge's own commands, each with a title, keywords and an SF Symbol.
@@ -157,6 +158,8 @@ Extensions run in a separate Node.js process, the extension host.
     - **Arguments.**
       A selected command's `arguments` get fields after the query, which then shrinks to its text.
       `ArgumentInput` (core) holds what's entered and which field has the keyboard, and takes the keys: Tab and ⇧Tab between the fields, Esc back to the query, ⌫ in an empty field back one, ↑↓ on a dropdown argument. ↵ with a required argument empty moves the keyboard there and outlines it.
+      The model decides which field has the keyboard, and takes a move SwiftUI reports only while the panel holds the keyboard (`ArgumentInput.follows`; `LauncherPanel.holdsKeyboard`, from its own `becomeKey` and `resignKey`), since the user moves it only then.
+      In a panel that doesn't (a snapshot run's never does), a field can't take the keyboard, and SwiftUI answers by falling back to the search field, then asking again; taken as moves, those answers undid the request and set off the next without end (FUD-140).
       A launch passes every argument in `launchProps.arguments`, with an empty string for those left empty, and the fields start over.
       They also start over when the selection moves, but not when a launch couldn't start.
     - **Quicklinks** (FUD-86) are root items too (`RootItem.quicklink`, kind "Quicklink"), from `QuicklinkStore` (core):
