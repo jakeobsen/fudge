@@ -136,6 +136,57 @@ final class SettingsModel {
         currencyRatesChanged(on)
     }
 
+    // MARK: - Hyperkey
+
+    /// **Hyperkey (Caps Lock)** (`hyperkey` in `settings.json`, SPEC-093).
+    var hyperkey: Bool { fudgeSettings.hyperkey }
+    /// **Quick press toggles Caps Lock** (`hyperkeyQuickPress`).
+    var hyperkeyQuickPress: Bool { fudgeSettings.hyperkeyQuickPress }
+    /// What stopped Hyperkey, shown under its switch: no Accessibility, or Caps Lock mapped elsewhere.
+    var hyperkeyProblem: String?
+    /// Whether Fudge may use Accessibility, asked as a user's click is: macOS's prompt the first time, Fudge's offer of
+    /// the pane after that. Set by the app delegate.
+    @ObservationIgnored var mayUseAccessibility: () -> Bool = { false }
+    /// Starts Hyperkey and calls back with what stopped it, if anything (`HyperkeyService.turnOn`); set by the app
+    /// delegate.
+    @ObservationIgnored var turnOnHyperkey: (Bool, @escaping @MainActor (String?) -> Void) -> Void = { _, done in
+        done(nil)
+    }
+    @ObservationIgnored var turnOffHyperkey: () -> Void = {}
+    @ObservationIgnored var hyperkeyQuickPressChanged: () -> Void = {}
+
+    /// The switch, and onboarding's step. Turning it on needs Accessibility, and is saved only once Caps Lock is
+    /// remapped, so a refusal leaves it off with the reason under the switch.
+    func setHyperkey(_ on: Bool) {
+        guard FudgeSettings.load(from: paths.settingsFile).hyperkey != on else { return }
+        guard on else {
+            guard change({ $0.hyperkey = false }) else { return }
+            hyperkeyProblem = nil
+            turnOffHyperkey()
+            return
+        }
+        guard FudgeSettings.isWritable(paths.settingsFile) else {
+            settingsProblem = unreadableMessage
+            return
+        }
+        guard mayUseAccessibility() else {
+            hyperkeyProblem = HyperkeyService.needsAccessibility
+            return
+        }
+        turnOnHyperkey(hyperkeyQuickPress) { [weak self] problem in
+            guard let self else { return }
+            hyperkeyProblem = problem
+            guard problem == nil else { return }
+            // Remapped; a settings.json that can't be written now puts Caps Lock back.
+            if !change({ $0.hyperkey = true }) { turnOffHyperkey() }
+        }
+    }
+
+    func setHyperkeyQuickPress(_ on: Bool) {
+        guard hyperkeyQuickPress != on, change({ $0.hyperkeyQuickPress = on }) else { return }
+        hyperkeyQuickPressChanged()
+    }
+
     /// The Color Picker's Copy Format (`colorFormat` in `settings.json`).
     var colorFormat: ColorFormat { fudgeSettings.colorFormat }
     /// Recent Colors, if it's open in the launcher, is drawn again with the new format first; set by the app delegate.

@@ -1,8 +1,8 @@
 import FudgeCore
 import SwiftUI
 
-/// The Settings window's General page: Open at Login, the launcher's hotkey, update checks, whether the calculator
-/// downloads exchange rates, clearing root search's history, and Import / Export.
+/// The Settings window's General page: Open at Login, the launcher's hotkey, Hyperkey, update checks, whether the
+/// calculator downloads exchange rates, clearing root search's history, and Import / Export.
 struct GeneralPage: View {
     @Bindable var model: SettingsModel
     @State private var confirmingClear = false
@@ -41,6 +41,9 @@ struct GeneralPage: View {
                         + "window. \"Close window and pop to root\" closes the window at once and starts from root "
                         + "search next time."
                 )
+            }
+            Section("Keyboard") {
+                HyperkeyControls(model: model)
             }
             Section("Updates") {
                 SettingsPopupRow(
@@ -126,6 +129,30 @@ struct CurrencyRatesToggle: View {
             Text("Fudge downloads exchange rates from the European Central Bank once a day.")
         }
         .toggleStyle(.switch)
+    }
+}
+
+/// **Hyperkey (Caps Lock)** and **Quick press toggles Caps Lock** (SPEC-093), with what stopped it, if anything.
+struct HyperkeyControls: View {
+    let model: SettingsModel
+
+    var body: some View {
+        Toggle(isOn: Binding(get: { model.hyperkey }, set: { model.setHyperkey($0) })) {
+            Text("Hyperkey (Caps Lock)")
+            Text(Hyperkey.explanation)
+        }
+        .toggleStyle(.switch)
+        if let problem = model.hyperkeyProblem {
+            Text(problem).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+        }
+        Toggle(
+            isOn: Binding(get: { model.hyperkeyQuickPress }, set: { model.setHyperkeyQuickPress($0) })
+        ) {
+            Text("Quick press toggles Caps Lock")
+            Text("A short press of Caps Lock on its own still turns caps on and off.")
+        }
+        .toggleStyle(.switch)
+        .disabled(!model.hyperkey)
     }
 }
 

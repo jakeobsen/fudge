@@ -16,6 +16,8 @@ public enum OnboardingStep: String, CaseIterable, Sendable {
     case clipboardHistory
     /// Whether to expand snippets as they're typed (FUD-101): an opt-in, explaining Input Monitoring.
     case snippetExpansion
+    /// Whether Caps Lock acts as Hyper (FUD-125): an opt-in, with the General page's own switch.
+    case hyperkey
     case updates
     case done
 
@@ -28,6 +30,7 @@ public enum OnboardingStep: String, CaseIterable, Sendable {
         "signInServer": .signIn,
         "clipboardHistory": .clipboardHistory,
         "expandSnippets": .snippetExpansion,
+        "hyperkey": .hyperkey,
         "updateCheck": .updates,
     ]
 }

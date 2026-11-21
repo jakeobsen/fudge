@@ -334,6 +334,12 @@ struct OnboardingView: View {
                         .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
+        case .hyperkey:
+            VStack(alignment: .leading, spacing: 14) {
+                title("Use Caps Lock as Hyper?")
+                Text("Hyper is ⌘⌥⌃⇧ in one key, for shortcuts no other app uses.")
+                SettingsGroup { HyperkeyControls(model: settings) }
+            }
         case .updates:
             VStack(alignment: .leading, spacing: 14) {
                 title("Updates")
@@ -353,6 +359,7 @@ struct OnboardingView: View {
                     summary("Sign-in") { Text(settings.signInServer.host ?? "Off") }
                     summary("Clipboard history") { Text(settings.clipboardHistory ? "On" : "Off") }
                     summary("Expand snippets") { Text(settings.expandSnippets ? "On" : "Off") }
+                    summary("Hyperkey") { Text(settings.hyperkey ? "On" : "Off") }
                     summary("Check for updates") { Text(settings.updateCheck?.onboardingTitle ?? "Off") }
                 }
                 Text("Change any of these in Settings.").foregroundStyle(.secondary)
@@ -387,6 +394,9 @@ struct OnboardingView: View {
                 settings.turnOnSnippetExpansion()
                 model.next()
             }
+            Button("Not Now") { model.next() }.keyboardShortcut(.defaultAction)
+        case .hyperkey where !settings.hyperkey:
+            // An opt-in that remaps Caps Lock: ↵ is Not Now, never on.
             Button("Not Now") { model.next() }.keyboardShortcut(.defaultAction)
         case .updates:
             // Answering saves the choice, Daily if it wasn't changed: until then nothing is checked.

@@ -135,6 +135,27 @@ Extensions run in a separate Node.js process, the extension host.
       Hiding the panel drops the read on screen, and showing it reads the frontmost app's menus again.
       Without Accessibility the list says so, after the gate's prompt or offer.
       Snapshot runs never read a real app's menus (`FixedMenuSystem`).
+    - **Hyperkey** (SPEC-093) is off until **Hyperkey (Caps Lock)** (`hyperkey` in `settings.json`, the General page's switch, `HyperkeyControls`) is on; then holding Caps Lock adds ⌘⌥⌃⇧ to every key pressed.
+      `HyperkeyService` (app) maps Caps Lock to F18 (`HyperkeyMapping.entry`) in macOS's per-user key mapping through `/usr/bin/hidutil` (`HidutilKeyMapping`, behind core's `KeyMappingSystem`, so no test runs it), on a serial queue off the main thread.
+      `HyperkeyMapping` (core) reads `hidutil`'s output (`(null)`, or CoreFoundation's description of the list), adds or removes only Fudge's entry and writes the whole list back.
+      It refuses, naming the key, when Caps Lock is mapped elsewhere: in the mapping every keyboard gets, in a keyboard's own (`--matching keyboard`), or in System Settings → Keyboard → Modifier Keys (`HIDKeyboardModifierMappingPairs`, per keyboard; Caps Lock left as itself there isn't a mapping).
+      It also refuses when any of them can't be read.
+      Turning it on needs Accessibility (`SystemCalls.mayPostKeysForUser`, the usual prompt and offer) and is saved only once the tap runs and the mapping is in; a refusal shows under the switch (`hyperkeyProblem`).
+      An active `CGEventTap` at the HID level runs on a thread and run loop of its own (`HyperTapThread`), and sees only the keyboard's own events (`eventSourceStateID` is the HID system's, so keys Fudge or another app posts are left alone).
+      It hands each key's code, kind, repeat flag and time to `HyperTap` (core): F18's own events are swallowed, and any other key gets ⌘⌥⌃⇧ while F18 is down in the HID system.
+      That state is `CGEventSource.keyState(.hidSystemState)`, read for every event, never only what the tap saw, so a lost key-up can't leave Hyper stuck.
+      It keeps nothing about what's typed, only when F18 went down and whether another key came since, and nothing is logged.
+      With **Quick press toggles Caps Lock** (`hyperkeyQuickPress`), a press under 200 ms with no other key toggles Caps Lock with `IOHIDSetModifierLockState` (a posted key can't).
+      Under secure input the tap does nothing, and the state starts over then, when macOS turns the tap off and it's turned back on, and when it's switched off.
+      `HyperkeyLifecycle` (core) decides when it runs, at launch, on each change and every 2 s: only while the setting is on and Accessibility is allowed, so without Accessibility the tap stops and the mapping goes, and both come back with it.
+      Whenever it won't run, Fudge's entry is removed once, at launch too, since a crash, a kill or a force-quit skips the removal at quit and a leftover Caps Lock → F18 with no tap leaves Caps Lock dead.
+      A start that failed (the tap or the mapping refused) isn't tried again until the setting or Accessibility changes.
+      Quitting removes Fudge's entry, and SIGTERM quits as Quit does (`NSApp.terminate`), so a kill or `make run`'s restart does too; `hidutil` mappings also reset at logout.
+      The 2 s check also turns the tap back on if macOS left it off.
+      With Quick press off, Fudge turns caps off when Hyperkey starts, since the key no longer can.
+      The quick press is timed on the uptime clock (`CLOCK_UPTIME_RAW`), read in the tap.
+      `HotKeySpec` shows all four modifiers as "Hyper" (`isHyper`; "Hyper+T", and a "Hyper" keycap), and saves them as the four.
+      Snapshot runs never tap or run `hidutil`.
     - **The Color Picker** (SPEC-090) is the Tools group (`BuiltInCommandGroup.tools`, one command per `ToolCommand`), a group for utilities that also holds Define Word.
       **Pick Color** hides the panel as the window commands do, then shows macOS's loupe through `ColorSampling` (the app's `ScreenColorSampler` is `NSColorSampler`, which needs no Screen Recording permission; snapshot runs get `InertColorSampler`, which picks nothing, and tests a fake).
       `ColorPick` (core) copies the picked color in the **Copy Format** (`colorFormat` in `settings.json`, `ColorFormat`: HEX by default, RGB, HSL, SwiftUI or UIColor) with a HUD ("Copied #3A7BD5") and adds it to Recent Colors; Esc copies and keeps nothing, and a color `colors.json` can't take is still copied, with the HUD saying so.
@@ -380,7 +401,7 @@ Extensions run in a separate Node.js process, the extension host.
       It holds public facts only: window classes and levels, bundle ids and decisions, never paths, titles or typing.
       Read it with `/usr/bin/log show --last 2m --predicate 'subsystem == "io.github.jakeobsen.fudge"' --info` (in zsh, a bare `log` is a builtin).
     - **The General page** (`GeneralPage.swift`) is the Settings window's first page, and the one ⌘, Settings… and "Fudge Settings" open on:
-      Open at Login, the launcher's hotkey, Show Fudge on, Pop to Root Search, Escape Key Behavior (all three `SettingsPopupRow`s), Updates (Check for Updates, another `SettingsPopupRow` with Daily, Weekly, Monthly and Never, then `UpdateStatusRow`:
+      Open at Login, the launcher's hotkey, Show Fudge on, Pop to Root Search, Escape Key Behavior (all three `SettingsPopupRow`s), Keyboard (Hyperkey and its Quick press switch, which is disabled while Hyperkey is off), Updates (Check for Updates, another `SettingsPopupRow` with Daily, Weekly, Monthly and Never, then `UpdateStatusRow`:
       While the update check is unset, that popup shows Not Chosen first (`UpdateCheckSetting.popupOptions`): it checks nothing, as Never does, and can't be picked again once something is chosen.
       the last check's result and time, Check Now, and Download… while a newer release is known; saved through `change {}`), the currency switch, the calculator's Number format (Same as macOS, "1,234.5" or "1.234,5", saved through `change {}`; changing it re-evaluates the open query), Clear Search History…, and Import / Export.
       The launcher's hotkey is recorded like a command's, through the same `HotkeyRecordingPrompt`, but it can't be cleared: ⌫ and the Reset button set ⌥Space (`HotKeyRecording.launcherEdit`).
@@ -549,13 +570,14 @@ Extensions run in a separate Node.js process, the extension host.
       `Onboarding` (core) keeps the answered step ids in `onboarding.json` and decides what to show (`pending`): the unanswered steps, in order, then Done.
       Once it has been completed, Welcome isn't shown again, and a step added later shows on its own, then Done, under "Something new to decide" (`hasSomethingNew`).
       **`OnboardingStep`'s cases are the one list of steps**: adding a step means adding its case and drawing it.
-      The steps use General's own controls (`LauncherHotkeyControls`, `OpenAtLoginControls`, `CurrencyRatesToggle`, and the Permissions page's `AccessibilityControls`), so an answer takes effect at once.
+      The steps use General's own controls (`LauncherHotkeyControls`, `OpenAtLoginControls`, `CurrencyRatesToggle`, `HyperkeyControls`, and the Permissions page's `AccessibilityControls`), so an answer takes effect at once.
       The **Extension Store** step (after Currency) shows the store's consent sheet's own words (`ExtensionStore.Consent`), with **Turn On Extension Store**, which writes what the switch and its sheet write and also ticks the store's Enabled (`FudgeSettings.turnOnExtensionStore`), and **Not Now**, which is ↵.
       The **Sign-in** step is the Sign-in page's own choice (`SignInServerControls`, shared with the page, with `SignInServer.explanation`), whose consent sheets show on the onboarding window (`OnboardingModel.ask`; laid out off-screen in snapshot runs), with Continue as ↵, so Off stays Off.
       The **Clipboard history** step (after Sign-in) shows the consent sheet's own words (`ClipboardHistory.consentMessage`, the one string both use) with **Keep Clipboard History**, which does what the switch and its sheet do (`SettingsModel.keepClipboardHistory`), and **Not Now**, which is ↵, so going through onboarding with ↵ never starts recording.
       When it's already on, the step says so and turning it off is left to Settings.
       **Expand snippets as you type**, after Clipboard history, works the same way: it explains Input Monitoring (`SnippetExpander.inputMonitoringExplanation`, the Snippets page's sheet's own words), **Turn On** does what the switch does (`SettingsModel.turnOnSnippetExpansion`, then macOS's prompt or pane), and **Not Now** is ↵.
-      Updates, after it, is `UpdateCheckChoice`: Daily, Weekly, Monthly or Off, with Daily preselected, and its Continue saves the choice, since nothing is checked until one is saved.
+      **Use Caps Lock as Hyper?** (after Snippet expansion) shows General's `HyperkeyControls`, with **Not Now** as ↵ while it's off.
+      Updates, after Hyperkey, is `UpdateCheckChoice`: Daily, Weekly, Monthly or Off, with Daily preselected, and its Continue saves the choice, since nothing is checked until one is saved.
       Welcome also has **Restore from a Backup…**, General's import flow with its own sheets on the onboarding window (`SettingsModel.onboardingBackup`); a backup never holds `onboarding.json`, so onboarding carries on after an import.
       A step is answered when it's left with Get Started, Continue or Not Now, and saved straight away, so closing the window keeps the answers so far.
       Leaving a step or closing the window ends a hotkey recording. ⌘W and ⌘Q close the window as they do Settings (`WindowShortcut`), without completing onboarding.

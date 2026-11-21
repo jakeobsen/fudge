@@ -43,10 +43,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var extensionsWatcher: ExtensionsWatcher?
     /// The Quick Look preview (SPEC-049). Never in snapshot runs.
     private var quickLook: QuickLookPreview?
+    /// Hyperkey (SPEC-093): Caps Lock as ⌘⌥⌃⇧. Never in snapshot runs.
+    private var hyperkey: HyperkeyService?
+    /// SIGTERM quits as Quit does, so what `applicationWillTerminate` puts back (Hyperkey's mapping) goes with a kill
+    /// or a restart too. Never in snapshot runs.
+    private var terminationSignal: DispatchSourceSignal?
 
     func applicationWillTerminate(_ notification: Notification) {
         // Clipboard History's decrypted image copies don't outlive the run.
         model?.clipboardHistory.clearPreviews()
+        // Nor does Hyperkey's Caps Lock mapping.
+        hyperkey?.quit()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -229,6 +236,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Switch Windows reads the system's windows; it notes which apps become active from now on.
         model.windowSwitching = SystemWindowSwitching(accessibility: { SystemCalls.mayReadWindows() })
         model.menuItemsAccess = SystemMenuItemsAccess(mayReadMenus: { SystemCalls.mayReadMenus() })
+
+        let hyperkey = HyperkeyService(paths: paths)
+        hyperkey.problemChanged = { [weak self] problem in self?.settingsModel.hyperkeyProblem = problem }
+        settingsModel.mayUseAccessibility = { SystemCalls.mayPostKeysForUser() }
+        settingsModel.turnOnHyperkey = { [weak hyperkey] quickPress, done in
+            guard let hyperkey else { return done(nil) }
+            hyperkey.turnOn(quickPress: quickPress, done: done)
+        }
+        settingsModel.turnOffHyperkey = { [weak hyperkey] in hyperkey?.turnOff() }
+        settingsModel.hyperkeyQuickPressChanged = { [weak hyperkey] in hyperkey?.update() }
+        self.hyperkey = hyperkey
+        hyperkey.update()
+
+        signal(SIGTERM, SIG_IGN)
+        let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        termination.setEventHandler { NSApp.terminate(nil) }
+        termination.resume()
+        terminationSignal = termination
 
         let quickLook = QuickLookPreview()
         quickLook.launcherLevel = panel.level
@@ -705,6 +730,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await exchangeRates.setEnabled(settings.currencyRates, now: Date()) }
         Task { await updates.setSetting(settings.updateCheck, now: Date()) }
         snippetExpansion?.update()
+        hyperkey?.update()
     }
 
     @objc private func reloadExtensions() {
