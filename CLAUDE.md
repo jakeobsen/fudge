@@ -961,12 +961,12 @@ Extensions run in a separate Node.js process, the extension host.
     The bundle gets the binary as `Contents/Helpers/node`, npm from the same distribution as `Contents/Resources/node/npm`, and its `LICENSE` (Node.js's, with what it bundles) as `Contents/Resources/node/LICENSE`.
     `fudge build` runs npm as `node npm-cli.js` (`BundledNode.npm`), with the helpers first on `PATH` so whatever npm starts gets the same Node.js.
     Its entitlements are in `App/Helpers/node.entitlements`, which `scripts/sign-app.sh` gives it (below), so a release's Developer ID signature keeps them: `allow-jit`, without which V8 can't start, and `disable-library-validation`, without which an extension's native addon (`.node`), signed by whoever built it, is refused ("different Team IDs").
-  - `App/Info.plist` gets three versions from `git describe --tags --always --dirty` (`VERSION`, or the release workflow's `RELEASE_TAG`):
+  - `App/Info.plist` gets three versions from `git describe --tags --always --dirty` (`VERSION`, which the release workflow sets to the version it releases, or `RELEASE_TAG`):
     `CFBundleShortVersionString` is the version tag's major, minor and patch, as macOS expects (`runtime/scripts/bundle-version.ts`: `v0.3.0-14-ga539cdd` is `0.3.0`, and with no version tag `0.0.0`), `CFBundleVersion` is `git rev-list --count HEAD`, and `FudgeGitDescribe` is the describe itself.
     Fudge shows its own form of the describe (`FudgeVersion.display`: `0.3.0`, `1.2.0-rc.1`, or after a tag `0.3.0-dev+14.a539cdd.dirty`), in the menu, General's update row, About, `fudge version` and its `User-Agent`s.
     `FudgeVersion` (core) reads the keys in the app, and in the `fudge` tool from the app's `Info.plist` beside `Contents/Helpers` (through a symlink too), only when its bundle id is Fudge's; anywhere else it's `0.0.0-dev`.
     **A release build stops rather than number itself wrong** (`make release-check`, before anything is built): with `CONFIG=release`, a shallow clone, which has no tags and would make the build number 1; with `RELEASE_TAG`, a tag that isn't on this commit.
-    The release workflow checks out the whole history and its tags, and passes `RELEASE_TAG` for a tag's build.
+    The release workflow checks out the whole history and its tags, and passes the version it releases as `VERSION` (`scripts/release.sh --version`), since its tag doesn't exist until the release is published.
   - `App/AppIcon.icon` (an Icon Composer icon) is compiled by `actool` into `Assets.car` and an `AppIcon.icns` fallback.
     That needs Xcode 26 or later.
   - the bundled extensions (`BUNDLED_EXTENSIONS`, as `BundledExtensions.folders` lists them) are built with `fudge build` from `runtime/<folder>` into `Contents/Resources/<folder>`
@@ -1050,7 +1050,7 @@ Extensions run in a separate Node.js process, the extension host.
   CI's runners have three cores, so the pool has about three threads, and Swift Testing itself needs the pool to start and report tests: with it full, nothing runs, fails or prints until a thread frees.
   A child process, a pipe read, a build or a long semaphore wait runs on a thread of its own (`OffThePool.run`, in the tests), never in `Task.detached`, which takes a pool thread.
   A deadline fires from Dispatch (`OffThePool.after`, or `run(within:)`), not from a `Task.sleep`, and a wait for an event ends as it comes (`Reloads` in `ExtensionsWatcherTests`).
-  A pool that's full for good can still stop the run, so CI's 20-minute step timeout is the last net.
+  A pool that's full for good can still stop the run, so CI's 15-minute job timeout is the last net.
 - **SwiftUI's `TextField` writes its unchanged text back** now and then, three times on ↵ before `onSubmit` and again when it loses the keyboard.
   Setters bound to a field must ignore writes that change nothing, or they'll redo work such as resetting the selection.
 - **`.onAppear` runs once for the panel's lifetime**, not each time it's shown.
@@ -1098,7 +1098,7 @@ Extensions run in a separate Node.js process, the extension host.
   An ad hoc signature's is its cdhash, which changes with every build, so each ad hoc `make run` drops them; builds signed with an identity keep them.
   **The first signing with an identity shows a keychain prompt** that only a person can answer (Always Allow).
   Until someone has, `make app` waits on it, so build with `SIGN_IDENTITY=-` where nobody has.
-  CI has no identity and stays ad hoc; a release is signed again with the Developer ID identity (see CI and releases).
+  CI has no identity and stays ad hoc; a release is signed again with the Developer ID identity (see Branches, CI and releases).
   No certificate, key, name or team ID ever goes into the repo.
 - **The hardened runtime refuses a protected resource without its entitlement**, with no prompt, whatever the user allowed.
   `App/Fudge.entitlements` has the two Fudge uses, each with a comment: Apple Events (Finder, System Events and the login window) and Calendars (My Schedule's EventKit).
@@ -1144,25 +1144,53 @@ Extensions run in a separate Node.js process, the extension host.
 - **The product's name is Fudge**, capitalized, in all text people read.
   `fudge` is only the CLI command, paths, env variables and identifiers.
 
-## CI and releases
+## Branches, CI and releases
 
-- **CI** (`.github/workflows/ci.yml`) runs `make lint` and `make test` on pull requests and pushes to `mainline`.
-  The test step, here and in the release workflow, stops after 20 minutes (`timeout-minutes`), so a hang fails the job instead of holding a runner.
-  `swift test` compiles every target, so the app's code is checked, but the app bundle is not assembled.
-- **The release workflow** (`.github/workflows/release.yml`) is the only place a release is built, and it runs on a pushed `v*` tag.
-  Tags are pushed only with the maintainer's explicit permission, never by an agent.
-  Two jobs:
-  - **`build`**, with a read-only token: the tag must be `v` and a semantic version (checked through an env var, never `${{ }}` in a script), then `make test`, `scripts/release.sh --tag <tag> --ad-hoc-without-secrets` and a `.sha256`, uploaded as an artifact.
-    `--tag` hands the tag to `make app` and `make dmg-image` as `RELEASE_TAG`, never as `VERSION`, so `make release-check` refuses a tag that isn't on the commit.
-  - **`publish`** runs only for a pushed tag, and has the only write token, and runs none of the repo's code: it checks the tag again, downloads the artifact and runs `gh release create` with GitHub's generated notes and one line on opening the app, which depends on how `build` signed it (its `signing` output).
+- **All work is based on and goes into `development`.**
+  Open every pull request with `--base development`: `mainline` is the default branch, so a pull request without it targets `mainline`.
+  Never open a pull request into `mainline` yourself.
+- **`mainline` changes only by a release**, in four steps, with the maintainer's yes before the second and the fourth:
+  1. The maintainer is asked: release `vX.Y.Z` from a `development` commit?
+     The version is `scripts/next-version.sh <commit>`'s, run locally.
+  2. On a yes, `release/vX.Y.Z` is pushed at exactly that commit, and its pull request into `mainline` opened.
+     CI runs on it once, and the reviewer runs `make lint` and `make test` locally at that commit.
+  3. When CI is green and the pull request approved, the maintainer is asked: merge, and so publish `vX.Y.Z`?
+  4. On a yes, it's merged with a merge commit (never a squash or a rebase) and GitHub's own title for it, `Merge pull request #N from jakeobsen/release/vX.Y.Z`, which starts the release, and `release/vX.Y.Z` is deleted.
+- **A release branch is never pushed to again** once it's created: no merge from `development`, no fix.
+  If CI is red, the pull request is closed and the branch deleted, nothing is published, and the fix goes into `development` and a later release.
+- **GitHub Actions run only on a release's pull request into `mainline` (CI) and on its merge (the release)**, because macOS runners cost money.
+  Never run, re-run or dispatch a workflow by hand, and never add another trigger.
+  Pull requests into `development` run nothing: their builder and the reviewer run `make lint` and `make test` locally.
+- **The version is worked out, never written down.**
+  `scripts/next-version.sh [<commit>]` prints the next version, with its `v`, from the conventional commit subjects since the highest `v1.2.3` tag in the commit's history, merges left out:
+  a breaking change (`type!:`, or a `BREAKING CHANGE:` or `BREAKING-CHANGE:` footer) bumps the major version from 1.0.0 on and the minor below it, otherwise a `feat` the minor, otherwise the patch.
+  With no release yet it's `v0.1.0`, and with nothing since the last one, or in a shallow clone, it fails.
+  Commit subjects must stay conventional, since they decide the version.
+  A release's tag is on its release commit, which is in `development`, so `git describe` there finds it; `runtime/test/next-version.test.ts` tries the script in throwaway repositories.
+- **CI** (`.github/workflows/ci.yml`) runs on pull requests into `mainline` only, in three jobs:
+  - **`release-branch`** (Linux, seconds) fails unless the head is this repository's `release/vX.Y.Z` (both passed through `env:`), so a pull request into `mainline` from anything else never starts a macOS runner and can't merge.
+  - **`macos`** runs `make lint` and `make test`, capped at 15 minutes (`timeout-minutes`), so a hang fails the job instead of holding a paid runner.
+    `swift test` compiles every target, so the app's code is checked, but the app bundle is not assembled.
+  - **`test`** (Linux) always runs and passes only when both did, since a skipped job counts as passed.
+    It's the check `mainline`'s ruleset requires, so its name stays `test`.
+- **The release workflow** (`.github/workflows/release.yml`) is the only place a release is built, and it runs on a push to `mainline`, a release's merge.
+  No one pushes a `v*` tag: the workflow creates it, on the release commit, once everything has passed.
+  Runs never overlap (`concurrency`), and if any job fails, nothing is published and there's no tag.
+  Three jobs:
+  - **`version`** (Linux, 3 minutes at most, the whole history): the pushed commit must be a merge whose tree is its second parent's, the release commit's, so what's published is what CI and the reviewer tested.
+    `scripts/next-version.sh` names the version from the release commit, and the run stops if it fails, if the merge's title isn't GitHub's for `release/<that version>` (so the version published is the one the maintainer said yes to, and a merge of any other branch never publishes), or if that tag exists.
+  - **`build`** (macOS, 30 minutes at most, a read-only token) checks out the release commit itself, with the whole history, so its build number is the one any later build of the tag gets.
+    It runs `make test`, then `scripts/release.sh --version <version>` and a `.sha256`, uploaded as an artifact.
+    The tag doesn't exist yet, so the version goes to `make` as `VERSION`, in the tag's form (`v0.2.0`), and the app and the disk image show it as a tag build would.
+    `release.sh` refuses a bare `0.2.0`, which the app would show as 0.0.0, and takes anything else `git describe` gives, as `make release` passes it (`runtime/test/release-version.test.ts`).
+    In jakeobsen/fudge, missing signing secrets fail it; a fork, which has none, gets an ad hoc build (`--ad-hoc-without-secrets`).
+  - **`publish`** has the only write token, and runs none of the repo's code: it runs `gh release create <version> --target <release commit>`, which creates the tag with the Release, with GitHub's generated notes and one line on opening the app, which depends on how `build` signed it (its `signing` output).
+    The "Release Tags" ruleset must let the workflow's token create `v*` tags, or this last step is refused.
     **The first release** gets that line and the hand-written `.github/first-release-notes.md` instead of generated notes, which would list every pull request so far (SPEC-117 §5).
-    `build` decides it (its `first` output) with `scripts/first-release.sh <tag>`: a tag is the first when no full release (`v1.2.3`, no pre-release suffix) other than itself is in its history (`git tag --merged HEAD`), so `v0.1.0` gets them after a `v0.1.0-rc.1` too.
+    `build` decides it (its `first` output) with `scripts/first-release.sh <version>`: a version is the first when no full release (`v1.2.3`, no pre-release suffix) other than itself is in its history (`git tag --merged HEAD`).
     That needs the whole history, so a shallow checkout fails the step rather than guess; `build` then uploads the file as a second artifact, `notes`.
-    The step only runs on a real tag, so `runtime/test/first-release.test.ts` tries the script in throwaway repositories.
-    A tag with a pre-release suffix (`v1.2.0-rc.1`) is a pre-release.
-  - **Run by hand** (Actions → Release → Run workflow, `workflow_dispatch`), it's the dry run: no tag check, the version `git describe` gives the commit, signed, notarized and stapled, and the disk image as an artifact.
-    Nothing is published.
-  - **The secrets are the `release` environment's**, not the repository's: only `mainline` and `v*` tags may use that environment, and only `build` names it, so no workflow on another branch can read them, one an unreviewed branch adds included.
+    The step only runs in a release, so `runtime/test/first-release.test.ts` tries the script in throwaway repositories.
+  - **The secrets are the `release` environment's**, not the repository's: only `mainline` may use that environment, and only `build` names it, so no workflow on another branch or a tag can read them, one an unreviewed branch adds included.
     Never add them as repository secrets again.
 - **Release signing** (`scripts/release.sh`, FUD-44) reads five secrets, which the workflow gives to that one step only:
   - `APPLE_CERTIFICATE_BASE64`: the Developer ID Application certificate with its private key, a `.p12` in base64
@@ -1175,10 +1203,12 @@ Extensions run in a separate Node.js process, the extension host.
   It signs again with the Developer ID identity (`scripts/sign-app.sh`), notarizes the app with `notarytool` and staples it, makes the disk image from it (`make dmg-image`), signs, notarizes and staples that, and checks both with `spctl`.
   Both signings take the identity from that keychain alone (`codesign --keychain`, `sign-app.sh`'s third argument), so on a Mac whose login keychain has the same Developer ID, `make release` neither finds it twice nor asks for that key's password.
   It never prints a secret or the identity's name: the tools' output shows only when one fails, with those values as `***`.
-  Without any of the five, a tag still makes a release, ad hoc, and its notes say so (a fork has none); the dry run fails instead, as does any run with only some of them.
+  Notarization waits 10 minutes at most for each submission (`notarytool --timeout 10m`), so a stuck one fails the release rather than hold a paid runner.
+  Without any of the five, a fork's release is built ad hoc (`--ad-hoc-without-secrets`), and its notes say so; anywhere else that's a failure, as is any run with only some of them.
 - **`make release`** does the same on the maintainer's Mac, for a release built without CI, after `secret env apple`, which sets the same five variables.
   It refuses a tree with changes, never pushes or tags, and writes no secret to disk but the temporary keychain.
   `make release RELEASE_TAG=<tag>` builds that tag's release (`--tag`), and without it the version is `git describe`'s (`--version`).
+  It's for a build by hand: a published release always comes from the release workflow.
 - **Dev builds** still sign with the Apple Development identity (or "fudge local signing", or ad hoc; see `make app`), so only a release has the Developer ID, and switching between the two asks for permissions again.
 - **`make dmg`** builds the app, then `build/Fudge-<version>.dmg` (the version without its `v`) with `make dmg-image`, which packs the app as it is: the app and a link to `/Applications`, UDZO, volume name Fudge, made with `hdiutil` from a staging folder that's removed afterwards.
 - **Linting the workflows:** actionlint isn't in CI; run it by hand after changing one: `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml`.
