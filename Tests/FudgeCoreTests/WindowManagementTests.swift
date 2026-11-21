@@ -137,6 +137,19 @@ private func field(_ value: JSONValue, _ key: String) -> JSONValue? {
     #expect(ids() == [], "an empty desktop")
 }
 
+@Test func anActiveWindowOnNoScreenIsOnThePrimaryOnesDesktop() throws {
+    // Its desktopId is the primary screen's, so that's the active desktop, wherever the mouse is.
+    let system = desk()
+    let offScreen = CGRect(x: -3000, y: 80, width: 800, height: 600)
+    system.listed[1].bounds = offScreen
+    system.ax[textEdit]?[0].frame = offScreen
+    system.mouse = CGPoint(x: 2000, y: 500)
+    #expect(field(try manager(system).activeWindow(), "desktopId") == .string("screen-1"))
+    #expect(
+        manager(system).windowsOnActiveDesktop().map { field($0, "id") } == [.string("11"), .string("13")])
+    #expect(manager(system).desktops().map { field($0, "active") } == [.bool(true), .bool(false)])
+}
+
 @Test func aFullScreenWindowsBoundsAreFullscreen() {
     let system = desk()
     system.frontmost = safari
@@ -387,6 +400,7 @@ private func field(_ value: JSONValue, _ key: String) -> JSONValue? {
             + "Allow Fudge in System Settings → Privacy & Security → Accessibility.")
     #expect(WindowManagementError.noActiveWindow.description == "There is no active window")
     #expect(WindowManagementError.noWindow(id: "42").description == "No window with id 42")
+    #expect(WindowManagementError.windowClosed.description == "The window closed before it could be changed")
     #expect(WindowManagementError.otherDesktop.description == "Fudge can't move windows between desktops.")
     #expect(WindowManagementError.cantMove.description == "This window can't be moved")
     #expect(WindowManagementError.cantResize.description == "This window can't be resized")

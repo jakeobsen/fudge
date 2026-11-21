@@ -108,6 +108,8 @@ public enum WindowManagementError: Error, Equatable, Sendable, CustomStringConve
     case accessibilityNeeded
     case noActiveWindow
     case noWindow(id: String)
+    /// The window closed while Fudge was changing it.
+    case windowClosed
     case otherDesktop
     case cantMove
     case cantResize
@@ -122,6 +124,7 @@ public enum WindowManagementError: Error, Equatable, Sendable, CustomStringConve
                 + "Allow Fudge in System Settings → Privacy & Security → Accessibility."
         case .noActiveWindow: "There is no active window"
         case .noWindow(let id): "No window with id \(id)"
+        case .windowClosed: "The window closed before it could be changed"
         case .otherDesktop: "Fudge can't move windows between desktops."
         case .cantMove: "This window can't be moved"
         case .cantResize: "This window can't be resized"
@@ -317,14 +320,12 @@ public struct WindowManager<System: WindowSystem> {
             return windows.first { $0.pid == pid && pairing[$0.number] == focused }
         }
 
-        /// The screen holding the active window, or the frontmost app's topmost window, else the mouse's, else the
-        /// primary one, as `PanelScreen` decides for "Screen with active window".
+        /// The desktop of the active window, or of the frontmost app's topmost window (`screen(of:)`, so a window
+        /// on no screen is on the primary one, as its `desktopId` says), else the mouse's screen, else the primary one.
         func activeScreen() -> WindowScreen? {
             let pid = manager.system.frontmostPid()
-            if let front = activeWindow() ?? windows.first(where: { $0.pid == pid }),
-                let index = PanelScreen.mostOf(front.bounds, on: screens.map(\.bounds))
-            {
-                return screens[index]
+            if let front = activeWindow() ?? windows.first(where: { $0.pid == pid }), let screen = screen(of: front) {
+                return screen
             }
             let mouse = manager.system.mouseLocation()
             return screens.first { $0.bounds.contains(mouse) } ?? screens.first

@@ -141,6 +141,7 @@ struct SystemWindows: WindowSystem, Sendable {
     private static func set(_ element: AXUIElement, _ attribute: String, _ value: CFTypeRef) throws {
         let error = AXUIElementSetAttributeValue(element, attribute as CFString, value)
         guard error == .success else {
+            if error == .invalidUIElement { throw WindowManagementError.windowClosed }
             throw WindowManagementError.failed(
                 "The window's app didn't accept the change (Accessibility error \(error.rawValue))")
         }

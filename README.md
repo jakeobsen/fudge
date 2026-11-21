@@ -169,7 +169,7 @@ Extensions can paste into the app you were in (`Clipboard.paste`, the Paste acti
 
 ### Windows
 
-Extensions can list your windows, and move, resize or make full screen the one you're using (`WindowManagement`). That needs the same Accessibility permission. macOS doesn't show apps your Spaces, so to extensions each screen is one desktop, and Fudge can't move a window to another Space.
+Extensions can list your windows, and move, resize or make full screen any of them (`WindowManagement`). That needs the same Accessibility permission. macOS doesn't let apps see your Spaces, so to extensions each screen is one desktop, and Fudge can't move a window to another Space.
 
 ## License
 
