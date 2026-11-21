@@ -75,7 +75,7 @@ private let folders = #"""
             """#),
         searchText: "")
     #expect(list.sections.map(\.title) == [nil, "S", nil])
-    #expect(list.sections.map(\.id) == [-2, 4, -6])
+    #expect(list.sections.map(\.id) == [-1, 4, -3], "by their place, never their items")
     #expect(list.items[1].title == "b" && list.items[1].titleTooltip == "bee" && list.items[1].subtitle == "sub")
     #expect(list.items[3].icon == .string("star-16") && list.items[3].iconTooltip == "starred")
 }
@@ -125,6 +125,27 @@ private let folders = #"""
     #expect(ListContent(view, searchText: "").emptyView == nil, "not while loading with an empty search")
     view.props["isLoading"] = .bool(false)
     #expect(ListContent(view, searchText: "").emptyView?.title == "No Results", "Raycast's default")
+}
+
+/// FUD-107: a List of items outside any section, re-ranked by a search, keeps its section's id. The views tell sections
+/// apart by it, and with the first item's id the re-ranked rows kept the old section's drawing: the highlight stayed
+/// on the item selected before while the detail showed the new selection's.
+@Test func aLooseSectionKeepsItsIdWhenItsItemsReRank() throws {
+    func ranked(_ ids: [Int], kind: String = "List") throws -> ListContent {
+        let items = ids.map {
+            #"{"id":\#($0),"type":"\#(kind).Item","props":{"id":"f\#($0)","title":"f\#($0)"},"children":[]}"#
+        }
+        let json =
+            #"{"id":1,"type":"\#(kind)","props":{"filtering":false},"children":[\#(items.joined(separator: ","))]}"#
+        return ListContent(try node(json), searchText: "")
+    }
+    // A Grid's cells are grouped the same way, and `GridScreen` tells sections apart by the same id.
+    for kind in ["List", "Grid"] {
+        let before = try ranked([26, 50, 73, 96, 119], kind: kind)
+        let after = try ranked([96, 50, 73, 26, 119], kind: kind)
+        #expect(before.sections.map(\.id) == after.sections.map(\.id), "\(kind)")
+        #expect(after.items.map(\.id) == [96, 50, 73, 26, 119], "\(kind)")
+    }
 }
 
 @Test func reselectsAfterAnUpdate() throws {

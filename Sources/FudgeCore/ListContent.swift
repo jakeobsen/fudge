@@ -67,8 +67,9 @@ public struct ListContent: Sendable, Equatable {
     }
 
     public struct Section: Sendable, Equatable, Identifiable {
-        /// The section node's id. Items outside a section are grouped into one without a title,
-        /// whose id is the negated id of its first item.
+        /// The section node's id. Items outside a section are grouped into one without a title, whose id is negative
+        /// and comes from its place: −1 for the first section in the view, −2 for the second, and so on. It never
+        /// comes from its items, which re-rank, since the views tell sections apart by it (FUD-107).
         public var id: Int
         public var title: String?
         public var subtitle: String?
@@ -162,7 +163,7 @@ public struct ListContent: Sendable, Equatable {
         var emptyNode: UINode?
         let shortcutSets = Self.shortcutSets(view)
         func flushLoose() {
-            if let first = loose.first { sections.append(Section(id: -first.id, items: loose, grid: grid)) }
+            if !loose.isEmpty { sections.append(Section(id: -(sections.count + 1), items: loose, grid: grid)) }
             loose = []
         }
         for child in view.children {
@@ -247,6 +248,23 @@ public struct ListContent: Sendable, Equatable {
                 .map(\.element)
         }
         return ranked.map(\.section)
+    }
+
+    /// What's selected after a render: the item the view's `selectedItemId` names, when that changed since the
+    /// selection last followed it (`followed`), wins; else the first item, when `selectFirst` (typing, or a search
+    /// text the extension set); else the same item as before (`reselect`). Returns the node and the
+    /// `selectedItemId` now followed.
+    public func selection(
+        selectedItemId: String?, followed: String?, selectFirst: Bool, node: Int?, itemId: String?
+    ) -> (node: Int?, followed: String?) {
+        if let selectedItemId, selectedItemId != followed,
+            let match = items.first(where: { $0.itemId == selectedItemId })
+        {
+            return (match.id, selectedItemId)
+        }
+        let kept = selectedItemId == nil ? nil : followed
+        if selectFirst { return (items.first?.id, kept) }
+        return (reselect(node: node, itemId: itemId), kept)
     }
 
     /// The item to select after the list changed: the same node if it's still there, else an item with the
