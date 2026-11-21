@@ -221,6 +221,10 @@ private struct AliasCell: View {
             }
         }
         .onAppear { text = model.alias(for: commandID) ?? "" }
+        // A default alias goes when another command takes it, and comes back when that one lets it go.
+        .onChange(of: model.alias(for: commandID)) { _, alias in
+            if !editing { text = alias ?? "" }
+        }
     }
 }
 

@@ -49,12 +49,10 @@ public struct RootItem: Sendable, Equatable, Identifiable {
     public var iconFile: URL?
     /// A command's `arguments`, entered in fields after the query.
     public var arguments: [ExtensionManifest.Argument]
-    /// A command's alias, from `settings.json`.
+    /// A command's alias, from `settings.json`, or its default (`FudgeSettings.alias(ofCommand:)`).
     public var alias: String?
     /// Matched like the subtitle, but never shown: a quicklink's link.
     public var secondaryText: String?
-    /// One of Fudge's own commands' hand-off word (`BuiltInCommand.handOffWord`).
-    public var handOffWord: String?
 
     public init(
         id: String,
@@ -64,8 +62,7 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         keywords: [String] = [],
         kind: Kind,
         iconFile: URL? = nil,
-        arguments: [ExtensionManifest.Argument] = [],
-        handOffWord: String? = nil
+        arguments: [ExtensionManifest.Argument] = []
     ) {
         self.id = id
         self.title = title
@@ -75,7 +72,6 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         self.kind = kind
         self.iconFile = iconFile
         self.arguments = arguments
-        self.handOffWord = handOffWord
     }
 
     public static func application(at url: URL, title: String) -> RootItem {
@@ -182,8 +178,7 @@ public struct RootItem: Sendable, Equatable, Identifiable {
                 extensionTitle: group.title,
                 keywords: command.keywords,
                 kind: .builtInCommand(group: group.name, command: command.name),
-                arguments: command.arguments,
-                handOffWord: command.handOffWord
+                arguments: command.arguments
             )
         }
     }
@@ -246,7 +241,7 @@ public enum RootSearch {
             guard let id = item.commandSettingsID else { return item }
             guard settings.isEnabled(commandID: id) else { return nil }
             var item = item
-            item.alias = settings.commands[id]?.alias
+            item.alias = settings.alias(ofCommand: id)
             return item
         }
     }

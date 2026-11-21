@@ -87,6 +87,25 @@ public struct FudgeSettings: Sendable, Equatable {
         var isDefault: Bool { hotkey == nil && alias == nil && enabled != false }
     }
 
+    /// A command's alias: the one in `settings.json`, else its default (`CommandAliases.defaults`, Define Word's
+    /// `define`) while the file has none for it and no other command has that alias, so the user's own wins.
+    /// An empty alias in the file is a default the user cleared, so the command has none.
+    /// The default is never written to the file, so Fudge's choice never looks like the user's.
+    public func alias(ofCommand id: String) -> String? {
+        if let alias = commands[id]?.alias { return alias.isEmpty ? nil : alias }
+        guard let fallback = CommandAliases.defaults[id] else { return nil }
+        let typed = fallback.lowercased()
+        let taken = commands.contains { $0.key != id && $0.value.alias?.lowercased() == typed }
+        return taken ? nil : fallback
+    }
+
+    /// Sets a command's alias; an empty one clears it. A cleared default is kept as an empty alias, so it stays
+    /// cleared; any other command's is removed.
+    public mutating func setAlias(_ alias: String, ofCommand id: String) {
+        let cleared: String? = CommandAliases.defaults[id] == nil ? nil : ""
+        commands[id, default: .init()].alias = alias.isEmpty ? cleared : alias
+    }
+
     public struct ExtensionSettings: Sendable, Equatable {
         /// nil means the default: enabled, except for the Extension Store (`isEnabled(extension:)`).
         public var enabled: Bool?

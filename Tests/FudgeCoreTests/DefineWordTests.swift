@@ -226,36 +226,92 @@ private func drawn(_ text: String) -> (text: String, formatted: Bool) {
 
 // MARK: - Root search
 
-private func items(aliases: [String: String] = [:]) -> [RootItem] {
-    var items = BuiltInCommandGroup.all.flatMap(RootItem.builtInCommands)
-    var withArgument = RootItem(
-        id: "command:ext/search", title: "Search", kind: .builtInCommand(group: ":x", command: "search"),
-        arguments: [DefineWord.argument])
-    withArgument.alias = aliases["search"]
-    var plain = RootItem(id: "command:ext/plain", title: "Plain", kind: .builtInCommand(group: ":x", command: "plain"))
-    plain.alias = aliases["plain"]
-    items += [withArgument, plain]
-    return items
+private let defineWordID = ":tools/define-word"
+
+/// Root search's command items as `applySettings` gives them: Fudge's own, and two made up, one with an argument.
+private func items(_ settings: FudgeSettings = FudgeSettings()) -> [RootItem] {
+    let madeUp = [
+        RootItem(
+            id: "command::x/search", title: "Search", kind: .builtInCommand(group: ":x", command: "search"),
+            arguments: [DefineWord.argument]),
+        RootItem(id: "command::x/plain", title: "Plain", kind: .builtInCommand(group: ":x", command: "plain")),
+    ]
+    return RootSearch.applying(settings, to: BuiltInCommandGroup.all.flatMap(RootItem.builtInCommands) + madeUp)
 }
 
-@Test func defineWordTakesAWordAndDefineHandsItOver() throws {
-    let define = try #require(items().first { $0.id == ":tools/define-word" || $0.title == "Define Word" })
+private func settings(aliases: [String: String]) -> FudgeSettings {
+    var settings = FudgeSettings()
+    for (id, alias) in aliases { settings.commands[id] = .init(alias: alias) }
+    return settings
+}
+
+@Test func defineWordTakesAWordAndDefineIsItsDefaultAlias() throws {
+    #expect(CommandAliases.defaults == [defineWordID: "define"])
+    let define = try #require(items().first { $0.title == "Define Word" })
     #expect(define.arguments == [DefineWord.argument])
     #expect(define.arguments.first?.required == false && define.arguments.first?.placeholder == "Word")
-    #expect(define.handOffWord == "define")
+    #expect(define.alias == "define", "the default applies while settings.json has none")
+    #expect(FudgeSettings().alias(ofCommand: defineWordID) == "define")
     let handed = try #require(CommandAliases.handOff("define serendipity", in: items()))
     #expect(handed.item.title == "Define Word" && handed.rest == "serendipity")
     #expect(CommandAliases.handOff("Define ice cream", in: items())?.rest == "ice cream", "ignoring case")
     #expect(CommandAliases.handOff("definer x", in: items()) == nil)
     #expect(CommandAliases.handOff("define", in: items()) == nil, "no space, no hand-off")
+    #expect(
+        RootSearch.exactAliasMatch(in: items(), query: "define")?.title == "Define Word",
+        "and it ranks as an alias does")
 }
 
-@Test func anAliasDefineWinsOverTheHandOffWord() throws {
-    let aliased = try #require(CommandAliases.handOff("define x", in: items(aliases: ["search": "define"])))
-    #expect(aliased.item.title == "Search")
+@Test func aUsersOwnDefineAliasWinsOverTheDefault() throws {
+    let taken = settings(aliases: [":x/search": "define"])
+    #expect(taken.alias(ofCommand: defineWordID) == nil, "the default isn't applied")
+    #expect(items(taken).first { $0.title == "Define Word" }?.alias == nil)
+    #expect(try #require(CommandAliases.handOff("define x", in: items(taken))).item.title == "Search")
     #expect(
-        CommandAliases.handOff("define x", in: items(aliases: ["plain": "DEFINE"])) == nil,
-        "an alias without arguments hands nothing off, and still wins")
-    let withoutDefineWord = items().filter { $0.title != "Define Word" }
-    #expect(CommandAliases.handOff("define x", in: withoutDefineWord) == nil, "turned off, it isn't in root search")
+        CommandAliases.handOff("define x", in: items(settings(aliases: [":x/plain": "DEFINE"]))) == nil,
+        "an alias without arguments hands nothing off, and still takes the word, ignoring case")
+    var off = FudgeSettings()
+    off.commands[defineWordID] = .init(enabled: false)
+    #expect(CommandAliases.handOff("define x", in: items(off)) == nil, "turned off, it isn't in root search")
+}
+
+@Test func theDefaultCanBeChangedOrClearedAndStaysCleared() throws {
+    let file = try Fixtures.temporaryDirectory().appendingPathComponent("settings.json")
+    var settings = FudgeSettings()
+    settings.setAlias("", ofCommand: defineWordID)
+    #expect(settings.commands[defineWordID]?.alias == "", "a cleared default is kept as an empty alias")
+    #expect(settings.alias(ofCommand: defineWordID) == nil)
+    try settings.save(to: file)
+    let object = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+    let commands = try #require(object["commands"] as? [String: Any])
+    #expect((commands[defineWordID] as? [String: Any])?["alias"] as? String == "")
+
+    // The next launch reads it back: still cleared, so `define` is free.
+    let reloaded = FudgeSettings.load(from: file)
+    #expect(reloaded.alias(ofCommand: defineWordID) == nil)
+    #expect(CommandAliases.handOff("define x", in: items(reloaded)) == nil)
+    #expect(items(reloaded).first { $0.title == "Define Word" }?.alias == nil)
+
+    // An alias of the user's own works as `define` did, and `define` no longer does.
+    var custom = reloaded
+    custom.setAlias("dw", ofCommand: defineWordID)
+    #expect(try #require(CommandAliases.handOff("dw glimmerwort", in: items(custom))).item.title == "Define Word")
+    #expect(CommandAliases.handOff("define x", in: items(custom)) == nil)
+
+    // Clearing an alias of a command with no default removes it, as before.
+    var other = FudgeSettings()
+    other.setAlias("s", ofCommand: ":x/search")
+    other.setAlias("", ofCommand: ":x/search")
+    #expect(other.commands[":x/search"]?.alias == nil)
+}
+
+@Test func theDefaultIsNeverWrittenToSettings() throws {
+    let file = try Fixtures.temporaryDirectory().appendingPathComponent("settings.json")
+    try #"{"hotkey":"option+space","commands":{"a/b":{"alias":"ab"}}}"#.write(
+        to: file, atomically: true, encoding: .utf8)
+    let loaded = FudgeSettings.load(from: file)
+    #expect(loaded.alias(ofCommand: defineWordID) == "define")
+    try loaded.save(to: file)
+    let object = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+    #expect((object["commands"] as? [String: Any])?.keys.sorted() == ["a/b"], "settings that exist aren't changed")
 }

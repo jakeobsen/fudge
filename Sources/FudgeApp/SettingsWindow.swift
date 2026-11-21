@@ -938,8 +938,9 @@ final class SettingsModel {
 
     // MARK: - Aliases and enabled
 
+    /// The command's alias, its default included (`FudgeSettings.alias(ofCommand:)`).
     func alias(for commandID: String) -> String? {
-        fudgeSettings.commands[commandID]?.alias
+        fudgeSettings.alias(ofCommand: commandID)
     }
 
     /// Saves `text` as the command's alias; empty removes it. Returns false, with a message, when it's refused.
@@ -948,6 +949,11 @@ final class SettingsModel {
         let alias = text.trimmingCharacters(in: .whitespaces)
         // Check against the file as it is now, as `change` edits it, so an alias added by hand meanwhile counts.
         fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        // ↵ on the alias shown, a default included, changes nothing, so a default never becomes the user's choice.
+        if alias == fudgeSettings.alias(ofCommand: commandID) ?? "" {
+            aliasMessages[commandID] = nil
+            return true
+        }
         if !alias.isEmpty, let problem = CommandAliases.problem(with: alias, for: commandID, in: fudgeSettings) {
             aliasMessages[commandID] =
                 switch problem {
@@ -958,7 +964,7 @@ final class SettingsModel {
             return false
         }
         aliasMessages[commandID] = nil
-        guard change({ $0.commands[commandID, default: .init()].alias = alias.isEmpty ? nil : alias }) else {
+        guard change({ $0.setAlias(alias, ofCommand: commandID) }) else {
             return false
         }
         _ = applyHotkeys()

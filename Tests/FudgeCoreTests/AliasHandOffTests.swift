@@ -182,11 +182,9 @@ private func type(
     #expect(type("dw ", into: &input, handOff: &handOff, items: [docs]) == .handOff(item: docs, rest: ""))
 }
 
-@Test func aHandOffWordRunsOncePerQueryToo() {
-    // Define Word's `define` goes through the same guard as an alias.
-    var define = quicklink("define-word", alias: "unused")
-    define.alias = nil
-    define.handOffWord = "define"
+@Test func aDefaultAliasRunsOncePerQueryToo() {
+    // Define Word's default alias `define` goes through the same guard as any alias.
+    let define = quicklink("define-word", alias: "define")
     var input = ArgumentInput(arguments: define.arguments)
     var handOff = AliasHandOff()
     #expect(
