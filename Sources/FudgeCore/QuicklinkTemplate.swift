@@ -6,7 +6,8 @@ import Foundation
 ///   `{argument name="kind" options="bug, task, story"}` (a dropdown), and Raycast's older bare `{Query}`. The same
 ///   name twice is one field, and a link has at most 3.
 /// - Dynamic values: `{clipboard}`, `{uuid}`, `{date}`, `{time}`, `{datetime}`.
-/// - Modifiers after `|`: `raw`, `percent-encode`, `uppercase`, `lowercase`, `trim`.
+/// - Modifiers after `|`: `raw`, `percent-encode`, `uppercase`, `lowercase`, `trim`. Like the names, they ignore
+///   letter case (`{Date | UPPERCASE}`).
 ///
 /// In a URL, every value is percent-encoded as JavaScript's `encodeURIComponent` does, unless it's marked `raw`; in a
 /// file path, values go in as they are. A link that is exactly one placeholder is taken raw. Anything else in braces
@@ -337,7 +338,7 @@ public struct QuicklinkTemplate: Sendable, Equatable {
             let head = parts.removeFirst()
             var modifiers: [Modifier] = []
             for part in parts {
-                guard let modifier = Modifier(rawValue: part) else {
+                guard let modifier = Modifier(rawValue: part.lowercased()) else {
                     fail("Fudge doesn't know the modifier “\(part)” in “\(written)”.")
                     return nil
                 }
