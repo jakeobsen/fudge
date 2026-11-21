@@ -25,6 +25,13 @@ public enum MarkdownBlock: Sendable, Equatable {
 
 /// Splits CommonMark into blocks: the subset extensions use in Detail views, without HTML.
 public enum Markdown {
+    /// A block's inline markdown (emphasis, code, links, strikethrough) as attributed text: what `MarkdownView` draws.
+    public static func inline(_ text: String) -> AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace, failurePolicy: .returnPartiallyParsedIfPossible)
+        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+    }
+
     public static func blocks(_ markdown: String) -> [MarkdownBlock] {
         let lines = markdown.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
         var blocks: [MarkdownBlock] = []

@@ -131,21 +131,22 @@ final class MacSystemActions: SystemActions {
         try await offMain { try NSWorkspace.shared.unmountAndEjectDevice(at: url) }
     }
 
-    func isMounted(_ volume: MountedVolume) async -> Bool {
+    func isMounted(_ volume: MountedVolume) async -> Bool? {
         let path = volume.url.standardizedFileURL.path
-        return
-            (try? await offMain {
-                let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: []) ?? []
-                return urls.contains { $0.standardizedFileURL.path == path }
-            }) ?? true
+        return try? await offMain {
+            guard let urls = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: [])
+            else { return nil }
+            return urls.contains { $0.standardizedFileURL.path == path }
+        }
     }
 
     /// The BSD name of the whole disk a volume is on, through DiskArbitration (read only); nil for a network volume.
     nonisolated private static func wholeDisk(of url: URL, session: DASession?) -> String? {
         guard let session, let disk = DADiskCreateFromVolumePath(kCFAllocatorDefault, session, url as CFURL),
-            let whole = DADiskCopyWholeDisk(disk), let name = DADiskGetBSDName(whole)
+            let whole = DADiskCopyWholeDisk(disk)
         else { return nil }
-        return String(cString: name)
+        // The name points into `whole`, so it's copied while `whole` is alive.
+        return withExtendedLifetime(whole) { DADiskGetBSDName(whole).map { String(cString: $0) } }
     }
 
     func runningApps() -> [RunningApp] {

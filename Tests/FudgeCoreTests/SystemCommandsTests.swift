@@ -23,6 +23,8 @@ private final class FakeSystem: SystemActions {
     /// Volume names that can't be unmounted (busy), with the reason: they stay mounted when their disk is ejected, and
     /// their own eject throws.
     var ejectFailures: [String: String] = [:]
+    /// Whether `isMounted` can read the mounted volumes; nil when it can't.
+    var mountsReadable = true
     /// Volume names whose eject unmounts them, and the disk, but then throws this reason anyway.
     var ejectErrorsAfterUnmount: [String: String] = [:]
     var apps: [RunningApp] = []
@@ -54,9 +56,9 @@ private final class FakeSystem: SystemActions {
             throw NSError(domain: "test", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
         }
     }
-    func isMounted(_ volume: MountedVolume) async -> Bool {
+    func isMounted(_ volume: MountedVolume) async -> Bool? {
         done.append("mounted? \(volume.name)")
-        return mounted.contains(volume.url)
+        return mountsReadable ? mounted.contains(volume.url) : nil
     }
     func runningApps() -> [RunningApp] { apps }
     func hide(_ app: RunningApp) { done.append("hide \(app.pid)") }
@@ -92,7 +94,9 @@ private func volume(
 @Test func theSystemGroupListsTheCommands() {
     let group = BuiltInCommandGroup.system
     #expect(group.name == ":system" && BuiltInCommandGroup.isValidName(group.name))
-    #expect(BuiltInCommandGroup.all.map(\.title) == ["Apps", "System", "Tools", "Window Management"], "by title")
+    #expect(
+        BuiltInCommandGroup.all.map(\.title) == ["Apps", "Calendar", "System", "Tools", "Window Management"],
+        "by title")
     #expect(
         group.commands.map(\.title) == [
             "Lock Screen", "Sleep", "Restart", "Shut Down", "Log Out", "Empty Trash", "Eject All Disks",
@@ -343,6 +347,27 @@ private func volume(
     late.volumes = [volume("Stick", ejectable: true, disk: "disk6")]
     late.ejectErrorsAfterUnmount = ["Stick": "The disk was busy"]
     #expect(await run(.ejectAllDisks, on: late).message == "Ejected Stick.")
+}
+
+@MainActor
+@Test func mountsThatCantBeReadAreNeverReadAsEjected() async {
+    // #133's review: with no mount list, each volume is still ejected, and the message says it couldn't check.
+    let system = FakeSystem()
+    system.volumes = [volume("Photos", removable: true, disk: "disk4"), volume("Card", removable: true, disk: "disk5")]
+    system.mountsReadable = false
+    #expect(await run(.ejectAllDisks, on: system).message == "Couldn't check whether Photos and Card were ejected.")
+    #expect(system.done.filter { $0.hasPrefix("eject") } == ["eject Photos", "eject Card"])
+
+    // A busy volume's error is still not the answer: the mounts are.
+    let busy = FakeSystem()
+    busy.volumes = [volume("Stick", ejectable: true, disk: "disk6")]
+    busy.ejectFailures = ["Stick": "The volume is in use"]
+    busy.mountsReadable = false
+    #expect(await run(.ejectAllDisks, on: busy).message == "Couldn't check whether Stick was ejected.")
+
+    #expect(
+        SystemCommandMessage.ejected(["A"], failed: [("B", "In use")], unchecked: ["C"])
+            == "Ejected A. Couldn't eject B: In use. Couldn't check whether C was ejected.")
 }
 
 @Test func hideAndQuitListsLeaveOutFudgeFinderAndBackgroundApps() {

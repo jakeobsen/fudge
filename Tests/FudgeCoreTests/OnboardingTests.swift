@@ -8,7 +8,7 @@ import Testing
     #expect(
         onboarding.pending == [
             .welcome, .hotkey, .accessibility, .openAtLogin, .currency, .extensionStore, .signIn, .clipboardHistory,
-            .updates, .done,
+            .snippetExpansion, .hyperkey, .updates, .done,
         ])
     #expect(onboarding.pending == OnboardingStep.allCases, "the cases are the one step list")
     #expect(!onboarding.isComplete)
@@ -21,7 +21,9 @@ import Testing
     onboarding.answer(.hotkey)
     #expect(
         onboarding.pending == [
-            .accessibility, .openAtLogin, .currency, .extensionStore, .signIn, .clipboardHistory, .updates, .done,
+            .accessibility, .openAtLogin, .currency, .extensionStore, .signIn, .clipboardHistory, .snippetExpansion,
+            .hyperkey,
+            .updates, .done,
         ], "Welcome isn't shown again")
     #expect(!onboarding.hasSomethingNew, "not completed yet, so nothing is new")
 }
@@ -44,26 +46,37 @@ import Testing
     // "Not now" on Accessibility answers it as Continue would.
     onboarding.answer(.accessibility)
     #expect(
-        onboarding.pending == [.openAtLogin, .currency, .extensionStore, .signIn, .clipboardHistory, .updates, .done])
+        onboarding.pending == [
+            .openAtLogin, .currency, .extensionStore, .signIn, .clipboardHistory, .snippetExpansion, .hyperkey,
+            .updates, .done,
+        ])
 }
 
 @Test func aNewStepShowsOnlyThatStepAndDone() {
     // A user who completed onboarding before the Currency step and the ones after it existed.
     let onboarding = Onboarding(answered: ["welcome", "hotkey", "accessibility", "openAtLogin", "done"])
-    #expect(onboarding.pending == [.currency, .extensionStore, .signIn, .clipboardHistory, .updates, .done])
+    #expect(
+        onboarding.pending == [
+            .currency, .extensionStore, .signIn, .clipboardHistory, .snippetExpansion, .hyperkey, .updates, .done,
+        ])
     #expect(onboarding.hasSomethingNew)
     #expect(!onboarding.isComplete)
     // Welcome never comes back once completed, even if its id is missing.
     let noWelcome = Onboarding(answered: ["hotkey", "accessibility", "openAtLogin", "currency", "done"])
-    #expect(noWelcome.pending == [.extensionStore, .signIn, .clipboardHistory, .updates, .done])
+    #expect(
+        noWelcome.pending == [
+            .extensionStore, .signIn, .clipboardHistory, .snippetExpansion, .hyperkey, .updates, .done,
+        ])
     let complete = Onboarding(answered: OnboardingStep.allCases.map(\.rawValue) + ["retiredStep"])
     #expect(complete.isComplete, "ids that aren't a step any more don't count")
 }
 
-@Test func theUpdatesStepComesAfterClipboardHistoryAndShowsAloneToThoseWhoFinished() {
+@Test func theUpdatesStepComesAfterTheOptInsAndShowsAloneToThoseWhoFinished() {
     let steps = OnboardingStep.allCases
-    // The order agreed between FUD-114 and FUD-117: Currency, Clipboard history, Updates.
-    #expect(steps.firstIndex(of: .updates) == steps.firstIndex(of: .clipboardHistory).map { $0 + 1 })
+    // The order agreed between FUD-114, FUD-117, FUD-101 and FUD-125: Clipboard history, Snippet expansion,
+    // Hyperkey, Updates.
+    #expect(steps.firstIndex(of: .hyperkey) == steps.firstIndex(of: .snippetExpansion).map { $0 + 1 })
+    #expect(steps.firstIndex(of: .updates) == steps.firstIndex(of: .hyperkey).map { $0 + 1 })
     #expect(OnboardingStep.updates.rawValue == "updates", "the id kept in onboarding.json")
     // A user who completed onboarding before the Updates step existed sees just it, under "Something new to decide".
     var onboarding = Onboarding(answered: OnboardingStep.allCases.filter { $0 != .updates }.map(\.rawValue))
@@ -149,22 +162,24 @@ import Testing
     #expect(
         OnboardingStep.allCases == [
             .welcome, .hotkey, .accessibility, .openAtLogin, .currency, .extensionStore, .signIn, .clipboardHistory,
-            .updates, .done,
+            .snippetExpansion, .hyperkey, .updates, .done,
         ])
     #expect(OnboardingStep.extensionStore.rawValue == "extensionStore", "the id kept in onboarding.json")
     #expect(OnboardingStep.signIn.rawValue == "signIn")
 }
 
-@Test func someoneWhoFinishedBeforeSeesOnlyTheStoreAndSignInSteps() {
-    // Finished with every step mainline had before FUD-128.
+@Test func someoneWhoFinishedBeforeSeesOnlyTheNewSteps() {
+    // Finished with every step mainline had before FUD-128, FUD-101's expansion and FUD-125.
     let before: [OnboardingStep] = [
         .welcome, .hotkey, .accessibility, .openAtLogin, .currency, .clipboardHistory, .updates, .done,
     ]
     var onboarding = Onboarding(answered: before.map(\.rawValue))
-    #expect(onboarding.pending == [.extensionStore, .signIn, .done])
+    #expect(onboarding.pending == [.extensionStore, .signIn, .snippetExpansion, .hyperkey, .done])
     #expect(onboarding.hasSomethingNew)
     onboarding.answer(.extensionStore)
     onboarding.answer(.signIn)
+    onboarding.answer(.snippetExpansion)
+    onboarding.answer(.hyperkey)
     #expect(onboarding.isComplete, "Done was clicked before")
 }
 
@@ -184,7 +199,10 @@ import Testing
         "resetAfter": "a choice that's on by default",
         "showOnScreen": "a choice, not a feature",
         "escapeBehavior": "a choice, not a feature",
+        "hyperkeyQuickPress": "a detail of Hyperkey, which has its own step",
         "colorFormat": "the Color Picker's format, not a feature",
+        "calendarHidden": "which calendars My Schedule shows; it asks for access when first run",
+        "calendarDaysAhead": "a detail of My Schedule",
     ]
     let defaults = FudgeSettings()
     let properties = Mirror(reflecting: defaults).children.compactMap { child in child.label.map { ($0, child.value) } }
@@ -201,7 +219,9 @@ import Testing
         }
     }
     #expect(
-        Set(OnboardingStep.optIns.values) == [.currency, .extensionStore, .signIn, .clipboardHistory, .updates])
+        Set(OnboardingStep.optIns.values) == [
+            .currency, .extensionStore, .signIn, .clipboardHistory, .snippetExpansion, .hyperkey, .updates,
+        ])
 }
 
 @Test func turningOnTheStoreInOnboardingWritesWhatTheSwitchWritesAndEnablesIt() {
@@ -227,4 +247,29 @@ import Testing
     #expect(ExtensionStore.Consent.message.hasPrefix("This adds the Extension Store to Fudge."))
     #expect(ExtensionStore.Consent.note.contains(ExtensionStore.Consent.issueLinkText))
     #expect(FudgeSettings().signIn == .off, "Sign-in starts Off, which ↵ keeps")
+}
+
+@Test func snippetExpansionIsAskedAfterClipboardHistoryAndExistingUsersSeeJustIt() {
+    let steps = OnboardingStep.allCases
+    #expect(steps.firstIndex(of: .snippetExpansion) == steps.firstIndex(of: .clipboardHistory).map { $0 + 1 })
+    #expect(OnboardingStep.snippetExpansion.rawValue == "snippetExpansion", "the id kept in onboarding.json")
+    #expect(OnboardingStep.optIns["expandSnippets"] == .snippetExpansion)
+    #expect(!FudgeSettings().expandSnippets, "Not Now writes nothing, so it stays off")
+    let existing = Onboarding(answered: OnboardingStep.allCases.filter { $0 != .snippetExpansion }.map(\.rawValue))
+    #expect(existing.pending == [.snippetExpansion, .done])
+    #expect(existing.hasSomethingNew)
+    // The step and the Snippets page's sheet say the same thing, from one string.
+    #expect(SnippetExpander.inputMonitoringExplanation.contains("Input Monitoring"))
+    #expect(SnippetExpander.inputMonitoringExplanation.contains("while macOS protects a password field"))
+}
+
+@Test func hyperkeyIsAskedAfterClipboardHistoryAndExistingUsersSeeJustIt() {
+    let steps = OnboardingStep.allCases
+    #expect(steps.firstIndex(of: .hyperkey) == steps.firstIndex(of: .snippetExpansion).map { $0 + 1 })
+    #expect(OnboardingStep.hyperkey.rawValue == "hyperkey", "the id kept in onboarding.json")
+    #expect(OnboardingStep.optIns["hyperkey"] == .hyperkey)
+    #expect(!FudgeSettings().hyperkey, "Not Now writes nothing, so it stays off")
+    let existing = Onboarding(answered: OnboardingStep.allCases.filter { $0 != .hyperkey }.map(\.rawValue))
+    #expect(existing.pending == [.hyperkey, .done])
+    #expect(existing.hasSomethingNew)
 }

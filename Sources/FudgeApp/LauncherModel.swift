@@ -113,6 +113,8 @@ final class LauncherModel {
     private(set) var arguments = ArgumentInput()
     /// The root item `arguments` belongs to.
     @ObservationIgnored private var argumentsItem: String?
+    /// The alias hand-off's memory of the query it last took (FUD-140).
+    @ObservationIgnored private var aliasHandOff = AliasHandOff()
     /// Counts the times `arguments` started over. Each field's edits carry the count it was drawn with, so a late
     /// write from a field that's gone can't refill the new ones.
     private(set) var argumentsGeneration = 0
@@ -156,6 +158,8 @@ final class LauncherModel {
     @ObservationIgnored var reloadAll: () -> Void = {}
     /// Shows a HUD message; set by the app delegate.
     @ObservationIgnored var showHUD: (String) -> Void = { _ in }
+    /// Snippet expansion reads `snippets.json` again after the launcher changed it; set by the app delegate.
+    @ObservationIgnored var snippetsChanged: () -> Void = {}
     /// Registers the command hotkeys again from the settings last read, after a quicklink and its hotkey went; set
     /// by the app delegate.
     @ObservationIgnored var commandHotkeysChanged: () -> Void = {}
@@ -188,6 +192,8 @@ final class LauncherModel {
     @ObservationIgnored var confirm: (AlertRequest, CallOrigin) async -> Bool = { _, _ in false }
     /// The system's part of the System commands. `AppDelegate` gives snapshot runs inert ones, which do nothing.
     @ObservationIgnored var systemActions: any SystemActions = MacSystemActions()
+    /// My Schedule's calendars: EventKit's, or a snapshot run's made-up ones (`FixedCalendarSource`).
+    @ObservationIgnored var calendarSource: any CalendarSource = EventKitCalendarSource()
 
     /// "Sign in to <provider>" on screen, over whatever the command shows (SPEC-056).
     private(set) var signIn: SignInPrompt?
@@ -458,14 +464,20 @@ final class LauncherModel {
                 reportSelection()
             case .root, .failure:
                 if case .failure = screen { screen = .root }
-                // An alias and a space hand the rest of the query to that command's first argument (as in Raycast).
-                if let handed = CommandAliases.handOff(newValue, in: items) {
+                // An alias and a space hand the rest of the query to that command's first argument (as in Raycast),
+                // once: the query coming back as the search field's write-back changes nothing.
+                switch aliasHandOff.answer(newValue, in: items, inArgument: arguments.focus != nil) {
+                case .handOff(let item, let rest):
                     rootQuery = String(newValue.prefix { $0 != " " })
                     refreshResults()
-                    selectedItem = handed.item.id
-                    arguments.set(handed.rest, at: 0)
+                    selectedItem = item.id
+                    arguments.set(rest, at: 0)
                     arguments.focus = 0
                     return
+                case .alreadyHandedOff:
+                    return
+                case .query:
+                    break
                 }
                 rootQuery = newValue
                 refreshResults()
@@ -660,9 +672,15 @@ final class LauncherModel {
         arguments.set(value, at: index)
     }
 
-    /// The user clicked into an argument field (an index) or the search field (nil).
+    /// The user picked a dropdown argument's value.
     func focusArgument(_ index: Int?) {
         if arguments.focus != index { arguments.focus = index }
+    }
+
+    /// SwiftUI says the keyboard moved to argument field `index`, or the search field (nil). Only a move the user
+    /// made counts, which needs the panel to hold the keyboard (`ArgumentInput.follows`, FUD-140).
+    func fieldTookKeyboard(_ index: Int?, panelHoldsKeyboard: Bool) {
+        if arguments.follows(index, panelHoldsKeyboard: panelHoldsKeyboard) { arguments.focus = index }
     }
 
     // MARK: - Command views
@@ -1756,11 +1774,11 @@ final class LauncherModel {
         }
     }
 
-    /// The sessions of Fudge's own views, its forms, Search Snippets, Switch Windows, Search Menu Items, Recent Colors and
-    /// Define Word, which never reach the host.
+    /// The sessions of Fudge's own views, its forms, Search Snippets, Switch Windows, Search Menu Items, Recent Colors,
+    /// Define Word and My Schedule, which never reach the host.
     static let builtInSessions: Set<String> = [
         QuicklinkForm.session, SnippetForm.session, SnippetList.session, SwitchWindowsList.session, LayoutForm.session,
-        MenuItemsList.session, RecentColorsGrid.session, DefineWordView.session,
+        MenuItemsList.session, RecentColorsGrid.session, DefineWordView.session, ScheduleList.session,
     ]
 
     @ObservationIgnored private var builtInForm: BuiltInFormState?
@@ -1882,6 +1900,7 @@ final class LauncherModel {
                 return
             }
             saved = "Snippet saved"
+            snippetsChanged()
         case .layout(let draft, _):
             let draft = LayoutForm.draft(draft, with: values)
             let file = paths.windowLayoutsFile
@@ -1941,6 +1960,149 @@ final class LauncherModel {
         for case .exit(let session, let reason) in form.deferred { handle(.exit(session: session, reason: reason)) }
         if case .command(let command) = screen, command.session == covered { return }
         send(.unload(session: covered))
+    }
+
+    // MARK: - My Schedule
+
+    /// What My Schedule was last drawn from, which its actions' nodes are read in (`ScheduleList.target`). It's in
+    /// memory only: no event is logged or kept (SPEC-092).
+    @ObservationIgnored private var scheduleContent = ScheduleList.Content.asking
+    /// Whether My Schedule shows its detail pane (Show Details, ⌘D), for the run.
+    @ObservationIgnored private var scheduleShowsDetail = false
+    /// The read of the calendars under way, off the main thread; a newer one replaces it.
+    @ObservationIgnored private var scheduleRead: Task<Void, Never>?
+
+    /// Shows My Schedule (SPEC-092), from root search or its hotkey. Its hotkey hides it again when it's on screen,
+    /// as a view command's does. It shows as loading until the calendars are read, off the main thread. Calendar
+    /// access is asked for here, the first time, and nowhere else.
+    private func showSchedule(fromHotkey: Bool) {
+        if fromHotkey, isVisible(), case .command(let command) = screen, command.session == ScheduleList.session {
+            hide()
+            return
+        }
+        let access = calendarSource.authorization
+        scheduleContent = access.canRead || access == .notDetermined ? .asking : .refused
+        let build = {
+            if case .command = self.screen { self.leaveCommand() }
+            self.actionPanel = nil
+            self.dropdownPanel = nil
+            self.datePanel = nil
+            var command = CommandScreen(session: ScheduleList.session, title: ScheduleList.title)
+            self.renderSchedule(&command)
+            self.screen = .command(command)
+        }
+        if fromHotkey {
+            resettingFirst(build)
+            show()
+        } else {
+            build()
+        }
+        guard access == .notDetermined else {
+            if access.canRead { readSchedule() }
+            return
+        }
+        let source = calendarSource
+        Task {
+            _ = await source.requestAccess()
+            readSchedule()
+        }
+    }
+
+    /// Reads the calendars off the main thread, since every EventKit call waits on the calendar agent, then draws the
+    /// list if it's still on screen: the days from today to Days Ahead, of the calendars not unticked on the Calendar
+    /// page.
+    private func readSchedule() {
+        scheduleRead?.cancel()
+        let source = calendarSource
+        let chosen = FudgeSettings.load(from: paths.settingsFile)
+        scheduleRead = Task {
+            let content = await Task.detached(priority: .userInitiated) {
+                Self.scheduleContent(from: source, chosen: chosen, now: Date(), calendar: .current)
+            }.value
+            guard !Task.isCancelled else { return }
+            scheduleContent = content
+            drawSchedule()
+        }
+    }
+
+    /// What My Schedule shows, read from `source`: called off the main thread.
+    nonisolated private static func scheduleContent(
+        from source: any CalendarSource, chosen: FudgeSettings, now: Date, calendar: Calendar
+    ) -> ScheduleList.Content {
+        switch source.authorization {
+        case .fullAccess:
+            let calendars = source.calendars()
+            let window = Schedule.window(now: now, daysAhead: chosen.calendarDaysAhead, calendar: calendar)
+            let events = source.events(
+                from: window.start, to: window.end,
+                calendars: Schedule.shownCalendars(calendars, hidden: chosen.calendarHidden))
+            return .days(
+                Schedule.days(
+                    events, now: now, daysAhead: chosen.calendarDaysAhead, calendar: calendar, locale: .current),
+                calendars: calendars, daysAhead: chosen.calendarDaysAhead)
+        case .notDetermined:
+            return .asking
+        default:
+            return .refused
+        }
+    }
+
+    /// Draws the list from what was last read, keeping the search text and the selection where it can.
+    private func renderSchedule(_ command: inout CommandScreen) {
+        command.view = ScheduleList.view(
+            scheduleContent, showingDetail: scheduleShowsDetail, now: Date(), calendar: .current, locale: .current)
+        refreshList(&command, selectFirst: false)
+    }
+
+    /// Draws My Schedule again from what was last read, if it's on screen.
+    private func drawSchedule() {
+        guard case .command(var command) = screen, command.session == ScheduleList.session else { return }
+        renderSchedule(&command)
+        screen = .command(command)
+    }
+
+    /// Reads and draws My Schedule again, if it's on screen: after the calendars change, or the Calendar page
+    /// changes what it shows.
+    func reloadSchedule() {
+        guard case .command(let command) = screen, command.session == ScheduleList.session else { return }
+        readSchedule()
+    }
+
+    /// One of its actions, as `send` hands it over.
+    private func scheduleListAction(node: Int) {
+        guard case .command(let list) = screen, list.session == ScheduleList.session,
+            let target = ScheduleList.target(of: node, in: scheduleContent, calendar: .current, locale: .current)
+        else { return }
+        switch target {
+        case .join(let url), .openInCalendar(let url):
+            // The user's own pick; a meeting link is one `MeetingLinks` accepted.
+            if NSWorkspace.shared.open(url) {
+                hide()
+            } else {
+                showFailureToast("Can't open it", message: "No app on this Mac opens this link.")
+            }
+        case .copyLink(let url):
+            copyScheduleText(url.absoluteString, hud: "Copied Meeting Link")
+        case .copyDetails(let text):
+            copyScheduleText(text, hud: "Copied to Clipboard")
+        case .openPrivacySettings:
+            NSWorkspace.shared.open(ScheduleList.privacySettingsURL)
+            hide()
+        case .openSettings:
+            showSettings(extension: SettingsModel.calendarPage)
+        case .toggleDetail:
+            scheduleShowsDetail.toggle()
+            drawSchedule()
+        }
+    }
+
+    private func copyScheduleText(_ text: String, hud: String) {
+        Task {
+            _ = try? await SystemCalls.handle(
+                "clipboard.copy", .object(["text": .string(text)]), origin: .userInitiated)
+        }
+        hide()
+        showHUD(hud)
     }
 
     // MARK: - Search Snippets
@@ -2020,7 +2182,8 @@ final class LauncherModel {
         Task {
             do {
                 try await SystemCalls.pasteSnippet(
-                    filled.text, leftArrows: filled.afterCursor ?? 0, hideWindow: { await self.hideForPaste() })
+                    filled.text, leftArrows: SnippetTemplate.leftArrows(afterCursor: filled.afterCursor),
+                    hideWindow: { await self.hideForPaste() })
             } catch PasteError.noTarget {
                 showHUD("There is no app to paste into")
             } catch {
@@ -2059,6 +2222,7 @@ final class LauncherModel {
                 return
             }
             reloadSnippetList()
+            snippetsChanged()
         }
     }
 
@@ -3329,6 +3493,8 @@ final class LauncherModel {
             }
         } else if group == BuiltInCommandGroup.tools.name, let command = ToolCommand(rawValue: command) {
             runTool(command, item: item, fromHotkey: fromHotkey)
+        } else if group == BuiltInCommandGroup.calendar.name, command == ScheduleList.commandName {
+            showSchedule(fromHotkey: fromHotkey)
         }
     }
 
@@ -3800,6 +3966,8 @@ final class LauncherModel {
                 recentColorsAction(node: node)
             } else if session == DefineWordView.session, path == ["onAction"] {
                 defineWordAction(node: node)
+            } else if session == ScheduleList.session, path == ["onAction"] {
+                scheduleListAction(node: node)
             }
             return
         }

@@ -53,7 +53,10 @@ Extensions run in a separate Node.js process, the extension host.
       `LauncherModel.applySettings()` rebuilds root search from the cached installed extensions with `RootSearch.applying`, which drops disabled commands and sets aliases; it runs on every reload and whenever the Settings window changes something.
       An exact alias (case-insensitive) outranks everything (`exactAliasScore`), and `RootSearch.rows` puts it above the calculator card: that's the one row order the panel draws and ↑↓ follows.
       An alias prefix ranks next.
-      For a command with arguments, "alias, space, rest" in the search field selects it and moves the rest into its first argument field (`CommandAliases.handOff`); one of Fudge's own commands can have a hand-off word that does the same (`define`), unless a command has it as its alias.
+      For a command with arguments, "alias, space, rest" in the search field selects it and moves the rest into its first argument field (`CommandAliases.handOff`).
+      One of Fudge's own commands can have a default alias (`CommandAliases.defaults`: Define Word's `define`), which the Commands page shows and edits like any other.
+      It applies while `settings.json` has no alias for the command and no other command has taken it, so the user's own wins, and it's never written there (`FudgeSettings.alias(ofCommand:)`); clearing it saves an empty alias, so it stays cleared (`setAlias`).
+      It does that once per query (`AliasHandOff`): the same query coming back while an argument field has the keyboard is the search field writing its text back as it loses the keyboard, and changes nothing.
       `CommandAliases.problem` holds the alias rules (1–32 characters, no whitespace, unique ignoring case).
       A disabled command's hotkey isn't registered (`FudgeSettings.availableHotkeys`), and `CommandLocator` refuses `launchCommand` for it (`LaunchCommandError.disabled`).
     - **Built-in command groups** (`BuiltInCommandGroup`, core) are Fudge's own commands, each with a title, keywords and an SF Symbol.
@@ -115,6 +118,7 @@ Extensions run in a separate Node.js process, the extension host.
       Eject All Disks unmounts ejectable, removable and network volumes, never the one macOS started from (`MountedVolume.toEject`, which puts each disk's volumes together, by DiskArbitration's whole disk, read only), off the main thread, and the HUD names what it ejected and what it couldn't, with why.
       Ejecting a volume ejects its whole disk, so each volume is checked before its turn (`SystemActions.isMounted`, the mounted volumes read afresh): one that's gone went with its disk and counts as ejected.
       Whether an eject worked is read from the mounts afterwards, never from the call's error.
+      When the mounts can't be read, each volume is still ejected, and the HUD says it couldn't check, never that it ejected.
       Hide All Apps hides every regular app but Fudge; Quit All Apps asks every regular app but Fudge and Finder that has finished launching to quit, counting and reading the list the same way, again once confirmed (`RunningApp.toHide`, `toQuit`).
       `LauncherModel.runBuiltIn` hides the panel first, as for window commands, and a command that asks does it in an alert of its own.
       In a snapshot run, `confirm` lays the alert out off-screen (`SnapshotSheet.laidOut`) and answers no, and the run saves the alert instead of the panel (`--query "empty trash" --activate`; `--trash-count <n>` sets the made-up count, 12 by default, and anything but a number is a count Finder couldn't give).
@@ -135,6 +139,27 @@ Extensions run in a separate Node.js process, the extension host.
       Hiding the panel drops the read on screen, and showing it reads the frontmost app's menus again.
       Without Accessibility the list says so, after the gate's prompt or offer.
       Snapshot runs never read a real app's menus (`FixedMenuSystem`).
+    - **Hyperkey** (SPEC-093) is off until **Hyperkey (Caps Lock)** (`hyperkey` in `settings.json`, the General page's switch, `HyperkeyControls`) is on; then holding Caps Lock adds ⌘⌥⌃⇧ to every key pressed.
+      `HyperkeyService` (app) maps Caps Lock to F18 (`HyperkeyMapping.entry`) in macOS's per-user key mapping through `/usr/bin/hidutil` (`HidutilKeyMapping`, behind core's `KeyMappingSystem`, so no test runs it), on a serial queue off the main thread.
+      `HyperkeyMapping` (core) reads `hidutil`'s output (`(null)`, or CoreFoundation's description of the list), adds or removes only Fudge's entry and writes the whole list back.
+      It refuses, naming the key, when Caps Lock is mapped elsewhere: in the mapping every keyboard gets, in a keyboard's own (`--matching keyboard`), or in System Settings → Keyboard → Modifier Keys (`HIDKeyboardModifierMappingPairs`, per keyboard; Caps Lock left as itself there isn't a mapping).
+      It also refuses when any of them can't be read.
+      Turning it on needs Accessibility (`SystemCalls.mayPostKeysForUser`, the usual prompt and offer) and is saved only once the tap runs and the mapping is in; a refusal shows under the switch (`hyperkeyProblem`).
+      An active `CGEventTap` at the HID level runs on a thread and run loop of its own (`HyperTapThread`), and sees only the keyboard's own events (`eventSourceStateID` is the HID system's, so keys Fudge or another app posts are left alone).
+      It hands each key's code, kind, repeat flag and time to `HyperTap` (core): F18's own events are swallowed, and any other key gets ⌘⌥⌃⇧ while F18 is down in the HID system.
+      That state is `CGEventSource.keyState(.hidSystemState)`, read for every event, never only what the tap saw, so a lost key-up can't leave Hyper stuck.
+      It keeps nothing about what's typed, only when F18 went down and whether another key came since, and nothing is logged.
+      With **Quick press toggles Caps Lock** (`hyperkeyQuickPress`), a press under 200 ms with no other key toggles Caps Lock with `IOHIDSetModifierLockState` (a posted key can't).
+      Under secure input the tap does nothing, and the state starts over then, when macOS turns the tap off and it's turned back on, and when it's switched off.
+      `HyperkeyLifecycle` (core) decides when it runs, at launch, on each change and every 2 s: only while the setting is on and Accessibility is allowed, so without Accessibility the tap stops and the mapping goes, and both come back with it.
+      Whenever it won't run, Fudge's entry is removed once, at launch too, since a crash, a kill or a force-quit skips the removal at quit and a leftover Caps Lock → F18 with no tap leaves Caps Lock dead.
+      A start that failed (the tap or the mapping refused) isn't tried again until the setting or Accessibility changes.
+      Quitting removes Fudge's entry, and SIGTERM quits as Quit does (`NSApp.terminate`), so a kill or `make run`'s restart does too; `hidutil` mappings also reset at logout.
+      The 2 s check also turns the tap back on if macOS left it off.
+      With Quick press off, Fudge turns caps off when Hyperkey starts, since the key no longer can.
+      The quick press is timed on the uptime clock (`CLOCK_UPTIME_RAW`), read in the tap.
+      `HotKeySpec` shows all four modifiers as "Hyper" (`isHyper`; "Hyper+T", and a "Hyper" keycap), and saves them as the four.
+      Snapshot runs never tap or run `hidutil`.
     - **The Color Picker** (SPEC-090) is the Tools group (`BuiltInCommandGroup.tools`, one command per `ToolCommand`), a group for utilities that also holds Define Word.
       **Pick Color** hides the panel as the window commands do, then shows macOS's loupe through `ColorSampling` (the app's `ScreenColorSampler` is `NSColorSampler`, which needs no Screen Recording permission; snapshot runs get `InertColorSampler`, which picks nothing, and tests a fake).
       `ColorPick` (core) copies the picked color in the **Copy Format** (`colorFormat` in `settings.json`, `ColorFormat`: HEX by default, RGB, HSL, SwiftUI or UIColor) with a HUD ("Copied #3A7BD5") and adds it to Recent Colors; Esc copies and keeps nothing, and a color `colors.json` can't take is still copied, with the HUD saying so.
@@ -148,17 +173,37 @@ Extensions run in a separate Node.js process, the extension host.
       Its empty view offers Pick Color.
       Its hotkey shows it as a view command's does, or hides the panel when it's already on screen.
       **The Color Picker page** (`ColorPickerPage.swift`, after Sign-in) has Copy Format, a `SettingsPopupRow`; changing it draws Recent Colors again if it's open.
-    - **Define Word** (SPEC-091, the Tools group) takes an optional Word argument (`DefineWord.argument`), and `define` is its hand-off word (`BuiltInCommand.handOffWord`), so `define serendipity` hands "serendipity" to the field as an alias would.
+    - **Define Word** (SPEC-091, the Tools group) takes an optional Word argument (`DefineWord.argument`), and `define` is its default alias (`BuiltInCommand.defaultAlias`), so `define serendipity` hands "serendipity" to the field.
       `DefineWord.start` (core) takes the typed word, else the frontmost app's selection (`LauncherModel.selectedText`, `selection.text` as the user's own call, read only when nothing was typed), each cut to its first line that isn't blank, trimmed, at most 100 characters (`DefineWord.word`); with neither, root search shows the Word field with the keyboard in it.
       The word is looked up through `DefinitionLookup`: the app's `DictionaryServicesLookup` is `DCSCopyTextDefinition`, the Mac's active dictionaries, offline; snapshot runs read no selection and get `FixedDefinitions` (`--definitions <file>`, a JSON object of word to made-up definition, else none), and tests fakes.
-      `DefineWordView` (core) is a Detail under its own session (in `LauncherModel.builtInSessions`): `DefinitionText.markdown` makes the plain text light Markdown (the headword, the text before the first " | ", as a heading; the pronunciation; each part of speech in italics on its own line where a definition or a run of senses starts;
-      each numbered sense in the expected order, each `•` sub-sense and each section such as ORIGIN on its own line), with everything from the dictionary escaped so none of it is read as Markdown.
+      `DefineWordView` (core) is a Detail under its own session (in `LauncherModel.builtInSessions`), and `DefinitionText.markdown` makes the dictionary's plain text light Markdown.
+      The headword, the text before the first " | ", is the heading, then the pronunciation; each part of speech is in italics on its own line where a definition or a run of senses starts, and each numbered sense in the expected order, each `•` sub-sense and each section such as ORIGIN gets a line of its own.
+      Everything from the dictionary, and the word, is escaped so none of it is read as Markdown (`DefinitionText.escaped`), scalar by scalar as Markdown reads it, since a `*` with a combining mark after it is one `Character` that isn't `*` (FUD-142).
+      An e-mail address in it is still linked, since that happens after escapes are read.
       ↵ and ⌘D (Look Up in Dictionary) open `dict://` and the word, percent-encoded and cut (`DefineWord.dictionaryURL`); ⌘↵ (Copy Definition) copies the dictionary's text with a HUD.
       With no definition it says so, with Look Up in Dictionary only.
       A run from root search shows its result only if root search is still on Define Word when the selection and the dictionary have answered.
+    - **My Schedule** (`BuiltInCommandGroup.calendar`, SPEC-092) lists the Mac's events through EventKit, behind `CalendarSource` (core).
+      The app's `EventKitCalendarSource` implements it, reading only; tests and snapshot runs fake it with `FixedCalendarSource` (`--calendar-events <file>`, made-up events with times relative to now), so nothing reads the real calendars there.
+      `Schedule` (core) holds the logic: the days from today to **Days Ahead** (`calendarDaysAhead`: 1, 3, 7 or 14), each titled Today, Tomorrow or its date, with the events not over yet that overlap it.
+      An event spanning days is on each, as "From 22:00", "All day" or "Until 10:00"; all-day ones come first; "Now" or "in N min" marks what's within the hour; and the calendars unticked on the Calendar page are left out (`calendarHidden`, so a new calendar shows).
+      `ScheduleList` (core) is the List, built like Search Snippets and shown under its own session (`ScheduleList.session`), so nothing of it reaches the host.
+      **Invites are written by other people.** `MeetingLinks` (core) takes a link from the event's URL, then location, then notes, only when its parsed host, written plainly (no user, no percent encoding), is a known meeting host or a subdomain of one (`MeetingLinks.hosts`).
+      Its scheme must be `https` with a path, or a meeting app's on that service's hosts (`zoommtg`, `msteams`; `facetime:` calls whoever it names, so FaceTime counts only as `https://facetime.apple.com/…`), never matched by substring and never another scheme.
+      Only the first 20,000 characters of a location or notes are looked through (`MeetingLinks.searchedLength`), and the detail shows the first 5,000, since an invite's notes can be megabytes.
+      The notes are shown in a code block, so nothing in them is read as markdown and no image loads.
+      Nothing from an event is logged or written anywhere, its row id is its position (`event-<n>`), and only the command counts in `LaunchHistory`.
+      ↵ is Join Meeting when there's a link, else Open in Calendar (⌘O, `ical://ekevent/<id>?method=show&options=more`), then Copy Meeting Link (⌘⇧C) and Copy Details; Show Details (⌘D) shows the detail pane, which hides the rows' times.
+      Calendar access (`NSCalendarsFullAccessUsageDescription`) is asked for only when My Schedule runs, the first time; refused, it shows an empty view with Open Privacy Settings.
+      Its hotkey hides it again when it's on screen, and `EKEventStoreChanged` draws it again.
+      The calendars are read off the main thread (`LauncherModel.readSchedule`, and the Calendar page's `loadCalendars`), since every EventKit call waits on the calendar agent: the list shows as loading until the read lands, and ⌘D draws again from it without reading again.
+      `EventKitCalendarSource` runs every call on one serial queue, and makes its store on first use.
+      **Settings → Calendar** (`CalendarPage.swift`, after Sign-in) has Days Ahead and a checkbox per calendar.
     - **Arguments.**
       A selected command's `arguments` get fields after the query, which then shrinks to its text.
       `ArgumentInput` (core) holds what's entered and which field has the keyboard, and takes the keys: Tab and ⇧Tab between the fields, Esc back to the query, ⌫ in an empty field back one, ↑↓ on a dropdown argument. ↵ with a required argument empty moves the keyboard there and outlines it.
+      The model decides which field has the keyboard, and takes a move SwiftUI reports only while the panel holds the keyboard (`ArgumentInput.follows`; `LauncherPanel.holdsKeyboard`, from its own `becomeKey` and `resignKey`), since the user moves it only then.
+      In a panel that doesn't (a snapshot run's never does), a field can't take the keyboard, and SwiftUI answers by falling back to the search field, then asking again; taken as moves, those answers undid the request and set off the next without end (FUD-140).
       A launch passes every argument in `launchProps.arguments`, with an empty string for those left empty, and the fields start over.
       They also start over when the selection moves, but not when a launch couldn't start.
     - **Quicklinks** (FUD-86) are root items too (`RootItem.quicklink`, kind "Quicklink"), from `QuicklinkStore` (core):
@@ -169,7 +214,7 @@ Extensions run in a separate Node.js process, the extension host.
       `QuicklinkTemplate` (core) reads the link's placeholders: arguments (`{argument name="…" default="…" options="a, b"}`, an unnamed `{argument}`, and Raycast's older bare `{Query}`; the same name twice is one field, at most 3), which become root search's argument fields (`fields`:
       a dropdown for `options`, required unless there's a default), dynamic values (`{clipboard}`, `{uuid}`, `{date}`, `{time}`, `{datetime}`, in the Mac's format and calendar), and modifiers (`raw`, `percent-encode`, `uppercase`, `lowercase`, `trim`) after a `|` outside quotes, so `default="a|b"` stays one attribute.
       Raycast's other dynamic names (`{selection}`, `{day}`, `{cursor}`, `{browser-tab}`, `{snippet}`), attributes Fudge doesn't know and unbalanced braces are a `problem` naming the placeholder; such a quicklink shows, with no fields, and opening it shows the problem.
-      Dynamic names ignore letter case (`{Date}`).
+      Dynamic names and modifiers ignore letter case (`{Date | UPPERCASE}`).
       In a URL every value is encoded as JavaScript's `encodeURIComponent` does, unless it's `raw`; in a path (starting with `/` or `~`) values go in as they are; a link that is one placeholder is taken raw.
       The clipboard is read only for a link that uses `{clipboard}` (`usesClipboard`), and reads as nothing when it's marked concealed or transient (`clipboardText`). ↵ fills it in, and `QuicklinkOpening` (core) checks the result: a URL with a scheme, or a path that exists.
       It opens through `SystemCalls`' `open`, with the quicklink's `application` (a bundle id) or the default app, then records the launch and hides the panel; any failure is a toast (`SystemCalls.message(of:)`: Fudge's message or the system's localized one) and the panel stays.
@@ -214,6 +259,25 @@ Extensions run in a separate Node.js process, the extension host.
       `SnippetDraft.problems` checks the rules above, and saving trims the name and keyword and keeps the text exactly as typed.
     - **`Action.CreateSnippet`** renders a host `Action` with `fudgeBuiltIn: "createSnippet"` and its `snippet` (text, name and keyword), which `ActionPanelReader` makes `ActionTarget.createSnippet(SnippetRequest)`.
       Running it opens the Create Snippet form over the command's view, with the name, or else the command's title.
+    - **Expanding snippets as you type** (SPEC-078 B) is off until **Expand Snippets as You Type** (`expandSnippets` in `settings.json`, the Snippets page's switch) is on.
+      `SnippetExpansion` (app) then runs a **listen-only** `CGEventTap` on key-down and clicks (it can't swallow or change a key), at the annotated session point, so each key names the app it goes to (`eventTargetUnixProcessID`).
+      The tap runs only while some snippet has a keyword and Input Monitoring is allowed (`IOHIDCheckAccess`, checked every 2 s, so revoking it removes the tap), and goes at once when switched off.
+      Each key's facts go to `SnippetExpander` (core), which keeps the last 32 characters typed and answers only `.expand(snippetID:)` when they end with a keyword, matched exactly as written.
+      **What's typed never leaves it** (the reviewer's MUST 2): the buffer is private, its description and mirror show nothing typed, and all the launcher's log gets is "expand snippet", with the id `.private`, then, for a `{cursor}`, `Paste`'s caret line (numbers only).
+      It's cleared by a click, an app switch, Return, Tab, Esc, ⌦, the arrows and page keys, the function keys, ⌥⌫, a ⌘ or ⌃ combination, one of Fudge's windows having the keyboard (the launcher's non-activating panel included), the snippets changing, switching off and the permission being revoked; ⌫ takes one character back.
+      A key that goes to another app than the last one clears it too (`SnippetKeyEvent.target`), so a panel that takes the keyboard mid-keyword never gets the ⌫s.
+      Under secure input (`IsSecureEventInputEnabled()`) nothing is kept or expanded.
+      macOS delivers no keys to the tap then, so secure input is also checked twice a second while the tap runs, and in the 2 s poll, which clear the buffer (`Reset.secureInput`); both timers run in the common run-loop modes, so a modal session doesn't stop them.
+      Keys Fudge posts carry `SnippetExpander.marker` as their `eventSourceUserData` and are ignored.
+      Keywords that clash, which only a hand edit or a restore can hold, expand none of them.
+      A tap macOS turns off is turned back on.
+      Expanding checks secure input and Fudge's windows again, then `SystemCalls.expandSnippet` checks Accessibility without a prompt (without it nothing is deleted, the clipboard isn't touched, and a HUD says so once per run).
+      It pastes through `Paste.expand` in its turn: `backspaces` ⌫ presses delete the keyword just before ⌘V, and `{cursor}`'s ← presses follow.
+      All of them go to the app the keyword's last key went to, never to the frontmost app when that's another (a panel such as Spotlight's has the keyboard without being frontmost).
+      Nothing is posted when that app is unknown or Fudge, or when secure input is on by the time the turn comes or comes on while the field is read (checked again right before the first key), and the clipboard is put back.
+      `SnippetTemplate.leftArrows` caps those at 2,000, past which the caret stays at the end.
+      The switch's row shows Input Monitoring's status every second while the page is on screen; turning it on without the permission explains it in a sheet, then asks macOS (its prompt the first time, the Input Monitoring pane after that); onboarding's step turns it on the same way (`SettingsModel.turnOnSnippetExpansion`).
+      Snapshot runs never tap (`--input-monitoring allowed|missing` fixes the status shown).
     - **The calculator.**
       On each root query, `Calculator.evaluate` (core) tries `TimeZoneConversion` (`13.00 copenhagen time to new york time`, `3pm cet in pst`, `time in tokyo`), then `CurrencyConversion` (`100 usd to eur`, `€100 in usd`, `100 € in kr`:
       the ECB's codes from a static list, four symbols, and `kr` as the locale's krone or krona, else DKK), then `UnitConversion` (`13kg to lbs`, through Foundation's `Measurement`, with exact factors where Foundation rounds), then `Arithmetic` (a recursive-descent parser with `%`, `!`, functions and implicit products, where a sign binds looser than a right-associative `^`, so `-2^2` is -4).
@@ -345,7 +409,7 @@ Extensions run in a separate Node.js process, the extension host.
       It holds public facts only: window classes and levels, bundle ids and decisions, never paths, titles or typing.
       Read it with `/usr/bin/log show --last 2m --predicate 'subsystem == "io.github.jakeobsen.fudge"' --info` (in zsh, a bare `log` is a builtin).
     - **The General page** (`GeneralPage.swift`) is the Settings window's first page, and the one ⌘, Settings… and "Fudge Settings" open on:
-      Open at Login, the launcher's hotkey, Show Fudge on, Pop to Root Search, Escape Key Behavior (all three `SettingsPopupRow`s), Updates (Check for Updates, another `SettingsPopupRow` with Daily, Weekly, Monthly and Never, then `UpdateStatusRow`:
+      Open at Login, the launcher's hotkey, Show Fudge on, Pop to Root Search, Escape Key Behavior (all three `SettingsPopupRow`s), Keyboard (Hyperkey and its Quick press switch, which is disabled while Hyperkey is off), Updates (Check for Updates, another `SettingsPopupRow` with Daily, Weekly, Monthly and Never, then `UpdateStatusRow`:
       While the update check is unset, that popup shows Not Chosen first (`UpdateCheckSetting.popupOptions`): it checks nothing, as Never does, and can't be picked again once something is chosen.
       the last check's result and time, Check Now, and Download… while a newer release is known; saved through `change {}`), the currency switch, the calculator's Number format (Same as macOS, "1,234.5" or "1.234,5", saved through `change {}`; changing it re-evaluates the open query), Clear Search History…, and Import / Export.
       The launcher's hotkey is recorded like a command's, through the same `HotkeyRecordingPrompt`, but it can't be cleared: ⌫ and the Reset button set ⌥Space (`HotKeyRecording.launcherEdit`).
@@ -501,24 +565,28 @@ Extensions run in a separate Node.js process, the extension host.
       The sheet saves through `SettingsModel.saveQuicklink`, which reads the file again and shows `QuicklinkDraft.problems` under the fields.
       An unreadable `quicklinks.json` shows the notice and disables changes.
       Each change calls `quicklinksChanged`, so root search reads the file again.
-    - **The Snippets page** (`SnippetsPage.swift`) comes after Quicklinks and works like it: a table of every snippet's Name, Keyword and the start of its text on one line, sorted by name, read again when the page is shown or the window becomes key; + and Edit… (or a double-click) open a sheet with Name, a several-line Snippet and Keyword, and − (or ⌫) deletes after a confirmation sheet.
+    - **The Snippets page** (`SnippetsPage.swift`) comes after Quicklinks and works like it, under the Expand Snippets as You Type switch: a table of every snippet's Name, Keyword and the start of its text on one line, sorted by name, read again when the page is shown or the window becomes key.
+      + and Edit… (or a double-click) open a sheet with Name, a several-line Snippet and Keyword, and − (or ⌫) deletes after a confirmation sheet.
       The sheet saves through `SettingsModel.saveSnippet`, which reads the file again and shows `SnippetDraft.problems` under the fields.
       An unreadable `snippets.json` shows the notice and disables changes.
-      Each change draws Search Snippets again if it's open in the launcher (`snippetsChanged`).
+      Each change draws Search Snippets again if it's open in the launcher, and expansion reads the snippets again (`snippetsChanged`).
     - **The Permissions page** (`PermissionsPage.swift`) comes after General: Accessibility's status (`AccessibilityStatus`, read without a prompt when it's shown and every second while it's on screen), its reason, and Open Accessibility Settings.
       That button asks for macOS's prompt on the first click and opens the pane on later ones, or at once when something in this run already asked for the prompt (`AccessibilityPermission.request`, `SystemAccessibility.promptShown`), so the prompt and the pane never stack.
       Below it, always shown, are the answers to "Allow <A> to open <B>'s commands?" (`LaunchPermissionsSection`, `LaunchPermissions.entries`), each changeable or forgotten, with the file read again before each change, a line saying none has asked yet when there are none, and the unreadable-file notice.
+      Between them is Calendar access as macOS has it, with Open Privacy Settings (`CalendarAccessRow`); My Schedule asks for it, never this page.
       Show Onboarding Again restarts onboarding from Welcome.
     - **Onboarding** (`OnboardingWindow.swift`) opens at every launch until it's complete, once the extensions have loaded; never in snapshot runs, tests or the CLI.
       `Onboarding` (core) keeps the answered step ids in `onboarding.json` and decides what to show (`pending`): the unanswered steps, in order, then Done.
       Once it has been completed, Welcome isn't shown again, and a step added later shows on its own, then Done, under "Something new to decide" (`hasSomethingNew`).
       **`OnboardingStep`'s cases are the one list of steps**: adding a step means adding its case and drawing it.
-      The steps use General's own controls (`LauncherHotkeyControls`, `OpenAtLoginControls`, `CurrencyRatesToggle`, and the Permissions page's `AccessibilityControls`), so an answer takes effect at once.
+      The steps use General's own controls (`LauncherHotkeyControls`, `OpenAtLoginControls`, `CurrencyRatesToggle`, `HyperkeyControls`, and the Permissions page's `AccessibilityControls`), so an answer takes effect at once.
       The **Extension Store** step (after Currency) shows the store's consent sheet's own words (`ExtensionStore.Consent`), with **Turn On Extension Store**, which writes what the switch and its sheet write and also ticks the store's Enabled (`FudgeSettings.turnOnExtensionStore`), and **Not Now**, which is ↵.
       The **Sign-in** step is the Sign-in page's own choice (`SignInServerControls`, shared with the page, with `SignInServer.explanation`), whose consent sheets show on the onboarding window (`OnboardingModel.ask`; laid out off-screen in snapshot runs), with Continue as ↵, so Off stays Off.
       The **Clipboard history** step (after Sign-in) shows the consent sheet's own words (`ClipboardHistory.consentMessage`, the one string both use) with **Keep Clipboard History**, which does what the switch and its sheet do (`SettingsModel.keepClipboardHistory`), and **Not Now**, which is ↵, so going through onboarding with ↵ never starts recording.
       When it's already on, the step says so and turning it off is left to Settings.
-      Updates, after Clipboard history, is `UpdateCheckChoice`: Daily, Weekly, Monthly or Off, with Daily preselected, and its Continue saves the choice, since nothing is checked until one is saved.
+      **Expand snippets as you type**, after Clipboard history, works the same way: it explains Input Monitoring (`SnippetExpander.inputMonitoringExplanation`, the Snippets page's sheet's own words), **Turn On** does what the switch does (`SettingsModel.turnOnSnippetExpansion`, then macOS's prompt or pane), and **Not Now** is ↵.
+      **Use Caps Lock as Hyper?** (after Snippet expansion) shows General's `HyperkeyControls`, with **Not Now** as ↵ while it's off.
+      Updates, after Hyperkey, is `UpdateCheckChoice`: Daily, Weekly, Monthly or Off, with Daily preselected, and its Continue saves the choice, since nothing is checked until one is saved.
       Welcome also has **Restore from a Backup…**, General's import flow with its own sheets on the onboarding window (`SettingsModel.onboardingBackup`); a backup never holds `onboarding.json`, so onboarding carries on after an import.
       A step is answered when it's left with Get Started, Continue or Not Now, and saved straight away, so closing the window keeps the answers so far.
       Leaving a step or closing the window ends a hotkey recording. ⌘W and ⌘Q close the window as they do Settings (`WindowShortcut`), without completing onboarding.
@@ -567,6 +635,7 @@ Extensions run in a separate Node.js process, the extension host.
     Anything else is dropped and logged once per id, the sessions of Fudge's own views included (`LauncherModel.builtInSessions`):
     - Define Word
     - its forms
+    - My Schedule
     - Recent Colors
     - Search Menu Items
     - Search Snippets
@@ -641,13 +710,17 @@ Extensions run in a separate Node.js process, the extension host.
     A top-level `use()` with no `<Suspense>` boundary just holds the first render until the promise settles.
   - **The fetch rewrite** (`src/api/oauth-fetch.ts`).
     `OAuthService` fetches its token and refresh URLs itself, so the worker wraps `fetch`: a `Request`, or anything else read as a string, as `fetch` reads it.
-    A request goes to the relay, as `<server>/<provider>/token` or `/refresh-token` with the same method, headers and body, only when it's a `POST` to one of the seven providers' default token or refresh URLs (by scheme, host and path) with `grant_type` `authorization_code` or `refresh_token`.
-    Google, Jira and Zoom refresh at their token URL, so there the grant picks the endpoint, and since those are the providers' own URLs, they go to the relay only when this extension has a relay sign-in for that provider, pending or stored (`SignInCalls.hasRelaySignIn`); an extension's own flow, or a service account's grant, goes where it was going.
+    A request goes to the relay, as `<server>/<provider>/token` or `/refresh-token` with the same method, headers and body, only when it's a `POST` to one of the table's token or refresh URLs (by scheme, host and path) with `grant_type` `authorization_code` or `refresh_token`.
+    Google, Atlassian and Zoom refresh at their own token URL, so there the grant picks the endpoint, and since those are the providers' own URLs, they go to the relay only when this extension has a relay sign-in for that provider, pending or stored (`SignInCalls.hasRelaySignIn`); an extension's own flow, or a service account's grant, goes where it was going.
     **Nothing is ever sent to Raycast's proxy hosts** (`*.oauth.raycast.com`, with or without a trailing dot): what isn't rewritten there is refused, with sign-in on or off.
     A rewritten request goes to the relay through Node's `http`/`https` (`sendToRelay`), never undici, as the `Request` `fetch` would send (its method, headers and serialized body, its `signal`), and comes back as the `Response` `fetch` would give, streamed and decoded.
     Its connection always verifies (`relayTLSOptions`: `rejectUnauthorized: true` and TLS 1.2 at least), whatever the worker's `NODE_TLS_REJECT_UNAUTHORIZED` says, since it carries the code and verifier or the refresh token.
     A redirect from the relay is an error, never followed, since a 307 or 308 would send that body on.
     Every other request keeps `fetch`'s own redirects, as in Raycast (D-65), so a third party's redirect to `*.oauth.raycast.com` isn't intercepted.
+    The table holds the seven providers `OAuthService` has built in, at their default URLs, and Raycast's proxies for Jira and Zoom (`jira.oauth.raycast.com`, `zoom.oauth.raycast.com`), which the store's Jira and Zoom extensions set (FUD-137).
+    Those go to the relay's `atlassian` and `zoom` providers, beside Atlassian's and Zoom's own URLs, so two entries can share a relay provider (`OAuthProvider.id`), and an entry is known by its authorize URL.
+    One Atlassian app covers Jira and Confluence, so both Atlassian entries are named **Atlassian (Jira, Confluence)**.
+    A sign-in stored with `relayProvider: "jira"`, the relay's Atlassian provider before fudge-oauth v0.3.0, counts as Atlassian's (`OAuthProviders.currentRelayProvider`).
     The table is core's (`OAuthProviders`), handed to the host as JSON in `FUDGE_OAUTH_PROVIDERS`; `runtime/test/fixtures/oauth-providers.json` is the same table, pinned by a Swift test, for the runtime's tests.
     Only for a request that may go to the relay does the worker ask the app (`oauth.server`, with the provider): the server in use, so a change while a command runs is honoured, and whether the extension has a relay sign-in there.
   - **Below `fetch`** (`src/api/oauth-http.ts`, SPEC-075).
@@ -694,14 +767,14 @@ Extensions run in a separate Node.js process, the extension host.
       Then it sends Finder `core/getd` of `selection` as an alias list with a 5 s timeout.
       It resolves POSIX paths in Finder's order, folders without a trailing slash.
     - `Paste` (`Clipboard.paste`, `Action.Paste`, `clipboard.paste`) snapshots the pasteboard the same way, writes the content as `Clipboard.copy` does, marked `org.nspasteboard.TransientType` and `AutoGeneratedType`, hides the panel unless `closeMainWindow` is false, waiting a run-loop turn plus 50 ms after hiding it so key status is back with the target app,
-      and posts ⌘V to the frontmost app on the key that types "v".
+      and posts ⌘V to the frontmost app on the key that types "v", after any ⌫ presses it was given (`backspaces`, an expanded keyword), to the same app from a private event source with only each key's own flags and `SnippetExpander.marker`.
       **The caret** (SPEC-101, FUD-133): an app takes ⌘V on a later turn of its run loop, so ← presses sent at once can arrive before the pasted text.
-      Before ⌘V, `Paste` reads the focused field's `kAXNumberOfCharactersAttribute` and `kAXSelectedTextRangeAttribute` (`CaretSystem`, the app's `SystemCaret`), never its value.
+      Before any key goes out (an expansion's ⌫ presses included, which `PastedText.deletedBefore` counts in UTF-16 units), `Paste` reads the focused field's `kAXNumberOfCharactersAttribute` and `kAXSelectedTextRangeAttribute` (`CaretSystem`, the app's `SystemCaret`), never its value.
       After it, `CaretPlacer` (core) polls them every 15 ms until they show the paste, until a second after ⌘V by the clock (each read can take its 2 s timeout, so polls aren't counted); a read that fails ends the wait at once.
       The paste has landed (`PasteLanding`, in UTF-16 units) when the caret is just after the pasted text, or, where the caret isn't reported, when the length is what the paste gives, counting the selection the paste replaces or the text ⌫ presses deleted before it.
       A paste no longer than what the ⌫ presses delete can't be told apart from them, so it isn't watched.
       Then, for a `{cursor}`, it sets an empty `kAXSelectedTextRangeAttribute` before the text after it and reads it back (a set the field took is trusted when the read-back fails).
-      Where the field doesn't take that, or stops partway, ← presses go from where the caret is, 10 at a time, 10 ms apart, from a private event source with only the arrow keys' own flags.
+      Where the field doesn't take that, or stops partway, ← presses go from where the caret is, 10 at a time, 10 ms apart, from a private event source with only the arrow keys' own flags and `SnippetExpander.marker`.
       A field that reports nothing, or never shows the paste, gets the ← presses after 150 ms more.
       Every call into the app runs on a dispatch queue with FUD-93's 2 s timeout, never the main actor, and a `{cursor}` paste resolves once the caret is placed.
       Each one logs one line (`CaretReport`: the path taken, the wait, the counts; no text or app).
@@ -883,7 +956,8 @@ Extensions run in a separate Node.js process, the extension host.
     - `--pick-date <title>` opens the picker of the `Action.PickDate` with that title (from the list with `--actions`, else straight).
     - `--run-action <title>`, given once or more, runs those actions in order, half a second apart (e.g. an extension's Create Quicklink, then Save Quicklink).
     - `--search text` types into its search field.
-  - `--accessibility allowed|missing` and `--login-item <status>` fix what Accessibility and Open at Login show, so nothing asks the system.
+  - `--accessibility allowed|missing`, `--input-monitoring allowed|missing` and `--login-item <status>` fix what Accessibility, the Snippets page's Input Monitoring and Open at Login show, so nothing asks the system.
+  - `--calendar-events <file>` gives My Schedule made-up events (`FixedCalendarSource.load`), and without it nothing has been asked.
   - `--clipboard-consent` saves Clipboard History's consent sheet, laid out off-screen like the sign-in one; it implies `--settings` and that page, as `--sign-in-consent` does.
   - `--clipboard-entries <file>` gives Clipboard History made-up entries (a JSON array of `clipboardHistory.list` entries); snapshots never read the clipboard or watch it.
   - `--definitions <file>` gives Define Word made-up definitions; snapshots never read the selection or the Mac's dictionaries.
@@ -891,6 +965,7 @@ Extensions run in a separate Node.js process, the extension host.
   - `--menu-items <file>` gives Search Menu Items a made-up app and menus (`FixedMenuFile`: `{ "app", "path"?, "menus": [{ "title", "key"?, "modifiers"?, "glyph"?, "enabled"?, "items"? }] }`, the app's own menu first), and without it there's no app to search; snapshots never read another app's menus.
   - `--onboarding [<step>]` renders the onboarding window.
   - `--settings` renders the Settings window instead, and `--settings <page>` one of these pages:
+    - `:calendar`
     - `:color-picker`
     - `:commands --search text`, the Commands page searched for that text
     - `:permissions`

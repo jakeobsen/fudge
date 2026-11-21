@@ -184,8 +184,9 @@ public protocol SystemActions: AnyObject {
     func mountedVolumes() async -> [MountedVolume]
     /// Unmounts and ejects `volume`, and with it the rest of its disk; the error's description says why it couldn't.
     func eject(_ volume: MountedVolume) async throws
-    /// Whether `volume` is still mounted (`FileManager.mountedVolumeURLs` lists it), read afresh.
-    func isMounted(_ volume: MountedVolume) async -> Bool
+    /// Whether `volume` is still mounted (`FileManager.mountedVolumeURLs` lists it), read afresh; nil when the mounted
+    /// volumes couldn't be read.
+    func isMounted(_ volume: MountedVolume) async -> Bool?
     func runningApps() -> [RunningApp]
     func hide(_ app: RunningApp)
     func quit(_ app: RunningApp)
@@ -218,7 +219,7 @@ public final class InertSystemActions: SystemActions {
     public func setDarkMode(_ on: Bool) async throws {}
     public func mountedVolumes() async -> [MountedVolume] { [] }
     public func eject(_ volume: MountedVolume) async throws {}
-    public func isMounted(_ volume: MountedVolume) async -> Bool { false }
+    public func isMounted(_ volume: MountedVolume) async -> Bool? { false }
     public func runningApps() -> [RunningApp] { [] }
     public func hide(_ app: RunningApp) {}
     public func quit(_ app: RunningApp) {}
@@ -280,12 +281,17 @@ public enum SystemCommandMessage {
     }
 
     /// What Eject All Disks did: what it ejected, then each volume it couldn't, with the reason.
-    public static func ejected(_ names: [String], failed: [(name: String, reason: String)]) -> String {
+    public static func ejected(
+        _ names: [String], failed: [(name: String, reason: String)], unchecked: [String] = []
+    ) -> String {
         var parts: [String] = []
         if !names.isEmpty { parts.append("Ejected \(list(names)).") }
         for failure in failed {
             let reason = failure.reason.hasSuffix(".") ? failure.reason : failure.reason + "."
             parts.append("Couldn't eject \(failure.name): \(reason)")
+        }
+        if !unchecked.isEmpty {
+            parts.append("Couldn't check whether \(list(unchecked)) \(unchecked.count == 1 ? "was" : "were") ejected.")
         }
         return parts.joined(separator: " ")
     }
@@ -376,14 +382,16 @@ public struct SystemCommandRunner {
     /// Ejects each volume in `MountedVolume.toEject`'s order. One that's no longer mounted when its turn comes went
     /// with an earlier volume of its disk, so it counts as ejected. Whether an eject worked is read from the mounts
     /// afterwards, never from the call's error: a volume that's still mounted failed, with the error's reason, and
-    /// one that's gone was ejected, whatever the call said.
+    /// one that's gone was ejected, whatever the call said. When the mounts can't be read, a volume is ejected all the
+    /// same, and the message says it couldn't be checked, never that it was ejected.
     private func ejectAll() async -> String {
         let volumes = MountedVolume.toEject(await actions.mountedVolumes())
         guard !volumes.isEmpty else { return SystemCommandMessage.nothingToEject }
         var ejected: [String] = []
         var failed: [(name: String, reason: String)] = []
+        var unchecked: [String] = []
         for volume in volumes {
-            guard await actions.isMounted(volume) else {
+            if await actions.isMounted(volume) == false {
                 ejected.append(volume.name)
                 continue
             }
@@ -393,13 +401,13 @@ public struct SystemCommandRunner {
             } catch {
                 reason = (error as NSError).localizedDescription
             }
-            if await actions.isMounted(volume) {
-                failed.append((volume.name, reason ?? "It's still mounted."))
-            } else {
-                ejected.append(volume.name)
+            switch await actions.isMounted(volume) {
+            case true?: failed.append((volume.name, reason ?? "It's still mounted."))
+            case false?: ejected.append(volume.name)
+            case nil: unchecked.append(volume.name)
             }
         }
-        return SystemCommandMessage.ejected(ejected, failed: failed)
+        return SystemCommandMessage.ejected(ejected, failed: failed, unchecked: unchecked)
     }
 
     /// Asks for Automation of `target` (the user decides once); a refusal, or a target that can't be asked, is the

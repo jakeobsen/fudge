@@ -4,9 +4,11 @@ import Foundation
 // lives in its own repository, jakeobsen/fudge-oauth. Fudge holds none: it sends `@raycast/utils`' built-in providers
 // to the relay instead of Raycast's servers, and keeps the tokens in the Keychain.
 
-/// One of the providers `@raycast/utils`' `OAuthService` has built in, with its default URLs (2.3.3).
+/// One of the providers `@raycast/utils`' `OAuthService` has built in, with its default URLs (2.3.3), or Raycast's
+/// own proxy for one, as a store extension sets it.
 public struct OAuthProvider: Sendable, Equatable, Codable {
-    /// The relay's path segment: `<server>/<id>/authorize`.
+    /// The relay's path segment: `<server>/<id>/authorize`. Two entries share one when they're a provider's own URLs
+    /// and Raycast's proxy for it (Atlassian's, Zoom's); an entry is known by its authorize URL.
     public let id: String
     public let name: String
     public let authorizeURL: String
@@ -34,20 +36,38 @@ public enum OAuthProviders {
         OAuthProvider(
             id: "google", name: "Google", authorizeURL: "https://accounts.google.com/o/oauth2/v2/auth",
             tokenURL: "https://oauth2.googleapis.com/token", refreshURL: "https://oauth2.googleapis.com/token"),
+        // One Atlassian app covers Jira and Confluence: `confluence-search` signs in at Atlassian's own URLs, and the
+        // store's Jira extension through Raycast's Jira proxy.
         OAuthProvider(
-            id: "jira", name: "Jira", authorizeURL: "https://auth.atlassian.com/authorize",
+            id: "atlassian", name: atlassianName, authorizeURL: "https://auth.atlassian.com/authorize",
             tokenURL: "https://auth.atlassian.com/oauth/token", refreshURL: "https://auth.atlassian.com/oauth/token"),
+        raycastProxy("jira", atlassianName, relay: "atlassian"),
         OAuthProvider(
             id: "zoom", name: "Zoom", authorizeURL: "https://zoom.us/oauth/authorize",
             tokenURL: "https://zoom.us/oauth/token", refreshURL: "https://zoom.us/oauth/token"),
+        // The store's Zoom extension signs in through Raycast's Zoom proxy.
+        raycastProxy("zoom", "Zoom"),
     ]
 
-    /// Raycast's proxy for a provider, as `OAuthService` uses it by default.
-    private static func raycastProxy(_ id: String, _ name: String) -> OAuthProvider {
-        let base = "https://\(id).oauth.raycast.com"
+    /// Atlassian's name, as Settings and the sign-in prompt show it.
+    public static let atlassianName = "Atlassian (Jira, Confluence)"
+
+    /// Raycast's proxy at `<host>.oauth.raycast.com`, as `OAuthService` uses it by default for GitHub, Linear, Slack
+    /// and Asana, and store extensions set it for Jira and Zoom, sent to the relay's `relay` provider.
+    private static func raycastProxy(_ host: String, _ name: String, relay: String? = nil) -> OAuthProvider {
+        let base = "https://\(host).oauth.raycast.com"
         return OAuthProvider(
-            id: id, name: name, authorizeURL: "\(base)/authorize", tokenURL: "\(base)/token",
+            id: relay ?? host, name: name, authorizeURL: "\(base)/authorize", tokenURL: "\(base)/token",
             refreshURL: "\(base)/refresh-token")
+    }
+
+    /// The relay's names before they changed: a sign-in stored with `relayProvider: "jira"` (the relay's Atlassian
+    /// provider until v0.3.0) counts as Atlassian's.
+    static let renamedRelayProviders = ["jira": "atlassian"]
+
+    /// A stored sign-in's relay provider by its current name.
+    public static func currentRelayProvider(_ stored: String) -> String {
+        renamedRelayProviders[stored] ?? stored
     }
 
     /// The provider whose default authorize URL this is, exactly; nil for anything else.
@@ -335,7 +355,7 @@ public struct StoredTokenSet: Codable, Equatable, Sendable {
     public var updatedAt: String
     public var providerName: String?
     /// The `OAuthProviders` id this sign-in went through the relay for. The worker sends a provider's own token URL
-    /// (Google's, Jira's, Zoom's) to the relay only for an extension with such a sign-in.
+    /// (Google's, Atlassian's, Zoom's) to the relay only for an extension with such a sign-in.
     public var relayProvider: String?
 
     public init(
@@ -709,7 +729,7 @@ public struct SignInCalls: Sendable {
             guard account.hasPrefix(prefix), let data = try? store.secrets.read(account: account),
                 let tokens = try? JSONDecoder().decode(StoredTokenSet.self, from: data)
             else { return false }
-            return tokens.relayProvider == provider
+            return tokens.relayProvider.map(OAuthProviders.currentRelayProvider) == provider
         }
     }
 }

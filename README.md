@@ -110,6 +110,14 @@ Pressing a view command's hotkey again while it's on screen hides the window.
 Fudge refuses a shortcut that's the launcher's or another command's, and one another app has registered.
 That last check is best-effort: macOS doesn't report system shortcuts such as ⌘Space or ⌃↑, so one of those can be recorded but never fire.
 
+### Hyperkey
+
+Turn on **Hyperkey (Caps Lock)** in **Settings… → General**, and holding Caps Lock presses ⌘⌥⌃⇧ at once, called Hyper, for shortcuts like Hyper+T that no other app uses.
+Caps Lock then no longer turns caps on, unless you also turn on **Quick press toggles Caps Lock**.
+Hyper doesn't work in password fields, and it needs Accessibility permission (**Settings… → Permissions**).
+Turning it off, or quitting Fudge, gives Caps Lock back.
+If Caps Lock is already mapped to another key, Fudge leaves it alone and says so.
+
 ### Aliases and turning commands off
 
 On the same page, a command can have an **Alias**: a short word such as `sf`.
@@ -204,8 +212,14 @@ Extensions can offer to make one too (**Create Snippet** in their ⌘K).
 A snippet's text can fill itself in: `{clipboard}`, `{date}`, `{time}`, `{datetime}`, `{day}` and `{uuid}`, changed by `| uppercase`, `| lowercase` or `| trim`, and `{date format="yyyy-MM-dd"}` picks a date's format.
 `{cursor}` marks where the cursor ends up after pasting.
 These names are always filled in, wherever they appear, as in Raycast; any other text in braces, such as code or JSON, is pasted as it is.
+
 A snippet can also have a keyword, such as `;addr`, which Search Snippets finds it by.
-No keyword can contain another.
+Turn on **Expand Snippets as You Type** in **Settings → Snippets**, and typing a keyword in any app replaces it with its snippet.
+It needs macOS's Input Monitoring permission, which Fudge asks for when you turn it on, and Accessibility, as pasting does.
+Fudge keeps only the last few characters you typed, in memory, to spot a keyword.
+What you type isn't saved or sent anywhere, and nothing is read while macOS protects a password field.
+A keyword typed in Fudge's own windows isn't expanded, and an expansion goes only into the app the keyword was typed in.
+No keyword can contain another, so a keyword never expands inside a longer one.
 
 ### Calculator and currency
 
@@ -259,6 +273,7 @@ Give either one a hotkey under **Settings… → Commands → Tools**.
 
 **Define Word** shows a word's definition from your Mac's own dictionaries.
 Type `define` and the word (`define serendipity`), or run it with nothing typed to look up the text selected in the app you're in.
+`define` is its alias, so you can change or clear it on the Commands page.
 ↵ (or ⌘D) opens the word in Dictionary, and ⌘↵ copies the definition.
 
 ### Clipboard History
@@ -300,6 +315,7 @@ In the **Extension Store** command, search the extensions, or pick a category in
 Some extensions sign in to a service, such as GitHub or Linear.
 Pick a sign-in server under **Settings… → Sign-in**: **Fudge's sign-in server**, or **Your own server…**.
 A company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth).
+Extensions can sign in to GitHub, Linear, Slack, Asana, Google, Atlassian (Jira and Confluence) and Zoom, as far as the server offers them.
 When an extension needs to sign in, Fudge shows **Sign in to** the service, and ↵ continues in your browser.
 Sign-ins are kept in your Keychain, and the Sign-in page lists them, each with **Sign Out**.
 Changing the server signs you out of everything.
@@ -352,6 +368,16 @@ Lock Screen needs Accessibility permission.
 Type to find one, such as "export" or "show fonts", and press ↵ to run it.
 Give it a hotkey under **Settings… → Commands → Apps**.
 It needs Accessibility permission (**Settings… → Permissions**).
+
+### My Schedule
+
+**My Schedule** lists your events from today on, a section per day, from the calendars on your Mac.
+Each shows its time, its calendar's color, and "Now" or "in 12 min" when it's about to start; **Show Details** (⌘D) adds the place, the calendar, how many are invited and the notes.
+↵ joins the meeting when the event has a Zoom, Google Meet, Microsoft Teams, Webex, FaceTime, Whereby, Around or Jitsi link, and otherwise opens the event in Calendar (⌘O).
+⌘⇧C copies the meeting link, and Copy Details copies the event.
+
+The first time you open it, macOS asks to let Fudge see your calendars; you can change that under **Privacy & Security → Calendars**.
+**Settings → Calendar** picks which calendars it shows, and how many days ahead (1, 3, 7 or 14).
 
 ### Selected text and Finder items
 
