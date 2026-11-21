@@ -26,6 +26,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var appToRestore: NSRunningApplication?
     private var exchangeRates: ExchangeRateUpdater!
     private let exchangeRateSchedule = ExchangeRateSchedule()
+    private var updates: UpdateChecker!
+    private let updateSchedule = UpdateCheckSchedule()
+    /// The menu bar item's "Fudge <version> Is Available…" and the separator under it, hidden until a newer release
+    /// is known.
+    private var availableItem: NSMenuItem?
+    private var availableSeparator: NSMenuItem?
     /// Not in snapshot runs, which install nothing that outlives them.
     private var extensionsWatcher: ExtensionsWatcher?
     /// The Quick Look preview (SPEC-049). Never in snapshot runs.
@@ -117,6 +123,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // The model reads the setting again, and the open query's card is evaluated again in the new format.
         settingsModel.numberFormatChanged = { [weak self] in self?.model.applySettings() }
+        // Update checks: only the real app asks GitHub, and only once a setting is chosen. A snapshot run never asks
+        // it and keeps nothing on disk; it counts as untagged, so `--update-available`'s version is always newer.
+        let snapshotRun = Snapshot(arguments: CommandLine.arguments)
+        updates = UpdateChecker(
+            fetcher: snapshotRun == nil ? GitHubReleaseFetcher() : SnapshotReleaseFetcher(),
+            stateFile: snapshotRun == nil ? paths.updateCheckFile : nil,
+            running: snapshotRun == nil ? RunningVersion(AppVersion.current) : .untagged,
+            setting: FudgeSettings.load(from: paths.settingsFile).updateCheck)
+        if let release = snapshotRun?.updateAvailable { updates.show(release, checkedAt: Date()) }
+        settingsModel.updateStatus = updates.status
+        updates.onChange = { [weak self] in self?.updatesChanged() }
+        updates.onNewRelease = { [weak self] release in self?.hud.show(UpdateCheck.availableText(release)) }
+        settingsModel.updateCheckChanged = { [weak self] setting in
+            guard let self else { return }
+            Task { await self.updates.setSetting(setting, now: Date()) }
+        }
+        settingsModel.checkForUpdates = { [weak self] in self?.checkForUpdatesNow() }
+        settingsModel.openReleasePage = { release in NSWorkspace.shared.open(release.pageURL) }
         panel.onEscape = { [weak self] in self?.model.escape() }
         panel.onResign = { [weak self] in
             LauncherLog.note("launcher resigned key: \(LauncherLog.keyboard)")
@@ -157,6 +181,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Snapshots never download; the app checks the rates now and every hour.
         exchangeRateSchedule.start(exchangeRates)
+        // Snapshots never ask GitHub; the app asks whether a check is due now and every hour.
+        updateSchedule.start(updates)
 
         // ⌘K, ⌘↵ and the extensions' shortcuts, before the search field sees them.
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
@@ -295,6 +321,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.image = MenuBarIcon.image
 
         let menu = NSMenu()
+        let available = menu.addItem(withTitle: "", action: #selector(openAvailableRelease), keyEquivalent: "")
+        available.target = self
+        availableItem = available
+        let separator = NSMenuItem.separator()
+        menu.addItem(separator)
+        availableSeparator = separator
         let open = menu.addItem(withTitle: "Open Fudge", action: #selector(openFromMenu), keyEquivalent: "")
         open.target = self
         openItem = open
@@ -303,11 +335,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         reload.target = self
         let settings = menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
         settings.target = self
+        let check = menu.addItem(
+            withTitle: "Check for Updates…", action: #selector(checkForUpdatesFromMenu), keyEquivalent: "")
+        check.target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "Fudge \(FudgeVersion.current)", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "Fudge \(AppVersion.current)", action: nil, keyEquivalent: "")
         menu.addItem(withTitle: "Quit Fudge", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.menu = menu
         statusItem = item
+        updatesChanged()
+    }
+
+    /// Shows what the update checker knows: on the General page, and as the menu's "Fudge <version> Is
+    /// Available…" while a newer release is known.
+    private func updatesChanged() {
+        settingsModel.updateStatus = updates.status
+        let available = updates.available
+        availableItem?.title = available.map(UpdateCheck.menuTitle) ?? ""
+        availableItem?.isHidden = available == nil
+        availableSeparator?.isHidden = available == nil
+    }
+
+    /// Check Now, on the General page and in the menu bar item.
+    private func checkForUpdatesNow() {
+        Task { await updates.checkNow(now: Date()) }
+    }
+
+    /// The menu's Check for Updates…: Settings opens on the General page, where the result shows, and it checks.
+    @objc private func checkForUpdatesFromMenu() {
+        settingsWindow.show(origin: .userInitiated)
+        checkForUpdatesNow()
+    }
+
+    /// The menu's "Fudge <version> Is Available…": the release's page in the browser. Nothing is downloaded.
+    @objc private func openAvailableRelease() {
+        guard let release = updates.available else { return }
+        NSWorkspace.shared.open(release.pageURL)
     }
 
     /// A main menu with the standard Edit menu. An accessory app never shows it, but text fields get ⌘Z, ⇧⌘Z,
@@ -569,6 +632,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         launcherHotkeyChanged()
         applyCommandHotkeys()
         Task { await exchangeRates.setEnabled(settings.currencyRates, now: Date()) }
+        Task { await updates.setSetting(settings.updateCheck, now: Date()) }
     }
 
     @objc private func reloadExtensions() {
@@ -593,6 +657,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// shows the Permissions page.
 /// `--snapshot <file.png> --onboarding [<step>]` renders the onboarding window, with the same fakes, on its pending
 /// steps from `onboarding.json`; with a step id, on every step from the start, at that one.
+/// `--update-available <version>` shows that version as found by an update check, wherever Fudge shows one (the
+/// General page). No snapshot run asks GitHub.
 /// For checking the layout without looking at the screen.
 @MainActor
 struct Snapshot {
@@ -631,6 +697,8 @@ struct Snapshot {
     /// `--clipboard-entries <file>`: Clipboard History's made-up entries, a JSON array of `clipboardHistory.list`
     /// entries. Snapshots never read the clipboard.
     let clipboardEntries: URL?
+    /// `--update-available <version>` (`0.9.0` or `v0.9.0`): an update check found that release.
+    let updateAvailable: Release?
 
     init?(arguments: [String]) {
         guard let index = arguments.firstIndex(of: "--snapshot"), index + 1 < arguments.count else { return nil }
@@ -669,6 +737,7 @@ struct Snapshot {
         clipboardConsent = arguments.contains("--clipboard-consent")
         foundFiles = value("--found-files").map { URL(fileURLWithPath: $0) }
         clipboardEntries = value("--clipboard-entries").map { URL(fileURLWithPath: $0) }
+        updateAvailable = value("--update-available").flatMap { Release(tag: $0.hasPrefix("v") ? $0 : "v" + $0) }
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1

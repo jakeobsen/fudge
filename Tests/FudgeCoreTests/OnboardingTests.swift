@@ -5,7 +5,7 @@ import Testing
 
 @Test func nothingAnsweredShowsEveryStep() {
     let onboarding = Onboarding()
-    #expect(onboarding.pending == [.welcome, .hotkey, .accessibility, .openAtLogin, .currency, .done])
+    #expect(onboarding.pending == [.welcome, .hotkey, .accessibility, .openAtLogin, .currency, .updates, .done])
     #expect(onboarding.pending == OnboardingStep.allCases, "the cases are the one step list")
     #expect(!onboarding.isComplete)
     #expect(!onboarding.hasSomethingNew)
@@ -15,7 +15,8 @@ import Testing
     var onboarding = Onboarding()
     onboarding.answer(.welcome)
     onboarding.answer(.hotkey)
-    #expect(onboarding.pending == [.accessibility, .openAtLogin, .currency, .done], "Welcome isn't shown again")
+    #expect(
+        onboarding.pending == [.accessibility, .openAtLogin, .currency, .updates, .done], "Welcome isn't shown again")
     #expect(!onboarding.hasSomethingNew, "not completed yet, so nothing is new")
 }
 
@@ -36,20 +37,33 @@ import Testing
     onboarding.answer(.hotkey)
     // "Not now" on Accessibility answers it as Continue would.
     onboarding.answer(.accessibility)
-    #expect(onboarding.pending == [.openAtLogin, .currency, .done])
+    #expect(onboarding.pending == [.openAtLogin, .currency, .updates, .done])
 }
 
 @Test func aNewStepShowsOnlyThatStepAndDone() {
-    // A user who completed onboarding before the Currency step existed.
+    // A user who completed onboarding before the Currency and Updates steps existed.
     let onboarding = Onboarding(answered: ["welcome", "hotkey", "accessibility", "openAtLogin", "done"])
-    #expect(onboarding.pending == [.currency, .done])
+    #expect(onboarding.pending == [.currency, .updates, .done])
     #expect(onboarding.hasSomethingNew)
     #expect(!onboarding.isComplete)
     // Welcome never comes back once completed, even if its id is missing.
-    let noWelcome = Onboarding(answered: ["hotkey", "accessibility", "openAtLogin", "done"])
-    #expect(noWelcome.pending == [.currency, .done])
+    let noWelcome = Onboarding(answered: ["hotkey", "accessibility", "openAtLogin", "currency", "done"])
+    #expect(noWelcome.pending == [.updates, .done])
     let complete = Onboarding(answered: OnboardingStep.allCases.map(\.rawValue) + ["retiredStep"])
     #expect(complete.isComplete, "ids that aren't a step any more don't count")
+}
+
+@Test func theUpdatesStepComesAfterCurrencyAndShowsAloneToThoseWhoFinished() {
+    let steps = OnboardingStep.allCases
+    #expect(steps.firstIndex(of: .updates) == steps.firstIndex(of: .currency).map { $0 + 1 })
+    #expect(OnboardingStep.updates.rawValue == "updates", "the id kept in onboarding.json")
+    // A user who completed onboarding before the Updates step existed sees just it, under "Something new to decide".
+    var onboarding = Onboarding(answered: ["welcome", "hotkey", "accessibility", "openAtLogin", "currency", "done"])
+    #expect(onboarding.pending == [.updates, .done])
+    #expect(onboarding.hasSomethingNew)
+    onboarding.answer(.updates)
+    #expect(onboarding.isComplete, "Done was clicked before, so answering the new step completes it")
+    #expect(!onboarding.hasSomethingNew)
 }
 
 @Test func restartShowsEveryStepAgain() {

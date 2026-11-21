@@ -1,8 +1,8 @@
 import FudgeCore
 import SwiftUI
 
-/// The Settings window's General page: Open at Login, the launcher's hotkey, whether the calculator downloads
-/// exchange rates, clearing root search's history, and Import / Export.
+/// The Settings window's General page: Open at Login, the launcher's hotkey, update checks, whether the calculator
+/// downloads exchange rates, clearing root search's history, and Import / Export.
 struct GeneralPage: View {
     @Bindable var model: SettingsModel
     @State private var confirmingClear = false
@@ -41,6 +41,16 @@ struct GeneralPage: View {
                         + "window. \"Close window and pop to root\" closes the window at once and starts from root "
                         + "search next time."
                 )
+            }
+            Section("Updates") {
+                SettingsPopupRow(
+                    "Check for Updates",
+                    selection: Binding(get: { model.updateCheck ?? .off }, set: { model.setUpdateCheck($0) }),
+                    options: UpdateCheckSetting.allCases.map { ($0, $0.title) },
+                    help: "How often Fudge asks GitHub whether there's a new version. It tells you when there is, "
+                        + "and never downloads or installs anything by itself."
+                )
+                UpdateStatusRow(model: model)
             }
             Section("Calculator") {
                 CurrencyRatesToggle(model: model)
@@ -113,6 +123,44 @@ struct CurrencyRatesToggle: View {
             Text("Fudge downloads exchange rates from the European Central Bank once a day.")
         }
         .toggleStyle(.switch)
+    }
+}
+
+/// Under Check for Updates: what the last check found and when, Check Now, and Download… while a newer release is
+/// known, which opens its page in the browser.
+struct UpdateStatusRow: View {
+    let model: SettingsModel
+
+    var body: some View {
+        let status = model.updateStatus
+        let details = status.details()
+        LabeledContent {
+            HStack(spacing: 8) {
+                if let release = status.available {
+                    Button("Download…") { model.openReleasePage(release) }
+                }
+                Button("Check Now") { model.checkForUpdates() }
+                    .disabled(status.checking)
+            }
+        } label: {
+            Text(status.headline)
+            if !details.isEmpty { Text(details.joined(separator: "\n")) }
+        }
+    }
+}
+
+/// Onboarding's Updates step: how often to check, with Daily chosen until the user picks another. Continue saves it.
+struct UpdateCheckChoice: View {
+    let model: SettingsModel
+
+    var body: some View {
+        Picker(
+            "Check for updates",
+            selection: Binding(get: { model.updateCheck ?? .daily }, set: { model.setUpdateCheck($0) })
+        ) {
+            ForEach(UpdateCheckSetting.allCases) { setting in Text(setting.onboardingTitle).tag(setting) }
+        }
+        .pickerStyle(.radioGroup)
     }
 }
 

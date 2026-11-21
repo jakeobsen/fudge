@@ -85,7 +85,7 @@ Untick **Enabled** to turn a command off, or a whole extension. A command that's
 
 ### First run
 
-The first time Fudge starts, it walks you through a few choices: the launcher hotkey, Accessibility, Open at Login and currency conversion. Each takes effect at once, and **Settings…** has them all. Until you click **Start Using Fudge** at the end, Fudge shows these steps again at its next start, from where you left off.
+The first time Fudge starts, it walks you through a few choices: the launcher hotkey, Accessibility, Open at Login, currency conversion and how often to check for updates. Each takes effect at once, and **Settings…** has them all. Until you click **Start Using Fudge** at the end, Fudge shows these steps again at its next start, from where you left off.
 
 **Settings… → Permissions** shows whether Fudge may use Accessibility, which extensions need to read the text you've selected, to paste, or to move windows. **Open Accessibility Settings** lets macOS ask you first; if it doesn't ask, click it again to open **System Settings → Privacy & Security → Accessibility** and turn Fudge on there. **Show Onboarding Again** goes through the first-run choices again.
 
@@ -135,6 +135,12 @@ Type a calculation in root search and the answer shows above the results: arithm
 Numbers follow your Mac's number format, or the one you pick under **Settings… → General → Number format**: "1,234.5" or "1.234,5". In "1.234,5", `1.000 + 1` is 1.001, and `1.5` isn't a number, so it gets no answer rather than a wrong one.
 
 Currency conversion uses the European Central Bank's daily exchange rates. Turn it on under **Settings… → General**; until then, a currency query shows a card that takes you there.
+
+### Updates
+
+Fudge can check for a new version daily, weekly or monthly. Pick how often when Fudge first starts, or under **Settings… → General → Check for Updates** (Never turns it off); until you pick, it doesn't check. **Check Now** on the same page, or **Check for Updates…** in the menu bar menu, checks at once.
+
+When there's a new version, Fudge says so once, the General page shows it with **Download…**, and the menu bar menu shows it at the top. Both open the release's page on GitHub. Fudge never downloads or installs anything by itself.
 
 ### Search Files
 

@@ -263,6 +263,13 @@ struct OnboardingView: View {
                 Text("The calculator can convert currencies, like 100 usd to eur.")
                 SettingsGroup { CurrencyRatesToggle(model: settings) }
             }
+        case .updates:
+            VStack(alignment: .leading, spacing: 14) {
+                title("Updates")
+                Text("Fudge can ask GitHub whether there's a new version, and tell you when there is.")
+                Text("It never downloads or installs anything by itself.").foregroundStyle(.secondary)
+                SettingsGroup { UpdateCheckChoice(model: settings) }
+            }
         case .done:
             VStack(alignment: .leading, spacing: 14) {
                 title("You're all set")
@@ -271,6 +278,7 @@ struct OnboardingView: View {
                     summary("Accessibility") { Text(settings.accessibility.isTrusted ? "Allowed" : "Not now") }
                     summary("Open at Login") { Text(settings.loginItemState.isOn ? "On" : "Off") }
                     summary("Currency conversion") { Text(settings.currencyRates ? "On" : "Off") }
+                    summary("Check for updates") { Text(settings.updateCheck?.onboardingTitle ?? "Off") }
                 }
                 Text("Change any of these in Settings.").foregroundStyle(.secondary)
             }
@@ -284,6 +292,13 @@ struct OnboardingView: View {
             Button("Get Started") { model.next() }.keyboardShortcut(.defaultAction)
         case .accessibility where !settings.accessibility.isTrusted:
             Button("Not Now") { model.next() }
+        case .updates:
+            // Answering saves the choice, Daily if it wasn't changed: until then nothing is checked.
+            Button("Continue") {
+                settings.setUpdateCheck(settings.updateCheck ?? .daily)
+                model.next()
+            }
+            .keyboardShortcut(.defaultAction)
         case .done:
             Button("Start Using Fudge") { model.finish() }.keyboardShortcut(.defaultAction)
         default:
