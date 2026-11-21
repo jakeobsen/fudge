@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { createElement as h } from "react";
-import { Action, ActionPanel, Detail, Icon, Keyboard } from "../src/api/index.ts";
+import { Action, ActionPanel, Detail, Grid, Icon, Keyboard, List } from "../src/api/index.ts";
 import { connect, settle, type RpcRequest } from "../src/bridge.ts";
 import type { UINode } from "../src/renderer/serialize.ts";
 import { mount } from "./support/mount.ts";
@@ -152,4 +152,45 @@ test("Submit Form outside a Form submits no values", async () => {
     assert.equal(entries[0]!.props.title, "Submit Form");
     await mounted.root.dispatch(entries[0]!.id, ["onAction"], []);
     assert.deepEqual(submitted, [{}]);
+});
+
+test("Toggle Quick Look renders with Raycast's defaults and a marker the app performs, with no onAction", async () => {
+    const { entries } = await panelWith(
+        h(Action.ToggleQuickLook),
+        h(Action.ToggleQuickLook, { title: "Preview", shortcut: Keyboard.Shortcut.Common.ToggleQuickLook }),
+    );
+    assert.deepEqual(
+        entries.map((entry) => [entry.type, entry.props.title, entry.props.icon, entry.props.fudgeBuiltIn]),
+        [
+            ["Action", "Quick Look", Icon.Eye, "toggleQuickLook"],
+            ["Action", "Preview", Icon.Eye, "toggleQuickLook"],
+        ],
+    );
+    assert.equal(entries[0]!.props.onAction, undefined, "nothing for the app to call back");
+    assert.deepEqual(entries[1]!.props.shortcut, {
+        macOS: { modifiers: ["cmd"], key: "y" },
+        Windows: { modifiers: ["ctrl"], key: "y" },
+    });
+});
+
+test("an item's quickLook path goes to the app as text: a URL as its href, a Buffer as UTF-8", async () => {
+    const list = await mount(
+        h(
+            List,
+            null,
+            h(List.Item, { title: "a", quickLook: { path: "/tmp/a.png", name: "A" } }),
+            h(List.Item, { title: "b", quickLook: { path: new URL("file:///tmp/b%20c.pdf") } }),
+            h(List.Item, { title: "c", quickLook: { path: Buffer.from("/tmp/ü.txt") } }),
+            h(List.Item, { title: "d" }),
+        ),
+    );
+    await list.settle();
+    const items = list.snapshots.at(-1)!.view!.children;
+    assert.deepEqual(
+        items.map((item) => item.props.quickLook ?? null),
+        [{ path: "/tmp/a.png", name: "A" }, { path: "file:///tmp/b%20c.pdf" }, { path: "/tmp/ü.txt" }, null],
+    );
+    const grid = await mount(h(Grid, null, h(Grid.Item, { content: "x", quickLook: { path: new URL("file:///tmp/g.png") } })));
+    await grid.settle();
+    assert.deepEqual(grid.snapshots.at(-1)!.view!.children[0]!.props.quickLook, { path: "file:///tmp/g.png" });
 });
