@@ -12,6 +12,7 @@ Fudge is an independent project. It is not affiliated with or endorsed by Raycas
 - `runtime/`: the extension host. This is the Node.js program that runs extensions. The app talks to it over stdin/stdout.
 - `runtime/store-extension/`: the Extension Store, an extension bundled with Fudge that lists and installs the extensions published in github.com/raycast/extensions.
 - `runtime/file-search-extension/`: Search Files, an extension bundled with Fudge that finds files and folders by name.
+- `runtime/emoji-extension/`: Search Emoji & Symbols, an extension bundled with Fudge that finds emoji by name and pastes them.
 
 ## Building
 
@@ -131,6 +132,12 @@ Currency conversion uses the European Central Bank's daily exchange rates. Turn 
 
 In **Settings… → Search Files**, **Search In** picks your home folder (the default) or the whole Mac, and **Leave Out** lists folders to skip, separated by commas (`~/Library` by default).
 
+### Emoji
+
+**Search Emoji & Symbols** finds an emoji by its name or a keyword ("thumbs", "+1", "heart"). ↵ pastes it into the app you were in, ⌘↵ copies it, and ⌘⇧C copies its name. The ones you use most recently come first, under **Recently Used**. It shows the emoji your Mac can draw.
+
+In **Settings… → Search Emoji & Symbols**, **Skin Tone** picks the tone for the emoji that have one.
+
 ### Extension Store
 
 The Extension Store browses the extensions in Raycast's open-source repository and installs the ones you choose. It takes two steps:
@@ -199,5 +206,7 @@ Extensions can list your windows, and move, resize or make full screen any of th
 Copyright (C) 2026 Morten Jakobsen.
 
 Licensed under the GNU Affero General Public License, version 3 or (at your option) any later version (`AGPL-3.0-or-later`). See [LICENSE](LICENSE).
+
+`runtime/vendor/unicode/` holds Unicode's emoji data and CLDR's English annotations, under the Unicode License v3; see [the license next to them](runtime/vendor/unicode/LICENSE).
 
 `runtime/vendor/raycast-api/index.d.ts` contains the type definitions from the `@raycast/api` package. They are Copyright (c) 2021 Raycast and MIT-licensed; see [the notice next to them](runtime/vendor/raycast-api/LICENSE).
