@@ -13,8 +13,9 @@ import { placeholderEnvironment, setLaunchContext, type LaunchEnvironment } from
 import { Toast } from "./api/feedback.ts";
 import { createApiModule } from "./api/module.ts";
 import { explainRenderError } from "./api/oauth.ts";
+import { providersFromEnvironment, rewriteFetch } from "./api/oauth-fetch.ts";
 import { NavigationRoot, type NavigationHandle } from "./api/navigation.ts";
-import { connect, settle } from "./bridge.ts";
+import { callApp, connect, settle } from "./bridge.ts";
 import { revive, type CommandMode, type HostToWorker, type LaunchProps, type WorkerMessage } from "./protocol.ts";
 import { createRoot, StaleCallbackError, type Root } from "./renderer/root.ts";
 
@@ -59,6 +60,13 @@ process.noDeprecation = true;
 process.on("uncaughtException", (error) => report(error, false));
 process.on("unhandledRejection", (reason) => report(reason, false));
 connect((request) => post(request));
+// Sign-in's token and refresh requests go to the relay the user chose, never to Raycast's servers (SPEC-056).
+globalThis.fetch = rewriteFetch(globalThis.fetch, providersFromEnvironment(), (provider) =>
+    callApp<{ server: string | null; signedIn: boolean }>("oauth.server", { provider }).then((answer) => ({
+        server: answer?.server ?? null,
+        signedIn: answer?.signedIn === true,
+    })),
+);
 
 const { entry, mode, launchProps, preferences, environment } = workerData as WorkerData;
 // launchCommand's context carries Dates and Buffers as markers (see protocol.ts `encode`).
