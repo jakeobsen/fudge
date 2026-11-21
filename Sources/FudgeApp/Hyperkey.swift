@@ -79,11 +79,12 @@ final class HyperkeyService {
 
     /// Fudge is quitting (or was asked to by SIGTERM): Caps Lock goes back to Caps Lock before it exits.
     func quit() {
-        guard tap != nil || lifecycle.running else { return }
+        let running = tap != nil || lifecycle.running
         tap?.end()
         tap = nil
         let mapping = self.mapping
-        queue.sync { try? HyperkeyMapping.remove(mapping) }
+        // Always through the queue, so a removal (or an apply) queued a moment ago has run before Fudge exits.
+        queue.sync { if running { try? HyperkeyMapping.remove(mapping) } }
     }
 
     private func check() {
