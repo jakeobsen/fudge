@@ -5,6 +5,11 @@
 //
 // The provider table is core's (`OAuthProviders`), handed over by the app in `FUDGE_OAUTH_PROVIDERS`.
 
+import http from "node:http";
+import https from "node:https";
+import { Readable } from "node:stream";
+import tls from "node:tls";
+import zlib from "node:zlib";
 import { signInOffMessage } from "./oauth.ts";
 
 export type OAuthProvider = { id: string; name: string; authorizeURL: string; tokenURL: string; refreshURL: string };
@@ -163,11 +168,89 @@ export async function decide(
     return { kind: "relay", target };
 }
 
+/**
+ * The TLS options a connection to the relay takes. It carries the code and verifier, or the refresh token, so it
+ * always verifies, whatever the worker's `NODE_TLS_REJECT_UNAUTHORIZED` or `tls.DEFAULT_MIN_VERSION` says
+ * (`rejectUnauthorized: true`, TLS 1.2 at least). Of the caller's own options (the request's and its agent's), only
+ * what adds trust or proves who the client is goes along (a CA, a revocation list, a client certificate), and a
+ * `minVersion` of TLS 1.3. Nothing that weakens verification does (`checkServerIdentity`, ciphers, `secureOptions`,
+ * a lower version, …). A request passed through unchanged keeps all its options; it goes where the caller sent it.
+ */
+const relayTLSKeys = ["ca", "crl", "cert", "key", "pfx", "passphrase"];
+
+export function relayTLSOptions(options: Record<string, unknown> = {}): Record<string, unknown> {
+    const agent = options.agent as { options?: Record<string, unknown> } | undefined;
+    const picked: Record<string, unknown> = {};
+    let minVersion: tls.SecureVersion = "TLSv1.2";
+    for (const source of [agent && typeof agent === "object" ? (agent.options ?? {}) : {}, options]) {
+        for (const key of relayTLSKeys) if (source[key] !== undefined) picked[key] = source[key];
+        if (source.minVersion === "TLSv1.3") minVersion = "TLSv1.3";
+    }
+    return { ...picked, rejectUnauthorized: true, minVersion };
+}
+
+/** A request rewritten to the relay, sent as `fetch` would send it. */
+export type RelaySend = (request: Request) => Promise<Response>;
+
+const nullBodyStatuses = new Set([101, 103, 204, 205, 304]);
+
+/**
+ * Sends a request rewritten to the relay through Node's `http`/`https`, never undici, whose verification follows
+ * the worker's environment: what goes out is the `Request` `fetch` would send (its method, headers and serialized
+ * body, its `signal`), over a connection that always verifies (`relayTLSOptions`). The answer comes back as the
+ * `Response` `fetch` would give: its status and headers, and its body streamed and decoded (gzip, deflate, br),
+ * though it asks for none. A redirect isn't followed.
+ */
+export const sendToRelay: RelaySend = async (request) => {
+    const url = new URL(request.url);
+    const body =
+        request.method === "GET" || request.method === "HEAD" ? undefined : Buffer.from(await request.arrayBuffer());
+    const headers: Record<string, string> = {};
+    request.headers.forEach((value, name) => {
+        if (name !== "host" && name !== "accept-encoding" && name !== "content-length") headers[name] = value;
+    });
+    headers["accept-encoding"] = "identity";
+    if (body !== undefined) headers["content-length"] = String(body.length);
+    const secure = url.protocol === "https:";
+    return new Promise<Response>((resolve, reject) => {
+        const options = { method: request.method, headers, signal: request.signal, ...(secure ? relayTLSOptions() : {}) };
+        const sent = (secure ? https : http).request(url, options, (answer) => {
+            const status = answer.statusCode ?? 0;
+            const answerHeaders = new Headers();
+            for (let at = 0; at + 1 < answer.rawHeaders.length; at += 2) {
+                answerHeaders.append(answer.rawHeaders[at], answer.rawHeaders[at + 1]);
+            }
+            if (nullBodyStatuses.has(status) || request.method === "HEAD" || redirectStatuses.has(status)) {
+                answer.resume();
+                return resolve(new Response(null, { status, statusText: answer.statusMessage, headers: answerHeaders }));
+            }
+            const encoding = (answer.headers["content-encoding"] ?? "").toLowerCase().trim();
+            const decoder =
+                encoding === "gzip" || encoding === "x-gzip"
+                    ? zlib.createGunzip()
+                    : encoding === "deflate"
+                      ? zlib.createInflate()
+                      : encoding === "br"
+                        ? zlib.createBrotliDecompress()
+                        : null;
+            const stream = decoder ? answer.pipe(decoder) : answer;
+            if (decoder) answer.on("error", (error) => decoder.destroy(error));
+            const readable = Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>;
+            resolve(new Response(readable, { status, statusText: answer.statusMessage, headers: answerHeaders }));
+        });
+        sent.on("error", (cause) =>
+            reject(cause.name === "AbortError" ? cause : new TypeError("fetch failed", { cause })),
+        );
+        sent.end(body);
+    });
+};
+
 /** Wraps `original` with `decide`'s rules. */
 export function rewriteFetch(
     original: Fetch,
     providers: OAuthProvider[],
     server: (provider: string) => Promise<ServerAnswer>,
+    send: RelaySend = sendToRelay,
 ): Fetch {
     const wrapped = async function fetch(input: Parameters<Fetch>[0], init?: Parameters<Fetch>[1]) {
         const request = typeof Request !== "undefined" && input instanceof Request ? input : null;
@@ -181,12 +264,11 @@ export function rewriteFetch(
         const decision = await decide(method, parsed, body, providers, server);
         if (decision.kind === "untouched") return original(input, init);
         if (decision.kind === "refused") throw new Error(decision.message);
-        // A redirect is never followed: a 307 or 308 would send the body (the code, the verifier or the refresh
+        // The relay gets the request as fetch would send it, over a connection that always verifies, and a
+        // redirect is never followed: a 307 or 308 would send the body (the code, the verifier or the refresh
         // token) on to wherever the relay points.
-        const manual = { ...init, redirect: "manual" as const };
-        const response = await (request
-            ? original(new Request(decision.target, request), manual)
-            : original(decision.target, manual));
+        const outgoing = request ? new Request(decision.target, request) : new Request(decision.target, init);
+        const response = await send(outgoing);
         if (redirectStatuses.has(response.status)) {
             await response.body?.cancel().catch(() => {});
             throw new Error(redirectedMessage);

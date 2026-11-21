@@ -15,9 +15,11 @@ import path from "node:path";
 import { after, before, test } from "node:test";
 import tls from "node:tls";
 import { pathToFileURL } from "node:url";
+import zlib from "node:zlib";
 import {
     providersFromEnvironment,
     redirectedMessage,
+    rewriteFetch,
     refusedMessage,
     type OAuthProvider,
     type ServerAnswer,
@@ -48,6 +50,7 @@ execFileSync("openssl", [
 ], { stdio: "ignore" });
 const ca = readFileSync(path.join(certs, "cert.pem"));
 const secureSeen: Seen[] = [];
+const secureHeaders: http.IncomingHttpHeaders[] = [];
 let secure: https.Server;
 const secureBase = () => `https://127.0.0.1:${(secure.address() as AddressInfo).port}`;
 
@@ -87,7 +90,16 @@ before(async () => {
         response.end("stolen");
     });
     secure = https.createServer({ key: readFileSync(path.join(certs, "key.pem")), cert: ca }, async (request, response) => {
+        secureHeaders.push(request.headers);
         await record(secureSeen, request);
+        if (request.headers["x-answer"] === "gzip") {
+            // Compressed whatever was asked, in two pieces, as a relay behind a proxy might answer.
+            const body = zlib.gzipSync('{"secure":true,"streamed":true}');
+            response.writeHead(200, { "Content-Type": "application/json", "Content-Encoding": "gzip" });
+            response.write(body.subarray(0, 10));
+            setTimeout(() => response.end(body.subarray(10)), 20);
+            return;
+        }
         response.writeHead(200, { "Content-Type": "application/json" }).end('{"secure":true}');
     });
     await new Promise<void>((resolve) => secure.listen(0, "127.0.0.1", resolve));
@@ -360,8 +372,9 @@ test("a request rewritten to the relay never takes an option that weakens verifi
         secureProtocol: "TLSv1_method",
         servername: "elsewhere.example",
     });
-    assert.deepEqual(kept, { ca: "agent-ca", cert: "c", key: "k", crl: "r" });
-    assert.deepEqual(relayTLSOptions({ minVersion: "TLSv1.3" }), { minVersion: "TLSv1.3" });
+    const pinned = { rejectUnauthorized: true, minVersion: "TLSv1.2" };
+    assert.deepEqual(kept, { ca: "agent-ca", cert: "c", key: "k", crl: "r", ...pinned });
+    assert.deepEqual(relayTLSOptions({ minVersion: "TLSv1.3" }), { ...pinned, minVersion: "TLSv1.3" });
     agent.destroy();
 
     // End to end: with the relay's certificate unknown to the system, each weakening option on its own still
@@ -390,4 +403,65 @@ test("a request rewritten to the relay never takes an option that weakens verifi
     // A request passed through unchanged keeps them: it goes where the caller sent it.
     const passed = await exchange(() => https.request(`${secureBase()}/token`, { ...post, rejectUnauthorized: false }), codeGrant);
     assert.equal(passed.body, '{"secure":true}');
+});
+
+test("a rewrite to the relay always verifies, whatever NODE_TLS_REJECT_UNAUTHORIZED says, through https and fetch", async () => {
+    answer = { server: secureBase(), signedIn: false };
+    secureSeen.length = 0;
+    const before = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+    try {
+        await assert.rejects(
+            exchange(() => https.request("https://github.oauth.raycast.com/token", post), codeGrant),
+            /self[- ]signed/,
+        );
+        const wrapped = rewriteFetch(globalThis.fetch, providers, async () => answer);
+        await assert.rejects(
+            wrapped("https://github.oauth.raycast.com/token", { ...post, body: codeGrant }),
+            (error: Error) => error instanceof TypeError && /self[- ]signed/.test(String((error.cause as Error)?.message)),
+        );
+        assert.equal(secureSeen.length, 0, "nothing reached the unverified relay");
+        // The extension's own traffic follows its own setting.
+        const own = await exchange(() => https.request(`${secureBase()}/token`, post), codeGrant);
+        assert.equal(own.body, '{"secure":true}');
+    } finally {
+        if (before === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+        else process.env.NODE_TLS_REJECT_UNAUTHORIZED = before;
+    }
+});
+
+test("a rewrite to a relay with a valid certificate works through fetch: sent as fetch would, answered as fetch would", async () => {
+    answer = { server: secureBase(), signedIn: false };
+    secureSeen.length = 0;
+    secureHeaders.length = 0;
+    const defaults = tls.getCACertificates("default");
+    tls.setDefaultCACertificates([...defaults, ca.toString()]);
+    try {
+        const wrapped = rewriteFetch(globalThis.fetch, providers, async () => answer);
+        const form = new URLSearchParams({ grant_type: "authorization_code", code: "c", code_verifier: "v" });
+        const response = await wrapped("https://github.oauth.raycast.com/token", {
+            method: "POST",
+            body: form,
+            headers: { "X-Answer": "gzip", Accept: "application/json" },
+        });
+        assert.equal(response.status, 200);
+        assert.equal(await response.text(), '{"secure":true,"streamed":true}', "streamed and decoded, as fetch does");
+        assert.deepEqual(secureSeen.map((seen) => [seen.path, seen.body]), [["/github/token", form.toString()]]);
+        const sent = secureHeaders[0]!;
+        assert.equal(sent["content-type"], "application/x-www-form-urlencoded;charset=UTF-8", "fetch's own serialization");
+        assert.equal(sent["accept-encoding"], "identity");
+        assert.equal(sent.accept, "application/json");
+        assert.equal(sent.host, `127.0.0.1:${port(secure)}`);
+    } finally {
+        tls.setDefaultCACertificates(defaults);
+    }
+});
+
+test("a pass-through keeps a Host header the caller set itself", async () => {
+    answer = { server: base(relay), signedIn: false };
+    ownSeen.length = 0;
+    const headers = { ...post.headers, Host: "custom.example" };
+    await exchange(() => http.request(`${base(own)}/token`, { ...post, headers }), codeGrant);
+    await exchange(() => http.request(`${base(own)}/token`, post), codeGrant);
+    assert.deepEqual(ownSeen.map((seen) => seen.host), ["custom.example", `127.0.0.1:${port(own)}`]);
 });
