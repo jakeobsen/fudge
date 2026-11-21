@@ -256,6 +256,35 @@ private func titles(_ listing: SwitcherListing<Int>) -> [String] {
     #expect(system.reads.filter { $0 == safari }.count == 2)
 }
 
+@Test func aReadWaitsOnTheAppsReadInFlightAndTakesItsAnswer() async throws {
+    // SPEC-102 §1: Safari's read outlives the first read's deadline, so that read names it.
+    let system = desk()
+    let gate = DispatchSemaphore(value: 0)
+    system.slow = [safari: gate]
+    let inFlight = WindowReadsInFlight()
+    let first = switcher(system, inFlight: inFlight).read(deadline: .milliseconds(50))
+    #expect(first.silentApps == ["Safari"])
+
+    // A second read, with time to spare, waits on that read instead of asking again, and Safari answers meanwhile.
+    let second = Task.detached {
+        let listing = switcher(system, inFlight: inFlight).read(deadline: .seconds(20))
+        return (titles: titles(listing), silent: listing.silentApps)
+    }
+    for _ in 0..<2000 where inFlight.waiting(on: safari) == 0 { try await Task.sleep(for: .milliseconds(5)) }
+    #expect(inFlight.waiting(on: safari) == 1, "waiting on the read in flight")
+    gate.signal()
+    let listing = await second.value
+    #expect(listing.silent.isEmpty, "not named: it answered within this read's second")
+    #expect(listing.titles == ["Start Page", "Notes.txt", "Inbox", "Docs", "Groceries", "Recipes"])
+    #expect(system.reads.filter { $0 == safari }.count == 1, "asked once")
+
+    // The answer went to the read that waited, and no further: the next read asks again.
+    system.slow = [:]
+    for _ in 0..<200 where inFlight.reading.contains(safari) { try await Task.sleep(for: .milliseconds(10)) }
+    _ = switcher(system, inFlight: inFlight).read(deadline: .seconds(5))
+    #expect(system.reads.filter { $0 == safari }.count == 2)
+}
+
 @Test func appsAreReadAtOnceNotOneAfterAnother() {
     // Mail's read waits for Notes' to start, and Notes comes after Mail: read one after another, Mail would miss the
     // deadline.
