@@ -214,7 +214,8 @@ final class SnippetExpansion {
         Task {
             do {
                 try await SystemCalls.expandSnippet(
-                    filled.text, keywordLength: keyword.count, leftArrows: filled.afterCursor ?? 0)
+                    filled.text, keywordLength: keyword.count,
+                    leftArrows: SnippetTemplate.leftArrows(afterCursor: filled.afterCursor))
             } catch PasteError.accessibilityNeeded {
                 if !accessibilityNoticeShown {
                     accessibilityNoticeShown = true

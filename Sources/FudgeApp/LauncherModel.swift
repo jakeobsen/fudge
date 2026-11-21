@@ -1892,7 +1892,8 @@ final class LauncherModel {
         Task {
             do {
                 try await SystemCalls.pasteSnippet(
-                    filled.text, leftArrows: filled.afterCursor ?? 0, hideWindow: { await self.hideForPaste() })
+                    filled.text, leftArrows: SnippetTemplate.leftArrows(afterCursor: filled.afterCursor),
+                    hideWindow: { await self.hideForPaste() })
             } catch PasteError.noTarget {
                 showHUD("There is no app to paste into")
             } catch {

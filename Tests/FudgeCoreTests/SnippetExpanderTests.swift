@@ -129,10 +129,16 @@ private func type(
         Snippet(id: "adtb", name: "B", text: "b", keyword: "adtb"),
         Snippet(id: "xdt", name: "C", text: "c", keyword: "XDT"),
         Snippet(id: "ok", name: "D", text: "d", keyword: "ok;"),
+        Snippet(id: "dup1", name: "E", text: "e", keyword: "dup!"),
+        Snippet(id: "dup2", name: "F", text: "f", keyword: "dup!"),
     ]
-    var expander = SnippetExpander(snippets: clashing)
-    #expect(type("adtb dt XDT", into: &expander).isEmpty, "inside, prefix or suffix, ignoring case: neither expands")
-    #expect(type("ok;", into: &expander) == [.expand(snippetID: "ok")])
+    // The same whatever order the file has them in: none of a clashing group wins.
+    for snippets in [clashing, clashing.reversed()] {
+        var expander = SnippetExpander(snippets: snippets)
+        #expect(type("adtb dt XDT", into: &expander).isEmpty, "inside, prefix or suffix, ignoring case: none expands")
+        #expect(type("dup!", into: &expander).isEmpty, "the same keyword twice: neither expands")
+        #expect(type("ok;", into: &expander) == [.expand(snippetID: "ok")], "the others still do")
+    }
 }
 
 @Test func theBufferKeepsOnlyTheLongestKeywordsWorth() {
