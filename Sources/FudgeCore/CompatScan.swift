@@ -47,14 +47,20 @@ public enum CompatScanner {
         script.deletingLastPathComponent().appendingPathComponent("raycast-api.d.ts")
     }
 
-    /// node's arguments and environment for the scan: the script, the folder and `--json`; `FUDGE_ESBUILD` and
-    /// `FUDGE_RAYCAST_TYPES` added to `environment`.
+    /// node's arguments and environment for the scan: the script, the folder and `--json`; `FUDGE_ESBUILD` added to
+    /// `environment`, and `FUDGE_RAYCAST_TYPES` only when it isn't set already and the types are beside the script.
+    /// So a value the user set wins, and a script with no types beside it (`FUDGE_COMPAT_SCAN` pointing at
+    /// `runtime/dist/compat-scan.js` in a checkout) reads the vendored ones itself. `fileExists` is injected for tests.
     public static func invocation(
-        script: URL, esbuild: URL, arguments: ScanArguments, environment: [String: String]
+        script: URL, esbuild: URL, arguments: ScanArguments, environment: [String: String],
+        fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
     ) -> (arguments: [String], environment: [String: String]) {
         var environment = environment
         environment["FUDGE_ESBUILD"] = esbuild.path
-        environment["FUDGE_RAYCAST_TYPES"] = types(beside: script).path
+        let types = types(beside: script)
+        if environment["FUDGE_RAYCAST_TYPES", default: ""].isEmpty, fileExists(types.path) {
+            environment["FUDGE_RAYCAST_TYPES"] = types.path
+        }
         return ([script.path, arguments.folder.path] + (arguments.json ? ["--json"] : []), environment)
     }
 }

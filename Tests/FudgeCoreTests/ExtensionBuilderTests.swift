@@ -138,3 +138,11 @@ struct ExtensionBuilderTests {
             == esbuild)
     #expect(ExtensionBuilder.locateEsbuild(environment: ["PATH": "/nonexistent"], executable: nil) == nil)
 }
+
+@Test func theBuildsScratchFolderGoesInAnAbsoluteTMPDIR() {
+    #expect(ExtensionBuilder.temporaryDirectory(environment: ["TMPDIR": "/tmp/x/"]).path == "/tmp/x")
+    let usual = FileManager.default.temporaryDirectory
+    #expect(ExtensionBuilder.temporaryDirectory(environment: [:]) == usual)
+    #expect(ExtensionBuilder.temporaryDirectory(environment: ["TMPDIR": ""]) == usual)
+    #expect(ExtensionBuilder.temporaryDirectory(environment: ["TMPDIR": "relative/tmp"]) == usual)
+}

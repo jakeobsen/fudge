@@ -1373,15 +1373,16 @@ final class LauncherModel {
         }
     }
 
-    /// After a render: the picker stays while its action is there, within any new `min` and `max`. When the action
-    /// is gone, or is no longer an `Action.PickDate`, the picker closes without calling anything.
+    /// After a render: the picker stays while its action is there, with the action's title as its heading, within
+    /// any new `min` and `max`. When the action is gone, or is no longer an `Action.PickDate`, the picker closes
+    /// without calling anything.
     private func syncDatePick() {
         guard let pick = actionPanel?.pick else { return }
-        guard let options = ActionPanelReader.entry(id: pick.node, in: currentActions)?.pickDate else {
+        guard let following = pick.following(ActionPanelReader.entry(id: pick.node, in: currentActions)) else {
             closeDatePick()
             return
         }
-        actionPanel?.pick?.update(options: options)
+        if following != pick { actionPanel?.pick = following }
     }
 
     /// For snapshots: opens the picker of the `Action.PickDate` titled `title`, as ↵ on it would.

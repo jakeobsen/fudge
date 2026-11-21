@@ -1,6 +1,7 @@
 // The store's list: one entry per extension in the repository copy, with what's installed and what can be updated.
-import { readdir, readFile } from "node:fs/promises";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
+import { maxManifestBytes, readRegularFile } from "./files.ts";
 
 /** `ExtensionManifest.isValidName`. It also rules out every character no-cone sparse patterns treat specially. */
 const namePattern = /^[a-z0-9][a-z0-9-]*$/;
@@ -75,7 +76,9 @@ export async function readCatalog(repo: string): Promise<StoreEntry[]> {
         folders
             .filter((folder) => folder.isDirectory() && isValidName(folder.name))
             .map(async (folder) => {
-                const text = await readFile(path.join(root, folder.name, "package.json"), "utf8").catch(() => undefined);
+                const text = await readRegularFile(path.join(root, folder.name, "package.json"), maxManifestBytes).catch(
+                    () => undefined,
+                );
                 if (text === undefined) return undefined;
                 try {
                     return parseManifest(folder.name, JSON.parse(text));
