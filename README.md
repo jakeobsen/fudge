@@ -302,7 +302,11 @@ Turning it off removes the store's downloaded list; the extensions you installed
 In the **Extension Store** command, search the extensions, or pick a category in the dropdown; **Installed** shows the ones you installed from it.
 
 - ↵ installs one, after saying whether Fudge supports everything it uses.
-  Fudge doesn't support Raycast AI or the Raycast Browser Extension, so an extension that uses either is marked **Not compatible**: the commands that use them won't work. ⌘U updates one marked **Update available**, and ⌃X uninstalls it, to the Trash.
+  Fudge doesn't support Raycast AI or the Raycast Browser Extension.
+  An extension where only some commands use either is marked **Partly compatible**, and its details name those commands; one where every command does is marked **Not compatible**.
+  Those commands are installed turned off, so they aren't in root search, and **Settings… → Commands** says why.
+  You can turn one on there: it then works, apart from what needs Raycast AI or the Browser Extension.
+  ⌘U updates one marked **Update available**, and ⌃X uninstalls it, to the Trash.
 - ⌘D shows an extension's details: whether it's compatible (checked once you stay on it for a moment), each command and whether it opens a view, runs without one, or sits in the menu bar, and its README. ⌘R updates the list, which otherwise happens when you open the store and the list is a day old.
   If the list couldn't be downloaded, ⌘R tries again.
 - The store needs Git.

@@ -4,10 +4,13 @@ import Foundation
 public struct InstalledExtension: Sendable, Equatable {
     public var manifest: ExtensionManifest
     public var directory: URL
+    /// Its commands that use something Fudge doesn't support (`compatibility.json`, SPEC-109).
+    public var compatibility: CommandCompatibility
 
-    public init(manifest: ExtensionManifest, directory: URL) {
+    public init(manifest: ExtensionManifest, directory: URL, compatibility: CommandCompatibility = .init()) {
         self.manifest = manifest
         self.directory = directory
+        self.compatibility = compatibility
     }
 
     /// The compiled command, a CommonJS file the extension host can load.
@@ -22,7 +25,8 @@ public struct InstalledExtension: Sendable, Equatable {
     public static func load(from directory: URL) throws -> InstalledExtension {
         InstalledExtension(
             manifest: try ExtensionManifest.load(from: directory.appendingPathComponent("package.json")),
-            directory: directory
+            directory: directory,
+            compatibility: CommandCompatibility.load(from: directory)
         )
     }
 
@@ -86,9 +90,18 @@ public struct ExtensionBuilder: Sendable {
     public var esbuild: URL
     public var log: @Sendable (String) -> Void
 
-    public init(esbuild: URL, log: @escaping @Sendable (String) -> Void = { _ in }) {
+    /// Finds which commands use something Fudge doesn't support, from the source folder (`fudge scan`, through
+    /// `CompatScanner.commands`); nil skips it. A scan that throws leaves the install without `compatibility.json`,
+    /// so every command is enabled, as before SPEC-109.
+    public var scanCommands: (@Sendable (URL) throws -> CommandCompatibility)?
+
+    public init(
+        esbuild: URL, log: @escaping @Sendable (String) -> Void = { _ in },
+        scanCommands: (@Sendable (URL) throws -> CommandCompatibility)? = nil
+    ) {
         self.esbuild = esbuild
         self.log = log
+        self.scanCommands = scanCommands
     }
 
     @discardableResult
@@ -141,6 +154,18 @@ public struct ExtensionBuilder: Sendable {
         let warnings = compiled.output.trimmingCharacters(in: .whitespacesAndNewlines)
         if !warnings.isEmpty { log(warnings) }
 
+        var compatibility = CommandCompatibility()
+        if let scanCommands {
+            log("checking which commands use Raycast AI")
+            do {
+                compatibility = try scanCommands(source)
+                try compatibility.write(to: staging)
+            } catch {
+                compatibility = CommandCompatibility()
+                log("couldn't check, so every command is enabled: \(error)")
+            }
+        }
+
         try files.copyItem(
             at: source.appendingPathComponent("package.json"),
             to: staging.appendingPathComponent("package.json")
@@ -154,7 +179,7 @@ public struct ExtensionBuilder: Sendable {
         // From here the staging folder is the install: a signal no longer deletes it.
         children.forget(staging)
         try Self.replace(destination, with: staging)
-        return InstalledExtension(manifest: manifest, directory: destination)
+        return InstalledExtension(manifest: manifest, directory: destination, compatibility: compatibility)
     }
 
     static func entry(for command: String, in source: URL) throws -> URL {
@@ -205,7 +230,7 @@ public struct ExtensionBuilder: Sendable {
 
     /// Moves `staging` to `destination`, replacing what's there.
     /// What an install folder holds: `build` writes exactly these, and nothing else may be replaced.
-    static let installedItems: Set<String> = ["package.json", "dist", "assets"]
+    static let installedItems: Set<String> = ["package.json", "dist", "assets", CommandCompatibility.fileName]
 
     /// Refuses a destination that is the source folder, holds it or sits inside it, compared after resolving
     /// symlinks and ignoring case (the file system does), since replacing it would delete the source. Refuses

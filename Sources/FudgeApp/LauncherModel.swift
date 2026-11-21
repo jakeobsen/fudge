@@ -367,6 +367,7 @@ final class LauncherModel {
     /// get their aliases and hotkeys. Settings calls it after each change.
     func applySettings(keepingSelection: Bool = false) {
         settings = FudgeSettings.load(from: paths.settingsFile)
+        settings.offByDefault = InstalledExtension.offByDefault(installedExtensions)
         panelReset.setting = settings.resetAfter
         let commands = installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
         windowLayouts = WindowLayoutStore.load(from: paths.windowLayoutsFile)

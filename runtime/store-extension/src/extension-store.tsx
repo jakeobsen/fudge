@@ -15,6 +15,7 @@ import path from "node:path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     accessoryTexts,
+    commandTitles,
     allFilter,
     categories,
     filterEntries,
@@ -32,7 +33,7 @@ import {
     checkFolder,
     CompatibilityChecks,
     compatibilityText,
-    isNotCompatible,
+    compatibilityTag,
     readCompatibility,
     rememberCompatibility,
     scannerIdentity,
@@ -48,7 +49,11 @@ type Loaded = { entries: StoreEntry[]; installed: Installed; trees: Map<string, 
 type Checked = { scanner: string; results: Map<string, Compatibility>; failed: Set<string> };
 
 const tagColor = (tag: string) =>
-    tag === "Not compatible" ? Color.Red : tag === "Update available" ? Color.Orange : Color.Green;
+    tag === "Not compatible"
+        ? Color.Red
+        : tag === "Update available" || tag === "Partly compatible"
+          ? Color.Orange
+          : Color.Green;
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -275,16 +280,16 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     }
 
     /** The detail's Compatibility line for a row: its cached result, or the check waiting, running or failed. */
-    const compatibilityFor = (tree: string | undefined) => {
+    const compatibilityFor = (entry: StoreEntry, tree: string | undefined) => {
         if (!tree) return undefined;
         const result = checked.results.get(tree);
-        return compatibilityText(result ?? (checked.failed.has(tree) ? "failed" : "checking"));
+        return compatibilityText(result ?? (checked.failed.has(tree) ? "failed" : "checking"), commandTitles(entry));
     };
     const item = (entry: StoreEntry) => {
         const state = loaded ? status(entry, loaded.installed, loaded.trees) : "available";
         const icon = loaded ? iconURL(entry, loaded.commit) : undefined;
         const tree = loaded?.trees.get(entry.dir);
-        const notCompatible = tree !== undefined && isNotCompatible(checked.results.get(tree));
+        const compatibility = tree === undefined ? undefined : compatibilityTag(checked.results.get(tree));
         return (
             <List.Item
                 key={entry.dir}
@@ -296,7 +301,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                 accessories={
                     showingDetail
                         ? undefined
-                        : accessoryTexts(entry, state, notCompatible).map((accessory) =>
+                        : accessoryTexts(entry, state, compatibility).map((accessory) =>
                               "tag" in accessory
                                   ? { tag: { value: accessory.tag, color: tagColor(accessory.tag) } }
                                   : { text: accessory.text },
@@ -310,7 +315,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                                 entry,
                                 loaded?.commit ?? "",
                                 readmes[entry.dir],
-                                compatibilityFor(tree),
+                                compatibilityFor(entry, tree),
                             )}
                         />
                     ) : undefined

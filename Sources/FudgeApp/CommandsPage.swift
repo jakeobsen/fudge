@@ -145,12 +145,18 @@ struct CommandsPage: View {
     private func commandRow(_ command: CommandRow, of row: GroupRow) -> some View {
         let id = FudgeSettings.commandID(extension: row.name, command: command.name)
         let enabled = model.isEnabled(command: id) && model.isEnabled(extension: row.name)
+        let reason = model.offByDefaultReason(command: id)
         return HStack(spacing: 0) {
             HStack(spacing: 6) {
                 iconView(command.icon)
                 // The extension's name gives way first when the column is narrow.
                 Text(command.title).layoutPriority(1)
-                Text(row.title).foregroundStyle(.secondary)
+                if let reason {
+                    // Why it's off until turned on (SPEC-109), in place of the extension's name.
+                    Label(reason, systemImage: "exclamationmark.circle").foregroundStyle(.secondary).help(reason)
+                } else {
+                    Text(row.title).foregroundStyle(.secondary)
+                }
             }
             .lineLimit(1)
             .padding(.leading, 18)

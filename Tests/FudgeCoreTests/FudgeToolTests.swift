@@ -161,6 +161,7 @@ struct FudgeScanEndToEnd {
                   captureMemorySnapshot (not in Fudge)
                 scan-gaps uses Raycast AI, which Fudge doesn't support:
                   AI.ask
+                  in every command
 
                 """)
     }

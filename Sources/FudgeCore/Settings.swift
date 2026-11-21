@@ -75,7 +75,8 @@ public struct FudgeSettings: Sendable, Equatable {
         /// In `HotKeySpec` text form.
         public var hotkey: String?
         public var alias: String?
-        /// nil means enabled.
+        /// Set only by the user's own choice; nil means the default: enabled, unless the command is off by default
+        /// (`FudgeSettings.offByDefault`).
         public var enabled: Bool?
 
         public init(hotkey: String? = nil, alias: String? = nil, enabled: Bool? = nil) {
@@ -84,7 +85,7 @@ public struct FudgeSettings: Sendable, Equatable {
             self.enabled = enabled
         }
 
-        var isDefault: Bool { hotkey == nil && alias == nil && enabled != false }
+        var isDefault: Bool { hotkey == nil && alias == nil && enabled == nil }
     }
 
     /// A command's alias: the one in `settings.json`, else its default (`CommandAliases.defaults`, Define Word's
@@ -131,10 +132,21 @@ public struct FudgeSettings: Sendable, Equatable {
         "\(extensionName)/\(command)"
     }
 
-    /// Whether a command is enabled: neither it nor its extension is disabled.
+    /// Commands that are off until the user turns them on, by id: those that use something Fudge doesn't support
+    /// (SPEC-109, `InstalledExtension.offByDefault`). Never saved: it's worked out from the installed extensions at
+    /// each load, so Fudge's default never looks like the user's choice, and follows an update either way.
+    public var offByDefault: Set<String> = []
+
+    /// Whether a command is enabled: its extension is, and the command is by the user's choice or, without one, by
+    /// default (`offByDefault`).
     public func isEnabled(extension extensionName: String, command: String) -> Bool {
         isEnabled(extension: extensionName)
-            && commands[Self.commandID(extension: extensionName, command: command)]?.enabled != false
+            && isEnabledOwn(commandID: Self.commandID(extension: extensionName, command: command))
+    }
+
+    /// A command's own Enabled, its extension's aside: the user's choice, else the default.
+    public func isEnabledOwn(commandID id: String) -> Bool {
+        commands[id]?.enabled ?? !offByDefault.contains(id)
     }
 
     /// `isEnabled` for a command id ("<extension name>/<command name>"), split at its first "/".
@@ -285,7 +297,8 @@ public struct FudgeSettings: Sendable, Equatable {
             let settings = commands[id] ?? CommandSettings()
             entry["hotkey"] = settings.hotkey
             entry["alias"] = settings.alias
-            entry["enabled"] = settings.enabled == false ? false : nil
+            // The user's choice either way, so a command off by default that they turned on stays on.
+            entry["enabled"] = settings.enabled
             commandObjects[id] = entry.isEmpty ? nil : entry
         }
         object["commands"] = commandObjects.isEmpty ? nil : commandObjects

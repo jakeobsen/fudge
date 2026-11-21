@@ -2,7 +2,15 @@
 // tests fake git, the fudge CLI, the confirmation and the Trash.
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { isValidFolder, isValidName, sameFolder, type Installed, type InstallRecord, type StoreEntry } from "./catalog.ts";
+import {
+    commandTitles,
+    isValidFolder,
+    isValidName,
+    sameFolder,
+    type Installed,
+    type InstallRecord,
+    type StoreEntry,
+} from "./catalog.ts";
 import {
     compatibilityLine,
     fromReport,
@@ -151,7 +159,7 @@ export async function install(entry: StoreEntry, context: StoreContext): Promise
     if (problem) throw new StoreError(`${entry.title} can't be installed. ${problem}.`);
 
     const tree = (await context.repo.trees()).get(dir);
-    const compatibility = compatibilityLine(await compatibilityOf(source, tree, context));
+    const compatibility = compatibilityLine(await compatibilityOf(source, tree, context), commandTitles(entry));
     const commit = await context.repo.commit();
     const confirmed = await context.confirm(
         `${record ? "Update" : "Install"} ${entry.title}?`,

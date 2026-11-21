@@ -203,6 +203,7 @@ import Testing
         "colorFormat": "the Color Picker's format, not a feature",
         "calendarHidden": "which calendars My Schedule shows; it asks for access when first run",
         "calendarDaysAhead": "a detail of My Schedule",
+        "offByDefault": "worked out from the installed extensions at each load, never saved (SPEC-109)",
     ]
     let defaults = FudgeSettings()
     let properties = Mirror(reflecting: defaults).children.compactMap { child in child.label.map { ($0, child.value) } }

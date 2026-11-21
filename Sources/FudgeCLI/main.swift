@@ -24,7 +24,16 @@ func build(_ arguments: BuildArguments) {
     guard let esbuild = ExtensionBuilder.locateEsbuild() else {
         fail("can't find esbuild: set FUDGE_ESBUILD to its path, or use the fudge tool inside Fudge.app")
     }
-    let builder = ExtensionBuilder(esbuild: esbuild, log: { print("  \($0)") })
+    var builder = ExtensionBuilder(esbuild: esbuild, log: { print("  \($0)") })
+    // Which commands use Raycast AI or the Browser Extension, so they're installed not enabled (SPEC-109).
+    let helpers = Bundle.main.executableURL?.resolvingSymlinksInPath().deletingLastPathComponent()
+    if let script = CompatScanner.locateScript(), let node = Runtime.locateNode(helpers: helpers) {
+        builder.scanCommands = { source in
+            try CompatScanner.commands(of: source, node: node, script: script, esbuild: esbuild)
+        }
+    } else {
+        print("  can't find the compatibility scanner or node, so every command is enabled")
+    }
     do {
         let installed = try builder.build(
             source: arguments.source, into: arguments.destination ?? FudgePaths.standard().extensionsDirectory)

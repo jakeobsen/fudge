@@ -71,7 +71,7 @@ final class SettingsModel {
         allExtensions = installed.sorted {
             $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending
         }
-        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        fudgeSettings = readSettings()
         settingsProblem = FudgeSettings.isWritable(paths.settingsFile) ? nil : unreadableMessage
         loadLaunchPermissions()
         loadQuicklinks()
@@ -595,7 +595,7 @@ final class SettingsModel {
     func recordLauncherHotkey(_ key: HotKeyRecording) {
         cancelRecording()
         // Check against the file as it is now, so a command hotkey added by hand meanwhile counts.
-        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        fudgeSettings = readSettings()
         switch key.launcherEdit(commands: fudgeSettings.commandHotkeys, installed: installedCommandIDs) {
         case .keep:
             return
@@ -915,7 +915,7 @@ final class SettingsModel {
     /// leaving the file and `fudgeSettings` as they were, when the file can't be written.
     @discardableResult
     private func change(_ edit: (inout FudgeSettings) -> Void) -> Bool {
-        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        fudgeSettings = readSettings()
         var edited = fudgeSettings
         edit(&edited)
         do {
@@ -948,7 +948,7 @@ final class SettingsModel {
     func setAlias(_ text: String, for commandID: String) -> Bool {
         let alias = text.trimmingCharacters(in: .whitespaces)
         // Check against the file as it is now, as `change` edits it, so an alias added by hand meanwhile counts.
-        fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        fudgeSettings = readSettings()
         // ↵ on the alias shown, a default included, changes nothing, so a default never becomes the user's choice.
         if alias == fudgeSettings.alias(ofCommand: commandID) ?? "" {
             aliasMessages[commandID] = nil
@@ -971,8 +971,25 @@ final class SettingsModel {
         return true
     }
 
+    /// A command's own Enabled: the user's choice, else its default (off for one that uses Raycast AI or the
+    /// Browser Extension, SPEC-109).
     func isEnabled(command commandID: String) -> Bool {
-        fudgeSettings.commands[commandID]?.enabled != false
+        fudgeSettings.isEnabledOwn(commandID: commandID)
+    }
+
+    /// Why a command is off by default, for its row on the Commands page; nil for one that isn't.
+    func offByDefaultReason(command commandID: String) -> String? {
+        guard let slash = commandID.firstIndex(of: "/") else { return nil }
+        let name = String(commandID[..<slash])
+        return allExtensions.first { $0.manifest.name == name }?.compatibility
+            .reason(for: String(commandID[commandID.index(after: slash)...]))
+    }
+
+    /// `settings.json`, with the commands that are off by default worked out from the installed extensions.
+    private func readSettings() -> FudgeSettings {
+        var settings = FudgeSettings.load(from: paths.settingsFile)
+        settings.offByDefault = InstalledExtension.offByDefault(allExtensions)
+        return settings
     }
 
     /// The Extension Store is off unless enabled (`FudgeSettings.isEnabled(extension:)`).
@@ -982,7 +999,8 @@ final class SettingsModel {
 
     /// Enables or disables a command: a disabled one leaves root search, and its hotkey stops working.
     func setEnabled(_ enabled: Bool, command commandID: String) {
-        change { $0.commands[commandID, default: .init()].enabled = enabled ? nil : false }
+        // Written either way: the user's choice, which Fudge's default never overrides.
+        change { $0.commands[commandID, default: .init()].enabled = enabled }
         _ = applyHotkeys()
     }
 

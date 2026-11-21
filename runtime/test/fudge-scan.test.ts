@@ -32,7 +32,13 @@ function scan(script: string, folder: string): unknown {
     return JSON.parse(output);
 }
 
-const supported = { extension: "scan-supported", supported: true, gaps: [], unreadable: [] };
+const supported = {
+    extension: "scan-supported",
+    supported: true,
+    gaps: [],
+    unreadable: [],
+    commands: [{ name: "index", unsupported: [], traced: true }],
+};
 const withGaps = {
     extension: "scan-gaps",
     supported: false,
@@ -41,6 +47,7 @@ const withGaps = {
         { api: "captureMemorySnapshot", kind: "missing" },
     ],
     unreadable: [],
+    commands: [{ name: "index", unsupported: ["AI"], traced: true }],
 };
 
 test("fudge scan reports a supported extension and one with gaps", () => {
@@ -65,6 +72,7 @@ test("without --json, fudge scan lists the gaps for a person, saying Fudge", () 
             "  captureMemorySnapshot (not in Fudge)",
             "scan-gaps uses Raycast AI, which Fudge doesn't support:",
             "  AI.ask",
+            "  in every command",
         ].join("\n"),
     );
     const other: Report = {
@@ -76,6 +84,7 @@ test("without --json, fudge scan lists the gaps for a person, saying Fudge", () 
             { api: "OAuth.PKCEClient", kind: "via @raycast/utils", via: ["OAuthService"], byDesign: "OAuth" },
         ],
         unreadable: ["src/broken.ts"],
+        commands: [],
     };
     assert.equal(
         describe(other),
@@ -96,10 +105,20 @@ test("without --json, fudge scan lists the gaps for a person, saying Fudge", () 
             { api: "AI.Model", kind: "missing", byDesign: "AI" },
         ],
         unreadable: [],
+        commands: [
+            { name: "ask", unsupported: ["AI"], traced: true },
+            { name: "history", unsupported: [], traced: true },
+            { name: "models", unsupported: [], traced: true },
+        ],
     };
     assert.equal(
         describe(onlyByDesign),
-        ["asks uses Raycast AI, which Fudge doesn't support:", "  AI.ask", "  AI.Model"].join("\n"),
+        [
+            "asks uses Raycast AI, which Fudge doesn't support:",
+            "  AI.ask",
+            "  AI.Model",
+            "  in 1 of 3 commands: ask",
+        ].join("\n"),
         "nothing under \"doesn't have yet\" when only APIs counted apart are used",
     );
     const browser: Report = {
@@ -107,6 +126,7 @@ test("without --json, fudge scan lists the gaps for a person, saying Fudge", () 
         supported: false,
         gaps: [{ api: "BrowserExtension.getTabs", kind: "missing", byDesign: "Browser Extension" }],
         unreadable: [],
+        commands: [],
     };
     assert.equal(
         describe(browser),
@@ -150,7 +170,14 @@ test("a source esbuild can't read is unreadable, and the extension isn't called 
     copyFileSync(path.join(fixtures, "supported/package.json"), path.join(broken, "package.json"));
     execFileSync("sh", ["-c", `printf 'export default (' > '${path.join(broken, "src/index.ts")}'`]);
     const report = scan(path.join(runtime, "scripts/compat/fudge-scan.ts"), broken) as Record<string, unknown>;
-    assert.deepEqual(report, { extension: "scan-supported", supported: false, gaps: [], unreadable: ["src/index.ts"] });
+    // Its one command's entry can't be read, so it counts as reaching everything the scan read: nothing here.
+    assert.deepEqual(report, {
+        extension: "scan-supported",
+        supported: false,
+        gaps: [],
+        unreadable: ["src/index.ts"],
+        commands: [{ name: "index", unsupported: [], traced: false }],
+    });
 });
 
 // MARK: - Regular files only
