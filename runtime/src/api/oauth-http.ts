@@ -21,6 +21,7 @@ import {
     needsDecision,
     redirectedMessage,
     redirectStatuses,
+    refusalError,
     refusedMessage,
     type Decision,
     type OAuthProvider,
@@ -216,7 +217,7 @@ class Gate extends Duplex {
 
     private send(decision: Decision, head: string[], raw: Buffer): void {
         if (this.destroyed) return;
-        if (decision.kind === "refused") return void this.destroy(new Error(decision.message));
+        if (decision.kind === "refused") return void this.destroy(refusalError(decision));
         this.relayed = decision.kind === "relay";
         const to = decision.kind === "relay" ? new URL(decision.target) : this.url;
         const [, ...headers] = head;

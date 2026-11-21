@@ -137,13 +137,15 @@ public enum AppMessage: Sendable, Equatable, Encodable {
     case slots(session: String, nodes: [Int])
     case pop(session: String)
     case unload(session: String)
-    case rpcResult(session: String, id: Int, result: JSONValue?, error: String?)
+    /// `notice` says the call was refused on purpose, and why (`SignInNotice.Kind`), so the worker marks its rejection
+    /// and the error it causes comes back as a notice (SPEC-095).
+    case rpcResult(session: String, id: Int, result: JSONValue?, error: String?, notice: String? = nil)
     /// The user picked a toast's primary or secondary action.
     case toastAction(session: String, toast: Int, action: String)
 
     enum Keys: String, CodingKey {
         case type, id, session, entry, mode, launchProps, preferences, environment, node, path, args, result, error
-        case toast, action, nodes
+        case toast, action, nodes, notice
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -176,12 +178,13 @@ public enum AppMessage: Sendable, Equatable, Encodable {
         case .unload(let session):
             try container.encode("unload", forKey: .type)
             try container.encode(session, forKey: .session)
-        case .rpcResult(let session, let id, let result, let error):
+        case .rpcResult(let session, let id, let result, let error, let notice):
             try container.encode("rpcResult", forKey: .type)
             try container.encode(session, forKey: .session)
             try container.encode(id, forKey: .id)
             try container.encodeIfPresent(result, forKey: .result)
             try container.encodeIfPresent(error, forKey: .error)
+            try container.encodeIfPresent(notice, forKey: .notice)
         case .toastAction(let session, let toast, let action):
             try container.encode("toastAction", forKey: .type)
             try container.encode(session, forKey: .session)
@@ -199,7 +202,9 @@ public enum HostMessage: Sendable, Equatable, Decodable {
     /// The answer to `AppMessage.slots`, for the items still mounted.
     case slots(session: String, items: [ItemSlots])
     case rpc(session: String, id: Int, method: String, params: JSONValue)
-    case error(session: String, message: String, stack: String?, fatal: Bool)
+    /// `notice`: the error is a refusal on purpose (the `rpcResult` notice it came from), shown as a notice with no
+    /// trace (`SignInNotice`), and `message` is the refusal's own.
+    case error(session: String, message: String, stack: String?, fatal: Bool, notice: String? = nil)
     case log(session: String, level: String, message: String)
     /// The worker's answer to an `event`, once its handler has returned or its promise has settled.
     case eventSettled(session: String)
@@ -208,7 +213,7 @@ public enum HostMessage: Sendable, Equatable, Decodable {
     case unknown(type: String)
 
     enum Keys: String, CodingKey {
-        case type, id, session, view, depth, method, params, message, stack, fatal, level, reason, items
+        case type, id, session, view, depth, method, params, message, stack, fatal, level, reason, items, notice
     }
 
     public init(from decoder: Decoder) throws {
@@ -242,7 +247,8 @@ public enum HostMessage: Sendable, Equatable, Decodable {
                 session: try container.decode(String.self, forKey: .session),
                 message: try container.decode(String.self, forKey: .message),
                 stack: try container.decodeIfPresent(String.self, forKey: .stack),
-                fatal: try container.decode(Bool.self, forKey: .fatal)
+                fatal: try container.decode(Bool.self, forKey: .fatal),
+                notice: try container.decodeIfPresent(String.self, forKey: .notice)
             )
         case "log":
             self = .log(
@@ -266,7 +272,7 @@ public enum HostMessage: Sendable, Equatable, Decodable {
     public var session: String? {
         switch self {
         case .render(let session, _, _), .slots(let session, _), .rpc(let session, _, _, _),
-            .error(let session, _, _, _), .log(let session, _, _), .eventSettled(let session), .exit(let session, _):
+            .error(let session, _, _, _, _), .log(let session, _, _), .eventSettled(let session), .exit(let session, _):
             session
         case .pong, .protocolError, .unknown:
             nil
@@ -323,9 +329,9 @@ extension HostMessage {
             self = .rpc(session: session, id: id, method: method, params: object["params"] ?? .null)
         case "error":
             guard let session = string("session"), let message = string("message"), let stack = optionalString("stack"),
-                case .bool(let fatal) = object["fatal"]
+                case .bool(let fatal) = object["fatal"], let notice = optionalString("notice")
             else { return nil }
-            self = .error(session: session, message: message, stack: stack, fatal: fatal)
+            self = .error(session: session, message: message, stack: stack, fatal: fatal, notice: notice)
         case "log":
             guard let session = string("session"), let level = string("level"), let message = string("message") else {
                 return nil

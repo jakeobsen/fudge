@@ -10,7 +10,8 @@ import https from "node:https";
 import { Readable } from "node:stream";
 import tls from "node:tls";
 import zlib from "node:zlib";
-import { signInOffMessage } from "./oauth.ts";
+import { markNotice } from "../notice.ts";
+import { signInOffMessage, signInOffNotice } from "./oauth.ts";
 
 export type OAuthProvider = { id: string; name: string; authorizeURL: string; tokenURL: string; refreshURL: string };
 
@@ -135,7 +136,17 @@ export const redirectStatuses = new Set([301, 302, 303, 307, 308]);
 export const redirectedMessage = "The sign-in server redirected the token request, and Fudge doesn't follow that.";
 
 /** Where a request goes, all things considered: untouched, refused (with what to say), or to the relay at `target`. */
-export type Decision = { kind: "untouched" } | { kind: "refused"; message: string } | { kind: "relay"; target: string };
+/** A refusal while sign-in is off carries its `notice` (SPEC-095), so the command shows a notice, not a failure. */
+export type Decision =
+    | { kind: "untouched" }
+    | { kind: "refused"; message: string; notice?: string }
+    | { kind: "relay"; target: string };
+
+/** The error a refused request fails with, marked with the refusal's notice when it has one. */
+export function refusalError(decision: Extract<Decision, { kind: "refused" }>): Error {
+    const error = new Error(decision.message);
+    return decision.notice === undefined ? error : markNotice(error, decision.notice);
+}
 
 /** Whether a request to `url` needs a decision, and so its body: Raycast's proxy hosts and the table's token and
  * refresh URLs. Everything else goes where it was going, untouched and unread. */
@@ -162,7 +173,8 @@ export async function decide(
     const answer = await server(where.provider.id);
     if (answer.server === null || (where.ownHost && !answer.signedIn)) {
         if (where.ownHost) return { kind: "untouched" };
-        return { kind: "refused", message: refusedMessage(url.host, answer.server === null) };
+        const off = answer.server === null;
+        return { kind: "refused", message: refusedMessage(url.host, off), ...(off ? { notice: signInOffNotice } : {}) };
     }
     const target = `${answer.server.replace(/\/+$/, "")}/${where.provider.id}/${where.endpoint}${url.search}`;
     return { kind: "relay", target };
@@ -271,7 +283,7 @@ export function rewriteFetch(
         const body = init?.body ?? (request ? await request.clone().text() : undefined);
         const decision = await decide(method, parsed, body, providers, server);
         if (decision.kind === "untouched") return original(input, init);
-        if (decision.kind === "refused") throw new Error(decision.message);
+        if (decision.kind === "refused") throw refusalError(decision);
         // The relay gets the request as fetch would send it, over a connection that always verifies, and a
         // redirect is never followed: a 307 or 308 would send the body (the code, the verifier or the refresh
         // token) on to wherever the relay points.

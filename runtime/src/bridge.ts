@@ -2,6 +2,8 @@
 // preferences, …). Each call is an `rpc` message with an id; the app answers
 // with an `rpcResult` carrying the same id.
 
+import { markNotice } from "./notice.ts";
+
 export type RpcRequest = { type: "rpc"; id: number; method: string; params: unknown };
 
 type Pending = { resolve(value: unknown): void; reject(error: Error): void };
@@ -40,12 +42,15 @@ export function callApp<T = unknown>(method: string, params?: unknown): Promise<
     });
 }
 
-/** Settles the call `id` with the app's answer. Unknown ids are ignored. */
-export function settle(id: number, result: unknown, error?: string): void {
+/**
+ * Settles the call `id` with the app's answer. Unknown ids are ignored. A rejection the app gave a `notice` (it refused
+ * on purpose, e.g. while sign-in is off) is marked with it (`markNotice`).
+ */
+export function settle(id: number, result: unknown, error?: string, notice?: string): void {
     const call = pending.get(id);
     if (!call) return;
     pending.delete(id);
     if (pending.size === 0) hold?.unref();
-    if (error !== undefined) call.reject(new Error(error));
+    if (error !== undefined) call.reject(notice === undefined ? new Error(error) : markNotice(new Error(error), notice));
     else call.resolve(result);
 }

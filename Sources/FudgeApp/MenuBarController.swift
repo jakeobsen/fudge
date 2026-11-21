@@ -268,16 +268,20 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             if first { sendQueuedPicks(item, session: session) }
             unloadIfDone(item)
 
-        case .error(_, let message, _, let fatal):
+        case .error(_, let message, _, let fatal, let notice):
             guard let item else { return }
+            // A refusal on purpose (sign-in is off, SPEC-095) says so, never as a failure with its trace.
+            let manifest = item.installed.manifest
+            let signIn = SignInNotice(
+                notice: notice, message: message, extensionName: manifest.name, extensionTitle: manifest.title,
+                commandID: nil)
+            let hud = signIn?.hud ?? "\(item.command.title) failed — \(message)"
             if fatal {
-                if item.lifecycle.failed(session) {
-                    host.showHUD("\(item.command.title) failed — \(message)")
-                }
+                if item.lifecycle.failed(session) { host.showHUD(hud) }
                 draw(item)
                 unloadIfDone(item)
             } else if item.lifecycle.isUserInitiated, item.lifecycle.session == session {
-                host.showHUD("\(item.command.title) failed — \(message)")
+                host.showHUD(hud)
             }
             if fatal { dropPicksUnlessAwaited(item, session: session) }
 
