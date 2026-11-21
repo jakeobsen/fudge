@@ -230,6 +230,56 @@ public struct MenuItemPress: @unchecked Sendable {
     public func callAsFunction() -> MenuPress { action() }
 }
 
+/// Running a row's menu item: find it, then press it only if the list it was run from is still the one on screen.
+/// Finding can wait on a busy app for seconds, and by then the user may have dismissed the panel and gone to another
+/// app, where pressing would bring the old one back and run what they gave up on.
+public enum MenuItemRun {
+    /// What a run came to.
+    public enum Outcome: Sendable, Equatable {
+        /// The item was pressed; `MenuPress` says how the app answered.
+        case pressed(MenuPress)
+        /// The item isn't there anymore.
+        case gone
+        /// The app didn't answer while the item was being found.
+        case noAnswer
+        /// The list was dismissed, or replaced, while the item was being found: nothing was done.
+        case dismissed
+    }
+
+    /// Finds the item (`find`, which waits on the app off the main thread), then, only while `isCurrent` still says
+    /// the list is the one the run started from: hides the panel, makes the app active and presses the item.
+    /// Otherwise nothing is hidden, activated or pressed, and nothing is said.
+    @MainActor
+    public static func run(
+        find: () async -> MenuItemFound, isCurrent: () -> Bool, hide: () async -> Void, activate: () async -> Void,
+        press: (MenuItemPress) async -> MenuPress
+    ) async -> Outcome {
+        let found = await find()
+        guard isCurrent() else { return .dismissed }
+        switch found {
+        case .found(let item):
+            await hide()
+            await activate()
+            return .pressed(await press(item))
+        case .gone:
+            return .gone
+        case .noAnswer:
+            return .noAnswer
+        }
+    }
+}
+
+/// Counts the lifetimes of the list on screen: hiding the panel or leaving the list starts a new one, so a run begun
+/// in an older one is no longer current (`MenuItemRun`).
+public struct MenuItemsGeneration: Sendable, Equatable {
+    public private(set) var value = 0
+
+    public init() {}
+
+    /// The panel hid, or the list went.
+    public mutating func dismissed() { value += 1 }
+}
+
 /// What reading an app's menus for the list gave.
 public enum MenuItemsRead: Sendable {
     case listing(MenuItemsListing)

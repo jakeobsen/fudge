@@ -2391,6 +2391,8 @@ final class LauncherModel {
     @ObservationIgnored private var menuItemsStale = false
     /// A row's item is being found to run: another ↵ meanwhile (a key repeat) runs nothing, so it's pressed once.
     @ObservationIgnored private var findingMenuItem = false
+    /// Moves on when the panel hides or the list goes, so a run still finding its item then does nothing.
+    @ObservationIgnored private var menuItemsGeneration = MenuItemsGeneration()
 
     private var menuItemsOnScreen: Bool {
         if case .command(let command) = screen { return command.session == MenuItemsList.session }
@@ -2503,6 +2505,7 @@ final class LauncherModel {
     /// menus are read again when the panel shows, perhaps another app's.
     private func menuItemsHidden() {
         guard menuItemsOnScreen else { return }
+        menuItemsGeneration.dismissed()
         menuItemsStale = true
         menuReads += 1
         menuTarget = nil
@@ -2513,6 +2516,7 @@ final class LauncherModel {
     /// The screen changed: once Search Menu Items is gone, its read goes too, and one still running is dropped.
     private func menuItemsLeft() {
         guard !menuItemsOnScreen, menuListing != nil || menuTarget != nil || menuItemsStale else { return }
+        menuItemsGeneration.dismissed()
         menuReads += 1
         menuTarget = nil
         menuListing = nil
@@ -2534,30 +2538,34 @@ final class LauncherModel {
         case .run(let row):
             guard let listing = menuListing, let target = menuTarget, !findingMenuItem else { return }
             findingMenuItem = true
+            let generation = menuItemsGeneration
             Task {
-                let found = await Self.offMain { listing.item(row: row, in: target.pid) }
+                let outcome = await MenuItemRun.run(
+                    find: { await Self.offMain { listing.item(row: row, in: target.pid) } },
+                    // Still the list the run came from, on screen: the panel hasn't hidden and the list hasn't gone.
+                    isCurrent: { menuItemsGeneration == generation && menuItemsOnScreen && isVisible() },
+                    hide: {
+                        hide()
+                        // A turn for the panel to be gone, so the app's own window has the keyboard back first.
+                        await withCheckedContinuation { continuation in
+                            DispatchQueue.main.async { continuation.resume() }
+                        }
+                        try? await Task.sleep(for: .milliseconds(50))
+                    },
+                    activate: { await menuItemsAccess.activate(target) },
+                    press: { press in await Self.offMain { press() } })
                 findingMenuItem = false
-                switch found {
-                case .found(let press):
-                    hide()
-                    // A turn for the panel to be gone, so the app's own window has the keyboard back first.
-                    await withCheckedContinuation { continuation in
-                        DispatchQueue.main.async { continuation.resume() }
-                    }
-                    try? await Task.sleep(for: .milliseconds(50))
-                    await menuItemsAccess.activate(target)
-                    switch await Self.offMain({ press() }) {
-                    case .pressed, .noAnswer:
-                        // No answer in time can mean the item opened a dialog, which holds the answer back.
-                        break
-                    case .gone:
-                        showHUD(MenuItemsList.gone)
-                    case .failed:
-                        showHUD("\(target.name) didn't run that menu item.")
-                    }
+                switch outcome {
+                case .pressed(.pressed), .pressed(.noAnswer), .dismissed:
+                    // No answer in time can mean the item opened a dialog, which holds the answer back.
+                    break
+                case .pressed(.gone):
+                    showHUD(MenuItemsList.gone)
+                case .pressed(.failed):
+                    showHUD("\(target.name) didn't run that menu item.")
                 case .gone:
                     showFailureToast(MenuItemsList.gone)
-                    if menuItemsOnScreen, menuListing === listing { readMenuItems() }
+                    if menuListing === listing { readMenuItems() }
                 case .noAnswer:
                     showFailureToast("\(target.name) didn't answer")
                 }

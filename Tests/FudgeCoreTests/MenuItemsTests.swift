@@ -461,3 +461,82 @@ private enum MenuTestError: Error {
     #expect(list.items.first?.accessories.map(\.keycaps) == [["⌥", "⌘", "E"]])
     #expect(list.items.first?.accessories.first?.text == nil)
 }
+
+// MARK: - Running, when the list may have gone (the review's REQUIRED item on #123)
+
+/// What a run did, in order, and the list's lifetime, which dismissing moves on.
+@MainActor
+private final class RunProbe {
+    var generation = MenuItemsGeneration()
+    var done: [String] = []
+}
+
+/// Runs row `row` of `listing` as the launcher does: found off the main thread, current while `probe`'s generation is
+/// the one the run started in.
+@MainActor
+private func runItem(_ row: Int, of listing: MenuItemsListing, probe: RunProbe) async -> MenuItemRun.Outcome {
+    let started = probe.generation
+    return await MenuItemRun.run(
+        find: {
+            await withCheckedContinuation { continuation in
+                DispatchQueue.global().async { continuation.resume(returning: listing.item(row: row, in: app.pid)) }
+            }
+        },
+        isCurrent: { probe.generation == started },
+        hide: { probe.done.append("hide") },
+        activate: { probe.done.append("activate") },
+        press: { press in
+            probe.done.append("press")
+            return press()
+        })
+}
+
+@MainActor
+@Test func aRunDismissedWhileItsItemIsFoundDoesNothing() async throws {
+    let system = FixedMenuSystem(menus: menus)
+    let listing = try read(system)
+    let row = try #require(listing.rows.firstIndex { $0.title == "As PDF…" })
+    let probe = RunProbe()
+    // The app is slow to answer for the item; while it waits, the user dismisses the panel. Then it answers.
+    let finding = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+    system.onRead = { title in
+        guard title == "As PDF…" else { return }
+        finding.signal()
+        release.wait()
+    }
+    Thread {
+        finding.wait()
+        Task { @MainActor in
+            probe.generation.dismissed()
+            release.signal()
+        }
+    }.start()
+    let outcome = await runItem(row, of: listing, probe: probe)
+    #expect(outcome == .dismissed)
+    #expect(probe.done.isEmpty, "nothing hidden, activated or pressed")
+    #expect(system.pressed.isEmpty)
+}
+
+@MainActor
+@Test func aCurrentRunHidesActivatesThenPresses() async throws {
+    let system = FixedMenuSystem(menus: menus)
+    let listing = try read(system)
+    let row = try #require(listing.rows.firstIndex { $0.title == "New Folder" })
+    let probe = RunProbe()
+    #expect(await runItem(row, of: listing, probe: probe) == .pressed(.pressed))
+    #expect(probe.done == ["hide", "activate", "press"])
+    #expect(system.pressed == ["New Folder"])
+
+    // Gone by the time it's found: nothing hidden or pressed; the launcher says so.
+    var rebuilt = menus
+    rebuilt[1].items!.removeAll { $0.title == "New Folder" }
+    system.rebuild(rebuilt)
+    let gone = RunProbe()
+    #expect(await runItem(row, of: listing, probe: gone) == .gone)
+    #expect(gone.done.isEmpty)
+    var hidden = MenuItemsGeneration()
+    let before = hidden
+    hidden.dismissed()
+    #expect(hidden != before)
+}
