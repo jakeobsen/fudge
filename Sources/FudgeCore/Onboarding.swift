@@ -8,6 +8,8 @@ public enum OnboardingStep: String, CaseIterable, Sendable {
     case accessibility
     case openAtLogin
     case currency
+    /// Whether to keep clipboard history (FUD-117): an opt-in, with the consent sheet's own words.
+    case clipboardHistory
     case updates
     case done
 }

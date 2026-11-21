@@ -448,8 +448,8 @@ final class SettingsModel {
         Task {
             if on {
                 guard await confirm(ClipboardHistorySheets.consent) else { return }
-                guard change({ $0.setClipboardHistory(true, now: Date()) }) else { return }
-                clipboardHistoryChanged()
+                keepClipboardHistory()
+                return
             } else {
                 guard change({ $0.setClipboardHistory(false, now: Date()) }) else { return }
                 clipboardHistoryChanged()
@@ -457,6 +457,14 @@ final class SettingsModel {
             }
             reload()
         }
+    }
+
+    /// Turns it on, the consent having been given: the switch's sheet, or onboarding's step, which shows the same
+    /// words. Writes the switch and its consent date, and starts recording.
+    func keepClipboardHistory() {
+        guard change({ $0.setClipboardHistory(true, now: Date()) }) else { return }
+        clipboardHistoryChanged()
+        reload()
     }
 
     func setClipboardHistoryKeepDays(_ days: Int) {
