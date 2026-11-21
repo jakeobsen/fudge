@@ -50,31 +50,71 @@ func pathsUnderAnExtensionFolderCount(_ relative: String) {
 
 // MARK: - Watching, on temporary folders only
 
-@MainActor
-private final class Reloads {
-    var times: [ContinuousClock.Instant] = []
-}
-
 /// A ceiling that only catches a hang: each wait ends as soon as what it waits for has happened, so a CI runner that
 /// stalls for seconds can't fail it.
 private let noHang: Duration = .seconds(30)
 
-/// Waits until no reload has come for 50 polls of 20 ms in a row (at least a second, longer than the latency and the
-/// debounce together), because FSEvents can report the folder's own creation, made just before the stream started.
-/// Counting polls rather than reading the clock means a stalled runner's pause counts as one quiet poll, not a second.
-@MainActor
-private func settle(_ reloads: Reloads) async throws {
-    let started = ContinuousClock.now
-    var seen = reloads.times.count
-    var quiet = 0
-    while quiet < 50, ContinuousClock.now - started < noHang {
-        try await Task.sleep(for: .milliseconds(20))
-        if reloads.times.count == seen {
-            quiet += 1
-        } else {
-            seen = reloads.times.count
-            quiet = 0
+/// The reloads a watcher made, and waits for them. A wait ends as the reload comes, or at its deadline, which a
+/// detached timer enforces off the main actor (FUD-153): a main actor that's held up can't hold a wait past it.
+private final class Reloads: @unchecked Sendable {
+    private let lock = NSLock()
+    private var times: [ContinuousClock.Instant] = []
+    /// Waits for the next reload, by id: `next` waits for one after it's called, `first` for the first since `reset`.
+    private var waiting: [UUID: CheckedContinuation<ContinuousClock.Instant?, Never>] = [:]
+
+    /// A reload, from the watcher's `onChange`.
+    func record() {
+        let now = ContinuousClock.now
+        let woken = lock.withLock {
+            times.append(now)
+            defer { waiting = [:] }
+            return Array(waiting.values)
         }
+        for continuation in woken { continuation.resume(returning: now) }
+    }
+
+    var all: [ContinuousClock.Instant] { lock.withLock { times } }
+
+    func reset() { lock.withLock { times = [] } }
+
+    /// The first reload since `reset`, if one has come, or the next one within `limit`, or nil.
+    func first(within limit: Duration) async -> ContinuousClock.Instant? {
+        await wait(within: limit, unlessAlready: true)
+    }
+
+    /// The next reload after this call, within `limit`, or nil.
+    func next(within limit: Duration) async -> ContinuousClock.Instant? {
+        await wait(within: limit, unlessAlready: false)
+    }
+
+    private func wait(within limit: Duration, unlessAlready: Bool) async -> ContinuousClock.Instant? {
+        let id = UUID()
+        return await withCheckedContinuation { continuation in
+            let already: ContinuousClock.Instant? = lock.withLock {
+                if unlessAlready, let first = times.first { return first }
+                waiting[id] = continuation
+                return nil
+            }
+            if let already {
+                continuation.resume(returning: already)
+                return
+            }
+            Task.detached { [self] in
+                try? await Task.sleep(for: limit)
+                lock.withLock { waiting.removeValue(forKey: id) }?.resume(returning: nil)
+            }
+        }
+    }
+}
+
+/// Waits until the watcher has gone quiet: a second with no reload and none waiting for its debounce, up to `noHang`.
+/// FSEvents can report the folder's own creation, made just before the stream started. A batch the main queue hasn't
+/// run yet is ahead of this function's turn there, so it shows as a pending change rather than being missed.
+@MainActor
+private func settle(_ watcher: ExtensionsWatcher, _ reloads: Reloads) async {
+    let started = ContinuousClock.now
+    while ContinuousClock.now - started < noHang {
+        if await reloads.next(within: .seconds(1)) == nil, !watcher.hasPendingChange { return }
     }
 }
 
@@ -84,25 +124,23 @@ private func settle(_ reloads: Reloads) async throws {
 /// then 1 s more for any further one.
 @MainActor
 private func reloads(
-    preparing prepare: (URL) throws -> Void = { _ in }, watching: Duration = noHang,
+    preparing prepare: (URL) async throws -> Void = { _ in }, watching: Duration = noHang,
     after change: (URL) async throws -> Void
 ) async throws -> [Duration] {
     let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
     try FileManager.default.createDirectory(at: extensions, withIntermediateDirectories: true)
-    try prepare(extensions)
+    try await prepare(extensions)
     let reloads = Reloads()
-    let watcher = ExtensionsWatcher(directory: extensions) { reloads.times.append(.now) }
+    let watcher = ExtensionsWatcher(directory: extensions) { reloads.record() }
     try watcher.start()
     defer { watcher.stop() }
-    try await settle(reloads)
-    reloads.times = []
+    await settle(watcher, reloads)
+    reloads.reset()
     try await change(extensions)
     let changed = ContinuousClock.now
-    while reloads.times.isEmpty, ContinuousClock.now - changed < watching {
-        try await Task.sleep(for: .milliseconds(20))
-    }
+    _ = await reloads.first(within: watching)
     try await Task.sleep(for: .seconds(1))
-    return reloads.times.map { $0 - changed }
+    return reloads.all.map { $0 - changed }
 }
 
 private func write(_ text: String, to url: URL) throws {
@@ -186,39 +224,69 @@ struct ExtensionsWatcherTests {
     @Test func nothingCallsBackAfterStop() async throws {
         let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
         let reloads = Reloads()
-        let watcher = ExtensionsWatcher(directory: extensions) { reloads.times.append(.now) }
+        let watcher = ExtensionsWatcher(directory: extensions) { reloads.record() }
         try watcher.start()
         #expect(watcher.isRunning)
-        try await settle(reloads)
-        reloads.times = []
+        await settle(watcher, reloads)
+        reloads.reset()
         try install(in: extensions)
         watcher.stop()
         #expect(!watcher.isRunning)
         // A window for a callback that shouldn't come, longer than the latency and the debounce together. FSEvents
         // runs in real time, so there's no clock to inject; a stall can only lengthen the window, never fail it.
-        try await Task.sleep(for: .seconds(1.5))
-        #expect(reloads.times.isEmpty)
+        #expect(await reloads.next(within: .seconds(1.5)) == nil)
+        #expect(reloads.all.isEmpty)
     }
 
     @Test func startingCreatesAMissingFolderAndWatchesIt() async throws {
         // Under /var, a link to /private/var: the folder's real path is only known once it exists.
         let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("support/extensions")
         let reloads = Reloads()
-        let watcher = ExtensionsWatcher(directory: extensions) { reloads.times.append(.now) }
+        let watcher = ExtensionsWatcher(directory: extensions) { reloads.record() }
         try watcher.start()
         defer { watcher.stop() }
         var isDirectory: ObjCBool = false
         #expect(FileManager.default.fileExists(atPath: extensions.path, isDirectory: &isDirectory))
         #expect(isDirectory.boolValue)
-        try await settle(reloads)
-        reloads.times = []
+        await settle(watcher, reloads)
+        reloads.reset()
         try install(in: extensions)
         let installed = ContinuousClock.now
-        while reloads.times.isEmpty, ContinuousClock.now - installed < noHang {
-            try await Task.sleep(for: .milliseconds(20))
-        }
+        _ = await reloads.first(within: noHang)
         try await Task.sleep(for: .seconds(1))
-        expectOnce(reloads.times.map { $0 - installed })
+        expectOnce(reloads.all.map { $0 - installed })
+    }
+
+    /// FUD-153: CI's tests once stopped for 16 minutes, the main actor held up. The watcher asks `fseventsd` only on
+    /// its own queue, so one that never answers (a suspended queue here) holds up nothing: `start` and `stop` return
+    /// at once, nothing is reported, and the test's wait ends at its deadline.
+    @Test func aStreamThatNeverStartsHoldsUpNothingAndItsWaitEndsAtItsDeadline() async throws {
+        let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
+        let fseventsd = DispatchQueue(label: "a stuck fseventsd")
+        fseventsd.suspend()
+        defer { fseventsd.resume() }
+        let reloads = Reloads()
+        let watcher = ExtensionsWatcher(directory: extensions, queue: fseventsd) { reloads.record() }
+        let began = ContinuousClock.now
+        try watcher.start()
+        #expect(watcher.isRunning)
+        try install(in: extensions)
+        #expect(await reloads.first(within: .seconds(1)) == nil, "nothing reports")
+        watcher.stop()
+        #expect(!watcher.isRunning)
+        #expect(ContinuousClock.now - began < noHang, "start, the wait and stop all ended")
+    }
+
+    /// A wait's deadline is enforced off the main actor: here the main actor is held until the wait has ended (or 30 s
+    /// have passed), and a deadline that needed the main actor would never come.
+    @Test func aWaitEndsAtItsDeadlineWhileTheMainActorIsHeldUp() {
+        let reloads = Reloads()
+        let ended = DispatchSemaphore(value: 0)
+        Task.detached {
+            _ = await reloads.first(within: .milliseconds(100))
+            ended.signal()
+        }
+        #expect(ended.wait(timeout: .now() + 30) == .success)
     }
 }
 
@@ -238,11 +306,10 @@ struct ExtensionsWatcherBuildTests {
     }
 
     @Test func rebuildingWithTheBuilderReloadsOnce() async throws {
-        let builder = builder
+        // Both builds off the main actor: the first one used to run on it, holding up every main-actor test for its
+        // seconds of esbuild (FUD-153).
         expectOnce(
-            try await reloads(preparing: { extensions in
-                _ = try builder.build(source: Fixtures.greeter, into: extensions)
-            }) { extensions in
+            try await reloads(preparing: { extensions in try await build(into: extensions) }) { extensions in
                 try await build(into: extensions)
             })
     }

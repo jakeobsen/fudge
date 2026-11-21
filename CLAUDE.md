@@ -897,6 +897,7 @@ Extensions run in a separate Node.js process, the extension host.
   - Extensions live in `FudgePaths.extensionsDirectory`: `~/Library/Application Support/fudge/extensions`, or under `$FUDGE_SUPPORT_DIR`.
   - **The running app picks it up.**
     `ExtensionsWatcher` (core) watches the extensions folder through FSEvents, with file-level events.
+    Its stream is made, started, stopped and released on a serial queue of its own, which it delivers on, never on the main thread, since each of those calls asks `fseventsd`, which can take seconds or not answer (FUD-153); `start` and `stop` return at once, and a batch goes on to the main queue.
     A path counts unless its first component under the folder starts with `.` (`.staging-*`, `.old-*`, `.DS_Store`), and a trailing 0.3 s debounce makes each install, rebuild or removal one reload: `LauncherModel.reloadExtensions()` (the installed extensions only, keeping the scanned applications, the query and the selection), the command hotkeys, and the Settings window if it's open.
     The menu's Reload Extensions also scans applications again.
     Snapshot runs don't watch.
@@ -989,6 +990,9 @@ Extensions run in a separate Node.js process, the extension host.
 - **Fudge runs only its own Node.js** (SPEC-115, D-74), never one the user has installed, so no setting, variable, Homebrew or `PATH` changes it.
   The app and the `fudge` tool find it beside themselves (`Runtime.locateNode`: `Contents/Helpers/node`, the tool's folder with links resolved), and a missing or broken one says to reinstall Fudge (`Runtime.nodeMissing`).
   The tests get it from `FUDGE_TEST_NODE`, which `make test` sets and only the test target reads; the tool's tests run a copy of `fudge` with a Node.js beside it, as in the bundle.
+- **A test never holds up the main actor or Swift's shared threads waiting for another program** (FUD-153).
+  CI's runners have three cores, so the shared pool has three threads, and a test that runs esbuild or asks `fseventsd` on the main actor holds up every main-actor test while it waits.
+  Run such work off the main actor (`Task.detached` for a build), and wait for an event with a deadline that a detached timer enforces (`Reloads` in `ExtensionsWatcherTests`), not by polling on the main actor.
 - **SwiftUI's `TextField` writes its unchanged text back** now and then, three times on ↵ before `onSubmit` and again when it loses the keyboard.
   Setters bound to a field must ignore writes that change nothing, or they'll redo work such as resetting the selection.
 - **`.onAppear` runs once for the panel's lifetime**, not each time it's shown.

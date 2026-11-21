@@ -7,67 +7,70 @@ import Foundation
 /// One FSEvents stream with file-level events. A path counts when its first component under the folder doesn't
 /// start with `.`: that leaves out `ExtensionBuilder`'s `.staging-*` and `.old-*` folders, and `.DS_Store`. A batch
 /// that counts calls `onChange` `debounce` later, and further counting batches in that time join it, so a build is
-/// one call. The stream delivers on the main queue, and `onChange` runs on the main actor.
+/// one call. `onChange` runs on the main actor.
+///
+/// The stream is made, started, stopped and released on a serial queue of its own, which it also delivers on, never
+/// on the main thread: each of those calls asks `fseventsd`, which can take seconds on a busy Mac, or not answer at
+/// all, and the main thread must never wait for it (FUD-153). So `start` and `stop` return at once.
 @MainActor
 public final class ExtensionsWatcher {
     /// How long FSEvents gathers events into one batch.
-    public static let latency: TimeInterval = 0.3
+    public nonisolated static let latency: TimeInterval = 0.3
     /// How long after a counting batch `onChange` runs, unless another counting batch comes first.
-    public static let debounce: Duration = .milliseconds(300)
+    public nonisolated static let debounce: Duration = .milliseconds(300)
 
     public let directory: URL
     private let onChange: @MainActor () -> Void
+    /// Where the stream lives. Tests pass a suspended queue to stand in for an `fseventsd` that doesn't answer.
+    private let queue: DispatchQueue
     /// The folder's paths as FSEvents may report them, read when watching starts, once the folder exists.
     private var roots: [String] = []
-    private var stream: FSEventStreamRef?
+    /// The current run's stream, from `start` to `stop`; only its queue touches what's inside it.
+    private var stream: WatcherStream?
+    /// Counts runs, so a batch delivered before `stop` (already on its way to the main queue) is dropped.
+    private var run = 0
     private var pending: Task<Void, Never>?
 
-    public init(directory: URL, onChange: @escaping @MainActor () -> Void) {
+    public convenience init(directory: URL, onChange: @escaping @MainActor () -> Void) {
+        self.init(
+            directory: directory, queue: DispatchQueue(label: "io.github.jakeobsen.fudge.extensions-watcher"),
+            onChange: onChange)
+    }
+
+    init(directory: URL, queue: DispatchQueue, onChange: @escaping @MainActor () -> Void) {
         self.directory = directory
+        self.queue = queue
         self.onChange = onChange
     }
 
     public var isRunning: Bool { stream != nil }
 
-    /// Starts watching, creating the folder first when it's missing (as `ExtensionBuilder` would).
+    /// Whether a counting batch is waiting for its debounce, for tests that wait for the watcher to go quiet.
+    var hasPendingChange: Bool { pending != nil }
+
+    /// Starts watching, creating the folder first when it's missing (as `ExtensionBuilder` would). The stream starts
+    /// on the watcher's queue; one FSEvents refuses is reported on stderr, and then nothing is ever delivered.
     public func start() throws {
         guard stream == nil else { return }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         roots = Self.roots(of: directory)
-        let sink = Unmanaged.passRetained(ExtensionsWatcherSink(self)).toOpaque()
-        var context = FSEventStreamContext(
-            version: 0, info: sink, retain: nil,
-            release: { info in
-                if let info { Unmanaged<ExtensionsWatcherSink>.fromOpaque(info).release() }
-            }, copyDescription: nil)
-        let flags =
-            kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagWatchRoot
-        guard
-            let stream = FSEventStreamCreate(
-                kCFAllocatorDefault, extensionsWatcherCallback, &context, [directory.path] as CFArray,
-                FSEventStreamEventId(kFSEventStreamEventIdSinceNow), Self.latency, FSEventStreamCreateFlags(flags))
-        else {
-            Unmanaged<ExtensionsWatcherSink>.fromOpaque(sink).release()
-            throw CocoaError(.fileReadUnknown, userInfo: [NSFilePathErrorKey: directory.path])
-        }
-        FSEventStreamSetDispatchQueue(stream, DispatchQueue.main)
-        guard FSEventStreamStart(stream) else {
-            FSEventStreamInvalidate(stream)
-            FSEventStreamRelease(stream)
-            throw CocoaError(.fileReadUnknown, userInfo: [NSFilePathErrorKey: directory.path])
-        }
+        run += 1
+        let stream = WatcherStream(queue: queue)
         self.stream = stream
+        let sink = ExtensionsWatcherSink(self, run: run)
+        let path = directory.path
+        queue.async { stream.start(path: path, sink: sink) }
     }
 
-    /// Stops watching. Nothing calls back after this, not even a reload that was waiting for its debounce.
+    /// Stops watching. Nothing calls back after this, not even a reload that was waiting for its debounce. The stream
+    /// itself is stopped and released on its queue.
     public func stop() {
         pending?.cancel()
         pending = nil
         guard let stream else { return }
-        FSEventStreamStop(stream)
-        FSEventStreamInvalidate(stream)
-        FSEventStreamRelease(stream)
         self.stream = nil
+        run += 1
+        queue.async { stream.stop() }
     }
 
     /// Whether a changed path calls for a reload: the folder itself, or anything under it whose first component
@@ -102,8 +105,10 @@ public final class ExtensionsWatcher {
         return real == given ? [given] : [given, real]
     }
 
-    fileprivate func received(_ paths: [String]) {
-        guard stream != nil, paths.contains(where: { Self.counts(path: $0, roots: roots) }) else { return }
+    fileprivate func received(_ paths: [String], run: Int) {
+        guard stream != nil, run == self.run, paths.contains(where: { Self.counts(path: $0, roots: roots) }) else {
+            return
+        }
         pending?.cancel()
         pending = Task { [weak self] in
             try? await Task.sleep(for: Self.debounce)
@@ -114,19 +119,73 @@ public final class ExtensionsWatcher {
     }
 }
 
-/// What a watcher's stream context points to. It holds the watcher weakly, so the stream never keeps it alive.
-@MainActor
-private final class ExtensionsWatcherSink {
+/// What a stream's context points to: its watcher, held weakly so the stream never keeps it alive and read only on
+/// the main queue, and the run the stream belongs to.
+private final class ExtensionsWatcherSink: @unchecked Sendable {
     weak var watcher: ExtensionsWatcher?
-    init(_ watcher: ExtensionsWatcher) { self.watcher = watcher }
+    let run: Int
+
+    @MainActor init(_ watcher: ExtensionsWatcher, run: Int) {
+        self.watcher = watcher
+        self.run = run
+    }
 }
 
-/// The stream's callback, on the main queue: with `kFSEventStreamCreateFlagUseCFTypes`, the paths are a CFArray.
+/// One run's FSEvents stream. Every call on it happens on `queue`, which it delivers on too.
+private final class WatcherStream: @unchecked Sendable {
+    let queue: DispatchQueue
+    private var stream: FSEventStreamRef?
+
+    init(queue: DispatchQueue) { self.queue = queue }
+
+    func start(path: String, sink: ExtensionsWatcherSink) {
+        let info = Unmanaged.passRetained(sink).toOpaque()
+        var context = FSEventStreamContext(
+            version: 0, info: info, retain: nil,
+            release: { info in
+                if let info { Unmanaged<ExtensionsWatcherSink>.fromOpaque(info).release() }
+            }, copyDescription: nil)
+        let flags =
+            kFSEventStreamCreateFlagUseCFTypes | kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagWatchRoot
+        guard
+            let stream = FSEventStreamCreate(
+                kCFAllocatorDefault, extensionsWatcherCallback, &context, [path] as CFArray,
+                FSEventStreamEventId(kFSEventStreamEventIdSinceNow), ExtensionsWatcher.latency,
+                FSEventStreamCreateFlags(flags))
+        else {
+            Unmanaged<ExtensionsWatcherSink>.fromOpaque(info).release()
+            FileHandle.standardError.write(Data("fudge: couldn't watch \(path): FSEvents refused the stream\n".utf8))
+            return
+        }
+        FSEventStreamSetDispatchQueue(stream, queue)
+        guard FSEventStreamStart(stream) else {
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            FileHandle.standardError.write(Data("fudge: couldn't watch \(path): FSEvents didn't start\n".utf8))
+            return
+        }
+        self.stream = stream
+    }
+
+    func stop() {
+        guard let stream else { return }
+        FSEventStreamStop(stream)
+        FSEventStreamInvalidate(stream)
+        FSEventStreamRelease(stream)
+        self.stream = nil
+    }
+}
+
+/// The stream's callback, on the watcher's queue: with `kFSEventStreamCreateFlagUseCFTypes`, the paths are a CFArray.
+/// The batch goes on to the main queue, in order.
 private func extensionsWatcherCallback(
     _ stream: ConstFSEventStreamRef, _ info: UnsafeMutableRawPointer?, _ count: Int, _ paths: UnsafeMutableRawPointer,
     _ flags: UnsafePointer<FSEventStreamEventFlags>, _ ids: UnsafePointer<FSEventStreamEventId>
 ) {
     guard let info, let paths = unsafeBitCast(paths, to: NSArray.self) as? [String] else { return }
     let sink = Unmanaged<ExtensionsWatcherSink>.fromOpaque(info).takeUnretainedValue()
-    MainActor.assumeIsolated { sink.watcher?.received(Array(paths.prefix(count))) }
+    let batch = Array(paths.prefix(count))
+    DispatchQueue.main.async {
+        MainActor.assumeIsolated { sink.watcher?.received(batch, run: sink.run) }
+    }
 }
