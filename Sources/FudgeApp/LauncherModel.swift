@@ -126,7 +126,12 @@ final class LauncherModel {
     private var rootQuery = ""
 
     /// Hides the panel; set by the app delegate.
-    @ObservationIgnored var hide: () -> Void = {}
+    /// Hides the panel (`AppDelegate.hidePanel`), told which model method asked, for the log.
+    @ObservationIgnored var hidePanel: (String) -> Void = { _ in }
+
+    func hide(_ caller: String = #function, line: Int = #line) {
+        hidePanel("\(caller):\(line)")
+    }
     /// Shows the panel; set by the app delegate.
     @ObservationIgnored var show: () -> Void = {}
     /// Opens the Settings window on an extension's preferences, or on its default page for nil; set by the app
@@ -1857,7 +1862,10 @@ final class LauncherModel {
     /// `Action.ToggleQuickLook`: the preview of the selected item's file, or closing it.
     private func toggleQuickLook() {
         reconcileQuickLook()
-        switch quickLook.toggle(selected: selectedListItem?.quickLook, in: quickLookView, exists: fileExists) {
+        let toggled = quickLook.toggle(selected: selectedListItem?.quickLook, in: quickLookView, exists: fileExists)
+        // The case only: `missing` carries a file name, which the log never holds.
+        LauncherLog.note("toggleQuickLook → \(String(describing: toggled).prefix { $0 != "(" })")
+        switch toggled {
         case .opened, .closed:
             quickLookChanged(quickLook.shown)
         case .nothingToPreview:
