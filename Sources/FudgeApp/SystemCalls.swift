@@ -9,6 +9,13 @@ enum SystemCalls {
         var description: String
     }
 
+    /// A call's error as a sentence for a toast: Fudge's own message, else the system's localized description, never
+    /// an `NSError` dump.
+    static func message(of error: Error) -> String {
+        if let failure = error as? Failure { return failure.description }
+        return (error as NSError).localizedDescription
+    }
+
     static let methods: Set<String> = [
         "clipboard.copy", "clipboard.clear", "clipboard.read", "open", "trash", "showInFinder",
         "applications.list", "applications.default", "applications.frontmost", "selection.text",

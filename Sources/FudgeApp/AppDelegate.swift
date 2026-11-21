@@ -80,6 +80,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.resetAfterChanged = { [weak self] setting in self?.model.panelReset.setting = setting }
         // The store stays installed either way; the launcher reads settings.json again.
         settingsModel.extensionStoreChanged = { [weak self] in self?.model.applySettings() }
+        settingsModel.quicklinksChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.stopExtensionStore = { [weak self] in
             await self?.model.unloadSessions(ofExtension: ExtensionStore.extensionName)
         }
@@ -530,6 +531,9 @@ struct Snapshot {
     let actions: Bool
     /// `--pick-date <title>`: the Action.PickDate to open the picker of.
     let pickDate: String?
+    /// `--run-action <title>`, once or more: actions to run in order, half a second apart, as picking them would
+    /// (e.g. an extension's Create Quicklink, then Save Quicklink).
+    let runActions: [String]
     let openDropdown: Bool
     let openTags: Bool
     let openDate: Bool
@@ -556,6 +560,9 @@ struct Snapshot {
         activate = arguments.contains("--activate")
         actions = arguments.contains("--actions")
         pickDate = value("--pick-date")
+        runActions = arguments.indices.compactMap { index in
+            arguments[index] == "--run-action" && index + 1 < arguments.count ? arguments[index + 1] : nil
+        }
         openDropdown = arguments.contains("--open-dropdown")
         openTags = arguments.contains("--open-tags")
         openDate = arguments.contains("--open-date")
@@ -633,6 +640,11 @@ struct Snapshot {
         if let pickDate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.8) { model.openDatePick(titled: pickDate) }
         }
+        for (index, title) in runActions.enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5 + 0.5 * Double(index)) {
+                model.runAction(titled: title)
+            }
+        }
         if openDropdown {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 if !model.openFirstFormPicker(.dropdown) { model.toggleDropdownPanel() }
@@ -644,8 +656,10 @@ struct Snapshot {
         if openDate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { _ = model.openFirstFormPicker(.datePicker) }
         }
-        let waits = actions || pickDate != nil || openDropdown || openTags || openDate || inCommand
-        DispatchQueue.main.asyncAfter(deadline: .now() + (waits ? 3.5 : activate ? 3 : 1)) {
+        let waits =
+            actions || pickDate != nil || !runActions.isEmpty || openDropdown || openTags || openDate || inCommand
+        let afterActions = runActions.isEmpty ? 0 : 2.5 + 0.5 * Double(runActions.count) + 0.5
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(waits ? 3.5 : activate ? 3 : 1, afterActions)) {
             guard let view = panel.contentView else { exit(1) }
             save(view)
         }

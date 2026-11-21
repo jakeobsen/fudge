@@ -97,9 +97,11 @@ private func item(_ title: String, subtitle: String? = nil, keywords: [String] =
     #expect(RootItem.settings.kind == .settings)
 }
 
-@Test func rootSearchHasReloadExtensionsAndQuitBesideSettings() {
-    #expect(RootSearch.builtInItems == [.settings, .reloadExtensions, .quit])
-    #expect(Set(RootSearch.builtInItems.map(\.id)).count == 3)
+@Test func rootSearchHasCreateQuicklinkReloadExtensionsAndQuitBesideSettings() {
+    #expect(RootSearch.builtInItems == [.settings, .createQuicklink, .reloadExtensions, .quit])
+    #expect(Set(RootSearch.builtInItems.map(\.id)).count == 4)
+    #expect(RootItem.createQuicklink.title == "Create Quicklink")
+    #expect(RootItem.createQuicklink.kind == .createQuicklink && RootItem.createQuicklink.recordsLaunch)
     #expect(RootItem.reloadExtensions.title == "Reload Extensions")
     #expect(RootItem.reloadExtensions.kind == .reloadExtensions)
     #expect(RootItem.quit.title == "Quit Fudge")
@@ -117,10 +119,13 @@ private func item(_ title: String, subtitle: String? = nil, keywords: [String] =
     for query in ["quit", "Quit Fudge", "exit"] {
         #expect(first(query) == .quit, "found by \(query)")
     }
+    for query in ["create quicklink", "Create Quick", "quicklink", "bookmark"] {
+        #expect(first(query) == .createQuicklink, "found by \(query)")
+    }
     let fudge = RootSearch.rank(items, query: "fudge", history: LaunchHistory(), now: now)
     #expect(fudge.first == .settings)
     #expect(
-        Set(fudge.prefix(3).map(\.id)) == Set(RootSearch.builtInItems.map(\.id)),
+        Set(fudge.prefix(4).map(\.id)) == Set(RootSearch.builtInItems.map(\.id)),
         "typing fudge finds all of fudge's own items")
     for query in ["terminal", "safari", "xyz"] {
         let ranked = RootSearch.rank(items, query: query, history: LaunchHistory(), now: now)

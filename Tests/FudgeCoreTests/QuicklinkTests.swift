@@ -115,7 +115,8 @@ private final class Folder {
 private func context(clipboard: String? = "copied text") -> QuicklinkTemplate.Context {
     QuicklinkTemplate.Context(
         clipboard: clipboard, now: Date(timeIntervalSince1970: 1_795_000_000), locale: Locale(identifier: "en_US"),
-        timeZone: TimeZone(identifier: "Europe/Copenhagen")!, makeUUID: { "11111111-2222-3333-4444-555555555555" })
+        timeZone: TimeZone(identifier: "Europe/Copenhagen")!, calendar: Calendar(identifier: .gregorian),
+        makeUUID: { "11111111-2222-3333-4444-555555555555" })
 }
 
 @Test func readsEveryArgumentForm() {
@@ -355,23 +356,28 @@ private func context(clipboard: String? = "copied text") -> QuicklinkTemplate.Co
     #expect(
         RootSearch.rank([jira, jiraApp], query: "quicklink", history: LaunchHistory()).map(\.id) == [jira.id],
         "typing quicklink lists them")
+    let search = RootItem.quicklink(Quicklink(id: "q2", name: "Search", link: #"https://e.com/?q={argument name="q"}"#))
+    #expect(search.secondaryText == "https://e.com/?q=")
+    #expect(
+        RootSearch.rank([search], query: "argument", history: LaunchHistory()).isEmpty,
+        "placeholders aren't matched")
 }
 
-@Test func aQuicklinksActionsAreOpenCopyLinkAndDelete() {
+@Test func aQuicklinksActionsAreOpenCopyLinkEditAndDelete() {
     let jira = Quicklink(id: "q1", name: "Jira Ticket", link: "https://jira.example.com/browse/{ticket}")
     let entries = ActionPanelReader.flat(RootActions.sections(for: RootItem.quicklink(jira)))
-    #expect(entries.map(\.title) == ["Open Quicklink", "Copy Link", "Delete Quicklink…"])
+    #expect(entries.map(\.title) == ["Open Quicklink", "Copy Link", "Edit Quicklink…", "Delete Quicklink…"])
     #expect(
         entries.map(\.shortcut) == [
             KeyShortcut(key: "return", modifiers: []), KeyShortcut(key: "c", modifiers: ["cmd", "shift"]),
-            KeyShortcut(key: "x", modifiers: ["ctrl"]),
+            KeyShortcut(key: "e", modifiers: ["cmd"]), KeyShortcut(key: "x", modifiers: ["ctrl"]),
         ])
     #expect(
         entries.map(\.target) == [
             .root(.open), .root(.copyQuicklink("https://jira.example.com/browse/{ticket}")),
-            .root(.deleteQuicklink("q1")),
+            .root(.editQuicklink("q1")), .root(.deleteQuicklink("q1")),
         ], "the link as saved, placeholders included")
-    #expect(entries.map(\.destructive) == [false, false, true])
+    #expect(entries.map(\.destructive) == [false, false, false, true])
 }
 
 @Test func anArgumentFieldMustBeFilledUnlessItHasADefault() {
