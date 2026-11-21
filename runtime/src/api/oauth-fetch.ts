@@ -123,11 +123,47 @@ export function refusedMessage(host: string, off: boolean): string {
     return off ? signInOffMessage : `Fudge doesn't send requests to ${host}.`;
 }
 
+/** The redirect statuses `fetch` and `node-fetch` follow. */
+export const redirectStatuses = new Set([301, 302, 303, 307, 308]);
+
+/** Refused: the relay answered a token or refresh request with a redirect, which would send its body on. */
+export const redirectedMessage = "The sign-in server redirected the token request, and Fudge doesn't follow that.";
+
+/** Where a request goes, all things considered: untouched, refused (with what to say), or to the relay at `target`. */
+export type Decision = { kind: "untouched" } | { kind: "refused"; message: string } | { kind: "relay"; target: string };
+
+/** Whether a request to `url` needs a decision, and so its body: Raycast's proxy hosts and the table's token and
+ * refresh URLs. Everything else goes where it was going, untouched and unread. */
+export function needsDecision(url: URL, providers: OAuthProvider[]): boolean {
+    return isRaycastHost(url.hostname) || providerFor(url, providers) !== null;
+}
+
 /**
- * Wraps `original`. `server` is asked only for a request that may go to the relay, so a server changed while a
+ * The one rule set for every way a request leaves the worker (`fetch`, and `http`/`https` in `oauth-http.ts`), so
+ * they can't drift apart. `server` is asked only for a request that may go to the relay, so a server changed while a
  * command runs is honoured. A provider's own token URL (Google, Jira, Zoom) goes to the relay only for an extension
  * with a relay sign-in for it; an extension's own flow there is left alone.
  */
+export async function decide(
+    method: string,
+    url: URL,
+    body: unknown,
+    providers: OAuthProvider[],
+    server: (provider: string) => Promise<ServerAnswer>,
+): Promise<Decision> {
+    const where = route(method, url.href, grantType(body), providers);
+    if (where.kind === "untouched") return where;
+    if (where.kind === "refused") return { kind: "refused", message: refusedMessage(url.host, false) };
+    const answer = await server(where.provider.id);
+    if (answer.server === null || (where.ownHost && !answer.signedIn)) {
+        if (where.ownHost) return { kind: "untouched" };
+        return { kind: "refused", message: refusedMessage(url.host, answer.server === null) };
+    }
+    const target = `${answer.server.replace(/\/+$/, "")}/${where.provider.id}/${where.endpoint}${url.search}`;
+    return { kind: "relay", target };
+}
+
+/** Wraps `original` with `decide`'s rules. */
 export function rewriteFetch(
     original: Fetch,
     providers: OAuthProvider[],
@@ -138,23 +174,14 @@ export function rewriteFetch(
         // Anything but a Request is read as `fetch` reads it, as a string: a URL, a URL from another realm, or any
         // object with a `toString()`.
         const parsed = parse(request ? request.url : String(input));
-        if (parsed === null) return original(input, init);
-        const raycast = isRaycastHost(parsed.hostname);
-        if (!raycast && providerFor(parsed, providers) === null) return original(input, init);
+        if (parsed === null || !needsDecision(parsed, providers)) return original(input, init);
 
         const method = init?.method ?? request?.method ?? "GET";
         const body = init?.body ?? (request ? await request.clone().text() : undefined);
-        const where = route(method, parsed.href, grantType(body), providers);
-        if (where.kind === "untouched") return original(input, init);
-        if (where.kind === "refused") throw new Error(refusedMessage(parsed.host, false));
-
-        const answer = await server(where.provider.id);
-        if (answer.server === null || (where.ownHost && !answer.signedIn)) {
-            if (where.ownHost) return original(input, init);
-            throw new Error(refusedMessage(parsed.host, answer.server === null));
-        }
-        const target = `${answer.server.replace(/\/+$/, "")}/${where.provider.id}/${where.endpoint}${parsed.search}`;
-        return request ? original(new Request(target, request), init) : original(target, init);
+        const decision = await decide(method, parsed, body, providers, server);
+        if (decision.kind === "untouched") return original(input, init);
+        if (decision.kind === "refused") throw new Error(decision.message);
+        return request ? original(new Request(decision.target, request), init) : original(decision.target, init);
     };
     return wrapped as Fetch;
 }

@@ -234,6 +234,18 @@ test("a no-view command runs to completion and its console output arrives as log
     await host.close();
 });
 
+test("a command can't reach Raycast's sign-in proxy, by https kept at load or by a raw socket", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "rp", entry: fixture("raycast-proxy.cjs"), mode: "no-view" });
+    const log = await host.next(of("rp", "log"));
+    assert.equal(
+        log.message,
+        "Fudge doesn't send requests to github.oauth.raycast.com. | Fudge doesn't send requests to x.oauth.raycast.com.",
+    );
+    assert.equal((await host.next(of("rp", "exit"))).reason, "finished");
+    await host.close();
+});
+
 test("a no-view command's last console output arrives before its exit, every time", async () => {
     const host = start();
     for (let run = 0; run < 5; run++) {
