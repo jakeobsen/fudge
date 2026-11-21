@@ -1,5 +1,9 @@
 name: Release
 
+# A v* tag becomes a GitHub Release with the app's disk image. Tags are pushed only with the maintainer's explicit
+# permission. The build job runs the repo's code with a read-only token; only the publish job, which runs none of it,
+# may write.
+
 on:
   push:
     tags: ["v*"]
@@ -8,9 +12,20 @@ permissions:
   contents: read
 
 jobs:
-  app:
+  build:
     runs-on: macos-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ github.ref_name }}
     steps:
+      - name: Check the tag
+        run: |
+          if ! printf '%s\n' "$TAG" | grep -Eqx 'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?'; then
+            echo "::error::$TAG isn't v and a semantic version (v1.2.0, v1.2.0-rc.1)"
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -24,14 +39,46 @@ jobs:
       - name: Test
         run: make test
 
-      - name: Build the app
-        run: make app CONFIG=release VERSION="$GITHUB_REF_NAME"
+      - name: Build the disk image
+        run: make dmg CONFIG=release VERSION="$TAG"
 
-      - name: Zip the app
-        run: ditto -c -k --keepParent build/Fudge.app "build/Fudge-$GITHUB_REF_NAME.zip"
+      - name: Checksum
+        working-directory: build
+        run: shasum -a 256 "Fudge-${TAG#v}.dmg" > "Fudge-${TAG#v}.dmg.sha256"
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: Fudge-${{ github.ref_name }}
-          path: build/Fudge-${{ github.ref_name }}.zip
+          name: release
+          path: |
+            build/Fudge-*.dmg
+            build/Fudge-*.dmg.sha256
           if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          if ! printf '%s\n' "$TAG" | grep -Eqx 'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?'; then
+            echo "::error::$TAG isn't v and a semantic version"
+            exit 1
+          fi
+          # A tag with a pre-release suffix (v1.2.0-rc.1) is a pre-release.
+          prerelease=()
+          case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
+          notes="Fudge isn't notarized yet, so macOS blocks it the first time: open it, then go to System Settings → Privacy & Security and click Open Anyway (on macOS 14, Control-click Fudge and choose Open instead)."
+          gh release create "$TAG" release/* --repo "$REPO" --verify-tag --title "$TAG" \
+            --notes "$notes" --generate-notes "${prerelease[@]}"

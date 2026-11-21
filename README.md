@@ -15,12 +15,17 @@ Fudge is an independent project. It is not affiliated with or endorsed by Raycas
 - `runtime/emoji-extension/`: Search Emoji & Symbols, an extension bundled with Fudge that finds emoji by name and pastes them.
 - `runtime/clipboard-history-extension/`: Clipboard History, an extension bundled with Fudge that lists what you copied.
 
+## Installing
+
+Each release on GitHub has a disk image, `Fudge-<version>.dmg`: open it and drag Fudge to Applications. Fudge isn't notarized yet, so macOS blocks it the first time: open it, then go to System Settings → Privacy & Security and click Open Anyway (on macOS 14, Control-click Fudge and choose Open instead).
+
 ## Building
 
 You need macOS 14 or later, Xcode 26 or later and Node.js 22.18 or later. The app runs on macOS 14 and later.
 
 ```bash
 make app     # build build/Fudge.app
+make dmg     # build it into a disk image, build/Fudge-<version>.dmg
 make run     # build it and open it
 make test    # run the Swift and extension host tests
 make lint    # check formatting and types
@@ -162,11 +167,13 @@ In the **Extension Store** command, search the extensions, or pick a category in
 - ↵ installs one, after saying whether Fudge supports everything it uses. ⌘U updates one marked **Update available**, and ⌃X uninstalls it, to the Trash.
 - ⌘D shows an extension's details, with each command and whether it opens a view, runs without one, or sits in the menu bar, and its README. ⌘R updates the list, which otherwise happens when you open the store and the list is a day old. If the list couldn't be downloaded, ⌘R tries again.
 - The store needs Git. If it's missing, install Apple's Command Line Tools: run `xcode-select --install` in Terminal.
-- It never touches extensions you installed with `fudge build` yourself.
+- It never touches extensions you installed with `fudge build` yourself. An extension installs under its own name, so it can't be installed while another extension of that name is: uninstall that one first.
 
 ### Signing in
 
 Some extensions sign in to a service, such as GitHub or Linear. Pick a sign-in server under **Settings… → Sign-in**: **Fudge's sign-in server**, or **Your own server…**. A company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth). When an extension needs to sign in, Fudge shows **Sign in to** the service, and ↵ continues in your browser. Sign-ins are kept in your Keychain, and the Sign-in page lists them, each with **Sign Out**. Changing the server signs you out of everything.
+
+Extensions trust the certificates your Mac trusts, so a server behind your company's own certificate works as it does in Safari.
 
 An extension that takes a token in its settings (⌘⇧,) works without signing in.
 

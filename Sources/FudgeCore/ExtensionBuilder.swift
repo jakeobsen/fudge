@@ -54,9 +54,9 @@ public enum BuildError: Error, Equatable, CustomStringConvertible {
     public var description: String {
         switch self {
         case .invalidName(let name):
-            "the extension name \"\(name)\" must be kebab-case (a-z, 0-9 and -)"
+            "the extension name \"\(name)\" may use only a-z, 0-9, - and _, starting with a letter or digit"
         case .invalidCommandName(let name):
-            "the command name \"\(name)\" must be kebab-case (a-z, 0-9 and -)"
+            "the command name \"\(name)\" may use only a-z, 0-9, - and _, starting with a letter or digit"
         case .noCommands:
             "the extension declares no commands"
         case .missingEntry(let command, let searched):

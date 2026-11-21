@@ -2,7 +2,8 @@
 // tests fake git, the fudge CLI, the confirmation and the Trash.
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { isValidName, type Installed, type InstallRecord, type StoreEntry } from "./catalog.ts";
+import { isValidFolder, isValidName, sameFolder, type Installed, type InstallRecord, type StoreEntry } from "./catalog.ts";
+import { maxManifestBytes, readRegularFile } from "./files.ts";
 import { spawnProgram, type Run, type StoreRepository } from "./git.ts";
 import { sourceProblem } from "./sources.ts";
 import { buildTimeout, scanTimeout } from "./timeouts.ts";
@@ -78,7 +79,10 @@ export function installedFile(supportPath: string): string {
     return path.join(supportPath, "installed.json");
 }
 
-/** `installed.json`, without entries whose name or record isn't valid. Missing or broken reads as empty. */
+/**
+ * `installed.json`, without entries whose name or record isn't valid. Missing or broken reads as empty. An entry
+ * without a folder, written before the store knew folders from names, came from the folder of its name.
+ */
 export async function readInstalled(supportPath: string): Promise<Installed> {
     const text = await readFile(installedFile(supportPath), "utf8").catch(() => "{}");
     let object: unknown;
@@ -91,10 +95,10 @@ export async function readInstalled(supportPath: string): Promise<Installed> {
     const installed: Installed = {};
     for (const [name, record] of Object.entries(object)) {
         if (!isValidName(name) || typeof record !== "object" || record === null) continue;
-        const { tree, commit, installedAt } = record as Record<string, unknown>;
-        if (typeof tree === "string" && typeof commit === "string" && typeof installedAt === "string") {
-            installed[name] = { tree, commit, installedAt };
-        }
+        const { tree, commit, installedAt, dir } = record as Record<string, unknown>;
+        if (typeof tree !== "string" || typeof commit !== "string" || typeof installedAt !== "string") continue;
+        if (dir !== undefined && !isValidFolder(dir)) continue;
+        installed[name] = { tree, commit, installedAt, dir: dir ?? name };
     }
     return installed;
 }
@@ -118,6 +122,20 @@ function checkedName(name: string): string {
     return name;
 }
 
+function checkedFolder(dir: string): string {
+    if (!isValidFolder(dir)) throw new StoreError(`"${dir}" isn't a valid folder in the store`);
+    return dir;
+}
+
+/** The extensions Fudge bundles (`BundledExtensions` in the app, `BUNDLED_EXTENSIONS` in the Makefile, which a test
+ * pins this to). One installed under the same name would stay hidden behind it, so the store never installs one. */
+export const bundledNames = ["fudge-extension-store", "fudge-file-search", "fudge-emoji", "fudge-clipboard-history"];
+
+/** Refused: an install under a name another extension has, from another folder of the store or not from the store. */
+export function nameTakenMessage(name: string): string {
+    return `Another extension called ${name} is installed. Uninstall it first.`;
+}
+
 const exists = (target: string) =>
     stat(target).then(
         () => true,
@@ -125,27 +143,37 @@ const exists = (target: string) =>
     );
 
 /**
- * Installs (or updates) `entry`: fetches its source, checks where its packages come from, scans what it uses
- * (`fudge scan`), asks, builds it with the CLI into `extensionsDir`, and records it. Resolves false when the user cancels; throws `StoreError` when a step
- * refuses or fails. A folder of that name that the store didn't install is never replaced.
+ * Installs (or updates) `entry`: fetches its source from its folder, checks where its packages come from, scans what
+ * it uses (`fudge scan`), asks, builds it with the CLI into `extensionsDir` (as `<extensionsDir>/<name>`), and records
+ * it under its name with its folder. Resolves false when the user cancels; throws `StoreError` when a step refuses or
+ * fails. An extension of that name that the store didn't install from this folder is never replaced: one installed
+ * another way, one from another folder whose manifest has the same name, or one Fudge bundles.
  */
 export async function install(entry: StoreEntry, context: StoreContext): Promise<boolean> {
     const name = checkedName(entry.name);
+    const dir = checkedFolder(entry.dir);
+    if (bundledNames.includes(name)) throw new StoreError(`${entry.title} can't be installed: ${name} is part of Fudge.`);
     const installed = await readInstalled(context.supportPath);
-    if (!installed[name] && (await exists(path.join(context.extensionsDir, name)))) {
-        throw new StoreError(`An extension named ${name} is already installed (not from the store)`);
+    const record = installed[name];
+    if (record ? !sameFolder(record.dir, dir) : await exists(path.join(context.extensionsDir, name))) {
+        throw new StoreError(nameTakenMessage(name));
     }
-    await context.repo.add(`/extensions/${name}/`);
-    const source = path.join(context.repo.path, "extensions", name);
+    await context.repo.add(`/extensions/${dir}/`);
+    const source = path.join(context.repo.path, "extensions", dir);
+    // The build installs under the name in this manifest, so it must still be the one the list showed.
+    const current = await readRegularFile(path.join(source, "package.json"), maxManifestBytes)
+        .then((text) => (JSON.parse(text) as { name?: unknown }).name)
+        .catch(() => undefined);
+    if (current !== name) throw new StoreError(`${entry.title} has changed in the store's copy. Refresh the list and try again.`);
     const problem = await sourceProblem(source);
     if (problem) throw new StoreError(`${entry.title} can't be installed. ${problem}.`);
 
     const compatibility = compatibilityLine(await scanExtension(source, context));
     const commit = await context.repo.commit();
     const confirmed = await context.confirm(
-        `${installed[name] ? "Update" : "Install"} ${entry.title}?`,
+        `${record ? "Update" : "Install"} ${entry.title}?`,
         `From github.com/raycast/extensions at ${commit.slice(0, 7)}. It runs its own code on your Mac, like any app you install.\n\n${compatibility}`,
-        installed[name] ? "Update" : "Install",
+        record ? "Update" : "Install",
     );
     if (!confirmed) return false;
 
@@ -154,21 +182,23 @@ export async function install(entry: StoreEntry, context: StoreContext): Promise
     if (result.code !== 0) {
         throw new StoreError((result.stderr.trim() || result.stdout.trim() || "fudge build failed").slice(-500));
     }
-    const tree = (await context.repo.trees()).get(name);
+    const tree = (await context.repo.trees()).get(dir);
     if (!tree) throw new StoreError(`Couldn't read ${name}'s version in the store's copy`);
-    const record: InstallRecord = { tree, commit, installedAt: (context.now?.() ?? new Date()).toISOString() };
-    await writeInstalled(context.supportPath, { ...(await readInstalled(context.supportPath)), [name]: record });
+    const recorded: InstallRecord = { tree, commit, installedAt: (context.now?.() ?? new Date()).toISOString(), dir };
+    await writeInstalled(context.supportPath, { ...(await readInstalled(context.supportPath)), [name]: recorded });
     return true;
 }
 
 /**
- * Moves an extension the store installed to the Trash, after asking, and forgets it. Names not in `installed.json`
- * are refused: the store never touches extensions installed another way.
+ * Moves an extension the store installed to the Trash, after asking, and forgets it. Anything not in `installed.json`
+ * from this row's folder is refused: the store never touches extensions installed another way, nor one another
+ * folder with the same name installed.
  */
 export async function uninstall(entry: StoreEntry, context: StoreContext): Promise<boolean> {
     const name = checkedName(entry.name);
     const installed = await readInstalled(context.supportPath);
-    if (!installed[name]) throw new StoreError(`${entry.title} wasn't installed by the store`);
+    const record = installed[name];
+    if (!record || !sameFolder(record.dir, entry.dir)) throw new StoreError(`${entry.title} wasn't installed by the store`);
     const confirmed = await context.confirm(
         `Uninstall ${entry.title}?`,
         "It's moved to the Trash. Its settings and data stay.",

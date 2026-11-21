@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdtempSync, readFileSync } from "node:fs";
+import https from "node:https";
+import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { once } from "node:events";
 import { createInterface } from "node:readline";
 import { after, test } from "node:test";
@@ -20,8 +25,11 @@ class Host {
     readonly arrived: Message[] = [];
     private readonly waiting: { match: (m: Message) => boolean; resolve: (m: Message) => void }[] = [];
 
-    constructor() {
-        this.process = spawn(process.execPath, [hostPath], { stdio: ["pipe", "pipe", "pipe"] });
+    constructor(environment: Record<string, string> = {}) {
+        this.process = spawn(process.execPath, [hostPath], {
+            stdio: ["pipe", "pipe", "pipe"],
+            env: { ...process.env, ...environment },
+        });
         createInterface({ input: this.process.stdout }).on("line", (line) => {
             const message = JSON.parse(line) as Message;
             this.arrived.push(message);
@@ -59,8 +67,8 @@ class Host {
 }
 
 const hosts: Host[] = [];
-const start = () => {
-    const host = new Host();
+const start = (environment: Record<string, string> = {}) => {
+    const host = new Host(environment);
     hosts.push(host);
     return host;
 };
@@ -223,6 +231,35 @@ test("a menu-bar command renders its MenuBarExtra, and every event is answered o
     host.send({ type: "unload", session: "mb" });
     assert.equal((await host.next(of("mb", "exit"))).reason, "unloaded");
     await host.close();
+});
+
+test("a worker trusts the CA the host is started with, by fetch and by https (SPEC-081)", async () => {
+    // A self-signed CA for 127.0.0.1, made for this run, as the app hands the Mac's certificates to an older Node.
+    const certs = mkdtempSync(path.join(tmpdir(), "fudge-ca-"));
+    execFileSync("openssl", [
+        "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=127.0.0.1",
+        "-addext", "subjectAltName=IP:127.0.0.1",
+        "-keyout", path.join(certs, "key.pem"), "-out", path.join(certs, "cert.pem"),
+    ], { stdio: "ignore" });
+    const server = https.createServer(
+        { key: readFileSync(path.join(certs, "key.pem")), cert: readFileSync(path.join(certs, "cert.pem")) },
+        (_request, response) => response.end("trusted"),
+    );
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `https://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+    const run = async (environment: Record<string, string>) => {
+        const host = start(environment);
+        host.send({ type: "launch", session: "ca", entry: fixture("trusted-fetch.cjs"), mode: "no-view", launchProps: { arguments: { url } } });
+        const log = await host.next(of("ca", "log"));
+        await host.close();
+        return String(log.message);
+    };
+    try {
+        assert.equal(await run({ NODE_EXTRA_CA_CERTS: path.join(certs, "cert.pem") }), "trusted | trusted");
+        assert.match(await run({}), /^failed: .*SELF_SIGNED.* \| failed: .*SELF_SIGNED/, "without it, both refuse");
+    } finally {
+        server.close();
+    }
 });
 
 test("a no-view command runs to completion and its console output arrives as logs", async () => {

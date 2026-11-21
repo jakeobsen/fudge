@@ -232,7 +232,7 @@ export class StoreRepository {
         return (await this.#exec(["rev-parse", "HEAD"])).trim();
     }
 
-    /** The tree id of every folder under `extensions/`, by name: one call, and no file contents needed. */
+    /** The tree id of every folder under `extensions/`, by folder: one call, and no file contents needed. */
     async trees(): Promise<Map<string, string>> {
         const output = await this.#exec(["ls-tree", "HEAD", "extensions/"]);
         const trees = new Map<string, string>();

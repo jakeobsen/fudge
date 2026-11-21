@@ -2629,11 +2629,16 @@ final class LauncherModel {
                 description: "The extension host is missing from Fudge.app. Rebuild it with `make app`.")
         }
         let cli = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/fudge")
+        // Extensions trust the certificates the Mac trusts (SPEC-081), read afresh at each start.
+        let trust = NodeTrust.launch(
+            nodeVersion: NodeTrust.version(of: node), certificates: SystemTrustSettings.certificates,
+            rootsFile: paths.trustRootsFile)
         let host = try ExtensionHost(
-            node: node, script: script,
+            node: node, script: script, nodeArguments: trust.arguments,
             environment: ExtensionStore.hostEnvironment(
                 cli: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil, paths: paths
-            ).merging([OAuthProviders.environmentKey: OAuthProviders.environmentValue]) { _, new in new })
+            ).merging([OAuthProviders.environmentKey: OAuthProviders.environmentValue]) { _, new in new }
+                .merging(trust.environment) { _, new in new })
         self.host = host
         Task { [weak self] in
             for await message in host.messages { self?.receive(message) }

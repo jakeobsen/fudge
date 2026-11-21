@@ -104,7 +104,9 @@ export function detailMarkdown(entry: StoreEntry, commit: string, readme: string
         entry.author && `**Author:** ${entry.author}`,
         entry.categories.length > 0 && `**Categories:** ${entry.categories.join(", ")}`,
         entry.license && `**License:** ${entry.license}`,
-        commit && `[Source on GitHub](${folderURL(entry.name, commit)})`,
+        // The folder passed `isValidFolder`, so it holds nothing markdown reads; the code span keeps `_` literal.
+        entry.dir !== entry.name && `In the repository as \`${entry.dir}\``,
+        commit && `[Source on GitHub](${folderURL(entry.dir, commit)})`,
     ].filter(Boolean);
     const markdown = [
         `# ${entry.title}`,
@@ -115,5 +117,5 @@ export function detailMarkdown(entry: StoreEntry, commit: string, readme: string
     ]
         .filter(Boolean)
         .join("\n\n");
-    return filterImages(markdown, entry.name, commit);
+    return filterImages(markdown, entry.dir, commit);
 }
