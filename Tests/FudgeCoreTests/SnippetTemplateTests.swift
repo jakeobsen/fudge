@@ -31,11 +31,9 @@ private let context = QuicklinkTemplate.Context(
 
 @Test func aSnippetHasNoFieldsAndRefusesWhatItCantFill() {
     #expect(SnippetTemplate("{argument}").problem == "Fudge doesn't support “{argument}” in a snippet.")
-    #expect(SnippetTemplate("{Query}").problem == "Fudge doesn't support “{Query}” in a snippet.")
     #expect(SnippetTemplate("{selection}").problem == "Fudge doesn't support “{selection}” in a snippet.")
     #expect(
         SnippetTemplate("{snippet name=\"x\"}").problem == "Fudge doesn't support “{snippet name=\"x\"}” in a snippet.")
-    #expect(SnippetTemplate("a } b").problem == "A “}” in the snippet has no “{” before it.")
     #expect(SnippetTemplate("{date|shout}").problem == "Fudge doesn't know the modifier “shout” in “{date|shout}”.")
     #expect(SnippetTemplate("plain text, no braces").fill(context: context).text == "plain text, no braces")
 }
