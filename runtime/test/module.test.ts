@@ -69,6 +69,29 @@ test("a missing export throws NotAvailableError naming it when called", () => {
     assert.throws(() => new (api.Cache as new () => object)(), /Cache isn't available in Fudge yet/);
 });
 
+test("Raycast AI and the Browser Extension say Fudge doesn't support them, with no \"yet\" (FUD-118)", () => {
+    const api = createApiModule() as {
+        AI: ((prompt: string) => unknown) & { ask(prompt: string): unknown; Model: Record<string, string> };
+        BrowserExtension: { getTabs(): unknown; getContent(): unknown };
+        AIs: unknown;
+    };
+    const ai = /^NotAvailableError: Raycast AI isn't supported in Fudge\.$/;
+    assert.throws(() => api.AI.ask("hello"), ai);
+    assert.throws(() => api.AI("hello"), ai);
+    assert.throws(() => api.AI.Model.Anthropic_Claude_Sonnet, ai);
+    const browser = /^NotAvailableError: The Raycast Browser Extension isn't supported in Fudge\.$/;
+    assert.throws(() => api.BrowserExtension.getTabs(), browser);
+    assert.throws(() => api.BrowserExtension.getContent(), browser);
+    assert.throws(
+        () => api.AI.ask("x"),
+        (error: unknown) => error instanceof NotAvailableError && error.api === "AI.ask",
+        "the error still names the API",
+    );
+    // Only the categories themselves: everything else Fudge lacks is still something it doesn't have yet.
+    assert.equal(new NotAvailableError("AIs").message, "AIs isn't available in Fudge yet");
+    assert.equal(new NotAvailableError("captureMemorySnapshot").message, "captureMemorySnapshot isn't available in Fudge yet");
+});
+
 test("reading a member of a missing export throws, naming it in full", () => {
     const api = createApiModule({}) as { Clipboard: { copy(text: string): void }; environment: { supportPath: string } };
     assert.throws(() => api.Clipboard.copy("x"), /^NotAvailableError: Clipboard\.copy isn't available in Fudge yet$/);

@@ -284,6 +284,6 @@ function stateOf(url: string): string {
 }
 
 const oauth = { PKCEClient, RedirectMethod: Object.freeze({ ...RAYCAST_ENUMS.OAuthRedirectMethod }) };
-// The compatibility scan keeps counting everything under OAuth as left out by design (D-50).
+// The compatibility scan counts everything under OAuth apart: it works only for the sign-in server's providers.
 mark(oauth, LEFT_OUT, "OAuth");
 export const OAuth = Object.freeze(oauth);
