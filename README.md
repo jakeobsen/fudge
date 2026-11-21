@@ -79,6 +79,7 @@ A release and a build you made yourself have different signatures, so switching 
 
 Every build has the hardened runtime, which notarizing needs.
 It refuses a protected resource unless the app has its entitlement, so `App/Fudge.entitlements` lists the ones Fudge uses: Apple Events and Calendars.
+The Node.js inside Fudge has two of its own, in `App/Helpers/node.entitlements`: one to compile JavaScript as it runs, and one to load extensions' native addons, which others have signed.
 
 ## Using it
 
