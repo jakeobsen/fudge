@@ -234,6 +234,16 @@ public enum RootSearch {
         .settings, .createQuicklink, .searchSnippets, .createSnippet, .reloadExtensions, .quit,
     ]
 
+    /// What an empty root search lists first while nothing has been opened yet (SPEC-114 §4), so a new user sees
+    /// some of what Fudge does: Search Snippets, Clipboard History, Search Emoji & Symbols and Fudge Settings, in that
+    /// order, each only when it's there. Any launch history at all puts it back to most-used first, then by title.
+    public static let firstRunItemIDs = [
+        RootItem.searchSnippets.id,
+        RootItem.commandID(extension: ClipboardHistory.extensionName, command: "clipboard-history"),
+        RootItem.commandID(extension: "fudge-emoji", command: "search-emoji"),
+        RootItem.settings.id,
+    ]
+
     /// Applies `settings` to command items, an extension's or one of Fudge's own: disabled commands (or commands of
     /// disabled extensions or groups) are left out, and each command gets its alias.
     public static func applying(_ settings: FudgeSettings, to items: [RootItem]) -> [RootItem] {
@@ -269,11 +279,15 @@ public enum RootSearch {
         let trimmed = query.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty {
             // Nothing typed: commands and apps you use, most-used first, then the rest by title.
-            return items.sorted { a, b in
+            let sorted = items.sorted { a, b in
                 let (fa, fb) = (history.score(a.id, now: now), history.score(b.id, now: now))
                 if fa != fb { return fa > fb }
                 return a.title.localizedStandardCompare(b.title) == .orderedAscending
             }
+            // Nothing opened yet: a few of Fudge's own items first.
+            guard history.entries.isEmpty else { return sorted }
+            let first = firstRunItemIDs.compactMap { id in sorted.first { $0.id == id } }
+            return first + sorted.filter { !firstRunItemIDs.contains($0.id) }
         }
         let scored: [(RootItem, Double)] = items.compactMap { item in
             guard let match = bestMatch(trimmed, for: item) else { return nil }

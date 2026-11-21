@@ -330,7 +330,7 @@ struct OnboardingView: View {
                 if settings.expandSnippets {
                     Text("It's on. You can turn it off in Settings → Snippets.").foregroundStyle(.secondary)
                 } else {
-                    Text(SnippetExpander.inputMonitoringExplanation)
+                    Text(SnippetExpander.permissionsExplanation)
                         .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }

@@ -51,6 +51,7 @@ Extensions run in a separate Node.js process, the extension host.
       Root search ranks `ApplicationIndex`, installed commands and Fudge's own items (`RootSearch.builtInItems`: "Fudge Settings", "Create Quicklink", "Search Snippets", "Create Snippet", "Reload Extensions" and "Quit Fudge", so nothing needs the menu bar) with `RootSearch` (fuzzy match, then `LaunchHistory`).
       "Reload Extensions" runs the menu bar item's own reload (`reloadAll`, set by `AppDelegate`).
       "Quit Fudge" asks through `confirm` first, and it's never recorded in `LaunchHistory` (`RootItem.recordsLaunch`), so an empty search never offers it first.
+      With no launch history yet (or after Clear Search History), an empty search lists Search Snippets, Clipboard History, Search Emoji & Symbols and Fudge Settings first (`RootSearch.firstRunItemIDs`), each when it's there, then the rest by title; one launch of anything puts it back to most-used first.
       Commands run through `ExtensionHost`, and its messages update the screen.
     - **Aliases and Enabled** come from `settings.json` too (`CommandSettings.alias`/`enabled`, `ExtensionSettings.enabled`).
       `LauncherModel.applySettings()` rebuilds root search from the cached installed extensions with `RootSearch.applying`, which drops disabled commands and sets aliases; it runs on every reload and whenever the Settings window changes something.
@@ -585,6 +586,7 @@ Extensions run in a separate Node.js process, the extension host.
       An unreadable `snippets.json` shows the notice and disables changes.
       Each change draws Search Snippets again if it's open in the launcher, and expansion reads the snippets again (`snippetsChanged`).
     - **The Permissions page** (`PermissionsPage.swift`) comes after General: Accessibility's status (`AccessibilityStatus`, read without a prompt when it's shown and every second while it's on screen), its reason, and Open Accessibility Settings.
+      The reason (`AccessibilityPermission.reason`, which onboarding's Accessibility step shows too) names Fudge's own commands that need it first, then extensions that read the selection or paste.
       That button asks for macOS's prompt on the first click and opens the pane on later ones, or at once when something in this run already asked for the prompt (`AccessibilityPermission.request`, `SystemAccessibility.promptShown`), so the prompt and the pane never stack.
       Below it, always shown, are the answers to "Allow <A> to open <B>'s commands?" (`LaunchPermissionsSection`, `LaunchPermissions.entries`), each changeable or forgotten, with the file read again before each change, a line saying none has asked yet when there are none, and the unreadable-file notice.
       Between them is Calendar access as macOS has it, with Open Privacy Settings (`CalendarAccessRow`); My Schedule asks for it, never this page.
@@ -598,7 +600,7 @@ Extensions run in a separate Node.js process, the extension host.
       The **Sign-in** step is the Sign-in page's own choice (`SignInServerControls`, shared with the page, with `SignInServer.explanation`), whose consent sheets show on the onboarding window (`OnboardingModel.ask`; laid out off-screen in snapshot runs), with Continue as ↵, so Off stays Off.
       The **Clipboard history** step (after Sign-in) shows the consent sheet's own words (`ClipboardHistory.consentMessage`, the one string both use) with **Keep Clipboard History**, which does what the switch and its sheet do (`SettingsModel.keepClipboardHistory`), and **Not Now**, which is ↵, so going through onboarding with ↵ never starts recording.
       When it's already on, the step says so and turning it off is left to Settings.
-      **Expand snippets as you type**, after Clipboard history, works the same way: it explains Input Monitoring (`SnippetExpander.inputMonitoringExplanation`, the Snippets page's sheet's own words), **Turn On** does what the switch does (`SettingsModel.turnOnSnippetExpansion`, then macOS's prompt or pane), and **Not Now** is ↵.
+      **Expand snippets as you type**, after Clipboard history, works the same way: it explains Input Monitoring, and that pasting the snippet needs Accessibility (`SnippetExpander.permissionsExplanation`, the Snippets page's sheet's own words), **Turn On** does what the switch does (`SettingsModel.turnOnSnippetExpansion`, then macOS's prompt or pane), and **Not Now** is ↵.
       **Use Caps Lock as Hyper?** (after Snippet expansion) shows General's `HyperkeyControls`, with **Not Now** as ↵ while it's off.
       Updates, after Hyperkey, is `UpdateCheckChoice`: Daily, Weekly, Monthly or Off, with Daily preselected, and its Continue saves the choice, since nothing is checked until one is saved.
       Welcome also has **Restore from a Backup…**, General's import flow with its own sheets on the onboarding window (`SettingsModel.onboardingBackup`); a backup never holds `onboarding.json`, so onboarding carries on after an import.

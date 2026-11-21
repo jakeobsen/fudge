@@ -126,6 +126,18 @@ import Testing
     #expect(AccessibilityPermission.reason.contains("paste"), "Paste needs it too")
 }
 
+@Test func theAccessibilityReasonNamesFudgesOwnCommandsBeforeExtensions() throws {
+    let reason = AccessibilityPermission.reason
+    let extensions = try #require(reason.range(of: "Extensions that read your selection or paste"))
+    for own in [
+        "window management", "layouts", "Switch Windows", "Search Menu Items", "snippets", "emoji", "clipboard items",
+    ] {
+        let named = try #require(reason.range(of: own), "\(own)")
+        #expect(named.upperBound <= extensions.lowerBound, "\(own) comes before the extensions")
+    }
+    #expect(reason.hasSuffix("under Privacy & Security → Accessibility."))
+}
+
 @Test func clipboardHistoryComesAfterSignInAndExistingUsersSeeJustIt() {
     let steps = OnboardingStep.allCases
     #expect(steps.firstIndex(of: .clipboardHistory) == steps.firstIndex(of: .signIn)! + 1)
@@ -260,8 +272,10 @@ import Testing
     #expect(existing.pending == [.snippetExpansion, .done])
     #expect(existing.hasSomethingNew)
     // The step and the Snippets page's sheet say the same thing, from one string.
-    #expect(SnippetExpander.inputMonitoringExplanation.contains("Input Monitoring"))
-    #expect(SnippetExpander.inputMonitoringExplanation.contains("while macOS protects a password field"))
+    #expect(SnippetExpander.permissionsExplanation.contains("Input Monitoring"))
+    #expect(SnippetExpander.permissionsExplanation.contains("while macOS protects a password field"))
+    // Pasting the snippet needs Accessibility, so the step says that too (SPEC-114 §5).
+    #expect(SnippetExpander.permissionsExplanation.contains("Pasting the snippet in its place needs Accessibility."))
 }
 
 @Test func hyperkeyIsAskedAfterClipboardHistoryAndExistingUsersSeeJustIt() {
