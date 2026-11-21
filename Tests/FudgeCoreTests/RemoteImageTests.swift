@@ -123,7 +123,7 @@ func allowsPublicHTTPSURLs(text: String) throws {
     let (loader, cache) = try makeLoader(fetcher)
     let url = URL(string: "https://example.com/a.png")!
 
-    #expect(await loader.load(url) == image)
+    #expect(await loader.load(url) == .loaded(image, fetchedAt: start))
     let request = try #require(fetcher.requests.first)
     #expect(request.value(forHTTPHeaderField: "User-Agent") == "fudge/\(FudgeVersion.current)")
     #expect(request.value(forHTTPHeaderField: "Accept") == "image/*")
@@ -134,32 +134,37 @@ func allowsPublicHTTPSURLs(text: String) throws {
         cache.read(url)?.entry == .init(fetchedAt: start, etag: "\"v1\"", lastModified: "Tue, 17 Nov 2026 10:00:00 GMT")
     )
 
-    // Fresh: no second request.
-    #expect(await loader.load(url) == image)
+    // Fresh: no second request, even for a refresh.
+    #expect(await loader.load(url) == .loaded(image, fetchedAt: start))
+    #expect(await loader.load(url, refreshing: true) == .loaded(image, fetchedAt: start))
     #expect(fetcher.requests.count == 1)
 }
 
-@Test func aStaleEntryShowsAtOnceAndA304KeepsIt() async throws {
+@Test func aStaleEntryShowsAtOnceAndARefreshAnswered304KeepsIt() async throws {
     let old = png(width: 8, height: 8)
     let fetcher = FakeImageFetcher { request in .status(304, request.url!) }
     let (loader, cache) = try makeLoader(fetcher)
     let url = URL(string: "https://example.com/a.png")!
-    try cache.store(url, body: old, entry: .init(fetchedAt: start - 25 * 3600, etag: "\"v1\"", lastModified: "then"))
+    let then = start - 25 * 3600
+    try cache.store(url, body: old, entry: .init(fetchedAt: then, etag: "\"v1\"", lastModified: "then"))
 
-    #expect(await loader.load(url) == old)
-    await loader.finishRequests()
+    // Shown at once, with when it was fetched, so the app knows it's due a refresh.
+    #expect(await loader.load(url) == .loaded(old, fetchedAt: then))
+    #expect(fetcher.requests.isEmpty)
+
+    #expect(await loader.load(url, refreshing: true) == .unchanged(fetchedAt: start))
     let request = try #require(fetcher.requests.first)
     #expect(request.value(forHTTPHeaderField: "If-None-Match") == "\"v1\"")
     #expect(request.value(forHTTPHeaderField: "If-Modified-Since") == "then")
     #expect(cache.read(url)?.body == old)
     #expect(cache.read(url)?.entry == .init(fetchedAt: start, etag: "\"v1\"", lastModified: "then"))
 
-    // Revalidated once: loading again doesn't ask again.
-    #expect(await loader.load(url) == old)
+    // Fresh again: neither a load nor a refresh asks.
+    #expect(await loader.load(url, refreshing: true) == .loaded(old, fetchedAt: start))
     #expect(fetcher.requests.count == 1)
 }
 
-@Test func aStaleEntryIsReplacedWhenTheServerSendsANewBody() async throws {
+@Test func aRefreshGetsTheNewBodyWhenTheServerSendsOne() async throws {
     let old = png(width: 8, height: 8)
     let new = png(width: 16, height: 16)
     let fetcher = FakeImageFetcher { request in .ok(request.url!, new, headers: ["etag": "\"v2\""]) }
@@ -167,10 +172,50 @@ func allowsPublicHTTPSURLs(text: String) throws {
     let url = URL(string: "https://example.com/a.png")!
     try cache.store(url, body: old, entry: .init(fetchedAt: start - 25 * 3600, etag: "\"v1\""))
 
-    #expect(await loader.load(url) == old, "the old image shows at once")
-    await loader.finishRequests()
+    #expect(await loader.load(url, refreshing: true) == .loaded(new, fetchedAt: start))
     #expect(cache.read(url)?.body == new)
     #expect(cache.read(url)?.entry == .init(fetchedAt: start, etag: "\"v2\""))
+}
+
+@Test func refreshesOfOneURLAreCoalesced() async throws {
+    let old = png(width: 8, height: 8)
+    let fetcher = FakeImageFetcher { request in
+        try await Task.sleep(for: .milliseconds(100))
+        return .status(304, request.url!)
+    }
+    let (loader, cache) = try makeLoader(fetcher)
+    let url = URL(string: "https://example.com/a.png")!
+    try cache.store(url, body: old, entry: .init(fetchedAt: start - 25 * 3600, etag: "\"v1\""))
+
+    async let first = loader.load(url, refreshing: true)
+    async let second = loader.load(url, refreshing: true)
+    #expect(await [first, second] == [.unchanged(fetchedAt: start), .unchanged(fetchedAt: start)])
+    #expect(fetcher.requests.count == 1, "no second load while one runs")
+}
+
+@Test func aFirstLoadThatJoinsARefreshNeedsTheBodyThe304Kept() async throws {
+    let old = png(width: 8, height: 8)
+    // The 304 waits until the gate opens.
+    let (gate, open) = AsyncStream<Void>.makeStream()
+    let fetcher = FakeImageFetcher { request in
+        for await _ in gate {}
+        return .status(304, request.url!)
+    }
+    let (loader, cache) = try makeLoader(fetcher)
+    let url = URL(string: "https://example.com/a.png")!
+    try cache.store(url, body: old, entry: .init(fetchedAt: start - 25 * 3600, etag: "\"v1\""))
+
+    async let refresh = loader.load(url, refreshing: true)
+    while fetcher.requests.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+    // The cached body is gone (evicted) while the refresh runs, and a first load joins it: the 304 kept nothing for
+    // it, so it fails as a network error would, and is tried again later.
+    try FileManager.default.removeItem(at: cache.directory)
+    async let joined = loader.load(url)
+    try await Task.sleep(for: .milliseconds(50))
+    open.finish()
+    #expect(await joined == .failed(.network))
+    #expect(await refresh == .unchanged(fetchedAt: start), "the image the refresh's caller shows stays")
+    #expect(fetcher.requests.count == 1)
 }
 
 @Test func requestsForOneURLAreCoalesced() async throws {
@@ -183,7 +228,7 @@ func allowsPublicHTTPSURLs(text: String) throws {
     let url = URL(string: "https://example.com/a.png")!
     async let first = loader.load(url)
     async let second = loader.load(url)
-    #expect(await [first, second] == [image, image])
+    #expect(await [first, second] == [.loaded(image, fetchedAt: start), .loaded(image, fetchedAt: start)])
     #expect(fetcher.requests.count == 1)
 }
 
@@ -194,11 +239,11 @@ func allowsPublicHTTPSURLs(text: String) throws {
         return .ok(request.url!, image)
     }
     let (loader, _) = try makeLoader(fetcher)
-    await withTaskGroup(of: Data?.self) { group in
+    await withTaskGroup(of: RemoteImageLoad.self) { group in
         for index in 0..<10 {
             group.addTask { await loader.load(URL(string: "https://example.com/\(index).png")!) }
         }
-        for await body in group { #expect(body == image) }
+        for await result in group { #expect(result == .loaded(image, fetchedAt: start)) }
     }
     #expect(fetcher.requests.count == 10)
     #expect(fetcher.mostAtOnce == 6)
@@ -214,7 +259,7 @@ func aBodyOverTheLimitIsDroppedWhateverContentLengthSays(contentLength: String?)
     }
     let (loader, cache) = try makeLoader(fetcher)
     let url = URL(string: "https://example.com/big.png")!
-    #expect(await loader.load(url) == nil)
+    #expect(await loader.load(url) == .failed(.tooBig))
     #expect(cache.read(url) == nil)
 }
 
@@ -228,14 +273,14 @@ func aBodyOverTheLimitIsDroppedWhateverContentLengthSays(contentLength: String?)
             }))
     }
     let (loader, _) = try makeLoader(fetcher)
-    #expect(await loader.load(URL(string: "https://example.com/big.png")!) == nil)
+    #expect(await loader.load(URL(string: "https://example.com/big.png")!) == .failed(.tooBig))
 }
 
 @Test func aBodyThatIsntAnImageIsntCached() async throws {
     let fetcher = FakeImageFetcher { request in .ok(request.url!, Data("<html>Sign in</html>".utf8)) }
     let (loader, cache) = try makeLoader(fetcher)
     let url = URL(string: "https://example.com/a.png")!
-    #expect(await loader.load(url) == nil)
+    #expect(await loader.load(url) == .failed(.notAnImage))
     #expect(cache.read(url) == nil)
 }
 
@@ -244,7 +289,7 @@ func aBodyOverTheLimitIsDroppedWhateverContentLengthSays(contentLength: String?)
     let fetcher = FakeImageFetcher { request in .ok(request.url!, huge) }
     let (loader, cache) = try makeLoader(fetcher)
     let url = URL(string: "https://example.com/wide.png")!
-    #expect(await loader.load(url) == nil)
+    #expect(await loader.load(url) == .failed(.tooBig))
     #expect(cache.read(url) == nil)
 }
 
@@ -253,8 +298,8 @@ func aBodyOverTheLimitIsDroppedWhateverContentLengthSays(contentLength: String?)
     let log = LogLines()
     let (loader, _) = try makeLoader(fetcher, log: log)
     let url = URL(string: "http://example.com/a.png?token=secret")!
-    #expect(await loader.load(url) == nil)
-    #expect(await loader.load(url) == nil)
+    #expect(await loader.load(url) == .failed(.refused))
+    #expect(await loader.load(url) == .failed(.refused))
     #expect(fetcher.requests.isEmpty)
     #expect(log.lines.count == 1)
     #expect(log.lines.first?.contains("secret") == false, "the query isn't logged")
@@ -264,8 +309,155 @@ func aBodyOverTheLimitIsDroppedWhateverContentLengthSays(contentLength: String?)
     let fetcher = FakeImageFetcher { _ in .ok(URL(string: "https://192.168.1.1/a.png")!, png(width: 1, height: 1)) }
     let (loader, cache) = try makeLoader(fetcher)
     let url = URL(string: "https://example.com/a.png")!
-    #expect(await loader.load(url) == nil)
+    #expect(await loader.load(url) == .failed(.refused))
     #expect(cache.read(url) == nil)
+}
+
+// MARK: - Retrying and refreshing (SPEC-059)
+
+@Test func aFailedLoadSaysWhyAndWhetherItsRetried() async throws {
+    let url = URL(string: "https://example.com/a.png")!
+    func failure(_ respond: @escaping @Sendable (URLRequest) async throws -> RemoteImageResponse) async throws
+        -> RemoteImageLoad
+    {
+        try await makeLoader(FakeImageFetcher(respond)).0.load(url)
+    }
+    #expect(try await failure { .status(404, $0.url!) } == .failed(.http(404, retryAfter: nil)))
+    #expect(try await failure { .status(503, $0.url!) } == .failed(.http(503, retryAfter: nil)))
+    #expect(
+        try await failure { .status(429, $0.url!, headers: ["retry-after": "120"]) }
+            == .failed(.http(429, retryAfter: 120)))
+    #expect(
+        try await failure { .status(503, $0.url!, headers: ["retry-after": "Fri, 15 Jan 2027 08:10:00 GMT"]) }
+            == .failed(.http(503, retryAfter: 600)), "an HTTP date, ten minutes after `start`")
+    #expect(
+        try await failure { .status(500, $0.url!, headers: ["retry-after": "120"]) }
+            == .failed(.http(500, retryAfter: nil)), "only a 429's or a 503's counts")
+    #expect(try await failure { _ in throw URLError(.notConnectedToInternet) } == .failed(.network))
+    #expect(try await failure { _ in throw URLError(.timedOut) } == .failed(.network))
+    let lost = AsyncThrowingStream<Data, Error> { $0.finish(throwing: URLError(.networkConnectionLost)) }
+    #expect(
+        try await failure { RemoteImageResponse(status: 200, url: $0.url!, body: lost) } == .failed(.network),
+        "the connection lost while reading")
+    #expect(try await failure { .ok($0.url!, Data("<html/>".utf8)) } == .failed(.notAnImage))
+
+    #expect(RemoteImageFailure.network.isRetryable)
+    for status in [408, 429, 500, 502, 503, 504, 599] {
+        #expect(RemoteImageFailure.http(status, retryAfter: nil).isRetryable, "\(status)")
+    }
+    for status in [301, 304, 400, 401, 403, 404, 410, 418] {
+        #expect(!RemoteImageFailure.http(status, retryAfter: nil).isRetryable, "\(status)")
+    }
+    for failure in [RemoteImageFailure.refused, .notAnImage, .tooBig] { #expect(!failure.isRetryable) }
+}
+
+@Test func retryAfterReadsSecondsOrAnHTTPDate() {
+    #expect(RemoteImageFailure.retryAfter("0", now: start) == 0)
+    #expect(RemoteImageFailure.retryAfter(" 3600 ", now: start) == 3600)
+    #expect(RemoteImageFailure.retryAfter("Fri, 15 Jan 2027 08:10:00 GMT", now: start) == 600)
+    #expect(RemoteImageFailure.retryAfter("Fri, 15 Jan 2027 07:00:00 GMT", now: start) == 0, "a date gone by")
+    for value in [nil, "", "-5", "soon", "1.5"] {
+        #expect(RemoteImageFailure.retryAfter(value, now: start) == nil, "\(value ?? "nil")")
+    }
+}
+
+@Test func retryableFailuresBackOffUpToTwoHours() {
+    var retry = RemoteImageRetry()
+    #expect(retry.isDue(now: start), "the first load")
+    var now = start
+    for wait in [60.0, 300, 1800, 7200, 7200, 7200] {
+        retry.started()
+        #expect(!retry.isDue(now: now + 99999), "no second load while one runs")
+        retry.failed(.network, now: now)
+        #expect(!retry.isDue(now: now + wait - 1))
+        #expect(retry.isDue(now: now + wait))
+        now += wait
+    }
+    #expect(retry.failures == 6)
+
+    // A success starts the back-off over.
+    retry.started()
+    retry.loaded(fetchedAt: now)
+    retry.started()
+    retry.failed(.http(503, retryAfter: nil), now: now)
+    #expect(retry.fetchedAt == now, "a failed refresh keeps the image")
+}
+
+@Test func asksDuringABackOffStartNoLoads() {
+    // A view asks for the source every second (every keystroke in a list) for 40 minutes, and every load fails.
+    var retry = RemoteImageRetry()
+    var loads: [TimeInterval] = []
+    for second in 0..<(40 * 60) {
+        let now = start + TimeInterval(second)
+        guard retry.isDue(now: now) else { continue }
+        loads.append(TimeInterval(second))
+        retry.started()
+        // Asked again while that load runs: nothing starts.
+        #expect(!retry.isDue(now: now))
+        retry.failed(.network, now: now)
+    }
+    #expect(loads == [0, 60, 360, 2160], "one load per interval: 1 min, 5 min, 30 min")
+}
+
+@Test func aRetryAfterOfNothingAddsNoWait() {
+    func wait(_ retryAfter: TimeInterval?) -> TimeInterval? {
+        var retry = RemoteImageRetry()
+        retry.started()
+        retry.failed(.http(503, retryAfter: retryAfter), now: start)
+        return retry.next?.timeIntervalSince(start)
+    }
+    // A past date and 0 both read as 0, junk as nil; a negative one can't be read, and still adds nothing.
+    for retryAfter in [nil, 0, -600] as [TimeInterval?] {
+        #expect(wait(retryAfter) == 60, "\(String(describing: retryAfter))")
+    }
+}
+
+@Test func aRetryAfterLongerThanTheBackOffIsHonouredUpToTwoHours() {
+    func wait(_ failure: RemoteImageFailure) -> TimeInterval? {
+        var retry = RemoteImageRetry()
+        retry.started()
+        retry.failed(failure, now: start)
+        return retry.next?.timeIntervalSince(start)
+    }
+    #expect(wait(.http(429, retryAfter: 600)) == 600)
+    #expect(wait(.http(503, retryAfter: 10)) == 60, "the back-off when it's longer")
+    #expect(wait(.http(429, retryAfter: 86400)) == 7200, "capped at 2 h")
+    #expect(wait(.http(500, retryAfter: nil)) == 60)
+}
+
+@Test func aFinalFailureIsNeverRetried() {
+    for failure in [RemoteImageFailure.refused, .http(404, retryAfter: nil), .notAnImage, .tooBig] {
+        var retry = RemoteImageRetry()
+        retry.started()
+        retry.failed(failure, now: start)
+        #expect(retry.isFinal)
+        #expect(!retry.isDue(now: start + 365 * 86400), "\(failure)")
+    }
+}
+
+@Test func anImageIsRefreshedADayAfterItWasFetched() {
+    var retry = RemoteImageRetry()
+    retry.started()
+    retry.loaded(fetchedAt: start)
+    #expect(!retry.isDue(now: start + 86399))
+    #expect(retry.isDue(now: start + 86400))
+
+    // One from the cache, fetched two days ago, is due at once.
+    var cached = RemoteImageRetry()
+    cached.started()
+    cached.loaded(fetchedAt: start - 2 * 86400)
+    #expect(cached.isDue(now: start))
+
+    // A failed refresh, final or not, keeps the image and waits another day.
+    for failure in [RemoteImageFailure.network, .http(404, retryAfter: nil)] {
+        var refreshing = cached
+        refreshing.started()
+        refreshing.failed(failure, now: start)
+        #expect(!refreshing.isFinal)
+        #expect(refreshing.fetchedAt == start - 2 * 86400)
+        #expect(!refreshing.isDue(now: start + 86399))
+        #expect(refreshing.isDue(now: start + 86400))
+    }
 }
 
 @Test func theSessionFollowsOnlyRedirectsToAllowedURLs() async throws {
@@ -375,8 +567,8 @@ extension RemoteImageResponse {
         RemoteImageResponse(status: 200, url: url, headers: headers, body: .chunks([body]))
     }
 
-    fileprivate static func status(_ status: Int, _ url: URL) -> RemoteImageResponse {
-        RemoteImageResponse(status: status, url: url, body: .chunks([]))
+    fileprivate static func status(_ status: Int, _ url: URL, headers: [String: String] = [:]) -> RemoteImageResponse {
+        RemoteImageResponse(status: status, url: url, headers: headers, body: .chunks([]))
     }
 }
 

@@ -58,33 +58,37 @@ public final class Paste {
     private let pasteboard: any PasteboardAccess
     private let ownPid: Int32
     private let restoreDelay: Duration
+    /// Shared with `SelectedText`'s ⌘C fallback. Pastes take turns with each other and with it: one taking its
+    /// snapshot while another's content is on the pasteboard would keep fudge's write as the user's clipboard.
+    private let turns: PasteboardTurns
 
     /// The restore waiting to happen: the user's clipboard from before the first of the pastes in quick succession,
-    /// the `changeCount` of fudge's write that it replaces, and the task that writes it back.
-    private var pending: (snapshot: PasteboardContents, written: Int, task: Task<Void, Never>)?
-    /// Whether a paste is running, and the pastes waiting for their turn, oldest first. Pastes run one at a time: one
-    /// taking its snapshot while another's content is on the pasteboard would keep fudge's write as the user's
-    /// clipboard.
-    private var busy = false
-    private var waiting: [CheckedContinuation<Void, Never>] = []
+    /// the `changeCount` of fudge's write that it replaces, and the task that writes it back. The turns know about
+    /// the task, so the fallback can wait for it.
+    private var pending: (snapshot: PasteboardContents, written: Int, task: Task<Void, Never>)? {
+        didSet { turns.restore = pending?.task }
+    }
 
     public init(
         gate: AccessibilityGate,
         keys: any PasteKeyPoster,
         pasteboard: any PasteboardAccess,
         ownPid: Int32,
+        turns: PasteboardTurns,
         restoreDelay: Duration = .seconds(1)
     ) {
         self.gate = gate
         self.keys = keys
         self.pasteboard = pasteboard
         self.ownPid = ownPid
+        self.turns = turns
         self.restoreDelay = restoreDelay
     }
 
     /// Pastes `content`. With `closeMainWindow`, `hideWindow` hides fudge's panel and returns once it's really gone,
     /// so key status is back with the target app. `frontmost` is read after that. Resolves once ⌘V is posted; the
-    /// restore follows on its own. A paste that starts while another is running waits for it.
+    /// restore follows on its own. A paste that starts while another paste or a ⌘C fallback is running waits for it.
+    /// It doesn't wait for a pending restore: it keeps that restore's snapshot instead.
     public func paste(
         _ content: PasteboardContents,
         closeMainWindow: Bool,
@@ -92,26 +96,10 @@ public final class Paste {
         hideWindow: () async -> Void,
         frontmost: () -> FrontmostApplication?
     ) async throws {
-        await takeTurn()
-        defer { endTurn() }
-        try await pasteNow(
-            content, closeMainWindow: closeMainWindow, origin: origin, hideWindow: hideWindow, frontmost: frontmost)
-    }
-
-    private func takeTurn() async {
-        guard busy else {
-            busy = true
-            return
-        }
-        await withCheckedContinuation { waiting.append($0) }
-    }
-
-    /// Hands the turn to the oldest waiting paste, or frees it.
-    private func endTurn() {
-        if waiting.isEmpty {
-            busy = false
-        } else {
-            waiting.removeFirst().resume()
+        try await turns.run {
+            try await pasteNow(
+                content, closeMainWindow: closeMainWindow, origin: origin, hideWindow: hideWindow,
+                frontmost: frontmost)
         }
     }
 
