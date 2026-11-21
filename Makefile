@@ -20,9 +20,10 @@ ESBUILD    = $(firstword $(wildcard runtime/node_modules/@esbuild/darwin-*/bin/e
 
 # The identity `make app` signs with: a name or SHA-1 hash that `security find-identity -v -p codesigning` lists, or -
 # for ad hoc. macOS ties Accessibility and Automation grants to the signature, and an ad hoc one changes with every
-# build. The default is "fudge local signing", else the first "Apple Development:" identity, else ad hoc (CI and
-# releases have neither). It's picked by hash, so two certificates with the same name can't make codesign refuse
-# the name as ambiguous. See the README.
+# build. The default is "fudge local signing", else the first "Apple Development:" identity, else ad hoc (CI has
+# neither; a release is built ad hoc, then signed again with the Developer ID identity by scripts/release.sh). It's
+# picked by hash, so two certificates with the same name can't make codesign refuse the name as ambiguous. See the
+# README.
 # (Every parenthesis in the awk program is balanced: make counts them to find the end of $(shell).)
 SIGN_IDENTITY ?= $(shell security find-identity -v -p codesigning 2>/dev/null | awk -F'"' \
 	'{ split($$1, f, " ") } length(f[2]) == 40 && f[2] ~ /^[0-9A-F]+$$/ { \
@@ -33,7 +34,7 @@ SIGN_IDENTITY ?= $(shell security find-identity -v -p codesigning 2>/dev/null | 
 # The @raycast/api release whose type definitions live in runtime/vendor/raycast-api.
 RAYCAST_API_VERSION ?= 2.13.1
 
-.PHONY: help app dmg run install-extension build runtime test test-swift test-runtime lint fmt raycast-types compat-scan clean
+.PHONY: help app dmg dmg-image run install-extension build runtime test test-swift test-runtime lint fmt raycast-types compat-scan clean
 
 help:
 	@printf 'fudge — a keyboard launcher for macOS, built to run Raycast extensions\n\n'
@@ -42,6 +43,7 @@ help:
 	@printf '  app            Build %s (CONFIG=debug|release, now: %s). Signs with SIGN_IDENTITY: by default\n' '$(APP)' '$(CONFIG)'
 	@printf '                 "fudge local signing", else an Apple Development identity, else ad hoc (-). See README.md.\n'
 	@printf '  dmg            Build the app, then %s: the app and a link to Applications (VERSION=<tag>).\n' '$(DMG)'
+	@printf '  dmg-image      Make %s from the app as it is, without building it.\n' '$(DMG)'
 	@printf '  run            Build the app and open it, quitting a running copy first.\n'
 	@printf '  install-extension DIR=<folder>  Build the app, then compile and install the extension in <folder>.\n'
 	@printf '  build          Build the Swift targets and the extension host.\n'
@@ -109,10 +111,16 @@ USER_FUDGE_PIDS = for pid in $$(pgrep -x Fudge); do \
 # A release's disk image: the app as `make app` built it, and a link to /Applications to drag it onto, compressed
 # (UDZO), with the volume name Fudge. The staging folder is gone afterwards.
 dmg: app
+	@$(MAKE) --no-print-directory dmg-image
+
+# The disk image of the app as it is, without building it again: the release script notarizes and staples the app
+# before packing it.
+dmg-image:
+	@test -d '$(APP)' || { printf 'make dmg-image: there is no %s; run make app first\n' '$(APP)'; exit 1; }
 	@rm -rf build/dmg '$(DMG)' && mkdir -p build/dmg
 	@ditto '$(APP)' build/dmg/Fudge.app && ln -s /Applications build/dmg/Applications
 	@hdiutil create -volname Fudge -srcfolder build/dmg -format UDZO -ov '$(DMG)' >/dev/null \
-		|| { echo 'make dmg: hdiutil could not create $(DMG)'; rm -rf build/dmg; exit 1; }
+		|| { echo 'make dmg-image: hdiutil could not create $(DMG)'; rm -rf build/dmg; exit 1; }
 	@rm -rf build/dmg
 	@printf '→ built %s\n' '$(DMG)'
 

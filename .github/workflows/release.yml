@@ -1,8 +1,10 @@
 name: Release
 
-# A v* tag becomes a GitHub Release with the app's disk image. Tags are pushed only with the maintainer's explicit
-# permission. The build job runs the repo's code with a read-only token; only the publish job, which runs none of it,
-# may write. Run by hand (workflow_dispatch), it only builds: the disk image is an artifact, and nothing is published.
+# A v* tag becomes a GitHub Release with the app's disk image, signed with the Developer ID identity, notarized and
+# stapled (scripts/release.sh). Tags are pushed only with the maintainer's explicit permission. The build job runs the
+# repo's code with a read-only token; only the publish job, which runs none of it, may write. Run by hand
+# (workflow_dispatch), it's the dry run: it builds, signs and notarizes, the disk image is an artifact, and nothing is
+# published.
 
 on:
   push:
@@ -17,6 +19,8 @@ jobs:
     runs-on: macos-latest
     permissions:
       contents: read
+    outputs:
+      signing: ${{ steps.release.outputs.signing }}
     env:
       TAG: ${{ github.ref_name }}
     steps:
@@ -41,13 +45,22 @@ jobs:
       - name: Test
         run: make test
 
-      # A run by hand takes the version `git describe` gives the commit, as `make app` does.
-      - name: Build the disk image
+      # The signing secrets reach this step only, and the script builds with none of them in its environment. Without
+      # them a tag still makes a release, signed ad hoc and saying so (a fork has none); a run by hand, which is there
+      # to try them, fails instead. A run by hand takes the version `git describe` gives the commit, as `make app` does.
+      - name: Build, sign and notarize the disk image
+        id: release
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           if [ "$GITHUB_EVENT_NAME" = push ]; then
-            make dmg CONFIG=release VERSION="$TAG"
+            scripts/release.sh --version "$TAG" --ad-hoc-without-secrets
           else
-            make dmg CONFIG=release
+            scripts/release.sh
           fi
 
       - name: Checksum
@@ -71,6 +84,7 @@ jobs:
       contents: write
     env:
       TAG: ${{ github.ref_name }}
+      SIGNING: ${{ needs.build.outputs.signing }}
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -89,6 +103,10 @@ jobs:
           # A tag with a pre-release suffix (v1.2.0-rc.1) is a pre-release.
           prerelease=()
           case "$TAG" in *-*) prerelease=(--prerelease) ;; esac
-          notes="Fudge isn't notarized yet, so macOS blocks it the first time: open it, then go to System Settings → Privacy & Security and click Open Anyway (on macOS 14, Control-click Fudge and choose Open instead)."
+          if [ "$SIGNING" = developer-id ]; then
+            notes="Fudge is signed with a Developer ID and notarized by Apple: the first time you open it, macOS asks once, as for any app downloaded from the internet."
+          else
+            notes="This build is signed ad hoc and isn't notarized, so macOS blocks it the first time: open it, then go to System Settings → Privacy & Security and click Open Anyway (on macOS 14, Control-click Fudge and choose Open instead)."
+          fi
           gh release create "$TAG" release/* --repo "$REPO" --verify-tag --title "$TAG" \
             --notes "$notes" --generate-notes "${prerelease[@]}"
