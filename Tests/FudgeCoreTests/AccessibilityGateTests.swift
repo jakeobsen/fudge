@@ -24,7 +24,6 @@ private final class FakeKeys: CopyKeyPoster, PasteKeyPoster {
     var posted = 0
     func postCopy(to pid: Int32) { posted += 1 }
     func postPaste(to pid: Int32) { posted += 1 }
-    func postLeftArrow(_ count: Int, to pid: Int32) {}
     func postDelete(_ count: Int, to pid: Int32) {}
 }
 

@@ -54,14 +54,6 @@ final class SystemCopyKey: CopyKeyPoster, PasteKeyPoster {
         post(CGKeyCode(PasteKey.keyCode(translate: Self.charactersWithCommand)), flags: .maskCommand, to: pid)
     }
 
-    func postLeftArrow(_ count: Int, to pid: Int32) {
-        // ← is the same key in every layout (kVK_LeftArrow). An arrow key carries the function-key and numeric-pad
-        // flags, as a typed one does.
-        for _ in 0..<count {
-            post(CGKeyCode(kVK_LeftArrow), flags: [.maskSecondaryFn, .maskNumericPad], to: pid)
-        }
-    }
-
     func postDelete(_ count: Int, to pid: Int32) {
         // ⌫ is the same key in every layout (kVK_Delete).
         for _ in 0..<count { post(CGKeyCode(kVK_Delete), flags: [], to: pid) }
@@ -140,9 +132,12 @@ final class SystemAutomationPermission: AutomationPermission {
         await withCheckedContinuation { continuation in
             // Blocks while macOS shows its consent dialog, so it gets a thread of its own and no timeout.
             DispatchQueue.global(qos: .userInitiated).async {
+                // `aeDesc` points into the descriptor's own storage, so the descriptor must outlive the call.
                 let target = NSAppleEventDescriptor(bundleIdentifier: bundleIdentifier)
-                let status = AEDeterminePermissionToAutomateTarget(
-                    target.aeDesc, FinderEvents.code("core"), FinderEvents.code("getd"), askUserIfNeeded)
+                let status = withExtendedLifetime(target) {
+                    AEDeterminePermissionToAutomateTarget(
+                        target.aeDesc, FinderEvents.code("core"), FinderEvents.code("getd"), askUserIfNeeded)
+                }
                 continuation.resume(returning: status)
             }
         }

@@ -23,13 +23,12 @@ public enum PasteError: Error, Equatable, Sendable, CustomStringConvertible {
     }
 }
 
-/// Posts the paste shortcut, and the ← presses that put the caret where a snippet's `{cursor}` was.
+/// Posts the paste shortcut. The ← presses that put the caret where a snippet's `{cursor}` was go through
+/// `CaretSystem`, off the main actor.
 @MainActor
 public protocol PasteKeyPoster: AnyObject {
     /// Posts ⌘V, key down then key up, to the application `pid`.
     func postPaste(to pid: Int32)
-    /// Posts ←, key down then key up, `count` times, to the application `pid`.
-    func postLeftArrow(_ count: Int, to pid: Int32)
     /// Posts ⌫, key down then key up, `count` times, to the application `pid`: an expanded keyword's characters.
     func postDelete(_ count: Int, to pid: Int32)
 }
@@ -66,6 +65,10 @@ public final class Paste {
     private let pasteboard: any PasteboardAccess
     private let ownPid: Int32
     private let restoreDelay: Duration
+    /// Puts the caret where a snippet's `{cursor}` was, once the paste has landed (SPEC-101).
+    private let caret: CaretPlacer
+    /// Gets each `{cursor}` paste's report, for the launcher's log.
+    private let caretPlaced: (CaretReport) -> Void
     /// Shared with `SelectedText`'s ⌘C fallback. Pastes take turns with each other and with it: one taking its
     /// snapshot while another's content is on the pasteboard would keep fudge's write as the user's clipboard.
     private let turns: PasteboardTurns
@@ -83,7 +86,9 @@ public final class Paste {
         pasteboard: any PasteboardAccess,
         ownPid: Int32,
         turns: PasteboardTurns,
-        restoreDelay: Duration = .seconds(1)
+        restoreDelay: Duration = .seconds(1),
+        caret: CaretPlacer = CaretPlacer(system: NoCaretSystem()),
+        caretPlaced: @escaping (CaretReport) -> Void = { _ in }
     ) {
         self.gate = gate
         self.keys = keys
@@ -91,14 +96,18 @@ public final class Paste {
         self.ownPid = ownPid
         self.turns = turns
         self.restoreDelay = restoreDelay
+        self.caret = caret
+        self.caretPlaced = caretPlaced
     }
 
     /// Pastes `content`. With `closeMainWindow`, `hideWindow` hides fudge's panel and returns once it's really gone,
     /// so key status is back with the target app. `frontmost` is read after that. Resolves once ⌘V is posted; the
     /// restore follows on its own. A paste that starts while another paste or a ⌘C fallback is running waits for it.
     /// It doesn't wait for a pending restore: it keeps that restore's snapshot instead. `backspaces` ⌫ presses go to
-    /// the same app just before ⌘V, deleting an expanded keyword, and `leftArrows` ← presses follow it, so the caret
-    /// ends up where a snippet's `{cursor}` was.
+    /// the same app just before ⌘V, deleting an expanded keyword. With `leftArrows`, the grapheme clusters after a
+    /// snippet's `{cursor}`, it resolves only once the caret is there (`CaretPlacer`): the paste is seen to land, then
+    /// the caret is set through Accessibility or with paced ← presses. The restore waits for the paste to land too,
+    /// or its own delay, whichever is later.
     public func paste(
         _ content: PasteboardContents,
         closeMainWindow: Bool,
@@ -119,18 +128,20 @@ public final class Paste {
     /// `target`, the app the keyword was typed in (its key event's target), never to the frontmost app when that's
     /// another one, such as the app under Spotlight's or another launcher's panel. Nothing is posted when the target
     /// is unknown or Fudge itself, or when `secureInput` says a protected password field has the keyboard by the time the
-    /// paste's turn comes (it may wait on a ⌘C fallback); the clipboard is put back then.
+    /// paste's turn comes (it may wait on a ⌘C fallback); the clipboard is put back then. `deletedUTF16` is the
+    /// keyword's length in UTF-16 units, which the ⌫s delete and the caret's placement counts (`PastedText`).
     public func expand(
         _ content: PasteboardContents,
         target: Int32?,
         backspaces: Int,
+        deletedUTF16: Int,
         leftArrows: Int,
         secureInput: () -> Bool
     ) async throws {
         try await turns.run {
             try await pasteNow(
                 content, closeMainWindow: false, origin: .background, backspaces: backspaces,
-                leftArrows: leftArrows, hideWindow: {}, secureInput: secureInput,
+                deletedBefore: deletedUTF16, leftArrows: leftArrows, hideWindow: {}, secureInput: secureInput,
                 frontmost: { target.map { FrontmostApplication(pid: $0, bundleIdentifier: nil) } })
         }
     }
@@ -140,6 +151,7 @@ public final class Paste {
         closeMainWindow: Bool,
         origin: CallOrigin,
         backspaces: Int,
+        deletedBefore: Int = 0,
         leftArrows: Int,
         hideWindow: () async -> Void,
         secureInput: () -> Bool,
@@ -167,17 +179,50 @@ public final class Paste {
             restore(snapshot, ifStill: written)
             throw PasteError.secureInput
         }
-        if backspaces > 0 { keys.postDelete(backspaces, to: target.pid) }
-        keys.postPaste(to: target.pid)
-        if leftArrows > 0 { keys.postLeftArrow(leftArrows, to: target.pid) }
-        let delay = restoreDelay
+        let landing = await postPaste(
+            content, to: target.pid, backspaces: backspaces, deletedBefore: deletedBefore, leftArrows: leftArrows)
         let task = Task { [weak self] in
-            try? await Task.sleep(for: delay)
+            await landing.wait()
             guard !Task.isCancelled, let self else { return }
             self.restore(snapshot, ifStill: written)
             self.pending = nil
         }
         pending = (snapshot, written, task)
+    }
+
+    /// Posts ⌘V to `pid`, reading the focused field before it, and, for a `{cursor}`, places the caret once the paste
+    /// has landed. The field is watched off the main actor, and the result is what the restore waits for.
+    private func postPaste(
+        _ content: PasteboardContents, to pid: Int32, backspaces: Int, deletedBefore: Int, leftArrows: Int
+    ) async -> PasteWatch {
+        let pasted = Self.plainText(of: content).map {
+            PastedText(text: $0, afterCursor: leftArrows, deletedBefore: deletedBefore)
+        }
+        let placer = caret
+        // The field is read before any key goes out, so before an expansion's ⌫s, which `deletedBefore` counts.
+        let before = pasted == nil ? nil : await placer.read(pid)
+        let posted = placer.now()
+        if backspaces > 0 { keys.postDelete(backspaces, to: pid) }
+        keys.postPaste(to: pid)
+        let watch = PasteWatch(posted: .now, delay: restoreDelay) {
+            guard let pasted else { return (nil, 0) }
+            return await placer.waitForLanding(pasted, before: before, pid: pid, since: posted)
+        }
+        guard leftArrows > 0, let pasted else { return watch }
+        let (landed, polls) = await watch.landing.value
+        let waited = posted.duration(to: placer.now())
+        let report = await Task.detached {
+            await placer.place(pasted, before: before, landed: landed, polls: polls, waited: waited, pid: pid)
+        }.value
+        caretPlaced(report)
+        return watch
+    }
+
+    /// The plain text a paste carries, which is what a text field takes; nil for one that has none (a file).
+    static func plainText(of content: PasteboardContents) -> String? {
+        content.items.first?.first { $0.type == "public.utf8-plain-text" }.map {
+            String(decoding: $0.data, as: UTF8.self)
+        }
     }
 
     /// Writes `snapshot` back, if the pasteboard still holds fudge's write: if the user or an app has changed it
@@ -186,5 +231,29 @@ public final class Paste {
         guard pasteboard.changeCount == written else { return }
         pasteboard.replace(with: snapshot)
         turns.markOwn(pasteboard.changeCount)
+    }
+}
+
+/// A paste being watched for landing (SPEC-101 §1), off the main actor: what the restore waits for, so it never puts
+/// the user's clipboard back before the app has read Fudge's.
+struct PasteWatch: Sendable {
+    let posted: ContinuousClock.Instant
+    let delay: Duration
+    let landing: Task<(landed: TextFieldState?, polls: Int), Never>
+
+    init(
+        posted: ContinuousClock.Instant, delay: Duration,
+        watch: @escaping @Sendable () async -> (landed: TextFieldState?, polls: Int)
+    ) {
+        self.posted = posted
+        self.delay = delay
+        landing = Task.detached { await watch() }
+    }
+
+    /// Until the paste has landed, or the wait has ended, and the restore's delay since ⌘V has passed.
+    func wait() async {
+        _ = await landing.value
+        let left = delay - posted.duration(to: .now)
+        if left > .zero { try? await Task.sleep(for: left) }
     }
 }

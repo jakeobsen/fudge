@@ -47,7 +47,8 @@ enum SystemCalls {
         ownPid: ProcessInfo.processInfo.processIdentifier, turns: pasteboardTurns, gate: gate)
     private static let paster = Paste(
         gate: gate, keys: keys, pasteboard: pasteboard, ownPid: ProcessInfo.processInfo.processIdentifier,
-        turns: pasteboardTurns)
+        turns: pasteboardTurns, caret: CaretPlacer(system: SystemCaret()),
+        caretPlaced: { LauncherLog.note($0.line) })
     private static let automation = SystemAutomationPermission()
     private static let finder = FinderEvents()
 
@@ -119,7 +120,8 @@ enum SystemCalls {
     }
 
     /// Pastes a snippet's filled-in text into the frontmost app as `Clipboard.paste` does, in its turn, then puts the
-    /// caret where its `{cursor}` was with `leftArrows` ← presses. Run from Search Snippets, by the user.
+    /// caret `leftArrows` grapheme clusters back, where its `{cursor}` was, once the paste has landed (SPEC-101). Run
+    /// from Search Snippets, by the user.
     static func pasteSnippet(_ text: String, leftArrows: Int, hideWindow: () async -> Void) async throws {
         try await paster.paste(
             PasteboardContents.forPaste(text: text, html: nil, file: nil), closeMainWindow: true,
@@ -130,11 +132,13 @@ enum SystemCalls {
     /// text is pasted as `Clipboard.paste` does, in its turn, the clipboard put back, and `leftArrows` ← presses place
     /// `{cursor}`. Accessibility is checked first, without a prompt, since typing isn't a request to show one: without
     /// it, nothing is deleted and the clipboard isn't touched.
-    static func expandSnippet(_ text: String, into target: Int32?, keywordLength: Int, leftArrows: Int) async throws {
+    static func expandSnippet(
+        _ text: String, into target: Int32?, keyword: String, leftArrows: Int
+    ) async throws {
         guard gate.isTrusted(origin: .background) else { throw PasteError.accessibilityNeeded }
         try await paster.expand(
-            PasteboardContents.forPaste(text: text, html: nil, file: nil), target: target, backspaces: keywordLength,
-            leftArrows: leftArrows, secureInput: { IsSecureEventInputEnabled() })
+            PasteboardContents.forPaste(text: text, html: nil, file: nil), target: target, backspaces: keyword.count,
+            deletedUTF16: keyword.utf16.count, leftArrows: leftArrows, secureInput: { IsSecureEventInputEnabled() })
     }
 
     /// Pastes `contents` into the frontmost app as `clipboard.paste` does: clipboard history's Paste.

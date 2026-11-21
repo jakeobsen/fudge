@@ -36,15 +36,15 @@ private final class FakePasteKeys: PasteKeyPoster {
     func postPaste(to pid: Int32) {
         posted.append(pid)
         log.events.append("post")
-    }
-
-    func postLeftArrow(_ count: Int, to pid: Int32) {
-        log.events.append("← ×\(count) to \(pid)")
+        field?.note("⌘V")
     }
 
     func postDelete(_ count: Int, to pid: Int32) {
         log.events.append("⌫ ×\(count) to \(pid)")
     }
+
+    /// The field the caret goes into, told when ⌘V goes out.
+    var field: FakeField?
 }
 
 @MainActor
@@ -102,14 +102,22 @@ private struct Rig {
     let pasteboard: FakePasteboard
     let turns = PasteboardTurns()
     let paste: Paste
+    let field: FakeField
+    let reports = Reports()
 
-    init(clipboard: PasteboardContents = clip("user's clipboard")) {
+    /// `field` is the text field the paste goes into; by default one that reports nothing.
+    init(clipboard: PasteboardContents = clip("user's clipboard"), field: FakeField = FakeField()) {
         access = FakeAccess(log)
         keys = FakePasteKeys(log)
         pasteboard = FakePasteboard(clipboard, log: log)
+        self.field = field
+        keys.field = field
+        let reports = reports
         paste = Paste(
             gate: AccessibilityGate(access: access), keys: keys, pasteboard: pasteboard, ownPid: me,
-            turns: turns, restoreDelay: restoreDelay)
+            turns: turns, restoreDelay: restoreDelay,
+            caret: placer(field),
+            caretPlaced: { reports.all.append($0) })
     }
 
     /// Once the pending restore has run, or been dropped: waits on the restore itself, never a fixed time, which a
@@ -147,15 +155,18 @@ private struct Rig {
 }
 
 @Test @MainActor func aSnippetsCursorIsPlacedWithLeftArrowsAfterThePaste() async throws {
+    // A field that reports nothing: after ⌘V, the settle time, then the ← presses.
     let rig = Rig()
     try await rig.run("Dear , thanks", leftArrows: 8)
-    #expect(rig.log.events == ["snapshot", "write Dear , thanks", "trust", "hide", "hidden", "post", "← ×8 to 200"])
+    #expect(rig.log.events == ["snapshot", "write Dear , thanks", "trust", "hide", "hidden", "post"])
+    #expect(rig.field.events == ["read 1", "⌘V", "sleep 150 ms", "← ×8 to 200"])
+    #expect(rig.reports.all.map(\.path) == [.arrowsUnreported])
     #expect(rig.turns.isOwn(rig.pasteboard.changeCount), "Fudge's own write, which clipboard history skips")
     await rig.afterRestore()
     #expect(rig.turns.isOwn(rig.pasteboard.changeCount), "and so is the restore")
     let none = Rig()
     await #expect(throws: PasteError.noTarget) { try await none.run("x", leftArrows: 3, frontmost: nil) }
-    #expect(!none.log.events.contains { $0.hasPrefix("←") }, "with no app to paste into, no ← either")
+    #expect(!none.field.events.contains { $0.hasPrefix("←") }, "with no app to paste into, no ← either")
 }
 
 @Test @MainActor func aPasteAndItsRestoreAreMarkedAsFudgesOwnForClipboardHistory() async throws {
@@ -174,7 +185,9 @@ private struct Rig {
 @Test @MainActor func anExpansionDeletesItsKeywordJustBeforeThePaste() async throws {
     let rig = Rig()
     try await rig.run("Best, me", closeMainWindow: false, backspaces: 4, leftArrows: 2)
-    #expect(rig.log.events == ["snapshot", "write Best, me", "trust", "⌫ ×4 to 200", "post", "← ×2 to 200"])
+    #expect(rig.log.events == ["snapshot", "write Best, me", "trust", "⌫ ×4 to 200", "post"])
+    // The ← presses for `{cursor}` go through the caret's placement (#128), to the same app.
+    #expect(rig.field.events.filter { $0.hasPrefix("←") } == ["← ×2 to 200"])
     let none = Rig()
     await #expect(throws: PasteError.noTarget) { try await none.run("x", backspaces: 3, frontmost: nil) }
     #expect(!none.log.events.contains { $0.hasPrefix("⌫") }, "with no app to paste into, nothing is deleted")
@@ -188,7 +201,7 @@ private let spotlight: Int32 = 300
 private func expand(_ rig: Rig, target: Int32?, secureInput: Bool = false) async throws {
     try await rig.paste.expand(
         PasteboardContents.forPaste(text: "Best, me", html: nil, file: nil), target: target, backspaces: 5,
-        leftArrows: 2, secureInput: { secureInput })
+        deletedUTF16: 5, leftArrows: 2, secureInput: { secureInput })
 }
 
 @Test @MainActor func anExpansionPostsOnlyToTheAppTheKeywordWasTypedIn() async throws {
@@ -196,7 +209,8 @@ private func expand(_ rig: Rig, target: Int32?, secureInput: Bool = false) async
     // Spotlight, and TextEdit loses nothing at its caret.
     let rig = Rig()
     try await expand(rig, target: spotlight)
-    #expect(rig.log.events == ["snapshot", "write Best, me", "trust", "⌫ ×5 to 300", "post", "← ×2 to 300"])
+    #expect(rig.log.events == ["snapshot", "write Best, me", "trust", "⌫ ×5 to 300", "post"])
+    #expect(rig.field.events.filter { $0.hasPrefix("←") } == ["← ×2 to 300"])
     #expect(rig.keys.posted == [spotlight])
     #expect(!rig.log.events.contains { $0.contains("to \(textEdit.pid)") }, "nothing to the frontmost app")
     await rig.afterRestore()
@@ -338,4 +352,29 @@ private func expand(_ rig: Rig, target: Int32?, secureInput: Bool = false) async
     #expect(PasteKey.keyCode { $0 == 47 ? "v" : ($0 == 9 ? "k" : nil) } == 47)
     #expect(PasteKey.keyCode { _ in nil } == 9, "the ANSI key when nothing types v")
     #expect(CopyKey.keyCode { $0 == 8 ? "c" : nil } == 8)
+}
+
+@Test @MainActor func aSnippetsCaretWaitsUntilTheAppHasThePasteThenIsReported() async throws {
+    // "Dear , thanks", 13 long, with the caret 8 back: the field shows the paste on its third read.
+    let field = FakeField(
+        before: TextFieldState(count: 0, selection: .caret(0)),
+        after: TextFieldState(count: 13, selection: .caret(13)), landsOnRead: 3)
+    let rig = Rig(field: field)
+    try await rig.run("Dear , thanks", leftArrows: 8)
+    #expect(field.events == ["read 1", "⌘V", "read 2", "sleep 15 ms", "read 3 landed", "set 5", "read 4 landed"])
+    #expect(rig.reports.all.map(\.path) == [.accessibility] && rig.reports.all.first?.polls == 2)
+    await rig.afterRestore()
+    #expect(rig.pasteboard.plainText() == "user's clipboard")
+}
+
+@Test @MainActor func aPasteWithoutACursorPlacesNothing() async throws {
+    let field = FakeField(
+        before: TextFieldState(count: 0, selection: .caret(0)),
+        after: TextFieldState(count: 6, selection: .caret(6)), landsOnRead: 2)
+    let rig = Rig(field: field)
+    try await rig.run("pasted")
+    await rig.afterRestore()
+    #expect(!field.events.contains { $0.hasPrefix("set") || $0.hasPrefix("←") })
+    #expect(rig.reports.all.isEmpty)
+    #expect(rig.pasteboard.plainText() == "user's clipboard")
 }
