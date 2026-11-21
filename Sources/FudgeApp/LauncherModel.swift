@@ -387,14 +387,16 @@ final class LauncherModel {
     /// The Calculator card's answer to the root query, when it's a calculation.
     private(set) var calculator: CalculatorResult?
 
-    /// What the calculator knows about exchange rates, from the app's `ExchangeRateUpdater`. A change redraws the
-    /// card, so "Downloading exchange rates…" turns into the answer when the rates arrive.
+    /// What the calculator knows about exchange rates, from the app's `ExchangeRateUpdater`. A change evaluates a
+    /// currency card again (`Calculator.afterRatesChange`), so "Downloading exchange rates…" turns into the answer
+    /// when the rates arrive, keeping the selection. That happens with a command open too, so the card is right when
+    /// the user comes back to root search.
     var currency: CurrencyState = .off {
         didSet {
-            guard currency != oldValue, case .root = screen else { return }
+            guard currency != oldValue else { return }
             let wasSelected = selectedItem == Self.calculatorID
-            calculator = evaluateCalculator()
-            if calculator == nil, wasSelected { selectedItem = results.first?.id }
+            calculator = Calculator.afterRatesChange(calculator, evaluate: evaluateCalculator)
+            if case .root = screen, calculator == nil, wasSelected { selectedItem = results.first?.id }
         }
     }
 

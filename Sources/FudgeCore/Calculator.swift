@@ -39,6 +39,15 @@ public struct CalculatorResult: Sendable, Equatable {
 /// Root search's calculator: a time zone conversion, a currency conversion, a unit conversion or arithmetic, read
 /// and written in the user's locale.
 public enum Calculator {
+    /// The card after the exchange rates changed (new rates, a download starting, or one failing): a currency card is
+    /// evaluated again from its query, as typing would; any other card doesn't depend on the rates and stays as it is.
+    public static func afterRatesChange(
+        _ card: CalculatorResult?, evaluate: () -> CalculatorResult?
+    ) -> CalculatorResult? {
+        guard card?.kind == .currency else { return card }
+        return evaluate()
+    }
+
     /// Longer queries aren't evaluated.
     public static let maximumLength = 200
 
