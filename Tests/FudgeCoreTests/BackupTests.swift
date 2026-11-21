@@ -658,3 +658,26 @@ private func storeFolder(_ trees: [String: String]) throws -> Folder {
     #expect(settings.commands[":test-tools/first"]?.alias == "tf")
     #expect(!settings.isEnabled(extension: ":test-tools"))
 }
+
+@Test func snippetsGoIntoABackupAndAreCounted() throws {
+    let source = try Folder()
+    try source.write(
+        "snippets.json", #"{"snippets":[{"id":"a","name":"Address","text":"1 Main St","keyword":"/addr"}]}"#)
+    let export = Backup.collect(from: source.paths, installed: [], fudgeVersion: "1.0", now: now)
+    #expect(export.summary.snippets == 1)
+    #expect(export.summary.text.contains("1 snippet"))
+    let file = source.url.appendingPathComponent("b.fudgebackup")
+    try BackupArchive.write(export.entries, to: file, password: password)
+    let contents = try Backup.open(file, password: password)
+    #expect(contents.summary.snippets == 1)
+    let target = try Folder()
+    _ = try Backup.apply(contents, to: target.paths, installed: [], fudgeVersion: "1.0", now: now)
+    #expect(SnippetStore.load(from: target.paths.snippetsFile).snippets.map(\.keyword) == ["/addr"])
+    let manifest = #"{"format":1,"fudgeVersion":"1","created":"2026-01-01T00:00:00Z","extensions":[]}"#
+    #expect(throws: BackupError.self, "a snippets.json that isn't an object is refused") {
+        try Backup.contents(of: [
+            BackupEntry(path: "manifest.json", data: Data(manifest.utf8)),
+            BackupEntry(path: "snippets.json", data: Data("[1]".utf8)),
+        ])
+    }
+}

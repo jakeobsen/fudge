@@ -75,6 +75,11 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("quicklinks.json")
     }
 
+    /// The user's snippets (`SnippetStore`).
+    public var snippetsFile: URL {
+        supportDirectory.appendingPathComponent("snippets.json")
+    }
+
     /// The preference values set for each extension.
     public var preferencesDirectory: URL {
         supportDirectory.appendingPathComponent("preferences", isDirectory: true)
