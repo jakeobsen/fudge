@@ -98,11 +98,51 @@ test("Open With is a submenu of the applications that can open the path", async 
 });
 
 test("an action fudge can't perform still shows, and says so when picked", async () => {
-    const { mounted, entries } = await panelWith(h(Action.CreateQuicklink, { quicklink: { link: "https://example.com" } }));
-    assert.equal(entries[0]!.props.title, "Create Quicklink");
+    const { mounted, entries } = await panelWith(h(Action.CreateSnippet, { snippet: { text: "hi" } }));
+    assert.equal(entries[0]!.props.title, "Create Snippet");
     await mounted.root.dispatch(entries[0]!.id, ["onAction"], []);
     const toast = calls.find((call) => call.method === "toast.show")!.params as { title: string; style: string };
-    assert.equal(toast.title, "Action.CreateQuicklink isn't available in Fudge yet");
+    assert.equal(toast.title, "Action.CreateSnippet isn't available in Fudge yet");
+    assert.equal(toast.style, "FAILURE");
+});
+
+test("Action.CreateQuicklink renders an Action the app opens its form for, with Raycast's defaults", async () => {
+    const shortcut = { modifiers: ["cmd"], key: "s" };
+    const safari = { name: "Safari", path: "/Applications/Safari.app", bundleId: "com.apple.Safari", localizedName: "Safari" };
+    const { entries } = await panelWith(
+        h(Action.CreateQuicklink, { quicklink: { link: "https://e.com/?q={argument}" } }),
+        h(Action.CreateQuicklink, {
+            title: "Save Search",
+            icon: Icon.Star,
+            shortcut,
+            quicklink: { name: "Search", link: "https://e.com", application: safari, icon: Icon.Globe },
+        }),
+        h(Action.CreateQuicklink, { quicklink: { link: "~/Documents", application: "Finder" } }),
+    );
+    assert.deepEqual(
+        entries.map((entry) => [entry.props.title, entry.props.icon, entry.props.fudgeBuiltIn, entry.props.quicklink]),
+        [
+            ["Create Quicklink", Icon.Link, "createQuicklink", { link: "https://e.com/?q={argument}" }],
+            [
+                "Save Search",
+                Icon.Star,
+                "createQuicklink",
+                { link: "https://e.com", name: "Search", application: { name: "Safari", path: "/Applications/Safari.app", bundleId: "com.apple.Safari" } },
+            ],
+            ["Create Quicklink", Icon.Link, "createQuicklink", { link: "~/Documents", application: "Finder" }],
+        ],
+    );
+    assert.deepEqual(entries[1]!.props.shortcut, shortcut);
+    assert.equal(entries[0]!.props.onAction, undefined, "the app opens the form; nothing runs in the command");
+});
+
+test("Action.CreateQuicklink without a link says so when picked", async () => {
+    const { mounted, entries } = await panelWith(h(Action.CreateQuicklink, { quicklink: { name: "No Link" } }));
+    assert.equal(entries[0]!.props.title, "Create Quicklink");
+    assert.equal(entries[0]!.props.fudgeBuiltIn, undefined);
+    await mounted.root.dispatch(entries[0]!.id, ["onAction"], []);
+    const toast = calls.find((call) => call.method === "toast.show")!.params as { title: string; style: string };
+    assert.equal(toast.title, "Action.CreateQuicklink needs a quicklink with a link");
     assert.equal(toast.style, "FAILURE");
 });
 

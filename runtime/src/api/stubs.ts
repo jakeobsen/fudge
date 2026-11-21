@@ -64,7 +64,7 @@ export function isNotAvailable(value: unknown): boolean {
 // Markers the compatibility scan (scripts/compat/) reads to count a component as missing. They're
 // non-enumerable symbol properties, so nothing an extension or React does with a component sees them.
 
-/** On a component that renders but fails when used: an action Fudge can't perform yet (`Action.CreateQuicklink`). */
+/** On a component that renders but fails when used: an action Fudge can't perform yet (`Action.CreateSnippet`). */
 export const UNAVAILABLE = Symbol.for("fudge.unavailable");
 /** On a component the extension host renders but the app can't draw yet (listed at the end of `components.ts`). */
 export const NOT_DRAWN = Symbol.for("fudge.notDrawn");

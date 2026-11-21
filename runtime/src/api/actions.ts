@@ -172,6 +172,22 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
         });
     }
 
+    /**
+     * Opens Fudge's Create Quicklink form over the command's view, filled in from `quicklink`: its link, its name
+     * (else the command's title) and its application. The icon isn't used. The app performs it itself, so nothing
+     * runs in the command; without a link it only says so when picked.
+     */
+    function CreateQuicklink({ quicklink, ...props }: Props) {
+        const defaults = { title: "Create Quicklink", icon: Icon.Link };
+        const request = quicklinkRequest(quicklink);
+        if (!request) {
+            return action(defaults, props, async () => {
+                await showToast({ style: Toast.Style.Failure, title: "Action.CreateQuicklink needs a quicklink with a link" });
+            });
+        }
+        return createElement(ActionHost, { ...defaults, ...withoutOwn(props), fudgeBuiltIn: "createQuicklink", quicklink: request });
+    }
+
     /** An action Fudge can't perform yet: it shows, and says so when picked. */
     const unavailable = (name: string, title: string) => {
         function Unavailable(props: Props) {
@@ -193,12 +209,35 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
         Trash,
         SubmitForm,
         Paste,
-        CreateQuicklink: unavailable("Action.CreateQuicklink", "Create Quicklink"),
+        CreateQuicklink,
         CreateSnippet: unavailable("Action.CreateSnippet", "Create Snippet"),
         ToggleQuickLook,
         PickDate: Object.assign(PickDate, { Type: PickDateType, isFullDay }),
         InstallMCPServer: unavailable("Action.InstallMCPServer", "Install MCP Server"),
     };
+}
+
+/**
+ * What the app reads from `Action.CreateQuicklink`'s `quicklink`: the link, the name, and the application as a name
+ * or bundle id, or an `Application`'s name, path and bundle id. Null without a link.
+ */
+export function quicklinkRequest(quicklink: unknown): Props | null {
+    if (typeof quicklink !== "object" || quicklink === null) return null;
+    const { link, name, application } = quicklink as Props;
+    if (typeof link !== "string") return null;
+    const request: Props = { link };
+    if (typeof name === "string") request.name = name;
+    if (typeof application === "string") {
+        request.application = application;
+    } else if (typeof application === "object" && application !== null) {
+        const app: Props = {};
+        for (const key of ["name", "path", "bundleId"]) {
+            const value = (application as Props)[key];
+            if (typeof value === "string") app[key] = value;
+        }
+        request.application = app;
+    }
+    return request;
 }
 
 /** The props every action passes through: title, icon, shortcut, style, autoFocus, id. */

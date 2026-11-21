@@ -13,6 +13,8 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         case quit
         /// Opens a quicklink, with its arguments filled in.
         case quicklink(Quicklink)
+        /// Opens the Create Quicklink form.
+        case createQuicklink
     }
 
     public var id: String
@@ -81,6 +83,14 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         kind: .quit
     )
 
+    /// "Create Quicklink": opens Fudge's form for a new quicklink (SPEC-052 B1).
+    public static let createQuicklink = RootItem(
+        id: "fudge:create-quicklink",
+        title: "Create Quicklink",
+        keywords: ["quicklink", "link", "bookmark", "new", "fudge"],
+        kind: .createQuicklink
+    )
+
     /// Whether opening the item counts in `LaunchHistory`. Quitting doesn't, so an empty search never puts
     /// "Quit Fudge" at the top.
     public var recordsLaunch: Bool {
@@ -93,7 +103,7 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         var item = RootItem(
             id: quicklink.rootItemID, title: quicklink.name, keywords: ["quicklink"], kind: .quicklink(quicklink),
             arguments: QuicklinkTemplate(quicklink.link).fields)
-        item.secondaryText = quicklink.link
+        item.secondaryText = QuicklinkTemplate(quicklink.link).searchableText
         return item
     }
 
@@ -149,7 +159,7 @@ public enum RootRow: Sendable, Equatable, Identifiable {
 
 public enum RootSearch {
     /// fudge's own items, searched alongside applications and commands.
-    public static let builtInItems: [RootItem] = [.settings, .reloadExtensions, .quit]
+    public static let builtInItems: [RootItem] = [.settings, .createQuicklink, .reloadExtensions, .quit]
 
     /// Applies `settings` to command items: disabled commands (or commands of disabled extensions) are left out,
     /// and each command gets its alias.
