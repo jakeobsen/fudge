@@ -8,7 +8,7 @@
 
 import * as implementation from "./index.ts";
 import { RAYCAST_EXPORTS } from "./raycast-exports.generated.ts";
-import { isNotAvailable, notAvailable } from "./stubs.ts";
+import { isNotAvailable, notAvailable, plainRecords } from "./stubs.ts";
 
 export { NotAvailableError, notAvailable } from "./stubs.ts";
 
@@ -26,8 +26,9 @@ const wrappers = new WeakMap<object, Map<string, unknown>>();
  */
 function withMissingMembers(value: unknown, name: string): unknown {
     if ((typeof value !== "function" && typeof value !== "object") || value === null) return value;
-    // A stub already fails on any use, and must stay recognisable to `isNotAvailable` (`pasteText`).
-    if (isNotAvailable(value)) return value;
+    // A stub already fails on any use, and must stay recognisable to `isNotAvailable` (`pasteText`). A record of
+    // the extension's own data (`preferences`) has its own names as members.
+    if (isNotAvailable(value) || plainRecords.has(value)) return value;
     let byName = wrappers.get(value);
     if (!byName) wrappers.set(value, (byName = new Map()));
     const cached = byName.get(name);

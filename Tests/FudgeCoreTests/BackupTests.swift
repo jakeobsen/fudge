@@ -69,6 +69,9 @@ private func seeded() throws -> Folder {
     try folder.write("history.json", #"{"alpha/run":3}"#)
     try folder.write("dropdown-values.json", #"{"alpha/run/kind":"b"}"#)
     try folder.write("command-metadata.json", #"{"alpha/run":{"subtitle":"Busy"}}"#)
+    try folder.write(
+        "quicklinks.json",
+        #"{"quicklinks":[{"id":"q1","name":"Jira","link":"https://jira.example.com/browse/{ticket}"},{"id":"q2"}]}"#)
     try folder.write("preferences/alpha.json", #"{"token":"secret"}"#)
     try folder.write("local-storage/alpha.json", #"{"count":"1"}"#)
     try folder.write("form-values/alpha.json", #"{"run":{"name":"x"}}"#)
@@ -107,8 +110,9 @@ private func seeded() throws -> Folder {
         fudgeVersion: "1.0", now: now)
     #expect(export.leftOut.isEmpty && export.skipped == 0)
     #expect(
-        export.summary.text == "Settings, 1 extension's preferences, 1 extension's data, 1 installed extension listed",
-        "alpha's data; the store's folder is never backed up")
+        export.summary.text
+            == "Settings, 1 quicklink, 1 extension's preferences, 1 extension's data, 1 installed extension listed",
+        "alpha's data; the store's folder is never backed up; q2 isn't a quicklink")
     let exported = try #require(export.entries.first { $0.path == "settings.json" })
     let exportedSettings = try #require(try JSONSerialization.jsonObject(with: exported.data) as? [String: Any])
     #expect(exportedSettings["extensionStoreConsentAt"] == nil, "the consent never goes into a backup")
@@ -125,6 +129,7 @@ private func seeded() throws -> Folder {
             Backup.Listed(name: "alpha", title: "Alpha", version: "1.2.0", source: .store, storeTree: "t")
         ])
     #expect(contents.hadExtensionStore)
+    #expect(contents.summary.quicklinks == 1, "the import's summary counts them too")
 
     let target = try Folder()
     let result = try Backup.apply(contents, to: target.paths, installed: [], fudgeVersion: "1.0", now: now)
@@ -133,8 +138,8 @@ private func seeded() throws -> Folder {
     #expect(settings["hotkey"] as? String == "option+space")
     #expect(settings["extensionStore"] == nil && settings["extensionStoreConsentAt"] == nil, "consent never travels")
     for path in [
-        "launch-permissions.json", "history.json", "preferences/alpha.json", "local-storage/alpha.json",
-        "form-values/alpha.json", "extension-data/alpha/notes/a.txt",
+        "launch-permissions.json", "history.json", "quicklinks.json", "preferences/alpha.json",
+        "local-storage/alpha.json", "form-values/alpha.json", "extension-data/alpha/notes/a.txt",
     ] {
         #expect(target.read(path) == source.read(path), "\(path)")
     }
@@ -478,6 +483,7 @@ private func file(_ path: String, _ text: String = "x") -> BackupArchive.RawEntr
 @Test func settingsAndKeyedFilesMustBeJSONObjects() throws {
     #expect(refusal(try crafted([file("settings.json", "[1, 2]")])) == .invalidPart("settings.json"))
     #expect(refusal(try crafted([file("dropdown-values.json", "not json")])) == .invalidPart("dropdown-values.json"))
+    #expect(refusal(try crafted([file("quicklinks.json", "[1, 2]")])) == .invalidPart("quicklinks.json"))
     #expect(throws: Never.self) { try crafted([file("history.json", "[1, 2]")]).get() }
 }
 

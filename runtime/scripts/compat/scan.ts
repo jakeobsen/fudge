@@ -6,7 +6,7 @@
 // what's left is what runs. JSX stays as written, so `<Action.CopyToClipboard>`
 // counts like `Action.CopyToClipboard`.
 
-import { isNotAvailable, LEFT_OUT, NOT_DRAWN, NotAvailableError, UNAVAILABLE } from "../../src/api/stubs.ts";
+import { isNotAvailable, LEFT_OUT, NOT_DRAWN, NotAvailableError, plainRecords, UNAVAILABLE } from "../../src/api/stubs.ts";
 
 /** What one source file uses: API paths such as `Clipboard.copy`, and the names it imports from @raycast/utils. */
 export interface Uses {
@@ -126,6 +126,8 @@ function read(value: object, key: string): { value: unknown } | "missing" {
  * segment is a function or property (`Clipboard.copy`, `environment.supportPath`), checked for being there, and
  * nothing after it is (`environment.commandName.length` is about the string). A value on the way that's a stub,
  * or a component marked as failing when used or as not drawn by the app, makes the path a gap of that kind.
+ * Anything under a record of the extension's own data (`plainRecords`: the deprecated `preferences`, read as
+ * `preferences.apiKey.value`) is there, since its members are the extension's names, known only during a launch.
  * `declared` says whether Raycast's types declare the path; without it, only the export is checked.
  */
 export function support(api: Record<string, unknown>, path: string, declared?: (path: string) => boolean): Support {
@@ -137,7 +139,7 @@ export function support(api: Record<string, unknown>, path: string, declared?: (
     let gap = gapOf(value);
     if (gap) return gap;
     for (const segment of rest) {
-        if (!isObjectLike(value)) return "implemented";
+        if (!isObjectLike(value) || plainRecords.has(value)) return "implemented";
         const capitalised = /^[A-Z]/.test(segment);
         if (!capitalised && !(segment in value)) return "missing";
         const member = read(value, segment);
