@@ -29,29 +29,31 @@ enum Tool {
     /// that stalls for seconds can't fail it.
     static let noHang: Duration = .seconds(30)
 
-    /// The node on `PATH`, which `make test` runs the runtime's tests with.
-    static let node: URL? = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":")
-        .map { URL(fileURLWithPath: String($0)).appendingPathComponent("node") }
-        .first { FileManager.default.isExecutableFile(atPath: $0.path) }
+    /// The pinned Node.js `make test` hands the tests.
+    static let node = Fixtures.node
 
-    /// The scan fixtures the runtime's tests use.
-    static let scanFixtures = Fixtures.repository.appendingPathComponent("runtime/test/fixtures/scan")
-
-    /// Runs `fudge scan` from a checkout: the TypeScript scanner with node and esbuild's binary, and no
-    /// `FUDGE_RAYCAST_TYPES`, so the scanner reads the vendored types. Returns the status, stdout and stderr.
-    static func scan(_ arguments: [String], esbuild: String? = nil) throws -> (Int32, String, String) {
+    /// The tool laid out as in Fudge.app, `<folder>/Contents/Helpers/fudge` (a hard link, else a copy), with `node`
+    /// beside it, as a link, when given. The tool finds Node.js only there. The caller removes `folder`.
+    static func bundled(in folder: URL, node: URL?) throws -> URL {
         let tool = try #require(fudge, "swift test builds the fudge tool")
-        let node = try #require(node)
-        let esbuild = try esbuild ?? #require(Fixtures.esbuild).path
+        let files = FileManager.default
+        let helpers = folder.appendingPathComponent("Contents/Helpers", isDirectory: true)
+        try files.createDirectory(at: helpers, withIntermediateDirectories: true)
+        let bundled = helpers.appendingPathComponent("fudge")
+        do { try files.linkItem(at: tool, to: bundled) } catch { try files.copyItem(at: tool, to: bundled) }
+        if let node {
+            try files.createSymbolicLink(at: helpers.appendingPathComponent("node"), withDestinationURL: node)
+        }
+        return bundled
+    }
+
+    /// Runs `tool` with `arguments` and `environment`, and returns its status, stdout and stderr.
+    static func run(_ tool: URL, _ arguments: [String], environment: [String: String]) throws -> (Int32, String, String)
+    {
         let process = Process()
         process.executableURL = tool
-        process.arguments = ["scan"] + arguments
-        process.environment = [
-            "HOME": FileManager.default.temporaryDirectory.path, "PATH": "/usr/bin:/bin", "FUDGE_NODE": node.path,
-            "FUDGE_ESBUILD": esbuild,
-            "FUDGE_COMPAT_SCAN": Fixtures.repository.appendingPathComponent("runtime/scripts/compat/fudge-scan.ts")
-                .path,
-        ]
+        process.arguments = arguments
+        process.environment = environment
         let output = Pipe()
         let errors = Pipe()
         process.standardOutput = output
@@ -63,12 +65,32 @@ enum Tool {
         return (process.terminationStatus, String(decoding: out, as: UTF8.self), String(decoding: err, as: UTF8.self))
     }
 
+    /// The scan fixtures the runtime's tests use.
+    static let scanFixtures = Fixtures.repository.appendingPathComponent("runtime/test/fixtures/scan")
+
+    /// Runs `fudge scan` from a checkout: the TypeScript scanner with node and esbuild's binary, and no
+    /// `FUDGE_RAYCAST_TYPES`, so the scanner reads the vendored types. Returns the status, stdout and stderr.
+    static func scan(_ arguments: [String], esbuild: String? = nil) throws -> (Int32, String, String) {
+        let folder = try Fixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let node: URL = try #require(Tool.node, "make test hands the tests Fudge's Node.js")
+        let tool = try bundled(in: folder, node: node)
+        let esbuild = try esbuild ?? #require(Fixtures.esbuild).path
+        return try run(
+            tool, ["scan"] + arguments,
+            environment: [
+                "HOME": FileManager.default.temporaryDirectory.path, "PATH": "/usr/bin:/bin", "FUDGE_ESBUILD": esbuild,
+                "FUDGE_COMPAT_SCAN": Fixtures.repository.appendingPathComponent("runtime/scripts/compat/fudge-scan.ts")
+                    .path,
+            ])
+    }
+
     /// Runs `fudge` with `arguments` until the stand-in has started, then sends it SIGTERM: the tool must exit
     /// with 143 and take the stand-in and its child with it.
     static func expectTerminationEndsEverything(
-        _ arguments: [String], environment: [String: String], pids: URL
+        _ arguments: [String], environment: [String: String], pids: URL, tool: URL? = nil
     ) async throws {
-        let tool = try #require(fudge, "swift test builds the fudge tool")
+        let tool = try tool ?? #require(fudge, "swift test builds the fudge tool")
         let process = Process()
         process.executableURL = tool
         process.arguments = arguments
@@ -103,13 +125,76 @@ enum Tool {
     let node = folder.appendingPathComponent("node")
     let pids = folder.appendingPathComponent("pids")
     try Tool.neverExiting(at: node, pids: pids)
+    // The stand-in is the Node.js beside the tool, as Fudge.app has it.
+    let tool = try Tool.bundled(in: folder.appendingPathComponent("app"), node: node)
     try await Tool.expectTerminationEndsEverything(
         ["scan", Fixtures.repository.appendingPathComponent("runtime/test/fixtures/scan/supported").path],
         environment: [
-            "HOME": folder.path, "PATH": "/usr/bin:/bin", "FUDGE_NODE": node.path, "FUDGE_ESBUILD": "/usr/bin/true",
+            "HOME": folder.path, "PATH": "/usr/bin:/bin", "FUDGE_ESBUILD": "/usr/bin/true",
             "FUDGE_COMPAT_SCAN": "/dev/null",
         ],
-        pids: pids)
+        pids: pids, tool: tool)
+}
+
+@Test func theToolRunsOnlyTheNodeBesideIt() throws {
+    // A Node.js on PATH and in FUDGE_NODE, which the tool used to take, is never run (SPEC-115).
+    let folder = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let elsewhere = folder.appendingPathComponent("bin", isDirectory: true)
+    try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: true)
+    let impostor = elsewhere.appendingPathComponent("node")
+    let ran = folder.appendingPathComponent("ran")
+    try "#!/bin/sh\ntouch '\(ran.path)'\n".write(to: impostor, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: impostor.path)
+    let tool = try Tool.bundled(in: folder.appendingPathComponent("app"), node: nil)
+    let (status, out, err) = try Tool.run(
+        tool, ["scan", Fixtures.repository.appendingPathComponent("runtime/test/fixtures/scan/supported").path],
+        environment: [
+            "HOME": folder.path, "PATH": "\(elsewhere.path):/usr/bin:/bin", "FUDGE_NODE": impostor.path,
+            "FUDGE_ESBUILD": "/usr/bin/true", "FUDGE_COMPAT_SCAN": "/dev/null",
+        ])
+    #expect(status == 1 && out.isEmpty)
+    #expect(err == "fudge: can't find Fudge's own Node.js beside this fudge tool: use the fudge inside Fudge.app\n")
+    #expect(!FileManager.default.fileExists(atPath: ran.path), "the other Node.js never ran")
+}
+
+@Test(.enabled(if: Fixtures.esbuild != nil, "needs esbuild: run `make test`"))
+func buildInstallsDependenciesWithTheBundledNpm() throws {
+    let folder = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    // A stand-in for Node.js that writes down how it was run, and installs nothing.
+    let node = folder.appendingPathComponent("node")
+    let ran = folder.appendingPathComponent("ran")
+    try "#!/bin/sh\nprintf '%s\\n' \"$PATH\" \"$@\" > '\(ran.path)'\n".write(
+        to: node, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
+    let tool = try Tool.bundled(in: folder.appendingPathComponent("app"), node: node)
+
+    let source = try Fixtures.greeterCopy()
+    defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+    let manifest = source.appendingPathComponent("package.json")
+    var object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: manifest)) as? [String: Any])
+    object["dependencies"] = ["left-pad": "1.3.0"]
+    try JSONSerialization.data(withJSONObject: object).write(to: manifest)
+    let extensions = folder.appendingPathComponent("extensions")
+    let temporary = folder.appendingPathComponent("tmp")
+    for made in [extensions, temporary] {
+        try FileManager.default.createDirectory(at: made, withIntermediateDirectories: true)
+    }
+
+    let (status, _, err) = try Tool.run(
+        tool, ["build", source.path, "--into", extensions.path],
+        environment: [
+            "HOME": folder.path, "PATH": "/usr/bin:/bin", "FUDGE_ESBUILD": try #require(Fixtures.esbuild).path,
+            "TMPDIR": temporary.path + "/",
+        ])
+    #expect(status == 0, "\(err)")
+    let lines = try String(contentsOf: ran, encoding: .utf8).split(separator: "\n").map(String.init)
+    #expect(lines.first?.split(separator: ":").first?.hasSuffix("/app/Contents/Helpers") == true, "\(lines)")
+    #expect(lines.first?.hasSuffix(":/usr/bin:/bin") == true, "then the PATH it had")
+    #expect(lines.dropFirst().first?.hasSuffix("/app/Contents/Resources/node/npm/bin/npm-cli.js") == true)
+    #expect(
+        Array(lines.dropFirst(2)) == ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"])
 }
 
 @Test func terminatingFudgeBuildEndsEsbuildAndEverythingItStarted() async throws {

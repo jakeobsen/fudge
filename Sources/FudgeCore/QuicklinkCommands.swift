@@ -10,6 +10,14 @@ public enum QuicklinkCommands {
     public static let groupTitle = "Quicklinks"
     /// The SF Symbol a quicklink's row shows on the Commands page.
     public static let symbol = "link"
+    /// How a message names a quicklink's key when no quicklink has that id any more.
+    public static let deletedName = "a deleted quicklink"
+
+    /// `deletedName` for a `:quicklinks/…` key, which a message shows when the key's quicklink isn't found; nil for
+    /// any other key.
+    public static func nameWhenGone(_ commandID: String) -> String? {
+        commandID.hasPrefix(groupName + "/") ? deletedName : nil
+    }
 
     /// Whether a quicklink's `id` can be part of a settings key: 1 to 64 ASCII letters, digits, `-` and `_`, letter
     /// case kept, as `UUID().uuidString` is. This is the quicklink group's own rule, not the extension name rule,
@@ -68,12 +76,22 @@ public enum QuicklinkCommands {
             isOnScreen: false)
     }
 
-    /// Takes out the settings of quicklinks that are gone: `:quicklinks/…` keys whose id isn't one of `quicklinks`'.
-    /// Unlike an uninstalled command's, they can't come back, so they'd only hold an alias or a key. Run it only
-    /// with `quicklinks` read from a file that could be read. True when it took something out.
+    /// Takes out the settings of quicklinks that are gone from `store`'s file: `:quicklinks/…` keys whose id no entry
+    /// has. An entry that's still there but isn't a valid quicklink (a hand edit) keeps its settings, so fixing it
+    /// brings them back. Run it only with a store read from a file that could be read. True when it took something
+    /// out.
+    @discardableResult
+    public static func prune(_ settings: inout FudgeSettings, in store: QuicklinkStore) -> Bool {
+        prune(&settings, keepingIDs: store.entryIDs)
+    }
+
+    /// `prune(_:in:)` for these quicklinks' ids.
     @discardableResult
     public static func prune(_ settings: inout FudgeSettings, keeping quicklinks: [Quicklink]) -> Bool {
-        let kept = Set(quicklinks.map(\.id))
+        prune(&settings, keepingIDs: Set(quicklinks.map(\.id)))
+    }
+
+    static func prune(_ settings: inout FudgeSettings, keepingIDs kept: Set<String>) -> Bool {
         let prefix = groupName + "/"
         let gone = settings.commands.keys.filter {
             $0.hasPrefix(prefix) && !kept.contains(String($0.dropFirst(prefix.count)))

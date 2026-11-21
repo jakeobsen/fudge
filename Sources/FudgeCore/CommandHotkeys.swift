@@ -165,6 +165,23 @@ public enum HotKeyConflict: Sendable, Equatable {
         return nil
     }
 
+    /// "Removed from <commands>, which isn't installed", for the hotkeys a new one took over (`displaced`), each named by
+    /// `title`; a deleted quicklink's key (`QuicklinkCommands.nameWhenGone`) is named as one, never as uninstalled.
+    /// Nil for none.
+    public static func displacedNote(_ displaced: [String], title: (String) -> String) -> String? {
+        let quicklinks = displaced.filter { QuicklinkCommands.nameWhenGone($0) != nil }.count
+        let commands = displaced.filter { QuicklinkCommands.nameWhenGone($0) == nil }.map(title)
+        var parts: [String] = []
+        if !commands.isEmpty {
+            let names = commands.formatted(.list(type: .and))
+            parts.append(commands.count == 1 ? "\(names), which isn't installed" : "\(names), which aren't installed")
+        }
+        if quicklinks > 0 {
+            parts.append(quicklinks == 1 ? QuicklinkCommands.deletedName : "\(quicklinks) deleted quicklinks")
+        }
+        return parts.isEmpty ? nil : "Removed from " + parts.joined(separator: ", and from ")
+    }
+
     /// The commands that aren't installed whose saved hotkey is `spec`'s keys: taking those keys clears theirs.
     public static func displaced(
         by spec: HotKeySpec, except commandID: String? = nil, commands: [String: HotKeySpec], installed: Set<String>

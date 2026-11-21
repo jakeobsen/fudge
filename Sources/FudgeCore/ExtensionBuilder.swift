@@ -54,6 +54,8 @@ public enum BuildError: Error, Equatable, CustomStringConvertible {
     case sourceIsDestination(String)
     /// Something that isn't an extension fudge built is in the way.
     case notAnInstall(String)
+    /// The extension's dependencies need npm, and Fudge's own Node.js isn't beside the tool.
+    case noNode
 
     public var description: String {
         switch self {
@@ -70,6 +72,9 @@ public enum BuildError: Error, Equatable, CustomStringConvertible {
                 + "install it into another folder"
         case .notAnInstall(let path):
             "\(path) isn't an extension Fudge built, so it won't be replaced"
+        case .noNode:
+            "the extension's dependencies need npm, from Fudge's own Node.js, which isn't beside this fudge tool; "
+                + "use the fudge inside Fudge.app"
         }
     }
 }
@@ -88,6 +93,8 @@ public struct ExtensionBuilder: Sendable {
     static let sourceExtensions = ["tsx", "ts", "jsx", "js"]
 
     public var esbuild: URL
+    /// Fudge's own Node.js, whose npm installs an extension's dependencies (`Runtime.locateNode`).
+    public var node: BundledNode?
     public var log: @Sendable (String) -> Void
 
     /// Finds which commands use something Fudge doesn't support, from the source folder (`fudge scan`, through
@@ -96,10 +103,11 @@ public struct ExtensionBuilder: Sendable {
     public var scanCommands: (@Sendable (URL) throws -> CommandCompatibility)?
 
     public init(
-        esbuild: URL, log: @escaping @Sendable (String) -> Void = { _ in },
+        esbuild: URL, node: BundledNode? = nil, log: @escaping @Sendable (String) -> Void = { _ in },
         scanCommands: (@Sendable (URL) throws -> CommandCompatibility)? = nil
     ) {
         self.esbuild = esbuild
+        self.node = node
         self.log = log
         self.scanCommands = scanCommands
     }
@@ -132,7 +140,8 @@ public struct ExtensionBuilder: Sendable {
         var environment: [String: String] = [:]
         if manifest.hasDependencies, !files.fileExists(atPath: source.appendingPathComponent("node_modules").path) {
             log("installing dependencies")
-            environment["NODE_PATH"] = try Self.installDependencies(of: source, into: scratch).path
+            guard let node else { throw BuildError.noNode }
+            environment["NODE_PATH"] = try Self.installDependencies(of: source, into: scratch, with: node).path
         }
 
         try files.createDirectory(at: extensionsDirectory, withIntermediateDirectories: true)
@@ -208,7 +217,7 @@ public struct ExtensionBuilder: Sendable {
     }
 
     /// Installs the extension's dependencies under `scratch` and returns the `node_modules` folder.
-    static func installDependencies(of source: URL, into scratch: URL) throws -> URL {
+    static func installDependencies(of source: URL, into scratch: URL, with node: BundledNode) throws -> URL {
         let files = FileManager.default
         let project = scratch.appendingPathComponent("dependencies", isDirectory: true)
         try files.createDirectory(at: project, withIntermediateDirectories: true)
@@ -219,12 +228,12 @@ public struct ExtensionBuilder: Sendable {
             try files.copyItem(at: file, to: project.appendingPathComponent(name))
             if name.hasSuffix(".json"), name != "package.json" { hasLockfile = true }
         }
-        // Install scripts stay off: the bundle only needs the packages' JavaScript.
-        try Shell.run(
-            URL(fileURLWithPath: "/usr/bin/env"),
-            ["npm", hasLockfile ? "ci" : "install", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"],
-            in: project
-        )
+        // Install scripts stay off: the bundle only needs the packages' JavaScript. npm is Fudge's own, run by its
+        // own Node.js.
+        let npm = node.npm(
+            [hasLockfile ? "ci" : "install", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"],
+            environment: ProcessInfo.processInfo.environment)
+        try Shell.run(npm.executable, npm.arguments, in: project, environment: npm.environment)
         return project.appendingPathComponent("node_modules", isDirectory: true)
     }
 

@@ -90,24 +90,52 @@ final class LineSplitter: @unchecked Sendable {
     }
 }
 
+/// Fudge's own Node.js (SPEC-115): the official build `make app` puts in the bundle, pinned and checked there.
+/// It's the only Node.js Fudge runs, for the extension host, `fudge build` and `fudge scan`, so every extension runs
+/// on the one Fudge was built and tested with.
+public struct BundledNode: Sendable, Equatable {
+    /// `Contents/Helpers/node`.
+    public var node: URL
+    /// npm, from Node.js's own distribution (`Contents/Resources/node/npm/bin/npm-cli.js`), which `node` runs.
+    public var npm: URL
+
+    public init(node: URL, npm: URL) {
+        self.node = node
+        self.npm = npm
+    }
+
+    /// The command that runs npm with `arguments`: `node npm-cli.js …`, with the helpers folder first on `PATH`, so a
+    /// script npm starts gets this Node.js too, never one the user has installed.
+    public func npm(_ arguments: [String], environment: [String: String])
+        -> (executable: URL, arguments: [String], environment: [String: String])
+    {
+        var environment = environment
+        let helpers = node.deletingLastPathComponent().path
+        environment["PATH"] = [helpers, environment["PATH"] ?? "/usr/bin:/bin"].joined(separator: ":")
+        return (node, [npm.path] + arguments, environment)
+    }
+}
+
 /// Finds the programs the app needs to run extensions.
 public enum Runtime {
-    /// Node: `$FUDGE_NODE`, then one next to the app's helpers, then the usual install locations, then `$PATH`.
-    /// Apps opened from Finder don't get the shell's `PATH`, hence the fixed locations.
-    public static func locateNode(
-        environment: [String: String] = ProcessInfo.processInfo.environment,
-        helpers: URL? = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers", isDirectory: true)
-    ) -> URL? {
-        let files = FileManager.default
-        if let override = environment["FUDGE_NODE"], !override.isEmpty { return URL(fileURLWithPath: override) }
-        var candidates: [URL] = []
-        if let helpers { candidates.append(helpers.appendingPathComponent("node")) }
-        candidates += ["/opt/homebrew/bin/node", "/usr/local/bin/node"].map(URL.init(fileURLWithPath:))
-        candidates += (environment["PATH"] ?? "").split(separator: ":").map {
-            URL(fileURLWithPath: String($0)).appendingPathComponent("node")
-        }
-        return candidates.first { files.isExecutableFile(atPath: $0.path) }
+    /// The app's `Contents/Helpers`.
+    public static var appHelpers: URL {
+        Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers", isDirectory: true)
     }
+
+    /// Fudge's own Node.js, beside `helpers`: the app's `Contents/Helpers`, or the folder the `fudge` tool really is
+    /// in (its path with links resolved, so a link to it on `PATH` finds the bundle's). Nothing else is looked for,
+    /// neither a variable, Homebrew nor `PATH`. Nil when it isn't there or can't run, as in a damaged app.
+    public static func locateNode(helpers: URL? = appHelpers) -> BundledNode? {
+        guard let helpers else { return nil }
+        let node = helpers.appendingPathComponent("node")
+        guard FileManager.default.isExecutableFile(atPath: node.path) else { return nil }
+        let npm = helpers.deletingLastPathComponent().appendingPathComponent("Resources/node/npm/bin/npm-cli.js")
+        return BundledNode(node: node, npm: npm)
+    }
+
+    /// What a missing or broken bundled Node.js says: it comes with Fudge, so only a damaged app is without it.
+    public static let nodeMissing = "Fudge's own Node.js is missing or can't run. Reinstall Fudge."
 
     /// The host script: `$FUDGE_RUNTIME`, else `runtime/host.js` in the app's resources.
     public static func locateHostScript(

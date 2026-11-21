@@ -311,3 +311,21 @@ private func installed(_ json: String) throws -> InstalledExtension {
     #expect(CommandNames.name(of: "vscode/search", in: [vscode]) == "Search Projects")
     #expect(CommandNames.name(of: "gone/old", in: [vscode]) == nil)
 }
+
+@Test func aTakenOverHotkeyIsNamedByItsCommandsTitleAndADeletedQuicklinkAsOne() {
+    let titles = ["old/search": "Search Old Things", "old/open": "Open Old Things"]
+    let title: (String) -> String = { titles[$0] ?? $0 }
+    let quicklink = "\(QuicklinkCommands.groupName)/7D3A2C9E-0B1F-4E6A-9C55-2F8E1D4B6A70"
+    #expect(
+        HotKeyConflict.displacedNote(["old/search"], title: title)
+            == "Removed from Search Old Things, which isn't installed")
+    #expect(HotKeyConflict.displacedNote([quicklink], title: title) == "Removed from a deleted quicklink")
+    #expect(
+        HotKeyConflict.displacedNote([quicklink, "\(QuicklinkCommands.groupName)/other"], title: title)
+            == "Removed from 2 deleted quicklinks")
+    let both = HotKeyConflict.displacedNote([quicklink, "old/open", "old/search"], title: title)
+    let names = ["Open Old Things", "Search Old Things"].formatted(.list(type: .and))
+    #expect(both == "Removed from \(names), which aren't installed, and from a deleted quicklink")
+    #expect(both?.contains("7D3A2C9E") == false, "a quicklink's key never shows")
+    #expect(HotKeyConflict.displacedNote([], title: title) == nil)
+}

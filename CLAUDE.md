@@ -131,9 +131,12 @@ Extensions run in a separate Node.js process, the extension host.
       It's a List built in core (`MenuItemsList`) under its own session (`MenuItemsList.session`), shown like Search Snippets.
       `MenuReader` (core) reads the menus over `MenuSystem`; `SystemMenus` (`FudgeApp/MenuItems.swift`) is the system side, the Accessibility API with `SystemWindows.timeout` per call: `kAXMenuBarAttribute`, then each element's role, title, enabled state, children and shortcut in one `AXUIElementCopyMultipleAttributeValues`.
       The read runs on a thread of its own, and after about 1.5 s the list shows what it found (`MenuWalk.finish`), the bottom bar saying so when some menus didn't load.
-      An app still being read isn't asked again (`MenuReadsInFlight`).
+      An app still being read isn't asked again (`MenuReadsInFlight`), unless that read was cancelled because its list went (`MenuReadCancel`, when the panel hides or the list is left): the next read waits for it, up to its own deadline, since it stops at its next step.
       The rows are the enabled leaf items with a title, in menu order, none of the Apple menu's: the menus above as the subtitle, the app's own menu by the app's name, and the shortcut as keycaps (`MenuShortcut.keycaps`: ⌃⌥⇧⌘, with ⌘ unless `NoCommand`, and glyph keys by `kAXMenuItemCmdGlyph`), drawn by Fudge's own `keycaps` accessory (`ListContent.Accessory.keycaps`).
       Search matches the title, and the path with the title as a keyword. ↵ finds the item first, with the panel up (`MenuItemsListing.item`): the element read, if it still answers with its title, else the item found again by its whole path, once (`MenuReader.current`, `locate`).
+      Alike items (the same path and title, such as two Terminal windows) are told apart by their place among them, and found again only while their number is the one the read saw (`menuItemPlaces`); otherwise the item counts as gone, never pressed by a place that now means another.
+      An item turned off since the read isn't pressed, and a toast says "That menu item is turned off right now." (`MenuLookup.disabled`).
+      `MenuNode.enabled` is nil when the app couldn't give `kAXEnabledAttribute` (it timed out, say): the list shows such an item, and a press takes it as no answer, never as on; an item that has no such attribute at all counts as on.
       When it's gone, a toast says "That menu item isn't there anymore." and the menus are read again.
       Found, and only while the list the run came from is still on screen (`MenuItemRun`; hiding the panel or leaving the list moves `MenuItemsGeneration` on), the panel hides, the app is made active if it isn't, and the item is pressed (`kAXPressAction`), so an app slow to answer never comes back over the one the user went to.
       No answer in time says nothing, since an item that opens a dialog can hold the answer back.
@@ -166,10 +169,10 @@ Extensions run in a separate Node.js process, the extension host.
     - **The Color Picker** (SPEC-090) is the Tools group (`BuiltInCommandGroup.tools`, one command per `ToolCommand`), a group for utilities that also holds Define Word.
       **Pick Color** hides the panel as the window commands do, then shows macOS's loupe through `ColorSampling` (the app's `ScreenColorSampler` is `NSColorSampler`, which needs no Screen Recording permission; snapshot runs get `InertColorSampler`, which picks nothing, and tests a fake).
       `ColorPick` (core) copies the picked color in the **Copy Format** (`colorFormat` in `settings.json`, `ColorFormat`: HEX by default, RGB, HSL, SwiftUI or UIColor) with a HUD ("Copied #3A7BD5") and adds it to Recent Colors; Esc copies and keeps nothing, and a color `colors.json` can't take is still copied, with the HUD saying so.
-      `PickedColor(cgColor:)` converts the loupe's color, which is in the display's color space (often Display P3), to sRGB with `CGColor.converted(to:)` (what `NSColor.usingColorSpace(.sRGB)` gives), and every component is clamped to 0…1.
+      `PickedColor(cgColor:)` converts the loupe's color, which is in the display's color space (often Display P3), to sRGB with `CGColor.converted(to:)` (what `NSColor.usingColorSpace(.sRGB)` gives), and every component is clamped to 0…1 and read-only once made.
       Each format is written from the components rounded to bytes.
       HEX, RGB, SwiftUI and UIColor name exactly the color the HEX does; HSL is in whole degrees and percent, as CSS writes it, so it's rounded: `#3A7BD5`, `rgb(58, 123, 213)`, `hsl(215, 65%, 53%)`, `Color(red: 0.227, green: 0.482, blue: 0.835)`, `UIColor(red: 0.227, green: 0.482, blue: 0.835, alpha: 1)`, and with alpha `#3A7BD580`, `rgba(…, 0.502)`, `hsla(…)` and `opacity:`.
-      `RecentColorStore` (core) keeps `colors.json`, `{ "colors": [ { id, red, green, blue, alpha, pickedAt } ] }`, newest first, through `EntryFile` as snippets are kept: at most 32, the oldest dropped, and a color picked again (the same bytes) moves to the top.
+      `RecentColorStore` (core) keeps `colors.json`, `{ "colors": [ { id, red, green, blue, alpha, pickedAt } ] }`, newest first, through `EntryFile` as snippets are kept: at most 32 valid colors, the oldest dropped (entries that aren't colors don't count, and stay in the file), and a color picked again (the same bytes) moves to the top.
       **Recent Colors** (`RecentColorsGrid`, core) is a Grid of 8 columns built in core and shown like Search Snippets, under its own session (`RecentColorsGrid.session`, in `LauncherModel.builtInSessions`): a swatch per color titled with its HEX.
       ↵ copies in the Copy Format, ⌘K lists every format with that one first, ⌃X removes a color, and ⌃⇧X (Clear Recent Colors…) asks through `confirm` first;
       each copy hides the panel with a HUD.
@@ -198,7 +201,9 @@ Extensions run in a separate Node.js process, the extension host.
       Nothing from an event is logged or written anywhere, its row id is its position (`event-<n>`), and only the command counts in `LaunchHistory`.
       ↵ is Join Meeting when there's a link, else Open in Calendar (⌘O, `ical://ekevent/<id>?method=show&options=more`), then Copy Meeting Link (⌘⇧C) and Copy Details; Show Details (⌘D) shows the detail pane, which hides the rows' times.
       Calendar access (`NSCalendarsFullAccessUsageDescription`) is asked for only when My Schedule runs, the first time; refused, it shows an empty view with Open Privacy Settings.
+      A search that matches none of the events listed says "No events match", with no action; "No upcoming events", with Open Calendar Settings, is for days with no events.
       Its hotkey hides it again when it's on screen, and `EKEventStoreChanged` draws it again.
+      After a new read (a calendar change, Days Ahead, a refresh), the selection stays on the event it was on (`ScheduleList.row(after:selected:in:)`), known by its day, its start and a hash of its title held in memory only, or keeps its place when that event is gone.
       The calendars are read off the main thread (`LauncherModel.readSchedule`, and the Calendar page's `loadCalendars`), since every EventKit call waits on the calendar agent: the list shows as loading until the read lands, and ⌘D draws again from it without reading again.
       `EventKitCalendarSource` runs every call on one serial queue, and makes its store on first use.
       **Settings → Calendar** (`CalendarPage.swift`, after Sign-in) has Days Ahead and a checkbox per calendar.
@@ -228,6 +233,8 @@ Extensions run in a separate Node.js process, the extension host.
       The quicklinks' keys count as installed commands' (`QuicklinkCommands.commandIDs`), so their hotkeys are registered, block a key and are named in conflicts by the quicklink's name (`QuicklinkCommands.group`, passed to `CommandNames`).
       A hotkey follows `QuicklinkCommands.hotkeyLaunch`, as a no-view command's does: with no required field it opens at once, filled in at the press (`QuicklinkOpening.target(for:arguments:context:)`), leaving root search as it is and showing a failure in the HUD; with one, it shows root search with the quicklink selected and its fields.
       Deleting a quicklink, in the launcher or in Settings, also takes its keys out of `settings.json` (`QuicklinkCommands.prune`) and registers the hotkeys again.
+      Only ids no entry in `quicklinks.json` has are pruned (`QuicklinkStore.entryIDs`), so an entry a hand edit broke keeps its settings until it's fixed or gone.
+      A message naming the key of a quicklink that's gone says "a deleted quicklink" (`QuicklinkCommands.nameWhenGone`), and an alias such a key still holds is freed when it's asked for.
     - **The Create Quicklink form** makes and edits quicklinks: the "Create Quicklink" root item, Edit Quicklink…, and an extension's `Action.CreateQuicklink`.
       It's a Form view built in core (`QuicklinkForm.view`: Name, Link with its info text, and Open With, a dropdown of "Default" then root search's applications by bundle id; an app it names that isn't listed is kept, by its bundle id), shown as a `CommandScreen` whose session is `QuicklinkForm.session`, so `FormScreen`, ⌘↵, ⌘K, Tab and Esc work as in any Form.
       Nothing of it reaches the host: `send` hands its events to `builtInFormEvent`, and drops its `pop`, `unload` and `slots`.
@@ -512,14 +519,15 @@ Extensions run in a separate Node.js process, the extension host.
       A background launch is refused with the same words.
       The extension host's environment carries `FUDGE_CLI` (the bundle's `fudge`) and `FUDGE_EXTENSIONS_DIR` to every worker, and the store installs with `fudge build <folder> --into "$FUDGE_EXTENSIONS_DIR"` (`BuildArguments`: an absolute path to a folder that exists).
     - **The Commands page** (`CommandsPage.swift`) is the Settings window's second page:
-      Fudge's own command groups, then the quicklinks as a group of their own (`SettingsModel.commandGroups`, shown once there is one, their Type "Quicklink"), then every installed extension, each expanded to its commands (menu-bar ones included), with each command's alias, hotkey and Enabled checkbox (an extension's row has its own checkbox).
+      Fudge's own command groups, then the quicklinks as a group of their own (`SettingsModel.commandGroups`, shown once there is one, its Type "Quicklinks" and theirs "Quicklink", `BuiltInCommandGroup.typeLabels`),
+      then every installed extension, each expanded to its commands (menu-bar ones included), with each command's alias, hotkey and Enabled checkbox (an extension's row has its own checkbox).
       The bundled Extension Store is listed too, unticked until it's enabled.
       An alias is saved on ↵, and Esc puts the old one back.
       Recording a hotkey suspends all of Fudge's hotkeys (`HotKeyRegistry.suspend`), so pressing one records it instead of firing.
       While recording, `HotkeyRecordingPrompt` turns each key press into a `HotKeyRecording` (core): Esc alone cancels, ⌫ or ⌦ alone clears, anything else is the new hotkey.
       Ending the recording (saving, Esc, closing the window, or leaving the page or onboarding step) resumes them (`HotKeyRecorder`, `SettingsModel.select`).
       A conflict (`HotKeyConflict`: the launcher's key, another installed command's, named by its title, with its extension's when two share one, `CommandNames`, or no ⌘ ⌥ ⌃) or a shortcut the system refuses keeps the old hotkey and shows why in the cell.
-      A command that isn't installed keeps its saved hotkey for a reinstall, but doesn't block the key: taking it clears that one's hotkey, keeping its alias and Enabled state (`HotKeyConflict.displaced`), and the cell says so.
+      A command that isn't installed keeps its saved hotkey for a reinstall, but doesn't block the key: taking it clears that one's hotkey, keeping its alias and Enabled state (`HotKeyConflict.displaced`), and the cell says so (`HotKeyConflict.displacedNote`): by the command's title, and a deleted quicklink's key as "a deleted quicklink", never its id.
       A command that's off by default says why on a line under its title (`SettingsModel.offByDefaultReason`, `CommandCompatibility.reason`: "Uses Raycast AI, which Fudge doesn't support.").
     - **The Sign-in page** (`SignInPage.swift`, after Window Management) sets the server extensions sign in through (SPEC-056): Off (the default), **Fudge's sign-in server** (`SignInServer.fudgeURL`, `https://fudge-oauth.rackofpain.net`) or **Your own server…**, whose address is saved on ↵ once `SignInServer.validate` accepts it (`https://`, or `http://` on `localhost` or `127.0.0.1`;
       no user info, query or fragment).
@@ -619,6 +627,7 @@ Extensions run in a separate Node.js process, the extension host.
 - **The extension host lives in `runtime/`.**
   It's written in TypeScript.
   Extensions trust the certificates the Mac trusts (SPEC-081, `NodeTrust`): the app starts the host with `--use-system-ca` when its Node has it (22.15+, 23.8+, 24 and later).
+  The Node.js Fudge bundles has it, so the `NODE_EXTRA_CA_CERTS` path below only runs while its version isn't known yet.
   `node --version` is read in the background when the app starts and kept for the run per resolved binary and its modification date (`NodeVersionCache`), so a host start never waits for it;
   while it isn't known, a start takes the `NODE_EXTRA_CA_CERTS` path, which works on any Node, and a host that ends at once on the flag, saying nothing, marks that binary as without it (a version manager's shim can switch Node underneath).
   Else the host starts with `NODE_EXTRA_CA_CERTS` naming `trust/roots.pem` in the support folder, written afresh at each start from the user's and admin's trust settings (`SystemTrustSettings`, read only; the system's roots are Apple's, and Node has its own).
@@ -632,6 +641,7 @@ Extensions run in a separate Node.js process, the extension host.
     Messages about a running command carry the `session` id the app chose when launching it: `s-` and 32 hex digits from 128 random bits (`SessionID.make()`).
     The app handles a host message only when it names no session, or one the app started in the running host and hasn't seen exit (`HostSessions`, checked in `LauncherModel.receive`).
     Nor does the app send anything for a session that isn't running (`HostSessions.mayReceive`, checked in `send`), so a pick or an action left open in a command that has ended goes nowhere, and the command's exit closes its ⌘K panel and date picker.
+    Its exit, unless Fudge unloaded it, and the host stopping under it, close every panel over it: ⌘K, a dropdown's panel and a form's calendar (`EndedCommand.closesPanels`); Fudge's own views need no host and keep theirs.
     Anything else is dropped and logged once per id, the sessions of Fudge's own views included (`LauncherModel.builtInSessions`):
     - Define Word
     - its forms
@@ -875,6 +885,13 @@ Extensions run in a separate Node.js process, the extension host.
 - **The Makefile assembles the app bundle** (`make app`):
   - the `FudgeApp` binary becomes `Contents/MacOS/Fudge`
   - the `fudge` tool and esbuild's native binary go into `Contents/Helpers/`, where `ExtensionBuilder.locateEsbuild` finds esbuild next to the tool
+  - **Node.js** (SPEC-115): an official build from nodejs.org, `NODE_VERSION` in the `Makefile`, for the architecture the Mac builds for (arm64 or x64, never both: the app itself is built for one).
+    Its tarball's SHA-256, copied from the release's `SHASUMS256.txt`, is pinned beside the version, and `make` checks it before unpacking anything; a tarball that doesn't match is deleted, and the build fails.
+    It's downloaded once into `.cache/node` (ignored, and kept by `make clean`), and every Node step of the build runs it (`npm ci`, esbuild, the runtime's tests), since the `Makefile` puts it first on `PATH`.
+    To update it, change the version and both checksums together.
+    The bundle gets the binary as `Contents/Helpers/node`, npm from the same distribution as `Contents/Resources/node/npm`, and its `LICENSE` (Node.js's, with what it bundles) as `Contents/Resources/node/LICENSE`.
+    `fudge build` runs npm as `node npm-cli.js` (`BundledNode.npm`), with the helpers first on `PATH` so whatever npm starts gets the same Node.js.
+    Only `Contents/Helpers/node` runs under the hardened runtime, with `App/Node.entitlements`: `allow-jit`, without which V8 can't start, and `disable-library-validation`, without which an extension's native addon (`.node`), signed by whoever built it, is refused ("different Team IDs").
   - `App/Info.plist` gets the version from `git describe`
   - `App/AppIcon.icon` (an Icon Composer icon) is compiled by `actool` into `Assets.car` and an `AppIcon.icns` fallback.
     That needs Xcode 26 or later.
@@ -941,8 +958,9 @@ Extensions run in a separate Node.js process, the extension host.
 - **actool's paths must be absolute.**
   `xcrun actool` hands the work to a shared daemon, which resolves relative paths against its own working directory.
   That's whichever checkout started it, so with several worktrees, relative paths make one worktree's `make app` write the icon into another's `build/`. actool can also exit 0 when it compiled nothing, and it reports errors on stdout, so `make app` checks for `Assets.car` and then shows `build/actool.log`.
-- **Apps opened from Finder don't get the shell's `PATH`.**
-  That's why `Runtime.locateNode` checks `$FUDGE_NODE`, `Contents/Helpers`, Homebrew and `/usr/local` before `PATH`.
+- **Fudge runs only its own Node.js** (SPEC-115, D-74), never one the user has installed, so no setting, variable, Homebrew or `PATH` changes it.
+  The app and the `fudge` tool find it beside themselves (`Runtime.locateNode`: `Contents/Helpers/node`, the tool's folder with links resolved), and a missing or broken one says to reinstall Fudge (`Runtime.nodeMissing`).
+  The tests get it from `FUDGE_TEST_NODE`, which `make test` sets and only the test target reads; the tool's tests run a copy of `fudge` with a Node.js beside it, as in the bundle.
 - **SwiftUI's `TextField` writes its unchanged text back** now and then, three times on ↵ before `onSubmit` and again when it loses the keyboard.
   Setters bound to a field must ignore writes that change nothing, or they'll redo work such as resetting the selection.
 - **`.onAppear` runs once for the panel's lifetime**, not each time it's shown.

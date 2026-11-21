@@ -192,11 +192,11 @@ struct BuildScansEndToEnd {
         let extensions = folder.appendingPathComponent("extensions")
         try FileManager.default.createDirectory(at: extensions, withIntermediateDirectories: true)
         let process = Process()
-        process.executableURL = Tool.fudge
+        process.executableURL = try Tool.bundled(in: folder.appendingPathComponent("app"), node: Tool.node)
         process.arguments = ["build", source.path, "--into", extensions.path]
         process.environment = [
             "HOME": folder.path, "PATH": "/usr/bin:/bin", "TMPDIR": folder.path + "/",
-            "FUDGE_NODE": try #require(Tool.node).path, "FUDGE_ESBUILD": try #require(Fixtures.esbuild).path,
+            "FUDGE_ESBUILD": try #require(Fixtures.esbuild).path,
             "FUDGE_COMPAT_SCAN": Fixtures.repository.appendingPathComponent("runtime/scripts/compat/fudge-scan.ts")
                 .path,
         ]
