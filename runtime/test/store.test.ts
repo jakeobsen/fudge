@@ -33,9 +33,12 @@ import {
     installNote,
     isNotCompatible,
     isPartlyCompatible,
+    isRefusedWant,
+    isScanned,
     maxCachedResults,
     maxScanBytes,
     maxScanFiles,
+    maxSrcFiles,
     readCompatibility,
     rememberCompatibility,
     scannerIdentity,
@@ -805,6 +808,8 @@ async function storeContext(
     // The sparse-checkout patterns, as `add`, `list` and `set --stdin` see them.
     const sparse = ["/extensions/*/package.json"];
     // A folder's source is missing until a fetch of its `src/` tree (named by the `rev-parse` before it) brings it.
+    // The nth file under a folder's `src/` has the object id n.
+    const objectOf = (n: number) => String(n).padStart(40, "0");
     const fetched = new Set<string>();
     let parsedFolder = "";
     const git = fakeRun((_program, args) => {
@@ -817,12 +822,14 @@ async function storeContext(
         if (args[0] === "rev-list" && args.includes("--missing=print")) {
             const dir = folderOf(args.at(-1))!;
             if (fetched.has(dir)) return {};
-            return { stdout: (options.sources?.[dir] ?? []).map((_file, i) => `?${String(i).padStart(40, "0")}\n`).join("") };
+            return { stdout: (options.sources?.[dir] ?? []).map((_file, n) => `?${objectOf(n)}\n`).join("") };
         }
         if (args[0] === "ls-tree" && args.includes("-r")) {
             const prefix = args.at(-1)!;
             const dir = /^extensions\/([^/]+)\/src\/$/.exec(prefix)![1]!;
-            return { stdout: (options.sources?.[dir] ?? []).map((file) => `${prefix}${file}\0`).join("") };
+            return {
+                stdout: (options.sources?.[dir] ?? []).map((file, n) => `100644 blob ${objectOf(n)}\t${prefix}${file}\0`).join(""),
+            };
         }
         if (args[0] === "sparse-checkout" && args[1] === "add") sparse.push(...args.slice(2));
         if (args[0] === "sparse-checkout" && args[1] === "list") return { stdout: `${sparse.join("\n")}\n` };
@@ -1318,7 +1325,7 @@ test("a detail scan fetches the folder's src/ with a per-file cap, checks out it
     assert.deepEqual(
         git.calls.map((call) => call.args),
         [
-            ["ls-tree", "-r", "-z", "--name-only", "HEAD", "--", "extensions/alpha/src/"],
+            ["ls-tree", "-r", "-z", "HEAD", "--", "extensions/alpha/src/"],
             // What's missing first: nothing is fetched when it's all here.
             ["rev-list", "--objects", "--missing=print", "HEAD:extensions/alpha/src"],
             ["rev-parse", "--verify", "HEAD:extensions/alpha/src"],
@@ -1341,34 +1348,67 @@ test("a detail scan fetches the folder's src/ with a per-file cap, checks out it
     );
     assert.deepEqual(git.calls[5]!.env, { GIT_NO_LAZY_FETCH: "1" }, "the checkout never downloads");
     assert.deepEqual(scanPatterns("alpha"), [
-        "/extensions/alpha/src/**/*.ts",
         "/extensions/alpha/src/**/*.tsx",
-        "/extensions/alpha/src/**/*.js",
+        "/extensions/alpha/src/**/*.ts",
         "/extensions/alpha/src/**/*.jsx",
+        "/extensions/alpha/src/**/*.js",
     ]);
     assert.equal(git.calls[7]!.input, "/extensions/*/package.json\n", "only the scan's own patterns go");
     assert.deepEqual(cli.calls.map((call) => call.args), [["scan", path.join(repoPath, "extensions/alpha"), "--json"]]);
 });
 
-test("past the caps a row isn't checked: too many files under src/ fetches nothing, too many bytes scans nothing", async () => {
-    const many = Array.from({ length: maxScanFiles }, (_, n) => `file${n}.ts`);
-    // Every file under src/ is downloaded, so every one counts, source or not.
-    const counted = await storeContext({ sources: { alpha: [...many, "a.png"] } });
-    assert.deepEqual(await checkFolder("alpha", counted.context, () => false), { notChecked: true });
-    assert.deepEqual(counted.git.calls.map((call) => call.args[0]), ["ls-tree"], "nothing fetched");
-    assert.deepEqual(counted.cli.calls, []);
-    const atCap = await storeContext({ sources: { alpha: [...many.slice(1), "a.png"] } });
-    await checkFolder("alpha", atCap.context, () => false);
-    assert.equal(atCap.cli.calls.length, 1, "exactly the cap is fine");
+test("the source files are what the scan's patterns check out: the scanner's extensions, in a file's name or a folder's", () => {
+    for (const file of ["index.ts", "lib/view.tsx", "old.js", "a/b/c.jsx", "types.d.ts", "index.test.ts", "lib.ts/logo.png"]) {
+        assert.ok(isScanned(file), file);
+    }
+    for (const file of ["data.json", "logo.png", "module.mjs", "module.cjs", "style.css", "ts", "notes.ts.md"]) {
+        assert.ok(!isScanned(file), file);
+    }
+});
 
-    const missing = await storeContext({ sources: { alpha: ["index.ts"] } });
-    const reply = missing.git.run;
-    const withMissing: Run = async (program, args, options) =>
-        args[0] === "rev-list" ? { code: 0, stdout: "abc1 extensions/alpha/src\n?def2\n", stderr: "" } : reply(program, args, options);
-    const overCap = { ...missing.context, repo: new StoreRepository(missing.repoPath, { run: withMissing }) };
-    assert.deepEqual(await checkFolder("alpha", overCap, () => false), { notChecked: true }, "a file over the per-file cap");
-    assert.equal(missing.git.calls.filter((call) => call.args[0] === "sparse-checkout").length, 0, "nothing checked out");
-    assert.deepEqual(missing.cli.calls, []);
+test("past the caps a row isn't checked: too many source files, or files under src/, fetch nothing; too many bytes scan nothing", async () => {
+    const sources = Array.from({ length: maxScanFiles }, (_, n) => `file${n}.ts`);
+    const assets = (count: number) => Array.from({ length: count }, (_, n) => `assets/image${n}.png`);
+    // Assets don't count toward the scan's cap, only toward the download's.
+    const atCaps = await storeContext({ sources: { alpha: [...sources, ...assets(maxSrcFiles - maxScanFiles)] } });
+    assert.deepEqual(await checkFolder("alpha", atCaps.context, () => false), fromReport(supportedScan), "exactly both caps is fine");
+    assert.equal(atCaps.cli.calls.length, 1);
+
+    const tooManySources = await storeContext({ sources: { alpha: [...sources, "one-more.tsx", "a.png"] } });
+    assert.deepEqual(await checkFolder("alpha", tooManySources.context, () => false), { notChecked: true });
+    assert.deepEqual(tooManySources.git.calls.map((call) => call.args[0]), ["ls-tree"], "nothing fetched");
+    assert.deepEqual(tooManySources.cli.calls, []);
+
+    // Every file under src/ is downloaded, so past the download's cap nothing is, however few the source files.
+    const tooManyFiles = await storeContext({ sources: { alpha: ["index.ts", ...assets(maxSrcFiles)] } });
+    assert.deepEqual(await checkFolder("alpha", tooManyFiles.context, () => false), { notChecked: true });
+    assert.deepEqual(tooManyFiles.git.calls.map((call) => call.args[0]), ["ls-tree"], "nothing fetched");
+    assert.deepEqual(tooManyFiles.cli.calls, []);
+
+    // After the fetch, a source file is still missing (over the per-file cap): not checked. An asset still missing is
+    // no reason.
+    for (const [still, expected] of [
+        ["index.ts", { notChecked: true }],
+        ["hero.png", fromReport(supportedScan)],
+    ] as const) {
+        const files = ["index.ts", "hero.png"];
+        const left = await storeContext({ sources: { alpha: files } });
+        const reply = left.git.run;
+        let fetched = false;
+        const withMissing: Run = async (program, args, options) => {
+            if (args[0] === "fetch") fetched = true;
+            if (args[0] !== "rev-list") return reply(program, args, options);
+            const missing = fetched ? [still] : files;
+            const lines = missing.map((file) => `?${String(files.indexOf(file)).padStart(40, "0")}\n`);
+            return { code: 0, stdout: `abc1 extensions/alpha/src\n${lines.join("")}`, stderr: "" };
+        };
+        const overCap = { ...left.context, repo: new StoreRepository(left.repoPath, { run: withMissing }) };
+        assert.deepEqual(await checkFolder("alpha", overCap, () => false), expected, `${still} over the per-file cap`);
+        assert.ok(fetched, `${still}: fetched`);
+        const checkedOut = left.git.calls.some((call) => call.args[0] === "sparse-checkout" && call.args[1] === "add");
+        assert.equal(checkedOut, still === "hero.png", `${still}: checked out or not`);
+        assert.equal(left.cli.calls.length, still === "hero.png" ? 1 : 0, `${still}: scanned or not`);
+    }
 
     const big = await storeContext({ sources: { alpha: ["huge.js"] } });
     await mkdir(path.join(big.repoPath, "extensions/alpha/src"), { recursive: true });
@@ -1755,7 +1795,17 @@ test("a detail scan's patterns fetch the source files alone, from the trees' lis
     };
     const everything = ["README.md", "assets/icon.png", "src/data.json", "src/index.ts", "src/lib/util.tsx"];
     assert.deepEqual(await missing(), everything);
-    assert.deepEqual((await repo.sourceFiles("alpha")).sort(), ["data.json", "index.ts", "lib/util.tsx"]);
+    const files = await repo.srcFiles("alpha");
+    assert.deepEqual(files.map((file) => file.path).sort(), ["data.json", "index.ts", "lib/util.tsx"]);
+    for (const file of files) {
+        const object = (await sh(repo.path, "rev-parse", `HEAD:extensions/alpha/src/${file.path}`)).trim();
+        assert.equal(file.object, object, `${file.path}'s id`);
+    }
+    assert.deepEqual(
+        await repo.missingObjects("alpha"),
+        new Set(files.map((file) => file.object)),
+        "and none of them is downloaded",
+    );
     assert.deepEqual(await missing(), everything, "listing the source downloads nothing");
 
     await repo.add(...scanPatterns("alpha"));
@@ -1807,7 +1857,7 @@ async function partialClone(files: Record<string, string | Buffer>) {
     const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}` });
     await repo.clone();
     const { context, cli } = await storeContext();
-    return { repo, context: { ...context, repo }, cli };
+    return { repo, context: { ...context, repo }, cli, root, bare };
 }
 
 test("a check downloads no source file over the cap: that folder isn't checked, and its blob never comes", async () => {
@@ -1838,7 +1888,12 @@ test("a check downloads no source file over the cap: that folder isn't checked, 
     assert.equal(cli.calls.length, 0, "nor scanned");
 
     assert.deepEqual(await checkFolder("small", context, () => false), fromReport(supportedScan));
-    assert.deepEqual(await notDownloaded(repo.path, "small"), ["README.md"], "only src/ came");
+    assert.deepEqual(
+        await notDownloaded(repo.path, "small"),
+        ["README.md", "src/data.json"],
+        "nothing outside src/ came, nor the asset: its index.ts was here already (big's is the same blob), and a missing " +
+            "asset alone fetches nothing",
+    );
     assert.deepEqual(cli.calls.map((call) => call.args[0]), ["scan"]);
     assert.deepEqual(
         (await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean),
@@ -1857,6 +1912,167 @@ test("a check downloads no source file over the cap: that folder isn't checked, 
     });
     assert.deepEqual(await checkFolder("small", { ...context, repo: recording }, () => false), fromReport(supportedScan));
     assert.ok(calls.includes("rev-list") && !calls.includes("fetch"), `no fetch the second time: ${calls.join(", ")}`);
+});
+
+test("only source files decide: an asset over the per-file cap never comes and the row is checked; a small one comes", async () => {
+    const big = Buffer.alloc(maxScanBytes + 1024, "a");
+    const { repo, context, cli } = await partialClone({
+        "extensions/art/package.json": JSON.stringify(manifest("art")),
+        "extensions/art/src/index.ts": "export {};\n",
+        "extensions/art/src/hero.png": big,
+        "extensions/art/src/icon.png": "small\n",
+        "extensions/gen/package.json": JSON.stringify(manifest("gen")),
+        "extensions/gen/src/index.ts": "export {};\n",
+        // The patterns match a folder named like a script too, so its files are checked out with the source.
+        "extensions/gen/src/table.js/rows.bin": big,
+    });
+    const patterns = async () => (await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean);
+    assert.deepEqual(await notDownloaded(repo.path, "art"), ["src/hero.png", "src/icon.png", "src/index.ts"]);
+
+    assert.deepEqual(await checkFolder("art", context, () => false), fromReport(supportedScan));
+    assert.deepEqual(
+        await notDownloaded(repo.path, "art"),
+        ["src/hero.png"],
+        "the asset over the cap never came; the small one came with the fetch, and doesn't count",
+    );
+    assert.deepEqual(cli.calls.map((call) => call.args), [["scan", path.join(repo.path, "extensions/art"), "--json"]]);
+    assert.deepEqual(await patterns(), ["/extensions/*/package.json"], "the scan's patterns went again");
+
+    // Checking out a file that isn't here, with the lazy fetch off, would fail: it counts as source, so not checked.
+    assert.deepEqual(await checkFolder("gen", context, () => false), { notChecked: true });
+    assert.deepEqual(await notDownloaded(repo.path, "gen"), ["src/table.js/rows.bin"]);
+    assert.deepEqual(await patterns(), ["/extensions/*/package.json"], "nothing was checked out");
+    assert.equal(cli.calls.length, 1, "nor scanned");
+});
+
+test("only git's own words for a refused want count as a refusal", () => {
+    const tree = "6014216c10952458a5426363594df848e6a3b8b5";
+    for (const text of [
+        // Protocol v0, a server that allows only its refs' tips in a want.
+        `error: git upload-pack: not our ref ${tree}\nfatal: remote error: upload-pack: not our ref ${tree}`,
+        // Protocol v0, a server that allows no unadvertised want at all (git's own check, before asking).
+        `error: Server does not allow request for unadvertised object ${tree}`,
+    ]) {
+        assert.ok(isRefusedWant(new GitError(text, "git fetch")), text);
+    }
+    for (const text of [
+        "\ngit stopped after 120 s",
+        "fatal: unable to access 'https://github.com/raycast/extensions.git/': Could not resolve host: github.com",
+        "fetch-pack: unexpected disconnect while reading sideband packet\nfatal: protocol error: bad pack header",
+        "fatal: the remote end hung up unexpectedly",
+        "git cancelled",
+    ]) {
+        assert.ok(!isRefusedWant(new GitError(text, "git fetch")), text);
+    }
+});
+
+/** The real git runner, recording each call: its arguments, its environment, and how it ended. */
+function recording(around: Run = spawnProgram) {
+    const calls: { args: string[]; env?: NodeJS.ProcessEnv; code: number; stderr: string }[] = [];
+    const run: Run = async (program, args, options) => {
+        const result = await around(program, args, options);
+        calls.push({ args, env: options.env, code: result.code, stderr: result.stderr });
+        return result;
+    };
+    const steps = () => calls.map((call) => `${call.args.slice(0, 2).join(" ")}${call.env ? " (no lazy fetch)" : ""}`);
+    return { run, calls, steps };
+}
+
+test("a server that refuses the folder's tree gets the fetch as before: each source file by its id, whatever its size", async () => {
+    // Real git on protocol v0, against a server that allows only its refs' tips: it refuses the tree with "not our
+    // ref", and the check takes the fetch as before. That server refuses the source files' ids too, so it fails.
+    const refusing = await partialClone({
+        "extensions/small/package.json": JSON.stringify(manifest("small")),
+        "extensions/small/src/index.ts": "export {};\n",
+    });
+    await sh(refusing.bare, "config", "uploadpack.allowTipSHA1InWant", "true");
+    await sh(refusing.repo.path, "config", "protocol.version", "0");
+    const v0 = recording();
+    await assert.rejects(
+        checkFolder("small", { ...refusing.context, repo: new StoreRepository(refusing.repo.path, { run: v0.run }) }, () => false),
+        /not our ref/,
+    );
+    const fetch = v0.calls.find((call) => call.args[0] === "fetch")!;
+    assert.match(fetch.stderr, /not our ref/, "git's own refusal");
+    assert.deepEqual(
+        v0.steps().filter((step) => step.startsWith("fetch") || step.startsWith("sparse-checkout")),
+        ["fetch --refetch", "sparse-checkout add"],
+        "the fetch as before (the checkout with the lazy fetch on) came after the refusal",
+    );
+
+    // On a server that sends source files by their ids (protocol v2) but, here, refuses the tree as v0's would.
+    const big = Buffer.alloc(maxScanBytes + 1024, "a");
+    const { repo, context, cli } = await partialClone({
+        "extensions/art/package.json": JSON.stringify(manifest("art")),
+        "extensions/art/src/index.ts": "export const art = 1;\n",
+        "extensions/art/src/logo.png": "an asset\n",
+        "extensions/huge/package.json": JSON.stringify(manifest("huge")),
+        "extensions/huge/src/index.ts": "export const huge = 1;\n",
+        "extensions/huge/src/generated.ts": big,
+    });
+    const refuseTrees: Run = async (program, args, options) => {
+        if (args[0] !== "fetch" || !args.includes("--refetch")) return spawnProgram(program, args, options);
+        const tree = args.at(-1)!;
+        return { code: 128, stdout: "", stderr: `error: git upload-pack: not our ref ${tree}\nfatal: remote error: upload-pack: not our ref ${tree}` };
+    };
+    const v2 = recording(refuseTrees);
+    const refused = { ...context, repo: new StoreRepository(repo.path, { run: v2.run }) };
+    assert.deepEqual(await checkFolder("art", refused, () => false), fromReport(supportedScan));
+    assert.deepEqual(await notDownloaded(repo.path, "art"), ["src/logo.png"], "only the source file came, not the asset");
+    assert.ok(v2.steps().includes("sparse-checkout add"), "with the lazy fetch on");
+
+    // A source file over the per-file cap comes all the same, and the total's check makes the row "Not checked".
+    assert.deepEqual(await checkFolder("huge", refused, () => false), { notChecked: true });
+    assert.deepEqual(await notDownloaded(repo.path, "huge"), [], "every source file came, whatever its size");
+    assert.equal(cli.calls.length, 1, "huge wasn't scanned");
+    assert.deepEqual(
+        (await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean),
+        ["/extensions/*/package.json"],
+        "the scan's patterns went again",
+    );
+});
+
+test("any other failure of the tree fetch fails the check: no fetch as before, nothing more downloaded", async () => {
+    const { repo, context, cli, root } = await partialClone({
+        "extensions/small/package.json": JSON.stringify(manifest("small")),
+        "extensions/small/src/index.ts": "export {};\n",
+        "extensions/small/src/data.json": "{}\n",
+    });
+    const patterns = async () => (await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean);
+    const unchanged = async (why: string, calls: ReturnType<typeof recording>) => {
+        assert.deepEqual(
+            calls.steps().filter((step) => step.startsWith("fetch") || step.startsWith("sparse-checkout")),
+            ["fetch --refetch"],
+            `${why}: no checkout, and no fetch as before`,
+        );
+        assert.deepEqual(await notDownloaded(repo.path, "small"), ["src/data.json", "src/index.ts"], `${why}: nothing came`);
+        assert.deepEqual(await patterns(), ["/extensions/*/package.json"], `${why}: nothing checked out`);
+        assert.deepEqual(await locks(repo.path), [], `${why}: no lock left`);
+        assert.equal(cli.calls.length, 0, `${why}: not scanned`);
+    };
+
+    // A timeout: a remote that takes 30 s to answer, and a fetch given half a second.
+    await sh(repo.path, "config", "remote.origin.uploadpack", "sleep 30; git-upload-pack");
+    const slow = recording((program, args, options) =>
+        spawnProgram(program, args, args[0] === "fetch" ? { ...options, timeout: 500 } : options),
+    );
+    const started = Date.now();
+    await assert.rejects(
+        checkFolder("small", { ...context, repo: new StoreRepository(repo.path, { run: slow.run }) }, () => false, new AbortController().signal),
+        /git stopped after 0\.5 s/,
+    );
+    assert.ok(Date.now() - started < 10_000, `the check ended with the fetch (${Date.now() - started} ms)`);
+    await unchanged("a timeout", slow);
+    await sh(repo.path, "config", "--unset", "remote.origin.uploadpack");
+
+    // A remote that can't be reached.
+    await sh(repo.path, "config", "remote.origin.url", `file://${path.join(root, "nowhere.git")}`);
+    const unreachable = recording();
+    await assert.rejects(
+        checkFolder("small", { ...context, repo: new StoreRepository(repo.path, { run: unreachable.run }) }, () => false),
+        /Could not read from remote repository/,
+    );
+    await unchanged("an unreachable remote", unreachable);
 });
 
 /** Every `*.lock` file under the copy's `.git`: a git ended while writing leaves one, and later git calls then fail. */

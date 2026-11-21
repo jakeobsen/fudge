@@ -338,12 +338,17 @@ export class StoreRepository {
     }
 
     /**
-     * How many of the files under `extensions/<dir>/src/` aren't downloaded: after `fetchSource`, the ones over its
+     * The ids of the files under `extensions/<dir>/src/` that aren't downloaded: after `fetchSource`, the ones over its
      * limit. `rev-list --missing=print` names them without fetching them, on any git. `dir` is a checked folder.
      */
-    async missingSource(dir: string): Promise<number> {
+    async missingObjects(dir: string): Promise<Set<string>> {
         const output = await this.#exec(["rev-list", "--objects", "--missing=print", `HEAD:extensions/${dir}/src`]);
-        return output.split("\n").filter((line) => line.startsWith("?")).length;
+        return new Set(
+            output
+                .split("\n")
+                .filter((line) => line.startsWith("?"))
+                .map((line) => line.slice(1)),
+        );
     }
 
     /**
@@ -361,16 +366,19 @@ export class StoreRepository {
     }
 
     /**
-     * The files under `extensions/<dir>/src/`, relative to it, read from the trees alone: a blobless clone has every
-     * tree, so nothing is downloaded. `dir` is a checked folder.
+     * The files under `extensions/<dir>/src/` (git's blobs: a link is one too), each by its path relative to `src/` and
+     * its object id, read from the trees alone: a blobless clone has every tree, so nothing is downloaded. `dir` is a
+     * checked folder.
      */
-    async sourceFiles(dir: string): Promise<string[]> {
+    async srcFiles(dir: string): Promise<{ path: string; object: string }[]> {
         const prefix = `extensions/${dir}/src/`;
-        const output = await this.#exec(["ls-tree", "-r", "-z", "--name-only", "HEAD", "--", prefix]);
-        return output
-            .split("\0")
-            .filter((name) => name.startsWith(prefix))
-            .map((name) => name.slice(prefix.length));
+        const output = await this.#exec(["ls-tree", "-r", "-z", "HEAD", "--", prefix]);
+        const files: { path: string; object: string }[] = [];
+        for (const entry of output.split("\0")) {
+            const match = /^\d+ blob ([0-9a-f]+)\t(.+)$/s.exec(entry);
+            if (match && match[2]!.startsWith(prefix)) files.push({ path: match[2]!.slice(prefix.length), object: match[1]! });
+        }
+        return files;
     }
 
     async commit(): Promise<string> {
