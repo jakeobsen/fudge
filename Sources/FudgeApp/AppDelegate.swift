@@ -94,6 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The store stays installed either way; the launcher reads settings.json again.
         settingsModel.extensionStoreChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.quicklinksChanged = { [weak self] in self?.model.applySettings() }
+        settingsModel.snippetsChanged = { [weak self] in self?.model.reloadSnippetList() }
         settingsModel.stopExtensionStore = { [weak self] in
             await self?.model.unloadSessions(ofExtension: ExtensionStore.extensionName)
         }

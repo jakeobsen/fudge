@@ -15,6 +15,7 @@ final class SettingsModel {
     static let commandsPage = ":commands"
     static let permissionsPage = ":permissions"
     static let quicklinksPage = ":quicklinks"
+    static let snippetsPage = ":snippets"
     static let signInPage = ":sign-in"
     /// Every installed extension, for the Commands page.
     private(set) var allExtensions: [InstalledExtension] = []
@@ -71,9 +72,10 @@ final class SettingsModel {
         settingsProblem = FudgeSettings.isWritable(paths.settingsFile) ? nil : unreadableMessage
         loadLaunchPermissions()
         loadQuicklinks()
+        loadSnippets()
         loadSignIns()
         if selected != Self.generalPage, selected != Self.commandsPage, selected != Self.permissionsPage,
-            selected != Self.quicklinksPage, selected != Self.signInPage,
+            selected != Self.quicklinksPage, selected != Self.snippetsPage, selected != Self.signInPage,
             !extensions.contains(where: { $0.manifest.name == selected })
         {
             select(Self.generalPage)
@@ -85,6 +87,7 @@ final class SettingsModel {
         if recorder.pageChanged(from: selected, to: page) { resumeHotkeys() }
         selected = page
         if page == Self.quicklinksPage { loadQuicklinks() }
+        if page == Self.snippetsPage { loadSnippets() }
     }
 
     /// Show Onboarding Again: a recording here ends first, since onboarding has its own hotkey step.
@@ -271,6 +274,59 @@ final class SettingsModel {
         }
         loadQuicklinks()
         quicklinksChanged()
+    }
+
+    // MARK: - Snippets
+
+    /// The snippets, by name, as the Snippets page lists them. Read again whenever the page is shown or the window
+    /// becomes key, so changes made in the launcher show.
+    private(set) var snippets: [Snippet] = []
+    /// `snippets.json` holds something Fudge can't read, so the page can't change it.
+    private(set) var snippetsUnreadable = false
+    /// Search Snippets, if it's open in the launcher, reads the snippets again; set by the app delegate.
+    @ObservationIgnored var snippetsChanged: () -> Void = {}
+
+    func loadSnippets() {
+        let file = paths.snippetsFile
+        snippets = SnippetList.sorted(SnippetStore.load(from: file).snippets)
+        snippetsUnreadable = !SnippetStore.isWritable(file)
+    }
+
+    enum SnippetSave: Equatable {
+        case saved
+        case problems(SnippetDraft.Problems)
+        case failed(String)
+    }
+
+    /// Saves the sheet's snippet, after reading the file again: as a new one, or in place of the one edited.
+    func saveSnippet(_ draft: SnippetDraft) -> SnippetSave {
+        let file = paths.snippetsFile
+        var store = SnippetStore.load(from: file)
+        let problems = draft.problems(among: store.snippets)
+        guard problems.isEmpty else { return .problems(problems) }
+        draft.save(into: &store)
+        do {
+            try store.save(to: file)
+        } catch {
+            loadSnippets()
+            return .failed(String(describing: error))
+        }
+        loadSnippets()
+        snippetsChanged()
+        return .saved
+    }
+
+    func deleteSnippet(id: String) {
+        let file = paths.snippetsFile
+        var store = SnippetStore.load(from: file)
+        store.remove(id: id)
+        do {
+            try store.save(to: file)
+        } catch {
+            FileHandle.standardError.write(Data("fudge: couldn't delete the snippet: \(error)\n".utf8))
+        }
+        loadSnippets()
+        snippetsChanged()
     }
 
     // MARK: - The launcher's hotkey
@@ -786,13 +842,14 @@ final class SettingsWindowController {
                 }
             }
             // Coming back from System Settings → Login Items shows what was changed there, and from the launcher a
-            // quicklink saved there.
+            // quicklink or snippet saved there.
             NotificationCenter.default.addObserver(
                 forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
             ) { _ in
                 MainActor.assumeIsolated {
                     model.refreshLoginItem()
                     model.loadQuicklinks()
+                    model.loadSnippets()
                 }
             }
         }
@@ -853,6 +910,7 @@ struct SettingsView: View {
                 Label("Permissions", systemImage: "hand.raised").tag(SettingsModel.permissionsPage)
                 Label("Commands", systemImage: "command").tag(SettingsModel.commandsPage)
                 Label("Quicklinks", systemImage: "link").tag(SettingsModel.quicklinksPage)
+                Label("Snippets", systemImage: "doc.text").tag(SettingsModel.snippetsPage)
                 Label("Sign-in", systemImage: "person.badge.key").tag(SettingsModel.signInPage)
                 Section("Extensions") {
                     ForEach(model.extensions, id: \.manifest.name) { installed in
@@ -874,6 +932,8 @@ struct SettingsView: View {
                     CommandsPage(model: model)
                 } else if model.selected == SettingsModel.quicklinksPage {
                     QuicklinksPage(model: model)
+                } else if model.selected == SettingsModel.snippetsPage {
+                    SnippetsPage(model: model)
                 } else if model.selected == SettingsModel.signInPage {
                     SignInPage(model: model)
                 } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {

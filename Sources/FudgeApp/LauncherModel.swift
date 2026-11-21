@@ -1830,8 +1830,8 @@ final class LauncherModel {
         refreshList(&command, selectFirst: false)
     }
 
-    /// Draws Search Snippets again, if it's on screen.
-    private func reloadSnippetList() {
+    /// Draws Search Snippets again, if it's on screen: after a delete, or a change on the Settings window's page.
+    func reloadSnippetList() {
         guard case .command(var command) = screen, command.session == SnippetList.session else { return }
         renderSnippetList(&command)
         screen = .command(command)
