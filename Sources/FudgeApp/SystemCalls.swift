@@ -188,6 +188,12 @@ enum SystemCalls {
     nonisolated private static let windowFrames = WindowFramesBox()
     private static let windowCommandQueue = DispatchQueue(label: "fudge.window-commands", qos: .userInitiated)
 
+    /// Search Menu Items' Accessibility check, as for a call the user started: macOS's prompt at the first refusal
+    /// in a run, and Fudge's offer at the next, shared with Paste and the window commands.
+    static func mayReadMenus() -> Bool {
+        gate.isTrusted(origin: .userInitiated)
+    }
+
     private static func frontmost() -> FrontmostApplication? {
         NSWorkspace.shared.frontmostApplication.map {
             FrontmostApplication(pid: $0.processIdentifier, bundleIdentifier: $0.bundleIdentifier)
