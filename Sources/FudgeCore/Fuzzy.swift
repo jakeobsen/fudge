@@ -17,18 +17,26 @@ public enum Fuzzy {
         let needle = Array(fold(query).filter { !$0.isWhitespace })
         guard !needle.isEmpty else { return FuzzyMatch(score: 0, positions: []) }
         let original = Array(candidate)
-        let haystack = original.map { Character(fold(String($0))) }
+        let (haystack, origin) = folded(original, candidate)
         guard needle.count <= haystack.count else { return nil }
 
         // Prefer the alignment that hits word starts: try each word start as the
         // anchor for the first character and keep the best-scoring alignment.
         var best: FuzzyMatch?
         for start in haystack.indices where haystack[start] == needle[0] {
-            guard let positions = align(needle, in: haystack, from: start) else { break }
-            let score = self.score(positions, in: original, queryLength: needle.count)
+            guard let found = align(needle, in: haystack, from: start) else { break }
+            let positions = origin.map { candidatePositions(found, origin: $0) } ?? found
+            let score = self.score(positions, in: original, queryLength: positions.count)
             if best == nil || score > best!.score { best = FuzzyMatch(score: score, positions: positions) }
         }
         return best
+    }
+
+    /// Positions in the folded candidate as positions in the candidate itself: both of "ss" are the one "ß".
+    private static func candidatePositions(_ positions: [Int], origin: [Int]) -> [Int] {
+        var mapped: [Int] = []
+        for position in positions where mapped.last != origin[position] { mapped.append(origin[position]) }
+        return mapped
     }
 
     private static func align(_ needle: [Character], in haystack: [Character], from start: Int) -> [Int]? {
@@ -80,6 +88,25 @@ public enum Fuzzy {
         let current = text[index]
         if before == " " || before == "-" || before == "_" || before == "." || before == "/" { return true }
         return before.isLowercase && current.isUppercase
+    }
+
+    /// The candidate folded, and for each folded Character the index of the candidate's it came from: nil when
+    /// they're one for one. Folding the whole string at once is much faster than a Character at a time, and gives
+    /// the same Characters whenever their count doesn't change. When it does, a Character folded into several ("ß"
+    /// into "ss", "ﬁ" into "fi"), so the candidate is folded a Character at a time and each keeps all of its own.
+    private static func folded(_ characters: [Character], _ text: String) -> (folded: [Character], origin: [Int]?) {
+        let whole = Array(fold(text))
+        if whole.count == characters.count { return (whole, nil) }
+        var folded: [Character] = []
+        var origin: [Int] = []
+        for (index, character) in characters.enumerated() {
+            let pieces = Array(fold(String(character)))
+            for piece in pieces.isEmpty ? [character] : pieces {
+                folded.append(piece)
+                origin.append(index)
+            }
+        }
+        return (folded, origin)
     }
 
     private static func fold(_ text: String) -> String {

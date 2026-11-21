@@ -75,6 +75,8 @@ public struct ActionEntry: Sendable, Equatable, Identifiable {
     public var isLoading: Bool
     /// What running it does.
     public var target: ActionTarget
+    /// A submenu whose `onOpen` the app calls when it opens.
+    public var hasOnOpen = false
     /// Set for an `Action.PickDate`: running it opens a date picker in the action panel overlay instead of calling
     /// `onAction`, and the pick goes to the node's `onChange`.
     public var pickDate: DatePickerOptions? = nil
@@ -263,7 +265,8 @@ public enum ActionPanelReader {
                 destructive: false,
                 submenu: sections(in: node.children),
                 isLoading: node.bool("isLoading") == true,
-                target: .node(node.id)
+                target: .node(node.id),
+                hasOnOpen: node.hasCallback("onOpen")
             )
         default:
             return nil
