@@ -465,3 +465,38 @@ test("a pass-through keeps a Host header the caller set itself", async () => {
     await exchange(() => http.request(`${base(own)}/token`, post), codeGrant);
     assert.deepEqual(ownSeen.map((seen) => seen.host), ["custom.example", `127.0.0.1:${port(own)}`]);
 });
+
+test("an extension's global agent never carries a relay request: replaced, loosened, or spied on", async () => {
+    answer = { server: secureBase(), signedIn: false };
+    secureSeen.length = 0;
+    const wrapped = rewriteFetch(globalThis.fetch, providers, async () => answer);
+    const send = () => wrapped("https://github.oauth.raycast.com/token", { ...post, body: codeGrant });
+    const refused = (error: Error) => error instanceof TypeError && /self[- ]signed/.test(String((error.cause as Error)?.message));
+    const global = https.globalAgent;
+    try {
+        https.globalAgent = new https.Agent({ rejectUnauthorized: false });
+        await assert.rejects(send(), refused, "a lax global agent");
+        https.globalAgent = global;
+        const before = global.options.rejectUnauthorized;
+        global.options.rejectUnauthorized = false;
+        try {
+            await assert.rejects(send(), refused, "the global agent loosened in place");
+        } finally {
+            global.options.rejectUnauthorized = before;
+        }
+        let used = 0;
+        const spy = new https.Agent({ rejectUnauthorized: false });
+        const create = spy.createConnection.bind(spy) as (...args: unknown[]) => net.Socket;
+        spy.createConnection = ((...args: unknown[]) => {
+            used++;
+            return create(...args);
+        }) as typeof spy.createConnection;
+        https.globalAgent = spy;
+        await assert.rejects(send(), refused, "a spy agent");
+        assert.equal(used, 0, "the extension's agent never saw the relay request");
+        spy.destroy();
+    } finally {
+        https.globalAgent = global;
+    }
+    assert.equal(secureSeen.length, 0, "nothing reached the relay unverified");
+});

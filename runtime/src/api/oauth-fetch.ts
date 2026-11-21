@@ -194,6 +194,12 @@ export type RelaySend = (request: Request) => Promise<Response>;
 
 const nullBodyStatuses = new Set([101, 103, 204, 205, 304]);
 
+// The relay's own agents, made when the worker starts, before any extension runs. Node merges an agent's options
+// over a request's, so the global agents, which an extension can replace or loosen, never carry a relay request.
+// They keep no TLS sessions: a resumed session isn't verified again, so every relay connection gets a full handshake
+// checked against the trust of the moment.
+const relayAgents = { "https:": new https.Agent({ maxCachedSessions: 0 }), "http:": new http.Agent() };
+
 /**
  * Sends a request rewritten to the relay through Node's `http`/`https`, never undici, whose verification follows
  * the worker's environment: what goes out is the `Request` `fetch` would send (its method, headers and serialized
@@ -213,7 +219,9 @@ export const sendToRelay: RelaySend = async (request) => {
     if (body !== undefined) headers["content-length"] = String(body.length);
     const secure = url.protocol === "https:";
     return new Promise<Response>((resolve, reject) => {
-        const options = { method: request.method, headers, signal: request.signal, ...(secure ? relayTLSOptions() : {}) };
+        const agent = relayAgents[secure ? "https:" : "http:"];
+        const tlsPins = secure ? relayTLSOptions() : {};
+        const options = { method: request.method, headers, signal: request.signal, agent, ...tlsPins };
         const sent = (secure ? https : http).request(url, options, (answer) => {
             const status = answer.statusCode ?? 0;
             const answerHeaders = new Headers();
