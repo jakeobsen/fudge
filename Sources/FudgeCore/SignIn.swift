@@ -146,15 +146,20 @@ public enum SignInServer: Sendable, Equatable {
 
     /// Checks a typed address for "Your own server…": an `https://` URL with a host, or `http://` on `localhost` or
     /// `127.0.0.1` for testing, with no user info, query or fragment. Surrounding whitespace is ignored.
+    ///
+    /// The address is returned as the worker's `new URL()` writes it, since a sign-in's authorize URL is compared with
+    /// what the worker sends back (`PreparedSignIn.state(ofAuthorizeURL:)`): the scheme and host in lowercase, no
+    /// default port, and the path's dot segments resolved. A host that parser would rewrite in other ways (non-ASCII,
+    /// percent-encoded, IPv6, or an IPv4 address written other than as four decimal numbers) isn't accepted.
     public static func validate(_ text: String) -> Result<URL, Problem> {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return .failure(.empty) }
         guard let components = URLComponents(string: trimmed), let scheme = components.scheme?.lowercased(),
-            let host = components.host, !host.isEmpty, let url = components.url
+            let host = components.percentEncodedHost.flatMap(canonicalHost)
         else { return .failure(.notAURL) }
         switch scheme {
         case "https": break
-        case "http" where ["localhost", "127.0.0.1"].contains(host.lowercased()): break
+        case "http" where ["localhost", "127.0.0.1"].contains(host): break
         case "http": return .failure(.insecure)
         default: return .failure(.notAURL)
         }
@@ -163,7 +168,60 @@ public enum SignInServer: Sendable, Equatable {
         {
             return .failure(.extraParts)
         }
+        var authority = host
+        if let port = components.port {
+            guard (0...65535).contains(port) else { return .failure(.notAURL) }
+            if port != (scheme == "https" ? 443 : 80) { authority += ":\(port)" }
+        }
+        let path = resolvingDotSegments(components.percentEncodedPath)
+        guard let url = URL(string: "\(scheme)://\(authority)\(path)") else { return .failure(.notAURL) }
         return .success(url)
+    }
+
+    private static let hostScalars = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789-._")
+
+    /// A host in lowercase, when the URL parser would only change its letter case: an ASCII name, or an IPv4 address
+    /// as four decimal numbers. Nil for anything else.
+    static func canonicalHost(_ host: String) -> String? {
+        let lowered = host.lowercased()
+        guard !lowered.isEmpty, lowered.unicodeScalars.allSatisfy(hostScalars.contains) else { return nil }
+        // A name whose last label is a number (decimal, or hex after "0x") is read as an IPv4 address, in any of
+        // several notations, so only the one it's written back in is kept.
+        var labels = lowered.split(separator: ".", omittingEmptySubsequences: false)
+        if labels.count > 1, labels.last == "" { labels.removeLast() }
+        guard let last = labels.last else { return nil }
+        let isNumber =
+            (!last.isEmpty && last.allSatisfy { $0.isASCII && $0.isNumber })
+            || (last.hasPrefix("0x") && last.dropFirst(2).allSatisfy(\.isHexDigit))
+        guard isNumber else { return lowered }
+        let octets = lowered.split(separator: ".", omittingEmptySubsequences: false)
+        let canonical =
+            octets.count == 4
+            && octets.allSatisfy { octet in
+                guard let value = Int(octet), (0...255).contains(value) else { return false }
+                return String(value) == octet
+            }
+        return canonical ? lowered : nil
+    }
+
+    /// A path with its `.` and `..` segments resolved as the URL parser does, `%2e` counting as a dot.
+    static func resolvingDotSegments(_ path: String) -> String {
+        guard path.hasPrefix("/") else { return path }
+        let segments = path.split(separator: "/", omittingEmptySubsequences: false).dropFirst()
+        var resolved: [Substring] = []
+        for (index, segment) in zip(segments.indices, segments) {
+            let isLast = index == segments.indices.last
+            switch segment.lowercased() {
+            case "..", ".%2e", "%2e.", "%2e%2e":
+                if !resolved.isEmpty { resolved.removeLast() }
+                if isLast { resolved.append("") }
+            case ".", "%2e":
+                if isLast { resolved.append("") }
+            default:
+                resolved.append(segment)
+            }
+        }
+        return "/" + resolved.joined(separator: "/")
     }
 
     /// The sheet before a server is saved.

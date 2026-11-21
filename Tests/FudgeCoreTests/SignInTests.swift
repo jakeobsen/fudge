@@ -119,6 +119,55 @@ import Testing
     #expect(problem("https://example.com/?a=1") == .extraParts)
     #expect(problem("https://example.com/#x") == .extraParts)
     #expect(SignInServer.Problem.insecure.message == "Use https://, or http:// on localhost or 127.0.0.1.")
+
+    // Saved as the worker's `new URL()` writes it (each expected value is Node's `href`, without the "/" it adds to
+    // an empty path), so a sign-in's authorize URL comes back unchanged.
+    let normalised = [
+        ("https://Relay.Example", "https://relay.example"),
+        ("HTTPS://relay.example", "https://relay.example"),
+        ("https://relay.example:443", "https://relay.example"),
+        ("https://relay.example:0443/x", "https://relay.example/x"),
+        ("http://LOCALHOST:8080", "http://localhost:8080"),
+        ("http://localhost:80", "http://localhost"),
+        ("https://relay.example:8443", "https://relay.example:8443"),
+        ("https://relay.example/a/../b", "https://relay.example/b"),
+        ("https://relay.example/a/./b/%2e%2E/c", "https://relay.example/a/c"),
+        ("https://relay.example/a/..", "https://relay.example/"),
+        ("https://relay.example/.", "https://relay.example/"),
+        ("https://Relay.Example/Base/", "https://relay.example/Base/"),
+        ("https://10.0.0.1", "https://10.0.0.1"),
+        ("https://relay.example./x", "https://relay.example./x"),
+    ]
+    for (typed, saved) in normalised {
+        #expect(SignInServer.validate(typed) == .success(URL(string: saved)!), "\(typed)")
+    }
+    // Hosts that parser rewrites in other ways aren't accepted: IPv4 in other notations, percent-encoded or
+    // non-ASCII names, IPv6. A port past 65535 isn't a URL there.
+    for typed in [
+        "https://0x7f.0.0.1", "https://127.1", "https://010.0.0.1", "https://10.0.0.1.", "https://re%6Cay.example",
+        "https://relä.example", "https://[::1]", "https://relay.example:99999",
+    ] {
+        #expect(problem(typed) == .notAURL, "\(typed)")
+    }
+
+    // End to end: the authorize URL the worker sends back, as Node writes it, is the prepared request's.
+    let redirect = "http://127.0.0.1:5000/oauth/callback/abc"
+    let query = "?redirect_uri=http%3A%2F%2F127.0.0.1%3A5000%2Foauth%2Fcallback%2Fabc&state=s1"
+    for (typed, fromNode) in [
+        ("https://Relay.Example", "https://relay.example/github/authorize"),
+        ("https://relay.example:443/a/../b/", "https://relay.example/b/github/authorize"),
+        ("http://LOCALHOST:80", "http://localhost/github/authorize"),
+    ] {
+        guard case .success(let url) = SignInServer.validate(typed),
+            case .success(let (provider, authorize)) = PreparedSignIn.provider(
+                for: "https://github.oauth.raycast.com/authorize", providerName: "GitHub", server: .custom(url))
+        else {
+            Issue.record("\(typed) wasn't accepted")
+            continue
+        }
+        let request = PreparedSignIn(provider: provider, authorizeURL: authorize, redirectURI: redirect)
+        #expect(request.state(ofAuthorizeURL: fromNode + query) == "s1", "\(typed)")
+    }
 }
 
 @Test func theRelaysEndpointsAreUnderTheServersAddress() {
