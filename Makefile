@@ -34,7 +34,7 @@ SIGN_IDENTITY ?= $(shell security find-identity -v -p codesigning 2>/dev/null | 
 # The @raycast/api release whose type definitions live in runtime/vendor/raycast-api.
 RAYCAST_API_VERSION ?= 2.13.1
 
-.PHONY: help app dmg dmg-image run install-extension build runtime test test-swift test-runtime lint fmt raycast-types compat-scan clean
+.PHONY: help app dmg dmg-image release run install-extension build runtime test test-swift test-runtime lint fmt raycast-types compat-scan clean
 
 help:
 	@printf 'fudge — a keyboard launcher for macOS, built to run Raycast extensions\n\n'
@@ -44,6 +44,7 @@ help:
 	@printf '                 "fudge local signing", else an Apple Development identity, else ad hoc (-). See README.md.\n'
 	@printf '  dmg            Build the app, then %s: the app and a link to Applications (VERSION=<tag>).\n' '$(DMG)'
 	@printf '  dmg-image      Make %s from the app as it is, without building it.\n' '$(DMG)'
+	@printf '  release        Build %s signed with Developer ID, notarized and stapled, after secret env apple.\n' '$(DMG)'
 	@printf '  run            Build the app and open it, quitting a running copy first.\n'
 	@printf '  install-extension DIR=<folder>  Build the app, then compile and install the extension in <folder>.\n'
 	@printf '  build          Build the Swift targets and the extension host.\n'
@@ -123,6 +124,11 @@ dmg-image:
 		|| { echo 'make dmg-image: hdiutil could not create $(DMG)'; rm -rf build/dmg; exit 1; }
 	@rm -rf build/dmg
 	@printf '→ built %s\n' '$(DMG)'
+
+# A release's disk image signed with the Developer ID identity, notarized and stapled, with the variables
+# `secret env apple` sets (scripts/release.sh). It refuses a tree with changes, and never pushes or tags.
+release:
+	@scripts/release.sh --version '$(VERSION)'
 
 run: app
 	@# Quit the user's fudge and wait for exactly those processes: open hands off to a Fudge that's still quitting
