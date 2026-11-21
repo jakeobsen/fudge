@@ -60,6 +60,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model.colorSampler = InertColorSampler()
             // Nor the windows: Save Layout… gets `--layout-windows`' made-up ones, and nothing is moved.
             model.windowLayoutActions = .inert(windows: snapshot.layoutWindows)
+            // Nor other apps' menus: Search Menu Items gets `--menu-items`' made-up app and menus.
+            model.menuItemsAccess = FixedMenuItemsAccess(file: snapshot.menuItems)
             // Define Word reads no selection and no dictionary: it gets `--definitions`' made-up ones, or none.
             model.selectedText = { nil }
             model.definitionLookup = snapshot.definitions.map(FixedDefinitions.load) ?? FixedDefinitions([:])
@@ -128,7 +130,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.resetAfterChanged = { [weak self] setting in self?.model.panelReset.setting = setting }
         // The store stays installed either way; the launcher reads settings.json again.
         settingsModel.extensionStoreChanged = { [weak self] in self?.model.applySettings() }
-        settingsModel.quicklinksChanged = { [weak self] in self?.model.applySettings() }
+        // A quicklink deleted in Settings takes its hotkey with it.
+        settingsModel.quicklinksChanged = { [weak self] in _ = self?.applyCommandHotkeys() }
+        model.commandHotkeysChanged = { [weak self] in self?.registerCommandHotkeys() }
         settingsModel.snippetsChanged = { [weak self] in self?.model.reloadSnippetList() }
         settingsModel.colorFormatChanged = { [weak self] in self?.model.reloadRecentColors() }
         model.windowLayoutsChanged = { [weak self] in self?.settingsModel.loadWindowLayouts() }
@@ -186,6 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel: panel, restoreKeyboard: { [weak self] in self?.model.restoreKeyboard() })
         // Switch Windows reads the system's windows; it notes which apps become active from now on.
         model.windowSwitching = SystemWindowSwitching(accessibility: { SystemCalls.mayReadWindows() })
+        model.menuItemsAccess = SystemMenuItemsAccess(mayReadMenus: { SystemCalls.mayReadMenus() })
 
         let quickLook = QuickLookPreview()
         quickLook.launcherLevel = panel.level
@@ -687,7 +692,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// `--snapshot <file.png> --onboarding [<step>]` renders the onboarding window, with the same fakes, on its pending
 /// steps from `onboarding.json`; with a step id, on every step from the start, at that one.
 /// `--update-available <version>` shows that version as found by an update check, wherever Fudge shows one (the
-/// General page). No snapshot run asks GitHub.
+/// General page). No snapshot run asks GitHub. `--menu-items <file>` gives Search Menu Items a made-up app and menus.
 /// For checking the layout without looking at the screen.
 @MainActor
 struct Snapshot {
@@ -742,6 +747,9 @@ struct Snapshot {
     /// `--edit-position [<name>]`: the Window Management page shows its position sheet in place, editing that
     /// position, or a new one.
     let editPosition: String?
+    /// `--menu-items <file>`: Search Menu Items' made-up app and menus (`FixedMenuFile`). Snapshots never read
+    /// another app's menus, so without it Search Menu Items has no app to search.
+    let menuItems: URL?
 
     init?(arguments: [String]) {
         guard let index = arguments.firstIndex(of: "--snapshot"), index + 1 < arguments.count else { return nil }
@@ -780,6 +788,7 @@ struct Snapshot {
         clipboardConsent = arguments.contains("--clipboard-consent")
         foundFiles = value("--found-files").map { URL(fileURLWithPath: $0) }
         clipboardEntries = value("--clipboard-entries").map { URL(fileURLWithPath: $0) }
+        menuItems = value("--menu-items").map { URL(fileURLWithPath: $0) }
         definitions = value("--definitions").map { URL(fileURLWithPath: $0) }
         updateAvailable = value("--update-available").flatMap { Release(tag: $0.hasPrefix("v") ? $0 : "v" + $0) }
         trashCount = value("--trash-count").map { Int($0) } ?? InertSystemActions.trashCount
@@ -807,6 +816,8 @@ struct Snapshot {
         let page =
             signInConsent
             ? SettingsModel.signInPage : clipboardConsent ? ClipboardHistory.extensionName : settingsExtension
+        // `--settings :commands --search text` searches the Commands page, as typing in its field does.
+        controller.model.commandsSearch = search
         controller.renderOffscreen(extension: page)
         if signInConsent || clipboardConsent {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [signInConsent] in
