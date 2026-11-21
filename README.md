@@ -6,23 +6,6 @@ It runs extensions written for Raycast's [`@raycast/api`](https://developers.ray
 Fudge is an independent project.
 It is not affiliated with or endorsed by Raycast.
 
-## What's here
-
-- `Sources/FudgeApp`: the macOS app.
-  It runs in the menu bar, without a Dock icon.
-- `Sources/FudgeCLI`: the `fudge` command-line tool.
-  `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for Fudge; `--into <folder>` installs it in that extensions folder instead.
-  `fudge scan <folder>` says what the extension uses that Fudge doesn't have yet or doesn't support, without building it (`--json` for a script).
-  A running Fudge picks up an extension you install, rebuild or remove within a second, with nothing to reload.
-- `Sources/FudgeCore`: code shared by the app and the tool.
-- `runtime/`: the extension host.
-  This is the Node.js program that runs extensions.
-  The app talks to it over stdin/stdout.
-- `runtime/store-extension/`: the Extension Store, an extension bundled with Fudge that lists and installs the extensions published in github.com/raycast/extensions.
-- `runtime/file-search-extension/`: Search Files, an extension bundled with Fudge that finds files and folders by name.
-- `runtime/emoji-extension/`: Search Emoji & Symbols, an extension bundled with Fudge that finds emoji by name and pastes them.
-- `runtime/clipboard-history-extension/`: Clipboard History, an extension bundled with Fudge that lists what you copied.
-
 ## Installing
 
 Each release on GitHub has a disk image, `Fudge-<version>.dmg`: open it and drag Fudge to Applications.
@@ -32,56 +15,15 @@ On an account that can't add apps to `/Applications`, it moves to the Applicatio
 Releases are signed with a Developer ID and notarized by Apple, so the first time you open Fudge, macOS asks once whether to open an app downloaded from the internet.
 Click **Open**, and Fudge starts.
 
-## Building
+## First run
 
-You need macOS 14 or later and Xcode 26 or later.
-The first build downloads the Node.js that Fudge includes from nodejs.org, checks it against the checksum pinned in the `Makefile`, and keeps it in `.cache/node`; every build step and test uses it.
-The app runs on macOS 14 and later.
+The first time Fudge starts, it walks you through a few choices: the launcher hotkey, Accessibility, Open at Login, currency conversion and how often to check for updates.
+Each takes effect at once, and **Settings…** has them all.
+Until you click **Start Using Fudge** at the end, Fudge shows these steps again at its next start, from where you left off.
 
-```bash
-make app     # build build/Fudge.app
-make dmg     # build it into a disk image, build/Fudge-<version>.dmg
-make release # the same, signed with the Developer ID and notarized (the maintainer's, after secret env apple)
-make run     # build it and open it
-make test    # run the Swift and extension host tests
-make lint    # check formatting and types
-
-make install-extension DIR=path/to/extension   # compile and install an extension
-```
-
-`make help` lists every target.
-
-### Keeping permissions across builds
-
-macOS remembers the permissions you give Fudge (Accessibility, Automation) by its code signature.
-An ad hoc signature changes with every build, so macOS would forget them each time.
-`make app` signs with the first of these that your keychain has:
-
-1. a code-signing identity named **fudge local signing**;
-2. an **Apple Development** identity, which Xcode creates when you add your Apple Account under **Xcode → Settings → Accounts**;
-3. otherwise none: it signs ad hoc.
-
-Its last line says which identity it used.
-`make app SIGN_IDENTITY=-` builds ad hoc anyway, and `SIGN_IDENTITY=<name>` picks another identity.
-
-**The first build that signs with an identity shows a keychain prompt** ("codesign wants to sign using key … in your keychain").
-Enter your login password and click **Always Allow**, once.
-Otherwise every later build stops at that prompt, and a build nobody is watching hangs on it.
-
-Without an Apple Development identity, you can create the self-signed one:
-
-1. In Keychain Access, choose **Keychain Access → Certificate Assistant → Create a Certificate…**.
-   Name it `fudge local signing`, with identity type **Self-Signed Root** and certificate type **Code Signing**.
-2. Open the certificate, expand **Trust**, and set **Code Signing** to **Always Trust**.
-3. Expand the certificate in **My Certificates**, open its private key, and under **Access Control** add `/usr/bin/codesign` to the allowed applications (⌘⇧G in the file dialog lets you type the path).
-   Or answer the first build's prompt with **Always Allow**, as above.
-
-Releases are signed with Fudge's Developer ID, so their permissions carry over from one release to the next.
-A release and a build you made yourself have different signatures, so switching between them asks for the permissions again.
-
-Every build has the hardened runtime, which notarizing needs.
-It refuses a protected resource unless the app has its entitlement, so `App/Fudge.entitlements` lists the ones Fudge uses: Apple Events and Calendars.
-The Node.js inside Fudge has two of its own, in `App/Helpers/node.entitlements`: one to compile JavaScript as it runs, and one to load extensions' native addons, which others have signed.
+**Settings… → Permissions** shows whether Fudge may use Accessibility, which extensions need to read the text you've selected, to paste, or to move windows.
+**Open Accessibility Settings** lets macOS ask you first; if it doesn't ask, click it again to open **System Settings → Privacy & Security → Accessibility** and turn Fudge on there.
+**Show Onboarding Again** goes through the first-run choices again.
 
 ## Using it
 
@@ -120,14 +62,6 @@ Pressing a view command's hotkey again while it's on screen hides the window.
 Fudge refuses a shortcut that's the launcher's or another command's, and one another app has registered.
 That last check is best-effort: macOS doesn't report system shortcuts such as ⌘Space or ⌃↑, so one of those can be recorded but never fire.
 
-### Hyperkey
-
-Turn on **Hyperkey (Caps Lock)** in **Settings… → General**, and holding Caps Lock presses ⌘⌥⌃⇧ at once, called Hyper, for shortcuts like Hyper+T that no other app uses.
-Caps Lock then no longer turns caps on, unless you also turn on **Quick press toggles Caps Lock**.
-Hyper doesn't work in password fields, and it needs Accessibility permission (**Settings… → Permissions**).
-Turning it off, or quitting Fudge, gives Caps Lock back.
-If Caps Lock is already mapped to another key, Fudge leaves it alone and says so.
-
 ### Aliases and turning commands off
 
 On the same page, a command can have an **Alias**: a short word such as `sf`.
@@ -145,16 +79,6 @@ Extensions' preferences are in the same window, under each extension.
 To go straight to a command's extension, select the command and press ⌘⇧, (or ⌘K, then **Configure Extension**).
 A command that needs a preference you haven't set opens that window instead of running.
 
-### First run
-
-The first time Fudge starts, it walks you through a few choices: the launcher hotkey, Accessibility, Open at Login, currency conversion and how often to check for updates.
-Each takes effect at once, and **Settings…** has them all.
-Until you click **Start Using Fudge** at the end, Fudge shows these steps again at its next start, from where you left off.
-
-**Settings… → Permissions** shows whether Fudge may use Accessibility, which extensions need to read the text you've selected, to paste, or to move windows.
-**Open Accessibility Settings** lets macOS ask you first; if it doesn't ask, click it again to open **System Settings → Privacy & Security → Accessibility** and turn Fudge on there.
-**Show Onboarding Again** goes through the first-run choices again.
-
 ### Open at Login and search history
 
 Fudge doesn't start at login until you turn on **Open at Login** at the top of **Settings… → General**. macOS then shows a "Login item added" notification, and lists Fudge under **System Settings → General → Login Items**, where you can also turn it off; the switch shows what's set there.
@@ -164,6 +88,64 @@ The login item is tied to where the app is, so after moving Fudge (to `/Applicat
 Root search ranks what you open often first.
 **Clear Search History…** on the same page makes it forget, after asking.
 
+### Hyperkey
+
+Turn on **Hyperkey (Caps Lock)** in **Settings… → General**, and holding Caps Lock presses ⌘⌥⌃⇧ at once, called Hyper, for shortcuts like Hyper+T that no other app uses.
+Caps Lock then no longer turns caps on, unless you also turn on **Quick press toggles Caps Lock**.
+Hyper doesn't work in password fields, and it needs Accessibility permission (**Settings… → Permissions**).
+Turning it off, or quitting Fudge, gives Caps Lock back.
+If Caps Lock is already mapped to another key, Fudge leaves it alone and says so.
+
+### Extension Store
+
+The Extension Store browses the extensions in Raycast's open-source repository and installs the ones you choose.
+It takes two steps:
+
+1. Enable **Extension Store** under **Settings… → Commands**, and it shows up in Fudge.
+2. Turn it on with the switch at the top of **Settings… → Extension Store**.
+
+Turning it off removes the store's downloaded list; the extensions you installed stay installed.
+
+In the **Extension Store** command, search the extensions, or pick a category in the dropdown; **Installed** shows the ones you installed from it.
+
+- ↵ installs one, after saying whether Fudge supports everything it uses.
+  Fudge doesn't support Raycast AI or the Raycast Browser Extension.
+  An extension where only some commands use either is marked **Partly compatible**, and its details name those commands; one where every command does is marked **Not compatible**.
+  Those commands are installed turned off, so they aren't in root search, and **Settings… → Commands** says why.
+  You can turn one on there: it then works, apart from what needs Raycast AI or the Browser Extension.
+  ⌘U updates one marked **Update available**, and ⌃X uninstalls it, to the Trash.
+- ⌘D shows an extension's details: whether it's compatible (checked once you stay on it for a moment), each command and whether it opens a view, runs without one, or sits in the menu bar, and its README. ⌘R updates the list, which otherwise happens when you open the store and the list is a day old.
+  If the list couldn't be downloaded, ⌘R tries again.
+- If an install or update fails, the store shows the whole error and its likely cause, such as npm not found or the npm registry not reachable. ↵ tries again, and ⌘C copies the error, to send with an issue.
+  It uses the proxy set in **System Settings → Network** for npm and Git, unless you've set one yourself (`HTTPS_PROXY`); a proxy configuration file (PAC) can't be passed on.
+- The store needs Git.
+  If it's missing, install Apple's Command Line Tools: run `xcode-select --install` in Terminal.
+- It never touches extensions you installed with `fudge build` yourself.
+  An extension installs under its own name, so it can't be installed while another extension of that name is: uninstall that one first.
+
+### Signing in
+
+Some extensions sign in to a service, such as GitHub or Linear.
+Pick a sign-in server under **Settings… → Sign-in**: **Fudge's sign-in server**, or **Your own server…**.
+A company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth).
+Extensions can sign in to GitHub, Linear, Slack, Asana, Google, Atlassian (Jira and Confluence) and Zoom, as far as the server offers them.
+When an extension needs to sign in, Fudge shows **Sign in to** the service, and ↵ continues in your browser.
+Sign-ins are kept in your Keychain, and the Sign-in page lists them, each with **Sign Out**.
+Changing the server signs you out of everything.
+
+Extensions trust the certificates your Mac trusts, so a server behind your company's own certificate works as it does in Safari.
+
+An extension that takes a token in its settings (⌘⇧,) works without signing in.
+
+### Menu bar commands
+
+An extension's menu bar command puts its own item in the menu bar.
+Run it from root search to turn it on, and the item stays there, across restarts, until you select the command in root search and pick **Deactivate Menu Bar Item** from ⌘K.
+Running it again from root search refreshes it and opens its menu.
+The command refreshes itself in the background at Fudge's start and as often as its extension asks, and again each time you open its menu.
+When a background refresh fails, the item keeps what it showed last and its menu ends with "⚠ Last refresh failed".
+Fudge shows at most 50 of these items.
+
 ### Extensions that open other extensions
 
 The first time an extension opens another extension's command, Fudge asks whether to allow it, and remembers the answer.
@@ -171,23 +153,54 @@ To change or forget an answer, open **Settings…** → **Permissions** → **Ex
 
 An extension running in the background, such as a menu bar refresh, never interrupts you to ask: Fudge says so once, and asks the next time you open that extension.
 
-### Backup: import and export
+### Selected text and Finder items
 
-**Settings… → General → Import / Export** saves everything you've set up in Fudge to one file, and brings it back, on this Mac or another one.
+Extensions can read the text selected in the app you were in, and the items selected in Finder.
+The first time, macOS asks you to allow Fudge under **Privacy & Security → Accessibility** or **Automation**.
 
-- **Export…** asks for a password (at least 8 characters), then where to save `fudge-backup-<date>.fudgebackup`.
-  The file holds Fudge's settings (hotkeys, aliases, which commands are on), your quicklinks, snippets and recent colors, the answers about extensions opening other extensions, root search's ranking, every extension's preferences and data, and the list of installed extensions.
-  It's always encrypted with your password, because extensions keep passwords and tokens in there; Fudge can't recover a forgotten one.
-  The file opens only in Fudge, not with Apple's `aea` tool.
-  Extension data over 100 MB in total leaves out the biggest extensions' data, and the export says which.
-- **Import…** (also **Restore from a Backup…** on the Welcome screen Fudge shows the first time) asks for the file and its password, shows what's in it, and replaces your settings and the data of the extensions in the backup; other extensions keep theirs.
-  The summary also lists the backup's extensions that changed since it was made (a new version, an update from the Extension Store, or installed another way); they're imported all the same.
-  It then lists the extensions in the backup that aren't installed here, so you can reinstall them.
-  It installs nothing itself.
-- **The extensions themselves aren't in a backup**, only the list, and neither are caches, the exchange rates, your sign-ins, the sign-in server or the Extension Store's switch (set these again yourself).
-- Before importing, Fudge saves what it's about to replace in `backups/` in its support folder (`~/Library/Application Support/fudge/backups`), readable by you only.
-  It keeps the last 3.
-  You can import one of those with **Import…**; it needs no password.
+macOS only asks when Fudge isn't in the Accessibility list yet.
+If Fudge is there but switched off, or the entry was left by an older build of Fudge, nothing appears, and extensions are just refused.
+So when Accessibility is refused a second time, Fudge shows its own alert, once per run, and **Open Accessibility Settings** takes you to the list.
+Switch Fudge on there.
+If it's already on, select it, remove it with −, and add it again with +.
+
+When an app doesn't share its selection through Accessibility (often browsers and Electron apps such as VS Code), Fudge copies it with ⌘C and puts back what was on your clipboard right after.
+That has some side effects:
+
+- A clipboard history app may record the copied text.
+- If your clipboard holds a password that a password manager marked as concealed, Fudge leaves the clipboard empty instead of putting the password back.
+  Put back, it would look like a new copy, and the password manager would no longer clear it.
+- Clipboard data over 50 MB (of one type) isn't put back.
+  An app that only produces its clipboard data when asked (some design apps do this with large images) still has to produce it, so that can take a moment.
+- An app that copies something when nothing is selected hands that over instead.
+  VS Code, for example, copies the current line.
+- Fudge waits half a second for the copy.
+  An app that answers ⌘C later than that copies after Fudge has put your clipboard back, so the selected text ends up on your clipboard.
+
+Secure text fields, such as passwords, never give their text.
+
+### Pasting
+
+Extensions can paste into the app you were in (`Clipboard.paste`, the Paste action).
+Fudge puts the content on your clipboard, presses ⌘V in that app, and puts back what was on your clipboard about a second later.
+It needs the same Accessibility permission.
+Without it, the content stays on your clipboard for you to paste yourself.
+
+- Fudge marks what it puts on the clipboard as transient, so clipboard history apps that follow [nspasteboard.org](http://nspasteboard.org) skip it.
+- If you copy something within that second, Fudge leaves your new copy alone.
+- If your clipboard held a password that a password manager marked as concealed, Fudge leaves the clipboard empty instead of putting the password back, for the same reason as above.
+- Apps that read the clipboard late, such as virtual machines or remote desktops that sync it, may paste what Fudge put back instead of the content.
+
+### Windows
+
+Extensions can list your windows, and move, resize or make full screen any of them (`WindowManagement`).
+That needs the same Accessibility permission. macOS doesn't let apps see your Spaces, so to extensions each screen is one desktop, and Fudge can't move a window to another Space.
+
+### Images from the web
+
+When an extension uses an `https://` image (an icon, or an image in markdown), Fudge shows it and keeps it in `~/Library/Application Support/fudge/image-cache/` (up to 200 MB).
+A downloaded image is reused for a day, then checked for changes the next time it's shown.
+`http://` images, and images from your Mac or the local network, aren't shown.
 
 ### Quicklinks
 
@@ -241,16 +254,6 @@ In "1.234,5", `1.000 + 1` is 1.001, and `1.5` isn't a number, so it gets no answ
 Currency conversion uses the European Central Bank's daily exchange rates.
 Turn it on under **Settings… → General**; until then, a currency query shows a card that takes you there.
 
-### Updates
-
-Fudge can check for a new version daily, weekly or monthly.
-Pick how often when Fudge first starts, or under **Settings… → General → Check for Updates** (Never turns it off); until you pick, it doesn't check.
-**Check Now** on the same page, or **Check for Updates…** in the menu bar menu, checks at once.
-
-When there's a new version, Fudge says so once, the General page shows it with **Download…**, and the menu bar menu shows it at the top.
-Both open the release's page on GitHub.
-Fudge never downloads or installs anything by itself.
-
 ### Search Files
 
 **Search Files** finds files and folders by name with Spotlight.
@@ -270,6 +273,19 @@ It shows the emoji your Mac can draw.
 
 In **Settings… → Search Emoji & Symbols**, **Skin Tone** picks the tone for the emoji that have one.
 
+### Clipboard History
+
+**Clipboard History** keeps what you copy, so you can search it and paste it again.
+It's off until you turn on **Keep Clipboard History** in **Settings… → Clipboard History**.
+The history is encrypted on this Mac, and copies that password managers mark as private aren't kept.
+Extensions can read it, as in Raycast.
+
+- ↵ pastes a copy into the app you're in, and ⌘↵ copies it. ⇧⌘P pins it, so it's kept however old it gets.
+- ⌃X deletes a copy, and ⌃⇧X deletes them all, after asking.
+
+On the same page, **Keep For** sets how long copies are kept (7 days by default), **Ignore Apps** lists apps whose copies aren't kept, and **Clear History…** deletes everything.
+Turning the switch off asks whether to keep or delete what's there.
+
 ### Color Picker
 
 **Pick Color** shows a magnifier: click a color anywhere on the screen to copy it, or press Esc to cancel.
@@ -285,69 +301,6 @@ Give either one a hotkey under **Settings… → Commands → Tools**.
 Type `define` and the word (`define serendipity`), or run it with nothing typed to look up the text selected in the app you're in.
 `define` is its alias, so you can change or clear it on the Commands page.
 ↵ (or ⌘D) opens the word in Dictionary, and ⌘↵ copies the definition.
-
-### Clipboard History
-
-**Clipboard History** keeps what you copy, so you can search it and paste it again.
-It's off until you turn on **Keep Clipboard History** in **Settings… → Clipboard History**.
-The history is encrypted on this Mac, and copies that password managers mark as private aren't kept.
-Extensions can read it, as in Raycast.
-
-- ↵ pastes a copy into the app you're in, and ⌘↵ copies it. ⇧⌘P pins it, so it's kept however old it gets.
-- ⌃X deletes a copy, and ⌃⇧X deletes them all, after asking.
-
-On the same page, **Keep For** sets how long copies are kept (7 days by default), **Ignore Apps** lists apps whose copies aren't kept, and **Clear History…** deletes everything.
-Turning the switch off asks whether to keep or delete what's there.
-
-### Extension Store
-
-The Extension Store browses the extensions in Raycast's open-source repository and installs the ones you choose.
-It takes two steps:
-
-1. Enable **Extension Store** under **Settings… → Commands**, and it shows up in Fudge.
-2. Turn it on with the switch at the top of **Settings… → Extension Store**.
-
-Turning it off removes the store's downloaded list; the extensions you installed stay installed.
-
-In the **Extension Store** command, search the extensions, or pick a category in the dropdown; **Installed** shows the ones you installed from it.
-
-- ↵ installs one, after saying whether Fudge supports everything it uses.
-  Fudge doesn't support Raycast AI or the Raycast Browser Extension.
-  An extension where only some commands use either is marked **Partly compatible**, and its details name those commands; one where every command does is marked **Not compatible**.
-  Those commands are installed turned off, so they aren't in root search, and **Settings… → Commands** says why.
-  You can turn one on there: it then works, apart from what needs Raycast AI or the Browser Extension.
-  ⌘U updates one marked **Update available**, and ⌃X uninstalls it, to the Trash.
-- ⌘D shows an extension's details: whether it's compatible (checked once you stay on it for a moment), each command and whether it opens a view, runs without one, or sits in the menu bar, and its README. ⌘R updates the list, which otherwise happens when you open the store and the list is a day old.
-  If the list couldn't be downloaded, ⌘R tries again.
-- If an install or update fails, the store shows the whole error and its likely cause, such as npm not found or the npm registry not reachable. ↵ tries again, and ⌘C copies the error, to send with an issue.
-  It uses the proxy set in **System Settings → Network** for npm and Git, unless you've set one yourself (`HTTPS_PROXY`); a proxy configuration file (PAC) can't be passed on.
-- The store needs Git.
-  If it's missing, install Apple's Command Line Tools: run `xcode-select --install` in Terminal.
-- It never touches extensions you installed with `fudge build` yourself.
-  An extension installs under its own name, so it can't be installed while another extension of that name is: uninstall that one first.
-
-### Signing in
-
-Some extensions sign in to a service, such as GitHub or Linear.
-Pick a sign-in server under **Settings… → Sign-in**: **Fudge's sign-in server**, or **Your own server…**.
-A company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth).
-Extensions can sign in to GitHub, Linear, Slack, Asana, Google, Atlassian (Jira and Confluence) and Zoom, as far as the server offers them.
-When an extension needs to sign in, Fudge shows **Sign in to** the service, and ↵ continues in your browser.
-Sign-ins are kept in your Keychain, and the Sign-in page lists them, each with **Sign Out**.
-Changing the server signs you out of everything.
-
-Extensions trust the certificates your Mac trusts, so a server behind your company's own certificate works as it does in Safari.
-
-An extension that takes a token in its settings (⌘⇧,) works without signing in.
-
-### Menu bar commands
-
-An extension's menu bar command puts its own item in the menu bar.
-Run it from root search to turn it on, and the item stays there, across restarts, until you select the command in root search and pick **Deactivate Menu Bar Item** from ⌘K.
-Running it again from root search refreshes it and opens its menu.
-The command refreshes itself in the background at Fudge's start and as often as its extension asks, and again each time you open its menu.
-When a background refresh fails, the item keeps what it showed last and its menu ends with "⚠ Last refresh failed".
-Fudge shows at most 50 of these items.
 
 ### Window management
 
@@ -395,54 +348,101 @@ Each shows its time, its calendar's color, and "Now" or "in 12 min" when it's ab
 The first time you open it, macOS asks to let Fudge see your calendars; you can change that under **Privacy & Security → Calendars**.
 **Settings → Calendar** picks which calendars it shows, and how many days ahead (1, 3, 7 or 14).
 
-### Selected text and Finder items
+### Updates
 
-Extensions can read the text selected in the app you were in, and the items selected in Finder.
-The first time, macOS asks you to allow Fudge under **Privacy & Security → Accessibility** or **Automation**.
+Fudge can check for a new version daily, weekly or monthly.
+Pick how often when Fudge first starts, or under **Settings… → General → Check for Updates** (Never turns it off); until you pick, it doesn't check.
+**Check Now** on the same page, or **Check for Updates…** in the menu bar menu, checks at once.
 
-macOS only asks when Fudge isn't in the Accessibility list yet.
-If Fudge is there but switched off, or the entry was left by an older build of Fudge, nothing appears, and extensions are just refused.
-So when Accessibility is refused a second time, Fudge shows its own alert, once per run, and **Open Accessibility Settings** takes you to the list.
-Switch Fudge on there.
-If it's already on, select it, remove it with −, and add it again with +.
+When there's a new version, Fudge says so once, the General page shows it with **Download…**, and the menu bar menu shows it at the top.
+Both open the release's page on GitHub.
+Fudge never downloads or installs anything by itself.
 
-When an app doesn't share its selection through Accessibility (often browsers and Electron apps such as VS Code), Fudge copies it with ⌘C and puts back what was on your clipboard right after.
-That has some side effects:
+### Backup: import and export
 
-- A clipboard history app may record the copied text.
-- If your clipboard holds a password that a password manager marked as concealed, Fudge leaves the clipboard empty instead of putting the password back.
-  Put back, it would look like a new copy, and the password manager would no longer clear it.
-- Clipboard data over 50 MB (of one type) isn't put back.
-  An app that only produces its clipboard data when asked (some design apps do this with large images) still has to produce it, so that can take a moment.
-- An app that copies something when nothing is selected hands that over instead.
-  VS Code, for example, copies the current line.
-- Fudge waits half a second for the copy.
-  An app that answers ⌘C later than that copies after Fudge has put your clipboard back, so the selected text ends up on your clipboard.
+**Settings… → General → Import / Export** saves everything you've set up in Fudge to one file, and brings it back, on this Mac or another one.
 
-Secure text fields, such as passwords, never give their text.
+- **Export…** asks for a password (at least 8 characters), then where to save `fudge-backup-<date>.fudgebackup`.
+  The file holds Fudge's settings (hotkeys, aliases, which commands are on), your quicklinks, snippets and recent colors, the answers about extensions opening other extensions, root search's ranking, every extension's preferences and data, and the list of installed extensions.
+  It's always encrypted with your password, because extensions keep passwords and tokens in there; Fudge can't recover a forgotten one.
+  The file opens only in Fudge, not with Apple's `aea` tool.
+  Extension data over 100 MB in total leaves out the biggest extensions' data, and the export says which.
+- **Import…** (also **Restore from a Backup…** on the Welcome screen Fudge shows the first time) asks for the file and its password, shows what's in it, and replaces your settings and the data of the extensions in the backup; other extensions keep theirs.
+  The summary also lists the backup's extensions that changed since it was made (a new version, an update from the Extension Store, or installed another way); they're imported all the same.
+  It then lists the extensions in the backup that aren't installed here, so you can reinstall them.
+  It installs nothing itself.
+- **The extensions themselves aren't in a backup**, only the list, and neither are caches, the exchange rates, your sign-ins, the sign-in server or the Extension Store's switch (set these again yourself).
+- Before importing, Fudge saves what it's about to replace in `backups/` in its support folder (`~/Library/Application Support/fudge/backups`), readable by you only.
+  It keeps the last 3.
+  You can import one of those with **Import…**; it needs no password.
 
-### Images from the web
+## Building
 
-When an extension uses an `https://` image (an icon, or an image in markdown), Fudge shows it and keeps it in `~/Library/Application Support/fudge/image-cache/` (up to 200 MB).
-A downloaded image is reused for a day, then checked for changes the next time it's shown.
-`http://` images, and images from your Mac or the local network, aren't shown.
+You need macOS 14 or later and Xcode 26 or later.
+The first build downloads the Node.js that Fudge includes from nodejs.org, checks it against the checksum pinned in the `Makefile`, and keeps it in `.cache/node`; every build step and test uses it.
+The app runs on macOS 14 and later.
 
-### Pasting
+```bash
+make app     # build build/Fudge.app
+make dmg     # build it into a disk image, build/Fudge-<version>.dmg
+make release # the same, signed with the Developer ID and notarized (the maintainer's, after secret env apple)
+make run     # build it and open it
+make test    # run the Swift and extension host tests
+make lint    # check formatting and types
 
-Extensions can paste into the app you were in (`Clipboard.paste`, the Paste action).
-Fudge puts the content on your clipboard, presses ⌘V in that app, and puts back what was on your clipboard about a second later.
-It needs the same Accessibility permission.
-Without it, the content stays on your clipboard for you to paste yourself.
+make install-extension DIR=path/to/extension   # compile and install an extension
+```
 
-- Fudge marks what it puts on the clipboard as transient, so clipboard history apps that follow [nspasteboard.org](http://nspasteboard.org) skip it.
-- If you copy something within that second, Fudge leaves your new copy alone.
-- If your clipboard held a password that a password manager marked as concealed, Fudge leaves the clipboard empty instead of putting the password back, for the same reason as above.
-- Apps that read the clipboard late, such as virtual machines or remote desktops that sync it, may paste what Fudge put back instead of the content.
+`make help` lists every target.
 
-### Windows
+### Keeping permissions across builds
 
-Extensions can list your windows, and move, resize or make full screen any of them (`WindowManagement`).
-That needs the same Accessibility permission. macOS doesn't let apps see your Spaces, so to extensions each screen is one desktop, and Fudge can't move a window to another Space.
+macOS remembers the permissions you give Fudge (Accessibility, Automation) by its code signature.
+An ad hoc signature changes with every build, so macOS would forget them each time.
+`make app` signs with the first of these that your keychain has:
+
+1. a code-signing identity named **fudge local signing**;
+2. an **Apple Development** identity, which Xcode creates when you add your Apple Account under **Xcode → Settings → Accounts**;
+3. otherwise none: it signs ad hoc.
+
+Its last line says which identity it used.
+`make app SIGN_IDENTITY=-` builds ad hoc anyway, and `SIGN_IDENTITY=<name>` picks another identity.
+
+**The first build that signs with an identity shows a keychain prompt** ("codesign wants to sign using key … in your keychain").
+Enter your login password and click **Always Allow**, once.
+Otherwise every later build stops at that prompt, and a build nobody is watching hangs on it.
+
+Without an Apple Development identity, you can create the self-signed one:
+
+1. In Keychain Access, choose **Keychain Access → Certificate Assistant → Create a Certificate…**.
+   Name it `fudge local signing`, with identity type **Self-Signed Root** and certificate type **Code Signing**.
+2. Open the certificate, expand **Trust**, and set **Code Signing** to **Always Trust**.
+3. Expand the certificate in **My Certificates**, open its private key, and under **Access Control** add `/usr/bin/codesign` to the allowed applications (⌘⇧G in the file dialog lets you type the path).
+   Or answer the first build's prompt with **Always Allow**, as above.
+
+Releases are signed with Fudge's Developer ID, so their permissions carry over from one release to the next.
+A release and a build you made yourself have different signatures, so switching between them asks for the permissions again.
+
+Every build has the hardened runtime, which notarizing needs.
+It refuses a protected resource unless the app has its entitlement, so `App/Fudge.entitlements` lists the ones Fudge uses: Apple Events and Calendars.
+The Node.js inside Fudge has two of its own, in `App/Helpers/node.entitlements`: one to compile JavaScript as it runs, and one to load extensions' native addons, which others have signed.
+
+## What's here
+
+- `Sources/FudgeApp`: the macOS app.
+  It runs in the menu bar, without a Dock icon.
+- `Sources/FudgeCLI`: the `fudge` command-line tool.
+  `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for Fudge; `--into <folder>` installs it in that extensions folder instead.
+  `fudge scan <folder>` says what the extension uses that Fudge doesn't have yet or doesn't support, without building it (`--json` for a script).
+  A running Fudge picks up an extension you install, rebuild or remove within a second, with nothing to reload.
+- `Sources/FudgeCore`: code shared by the app and the tool.
+- `runtime/`: the extension host.
+  This is the Node.js program that runs extensions.
+  The app talks to it over stdin/stdout.
+- `runtime/store-extension/`: the Extension Store, an extension bundled with Fudge that lists and installs the extensions published in github.com/raycast/extensions.
+- `runtime/file-search-extension/`: Search Files, an extension bundled with Fudge that finds files and folders by name.
+- `runtime/emoji-extension/`: Search Emoji & Symbols, an extension bundled with Fudge that finds emoji by name and pastes them.
+- `runtime/clipboard-history-extension/`: Clipboard History, an extension bundled with Fudge that lists what you copied.
 
 ## License
 
