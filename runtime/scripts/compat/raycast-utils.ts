@@ -143,7 +143,8 @@ export function renderTable(table: Record<string, string[]>, version: string): s
     return lines.join("\n");
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+// Only when run as this script: bundled into another one (`compat-scan.js`), `import.meta.url` is that bundle's.
+if (process.argv[1] === fileURLToPath(import.meta.url) && import.meta.url.endsWith(".ts")) {
     const version = (JSON.parse(readFileSync(join(packageDirectory, "package.json"), "utf8")) as { version: string }).version;
     const map = JSON.parse(readFileSync(join(packageDirectory, "dist/module.js.map"), "utf8")) as SourceMap;
     const expected = renderTable(await utilsTable(map), version);

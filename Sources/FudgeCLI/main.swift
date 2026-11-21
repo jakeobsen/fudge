@@ -8,6 +8,9 @@ let usage = """
       build <folder> [--into <extensions folder>]
                       Compile the Raycast extension in <folder> and install it, in the
                       default extensions folder or, with --into, in that one.
+      scan <folder> [--json]
+                      Say what the extension in <folder> uses that Fudge doesn't have
+                      yet. Nothing is built or run.
       help            Show this help.
       version         Print the Fudge version.
     """
@@ -32,6 +35,35 @@ func build(_ arguments: BuildArguments) {
     }
 }
 
+/// Runs the bundled compatibility scanner with node; its output and exit status are the command's.
+func scan(_ arguments: ScanArguments) -> Never {
+    let executable = Bundle.main.executableURL?.resolvingSymlinksInPath()
+    guard let script = CompatScanner.locateScript() else {
+        fail(
+            "can't find the compatibility scanner: set FUDGE_COMPAT_SCAN to compat-scan.js, or use the fudge inside Fudge.app"
+        )
+    }
+    guard let esbuild = ExtensionBuilder.locateEsbuild() else {
+        fail("can't find esbuild: set FUDGE_ESBUILD to its path, or use the fudge inside Fudge.app")
+    }
+    guard let node = Runtime.locateNode(helpers: executable?.deletingLastPathComponent()) else {
+        fail("can't find node: set FUDGE_NODE to its path")
+    }
+    let (nodeArguments, environment) = CompatScanner.invocation(
+        script: script, esbuild: esbuild, arguments: arguments, environment: ProcessInfo.processInfo.environment)
+    let process = Process()
+    process.executableURL = node
+    process.arguments = nodeArguments
+    process.environment = environment
+    do {
+        try process.run()
+    } catch {
+        fail("couldn't run node: \(error)")
+    }
+    process.waitUntilExit()
+    exit(process.terminationStatus)
+}
+
 let arguments = Array(CommandLine.arguments.dropFirst())
 
 switch arguments.first {
@@ -42,6 +74,12 @@ case "version", "--version":
 case "build":
     do {
         build(try BuildArguments.parse(Array(arguments.dropFirst())))
+    } catch {
+        fail(String(describing: error), status: 2)
+    }
+case "scan":
+    do {
+        scan(try ScanArguments.parse(Array(arguments.dropFirst())))
     } catch {
         fail(String(describing: error), status: 2)
     }

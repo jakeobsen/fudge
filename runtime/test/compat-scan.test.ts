@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import * as implementation from "../src/api/index.ts";
 import { createApiModule } from "../src/api/module.ts";
-import { NOT_DRAWN, notAvailable, UNAVAILABLE } from "../src/api/stubs.ts";
+import { mark, NOT_DRAWN, notAvailable, UNAVAILABLE } from "../src/api/stubs.ts";
 import { RAYCAST_UTILS_PATHS } from "../scripts/compat/raycast-utils.generated.ts";
 import { apiName, gaps, isExtensionSource, support, toJavaScript, uses } from "../scripts/compat/scan.ts";
 import { raycastDeclarations, vendoredTypes } from "../scripts/raycast-types.ts";
@@ -73,6 +73,12 @@ test("an action that renders but fails when used is render-but-fail", () => {
 
 test("a component the app doesn't draw, and any member of one, is not-drawn", () => {
     assert.equal(support(api, "Form.LinkAccessory", declared), "not-drawn");
+    // LinkAccessory has no members, so a small marked component stands in for one that does.
+    const Thing = Object.assign(() => null, { Item: Object.assign(() => null, { Kind: { Big: "big" } }) });
+    mark(Thing, NOT_DRAWN, "Thing");
+    for (const path of ["Thing", "Thing.Item", "Thing.Item.Kind.Big"]) {
+        assert.equal(support({ Thing }, path), "not-drawn", `${path}: a member of a component that isn't drawn`);
+    }
     // The app draws these now, and the old names that reach them too.
     const drawn = [
         ...["Form", "Form.TextField", "Form.Checkbox", "List.Item", "Detail.Metadata.Label"],
