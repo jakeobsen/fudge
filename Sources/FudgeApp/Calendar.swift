@@ -3,9 +3,21 @@ import EventKit
 import FudgeCore
 
 /// The Mac's calendars through EventKit, for My Schedule (SPEC-092). It only reads: nothing is created, changed or
-/// kept, and nothing an event holds is logged.
+/// kept, and nothing an event holds is logged. Every call to the store goes through one serial queue, and callers
+/// make them off the main thread, since each waits on the calendar agent. The store is made on first use, so a run
+/// that never opens My Schedule or the Calendar page (a snapshot run, say) never makes one.
 final class EventKitCalendarSource: CalendarSource, @unchecked Sendable {
-    private let store = EKEventStore()
+    private let queue = DispatchQueue(label: "io.github.jakeobsen.fudge.calendar")
+    /// Read and written on `queue` only.
+    private var made: EKEventStore?
+
+    /// The store, made on first use; on `queue` only.
+    private var store: EKEventStore {
+        if let made { return made }
+        let store = EKEventStore()
+        made = store
+        return store
+    }
 
     var authorization: CalendarAuthorization {
         switch EKEventStore.authorizationStatus(for: .event) {
@@ -19,29 +31,35 @@ final class EventKitCalendarSource: CalendarSource, @unchecked Sendable {
 
     /// macOS's prompt, the first time; afterwards it answers at once. Only My Schedule's own run calls it.
     func requestAccess() async -> Bool {
+        let store = queue.sync { self.store }
         let granted = (try? await store.requestFullAccessToEvents()) ?? false
         // A store made before the grant can hold an empty list of calendars.
-        if granted { store.reset() }
+        if granted { queue.sync { store.reset() } }
         return granted
     }
 
     func calendars() -> [CalendarInfo] {
         guard authorization.canRead else { return [] }
-        return store.calendars(for: .event).map {
-            CalendarInfo(id: $0.calendarIdentifier, title: $0.title, color: Self.hex($0.cgColor))
+        return queue.sync {
+            store.calendars(for: .event).map {
+                CalendarInfo(id: $0.calendarIdentifier, title: $0.title, color: Self.hex($0.cgColor))
+            }
         }
     }
 
     func events(from: Date, to: Date, calendars ids: Set<String>) -> [CalendarEvent] {
         guard authorization.canRead else { return [] }
-        let chosen = store.calendars(for: .event).filter { ids.contains($0.calendarIdentifier) }
-        guard !chosen.isEmpty else { return [] }
-        let predicate = store.predicateForEvents(withStart: from, end: to, calendars: chosen)
-        return store.events(matching: predicate).map { event in
-            CalendarEvent(
-                identifier: event.calendarItemIdentifier, title: event.title ?? "", start: event.startDate,
-                end: event.endDate, isAllDay: event.isAllDay, calendarID: event.calendar.calendarIdentifier,
-                location: event.location, notes: event.notes, url: event.url, attendees: event.attendees?.count ?? 0)
+        return queue.sync {
+            let chosen = store.calendars(for: .event).filter { ids.contains($0.calendarIdentifier) }
+            guard !chosen.isEmpty else { return [] }
+            let predicate = store.predicateForEvents(withStart: from, end: to, calendars: chosen)
+            return store.events(matching: predicate).map { event in
+                CalendarEvent(
+                    identifier: event.calendarItemIdentifier, title: event.title ?? "", start: event.startDate,
+                    end: event.endDate, isAllDay: event.isAllDay, calendarID: event.calendar.calendarIdentifier,
+                    location: event.location, notes: event.notes, url: event.url,
+                    attendees: event.attendees?.count ?? 0)
+            }
         }
     }
 

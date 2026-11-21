@@ -39,8 +39,9 @@ private let calendars = [
         ("https://teams.live.com/meet/123", "Microsoft Teams"), ("https://acme.webex.com/meet/someone", "Webex"),
         ("https://facetime.apple.com/join#v=1&p=abc", "FaceTime"), ("https://whereby.com/team-room", "Whereby"),
         ("https://around.co/r/standup", "Around"), ("https://meet.jit.si/SomeRoom", "Jitsi"),
-        ("zoommtg://zoom.us/join?confno=123", "Zoom"), ("msteams:/l/meetup-join/19%3ameeting", "Microsoft Teams"),
-        ("facetime://someone@example.com", "FaceTime"), ("HTTPS://ZOOM.US/j/1", "Zoom"),
+        ("zoommtg://zoom.us/join?confno=123", "Zoom"), ("zoommtg://us02web.zoom.us/join?confno=1", "Zoom"),
+        ("msteams://teams.microsoft.com/l/meetup-join/19%3ameeting", "Microsoft Teams"),
+        ("HTTPS://ZOOM.US/j/1", "Zoom"),
     ]
     for (text, service) in links {
         #expect(MeetingLinks.first(in: text)?.service == service, "\(text)")
@@ -55,6 +56,12 @@ private let calendars = [
         "http://zoom.us/j/1", "file:///Users/someone/zoom.us", "javascript:alert('zoom.us')",
         "x-apple.systempreferences:com.apple.preference.security", "ftp://zoom.us/j/1", "data:text/html,zoom.us",
         "https://example.com/docs", "zoom.us", "https://zoom.us", "https://meet.google.com/", "Meet me at the zoo.",
+        // An app's own scheme only on that service's hosts, and FaceTime's not at all: it calls whoever it names.
+        "facetime://attacker@evil.example", "facetime:someone@example.com", "zoommtg://evil.example/join?action=start",
+        "msteams://evil.example/x", "msteams:/l/meetup-join/x", "zoommtg://user@zoom.us/join",
+        "zoommtg://teams.microsoft.com/join", "msteams://zoom.us/x",
+        // A host written plainly only.
+        "https://evil.example%2F.zoom.us/j/1", "https://zo%6Fm.us/j/1",
     ]
     for text in refused {
         #expect(MeetingLinks.first(in: text) == nil, "\(text)")
@@ -79,6 +86,26 @@ private let calendars = [
         MeetingLinks.first(in: "Dial in: meet.google.com/abc-defg-hij")?.url.absoluteString
             == "https://meet.google.com/abc-defg-hij", "no scheme reads as https")
     #expect(MeetingLinks.find(in: event("Lunch", "23T12:00", "23T13:00", notes: "No link here")) == nil)
+}
+
+@Test func onlyTheStartOfLongNotesIsLookedThrough() throws {
+    let padding = String(repeating: "lorem ipsum ", count: 90_000)  // about 1 MB
+    let late = event("Late", "23T10:00", "23T11:00", notes: padding + " https://zoom.us/j/1")
+    #expect(MeetingLinks.find(in: late) == nil, "a link past the first \(MeetingLinks.searchedLength) characters")
+    let early = event("Early", "23T10:00", "23T11:00", notes: "https://meet.google.com/abc-defg-hij " + padding)
+    #expect(MeetingLinks.find(in: early)?.service == "Google Meet")
+    let lateLocation = event("Where", "23T10:00", "23T11:00", location: padding + " https://zoom.us/j/1")
+    #expect(MeetingLinks.find(in: lateLocation) == nil)
+
+    // Twenty invites of a megabyte each draw in well under a second in a release build; the bound is loose for CI.
+    let invites = (0..<20).map { event("Invite \($0)", "23T10:00", "23T11:00", location: padding, notes: padding) }
+    let started = ContinuousClock.now
+    let view = ScheduleList.view(content(invites), showingDetail: true, now: now, calendar: utc, locale: british)
+    let list = ListContent(view, searchText: "")
+    #expect(list.items.count == 20)
+    #expect(ContinuousClock.now - started < .seconds(20))
+    let markdown = try #require(list.items.first?.detail?.string("markdown"))
+    #expect(markdown.count < ScheduleList.notesLimit + 20, "the detail holds only the start")
 }
 
 // MARK: - Days
@@ -209,6 +236,11 @@ private func content(_ events: [CalendarEvent], daysAhead: Int = 7) -> ScheduleL
     #expect(list.items.map(\.title) == ["Standup", "Dentist", "Planning"])
     #expect(list.items.map(\.subtitle) == ["08:20 – 08:45", "09:00 – 09:30", "10:00 – 11:00"])
     #expect(list.items.map { $0.accessories.first?.text } == ["Now", "in 30 min", nil])
+    // An event spanning days is on now only on today's row.
+    let trip = event("Trip", "22T18:00", "24T10:00")
+    let tripList = ListContent(
+        ScheduleList.view(content([trip]), now: now, calendar: utc, locale: british), searchText: "")
+    #expect(tripList.items.map { $0.accessories.first?.text } == ["Now", nil])
     let standup = try #require(list.items.first)
     #expect(
         MetadataEntry.entries(of: standup.detail?.node("metadata")).map { entry -> String in

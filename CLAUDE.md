@@ -146,12 +146,16 @@ Extensions run in a separate Node.js process, the extension host.
       `Schedule` (core) holds the logic: the days from today to **Days Ahead** (`calendarDaysAhead`: 1, 3, 7 or 14), each titled Today, Tomorrow or its date, with the events not over yet that overlap it.
       An event spanning days is on each, as "From 22:00", "All day" or "Until 10:00"; all-day ones come first; "Now" or "in N min" marks what's within the hour; and the calendars unticked on the Calendar page are left out (`calendarHidden`, so a new calendar shows).
       `ScheduleList` (core) is the List, built like Search Snippets and shown under its own session (`ScheduleList.session`), so nothing of it reaches the host.
-      **Invites are written by other people.** `MeetingLinks` (core) takes a link from the event's URL, then location, then notes, only when its parsed scheme is `https` with a path and its parsed host is a known meeting host or a subdomain of one (`MeetingLinks.hosts`), or its scheme is a meeting app's (`zoommtg`, `msteams`, `facetime`), never by substring and never another scheme.
+      **Invites are written by other people.** `MeetingLinks` (core) takes a link from the event's URL, then location, then notes, only when its parsed host, written plainly (no user, no percent encoding), is a known meeting host or a subdomain of one (`MeetingLinks.hosts`).
+      Its scheme must be `https` with a path, or a meeting app's on that service's hosts (`zoommtg`, `msteams`; `facetime:` calls whoever it names, so FaceTime counts only as `https://facetime.apple.com/…`), never matched by substring and never another scheme.
+      Only the first 20,000 characters of a location or notes are looked through (`MeetingLinks.searchedLength`), and the detail shows the first 5,000, since an invite's notes can be megabytes.
       The notes are shown in a code block, so nothing in them is read as markdown and no image loads.
       Nothing from an event is logged or written anywhere, its row id is its position (`event-<n>`), and only the command counts in `LaunchHistory`.
       ↵ is Join Meeting when there's a link, else Open in Calendar (⌘O, `ical://ekevent/<id>?method=show&options=more`), then Copy Meeting Link (⌘⇧C) and Copy Details; Show Details (⌘D) shows the detail pane, which hides the rows' times.
       Calendar access (`NSCalendarsFullAccessUsageDescription`) is asked for only when My Schedule runs, the first time; refused, it shows an empty view with Open Privacy Settings.
       Its hotkey hides it again when it's on screen, and `EKEventStoreChanged` draws it again.
+      The calendars are read off the main thread (`LauncherModel.readSchedule`, and the Calendar page's `loadCalendars`), since every EventKit call waits on the calendar agent: the list shows as loading until the read lands, and ⌘D draws again from it without reading again.
+      `EventKitCalendarSource` runs every call on one serial queue, and makes its store on first use.
       **Settings → Calendar** (`CalendarPage.swift`, after Sign-in) has Days Ahead and a checkbox per calendar.
     - **Arguments.**
       A selected command's `arguments` get fields after the query, which then shrinks to its text.

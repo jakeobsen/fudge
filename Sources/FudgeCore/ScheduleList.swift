@@ -208,7 +208,8 @@ public enum ScheduleList {
             "actions": UINode(id: base + Node.actions, type: "ActionPanel", children: actions).json,
             "detail": detail.json,
         ]
-        if let accessory = Schedule.accessory(of: event, now: now) {
+        // "Now" and "in N min" belong to today's row of an event, not to the later days it spans.
+        if day.interval.contains(now), let accessory = Schedule.accessory(of: event, now: now) {
             props["accessories"] = .array([.object(["text": .string(accessory)])])
         }
         return UINode(id: base + Node.item, type: "List.Item", props: props)
@@ -216,9 +217,10 @@ public enum ScheduleList {
 
     /// The notes as the detail shows them: trimmed, cut at `notesLimit`, in a code block, so they're literal text.
     static func notesMarkdown(_ notes: String?) -> String {
-        guard var text = trimmed(notes) else { return "" }
-        if text.count > notesLimit { text = String(text.prefix(notesLimit)) + "…" }
-        return SnippetList.codeBlock(text)
+        // Only the start is ever looked at, so a megabyte of notes costs no more than 5,000 characters.
+        guard let notes, let text = trimmed(String(notes.prefix(notesLimit * 2))) else { return "" }
+        let shown = text.prefix(notesLimit + 1)
+        return SnippetList.codeBlock(shown.count > notesLimit ? String(shown.prefix(notesLimit)) + "…" : String(shown))
     }
 
     private static func trimmed(_ text: String?) -> String? {

@@ -340,10 +340,13 @@ final class SettingsModel {
     private(set) var calendars: [CalendarInfo] = []
 
     /// Reads the access and the calendars again, without asking: when the page is shown or the window becomes key.
+    /// The calendars are read off the main thread, since EventKit waits on the calendar agent.
     func loadCalendars() {
         calendarAccess = calendarSource.authorization
-        calendars = calendarSource.calendars().sorted {
-            $0.title.localizedStandardCompare($1.title) == .orderedAscending
+        let source = calendarSource
+        Task {
+            let read = await Task.detached(priority: .userInitiated) { source.calendars() }.value
+            calendars = read.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         }
     }
 

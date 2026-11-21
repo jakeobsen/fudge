@@ -1937,14 +1937,19 @@ final class LauncherModel {
     @ObservationIgnored private var scheduleContent = ScheduleList.Content.asking
     /// Whether My Schedule shows its detail pane (Show Details, ⌘D), for the run.
     @ObservationIgnored private var scheduleShowsDetail = false
+    /// The read of the calendars under way, off the main thread; a newer one replaces it.
+    @ObservationIgnored private var scheduleRead: Task<Void, Never>?
 
     /// Shows My Schedule (SPEC-092), from root search or its hotkey. Its hotkey hides it again when it's on screen,
-    /// as a view command's does. Calendar access is asked for here, the first time, and nowhere else.
+    /// as a view command's does. It shows as loading until the calendars are read, off the main thread. Calendar
+    /// access is asked for here, the first time, and nowhere else.
     private func showSchedule(fromHotkey: Bool) {
         if fromHotkey, isVisible(), case .command(let command) = screen, command.session == ScheduleList.session {
             hide()
             return
         }
+        let access = calendarSource.authorization
+        scheduleContent = access.canRead || access == .notDetermined ? .asking : .refused
         let build = {
             if case .command = self.screen { self.leaveCommand() }
             self.actionPanel = nil
@@ -1960,49 +1965,75 @@ final class LauncherModel {
         } else {
             build()
         }
-        guard calendarSource.authorization == .notDetermined else { return }
+        guard access == .notDetermined else {
+            if access.canRead { readSchedule() }
+            return
+        }
         let source = calendarSource
         Task {
             _ = await source.requestAccess()
-            reloadSchedule()
+            readSchedule()
         }
     }
 
-    /// Reads the calendars and draws the list, keeping the search text and the selection where it can: the days
-    /// from today to Days Ahead, of the calendars not unticked on the Calendar page.
-    private func renderSchedule(_ command: inout CommandScreen) {
-        let now = Date()
-        let calendar = Calendar.current
-        let content: ScheduleList.Content
-        switch calendarSource.authorization {
+    /// Reads the calendars off the main thread, since every EventKit call waits on the calendar agent, then draws the
+    /// list if it's still on screen: the days from today to Days Ahead, of the calendars not unticked on the Calendar
+    /// page.
+    private func readSchedule() {
+        scheduleRead?.cancel()
+        let source = calendarSource
+        let chosen = FudgeSettings.load(from: paths.settingsFile)
+        scheduleRead = Task {
+            let content = await Task.detached(priority: .userInitiated) {
+                Self.scheduleContent(from: source, chosen: chosen, now: Date(), calendar: .current)
+            }.value
+            guard !Task.isCancelled else { return }
+            scheduleContent = content
+            drawSchedule()
+        }
+    }
+
+    /// What My Schedule shows, read from `source`: called off the main thread.
+    nonisolated private static func scheduleContent(
+        from source: any CalendarSource, chosen: FudgeSettings, now: Date, calendar: Calendar
+    ) -> ScheduleList.Content {
+        switch source.authorization {
         case .fullAccess:
-            let chosen = FudgeSettings.load(from: paths.settingsFile)
-            let calendars = calendarSource.calendars()
+            let calendars = source.calendars()
             let window = Schedule.window(now: now, daysAhead: chosen.calendarDaysAhead, calendar: calendar)
-            let events = calendarSource.events(
+            let events = source.events(
                 from: window.start, to: window.end,
                 calendars: Schedule.shownCalendars(calendars, hidden: chosen.calendarHidden))
-            content = .days(
+            return .days(
                 Schedule.days(
                     events, now: now, daysAhead: chosen.calendarDaysAhead, calendar: calendar, locale: .current),
                 calendars: calendars, daysAhead: chosen.calendarDaysAhead)
         case .notDetermined:
-            content = .asking
+            return .asking
         default:
-            content = .refused
+            return .refused
         }
-        scheduleContent = content
+    }
+
+    /// Draws the list from what was last read, keeping the search text and the selection where it can.
+    private func renderSchedule(_ command: inout CommandScreen) {
         command.view = ScheduleList.view(
-            content, showingDetail: scheduleShowsDetail, now: now, calendar: calendar, locale: .current)
+            scheduleContent, showingDetail: scheduleShowsDetail, now: Date(), calendar: .current, locale: .current)
         refreshList(&command, selectFirst: false)
     }
 
-    /// Draws My Schedule again, if it's on screen: after access is answered, the calendars change, or the Calendar
-    /// page changes what it shows.
-    func reloadSchedule() {
+    /// Draws My Schedule again from what was last read, if it's on screen.
+    private func drawSchedule() {
         guard case .command(var command) = screen, command.session == ScheduleList.session else { return }
         renderSchedule(&command)
         screen = .command(command)
+    }
+
+    /// Reads and draws My Schedule again, if it's on screen: after the calendars change, or the Calendar page
+    /// changes what it shows.
+    func reloadSchedule() {
+        guard case .command(let command) = screen, command.session == ScheduleList.session else { return }
+        readSchedule()
     }
 
     /// One of its actions, as `send` hands it over.
@@ -2029,7 +2060,7 @@ final class LauncherModel {
             showSettings(extension: SettingsModel.calendarPage)
         case .toggleDetail:
             scheduleShowsDetail.toggle()
-            reloadSchedule()
+            drawSchedule()
         }
     }
 

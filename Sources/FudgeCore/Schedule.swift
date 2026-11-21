@@ -90,10 +90,11 @@ public struct MeetingLink: Sendable, Equatable {
 }
 
 /// Finds the first video-meeting link in an event (SPEC-092). An invite is written by someone else, so a link counts
-/// only when its parsed scheme is `https` and its parsed host is a known meeting host or a subdomain of one, or when
-/// its scheme is one of a few meeting apps', and an https link has a path (a meeting's page, not the host's front
-/// page). Nothing is matched as a substring: `zoom.us.evil.example` and `evil.example/zoom.us` aren't Zoom, and
-/// `file:`, `javascript:` or any other scheme never counts.
+/// only when its parsed host is a known meeting host or a subdomain of one, written plainly (no user, no percent
+/// encoding), and its scheme is `https` with a path (a meeting's page, not the host's front page) or a meeting app's
+/// own, on that app's hosts. Nothing is matched as a substring: `zoom.us.evil.example` and `evil.example/zoom.us`
+/// aren't Zoom, and `file:`, `javascript:`, `facetime:` or any other scheme never counts. Only the first
+/// `searchedLength` characters of a location or notes are looked through, since anyone can send an invite.
 public enum MeetingLinks {
     /// Known hosts, by the service they belong to. A link's host must be one of these, or end in `.` and one.
     public static let hosts: [(host: String, service: String)] = [
@@ -103,16 +104,21 @@ public enum MeetingLinks {
         ("meet.jit.si", "Jitsi"),
     ]
 
-    /// The meeting apps' own schemes, which open the app straight away.
-    public static let appSchemes: [String: String] = [
-        "zoommtg": "Zoom", "msteams": "Microsoft Teams", "facetime": "FaceTime",
+    /// The meeting apps' own schemes, which open the app straight away, each only on its service's hosts. FaceTime's
+    /// meeting links are `https://facetime.apple.com/join…`; its own scheme calls whoever the link names, so it's left
+    /// out.
+    public static let appSchemes: [String: (service: String, hosts: [String])] = [
+        "zoommtg": ("Zoom", ["zoom.us", "zoomgov.com"]), "msteams": ("Microsoft Teams", ["teams.microsoft.com"]),
     ]
+
+    /// How much of a location or notes is looked through for a link: an invite's notes can be megabytes.
+    public static let searchedLength = 20_000
 
     /// The first meeting link in the event's URL, then its location, then its notes.
     public static func find(in event: CalendarEvent) -> MeetingLink? {
         if let url = event.url, let link = link(url.absoluteString) { return link }
         for text in [event.location, event.notes].compactMap(\.self) {
-            if let link = first(in: text) { return link }
+            if let link = first(in: String(text.prefix(searchedLength))) { return link }
         }
         return nil
     }
@@ -143,18 +149,22 @@ public enum MeetingLinks {
             guard let https = URLComponents(string: "https://" + candidate), https.host != nil else { return nil }
             components = https
         }
-        guard let scheme = components.scheme?.lowercased() else { return nil }
-        if let service = appSchemes[scheme] {
-            return components.url.map { MeetingLink(url: $0, service: service) }
-        }
-        // A meeting is a page on the host, never the host's front page (`zoom.us` alone in a sentence).
-        guard scheme == "https", components.user == nil, components.password == nil,
-            var host = components.host?.lowercased(), !host.isEmpty, components.path.count > 1
-        else { return nil }
-        if host.hasSuffix(".") { host.removeLast() }
-        guard let known = hosts.first(where: { host == $0.host || host.hasSuffix("." + $0.host) }),
+        guard let scheme = components.scheme?.lowercased(), components.user == nil, components.password == nil,
+            var host = components.percentEncodedHost?.lowercased(), !host.isEmpty,
+            host.unicodeScalars.allSatisfy({
+                CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789.-").contains($0)
+            }),
             let url = components.url
         else { return nil }
+        if host.hasSuffix(".") { host.removeLast() }
+        func on(_ known: String) -> Bool { host == known || host.hasSuffix("." + known) }
+        if let app = appSchemes[scheme] {
+            return app.hosts.contains(where: on) ? MeetingLink(url: url, service: app.service) : nil
+        }
+        // A meeting is a page on the host, never the host's front page (`zoom.us` alone in a sentence).
+        guard scheme == "https", components.path.count > 1, let known = hosts.first(where: { on($0.host) }) else {
+            return nil
+        }
         return MeetingLink(url: url, service: known.service)
     }
 }

@@ -350,7 +350,7 @@ It needs Accessibility permission (**Settings… → Permissions**).
 ### My Schedule
 
 **My Schedule** lists your events from today on, a section per day, from the calendars on your Mac.
-Each shows its time, its calendar's color, and "Now" or "in 12 min" when it's about to start; the detail has the place, the calendar, how many are invited and the notes.
+Each shows its time, its calendar's color, and "Now" or "in 12 min" when it's about to start; **Show Details** (⌘D) adds the place, the calendar, how many are invited and the notes.
 ↵ joins the meeting when the event has a Zoom, Google Meet, Microsoft Teams, Webex, FaceTime, Whereby, Around or Jitsi link, and otherwise opens the event in Calendar (⌘O).
 ⌘⇧C copies the meeting link, and Copy Details copies the event.
 
