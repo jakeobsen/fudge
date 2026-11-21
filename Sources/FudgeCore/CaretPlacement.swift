@@ -85,6 +85,9 @@ public struct PasteLanding: Sendable, Equatable {
     public var count: Int?
 
     public init(before: TextFieldState, pasted: PastedText) {
+        // While ⌫ presses are being taken, the caret and length pass through every value down to the keyword's
+        // start, so a paste no longer than what they delete would look landed before it is.
+        guard pasted.deletedBefore == 0 || pasted.length > pasted.deletedBefore else { return }
         var removed = pasted.deletedBefore
         if let selection = before.selection {
             if selection.length > 0 {
@@ -105,10 +108,10 @@ public struct PasteLanding: Sendable, Equatable {
     /// Whether anything about the field can tell that the paste has landed.
     public var isObservable: Bool { caret != nil || count != nil }
 
-    /// Whether `state` shows the paste: the caret just after it, or the length it gives.
+    /// Whether `state` shows the paste: the caret just after it, or, when the caret can't tell, the length it gives.
     public func landed(_ state: TextFieldState) -> Bool {
-        if let caret, state.selection == .caret(caret) { return true }
-        if let count, state.count == count { return true }
+        if let caret { return state.selection == .caret(caret) }
+        if let count { return state.count == count }
         return false
     }
 }
@@ -150,18 +153,24 @@ public struct CaretPlacer: Sendable {
     public let system: any CaretSystem
     /// Waits between polls and ← batches; tests pass one that doesn't.
     let sleep: @Sendable (Duration) async -> Void
-    /// Polls for the paste every 15 ms, about a second in all.
+    /// The time, for the landing's deadline; tests pass a clock their `sleep` moves on.
+    public let now: @Sendable () -> ContinuousClock.Instant
+    /// Polls for the paste every 15 ms, until a second after ⌘V.
     static let pollInterval: Duration = .milliseconds(15)
-    static let maxPolls = 66
+    static let landingDeadline: Duration = .seconds(1)
     /// After a paste the field can't show, or didn't in time: a moment for it to land anyway.
     static let settle: Duration = .milliseconds(150)
     /// ← presses go 10 at a time, 10 ms apart, so the app's queue keeps up.
     static let batch = 10
     static let batchPause: Duration = .milliseconds(10)
 
-    public init(system: any CaretSystem, sleep: @escaping @Sendable (Duration) async -> Void = CaretPlacer.realSleep) {
+    public init(
+        system: any CaretSystem, sleep: @escaping @Sendable (Duration) async -> Void = CaretPlacer.realSleep,
+        now: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
+    ) {
         self.system = system
         self.sleep = sleep
+        self.now = now
     }
 
     public static let realSleep: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
@@ -172,22 +181,26 @@ public struct CaretPlacer: Sendable {
         return await Self.offMain { system.state(of: pid) }
     }
 
-    /// Polls until the field shows the paste (`PasteLanding`), about a second at most. The state that showed it, or
-    /// nil when the field can't tell or didn't in time; and how many polls it took.
-    public func waitForLanding(_ pasted: PastedText, before: TextFieldState?, pid: Int32) async -> (
-        landed: TextFieldState?, polls: Int
-    ) {
+    /// Polls until the field shows the paste (`PasteLanding`), until a second after ⌘V (`posted`) by the clock, not
+    /// by the number of polls, since each read can take up to its 2 s timeout. A read that fails (the app didn't
+    /// answer in time, or there's no field any more) ends the wait at once. The state that showed the paste, or nil
+    /// when the field can't tell, stopped answering or didn't show it in time; and how many polls it took.
+    public func waitForLanding(
+        _ pasted: PastedText, before: TextFieldState?, pid: Int32, since posted: ContinuousClock.Instant
+    ) async -> (landed: TextFieldState?, polls: Int) {
         guard let before else { return (nil, 0) }
         let landing = PasteLanding(before: before, pasted: pasted)
         guard landing.isObservable else { return (nil, 0) }
         let system = system
-        for poll in 1...Self.maxPolls {
-            if let state = await Self.offMain({ system.state(of: pid) }), landing.landed(state) {
-                return (state, poll)
-            }
+        let deadline = posted + Self.landingDeadline
+        var polls = 0
+        while true {
+            polls += 1
+            guard let state = await Self.offMain({ system.state(of: pid) }) else { return (nil, polls) }
+            if landing.landed(state) { return (state, polls) }
+            if now() >= deadline { return (nil, polls) }
             await sleep(Self.pollInterval)
         }
-        return (nil, Self.maxPolls)
     }
 
     /// Puts the caret before the tail (SPEC-101 §2, §3), once `waitForLanding` has said where the paste is: through
@@ -220,9 +233,11 @@ public struct CaretPlacer: Sendable {
             return report
         }
         let target = end - report.tail
-        _ = await Self.offMain { system.setCaret(target, of: pid) }
+        let set = await Self.offMain { system.setCaret(target, of: pid) }
         let back = await Self.offMain { system.state(of: pid) }?.selection
-        if back == .caret(target) {
+        // A set the field took and doesn't report back on is trusted (the reviewer's note): ← presses on top of it
+        // would move the caret twice.
+        if back == .caret(target) || (set && back == nil) {
             report.path = .accessibility
             return report
         }

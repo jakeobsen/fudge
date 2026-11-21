@@ -22,6 +22,10 @@ final class FakeField: CaretSystem, @unchecked Sendable {
     var settable = true
     /// Where a set caret ends up; the place asked for by default.
     var setLands: (Int) -> Int = { $0 }
+    /// How long each read takes, as a slow app's would.
+    var readDelay: Duration = .zero
+    /// The first read that fails, as one that times out does; none by default.
+    var failsFromRead = Int.max
 
     init(before: TextFieldState? = nil, after: TextFieldState? = nil, landsOnRead: Int = .max) {
         self.before = before
@@ -34,8 +38,13 @@ final class FakeField: CaretSystem, @unchecked Sendable {
     func note(_ event: String) { lock.withLock { recorded.append(event) } }
 
     func state(of pid: Int32) -> TextFieldState? {
-        lock.withLock {
+        if readDelay > .zero { usleep(useconds_t(readDelay / .microseconds(1))) }
+        return lock.withLock {
             reads += 1
+            if reads >= failsFromRead {
+                recorded.append("read \(reads) failed")
+                return nil
+            }
             let landed = reads >= landsOnRead
             recorded.append("read \(reads)" + (landed ? " landed" : ""))
             var state = landed ? after : before
@@ -58,6 +67,16 @@ final class FakeField: CaretSystem, @unchecked Sendable {
     }
 }
 
+/// A clock that only the fake sleep moves on, so a wait "of a second" takes none.
+final class CaretClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private let start = ContinuousClock.now
+    private var passed: Duration = .zero
+
+    func now() -> ContinuousClock.Instant { lock.withLock { start + passed } }
+    func advance(_ duration: Duration) { lock.withLock { passed += duration } }
+}
+
 /// The reports `Paste` hands the log.
 @MainActor
 final class Reports {
@@ -66,8 +85,15 @@ final class Reports {
 
 private let pid: Int32 = 200
 
-private func placer(_ field: FakeField) -> CaretPlacer {
-    CaretPlacer(system: field, sleep: { field.note("sleep \($0.components.attoseconds / 1_000_000_000_000_000) ms") })
+/// A placer whose sleeps take no time, are noted in the field's events, and move a fake clock on.
+func placer(_ field: FakeField) -> CaretPlacer {
+    let clock = CaretClock()
+    return CaretPlacer(
+        system: field,
+        sleep: {
+            field.note("sleep \($0.components.attoseconds / 1_000_000_000_000_000) ms")
+            clock.advance($0)
+        }, now: clock.now)
 }
 
 /// What `Paste` does around ⌘V: read the field, post ⌘V, wait for the landing, place the caret.
@@ -75,7 +101,7 @@ private func paste(_ pasted: PastedText, into field: FakeField) async -> CaretRe
     let placer = placer(field)
     let before = await placer.read(pid)
     field.note("⌘V")
-    let (landed, polls) = await placer.waitForLanding(pasted, before: before, pid: pid)
+    let (landed, polls) = await placer.waitForLanding(pasted, before: before, pid: pid, since: placer.now())
     return await placer.place(pasted, before: before, landed: landed, polls: polls, waited: .zero, pid: pid)
 }
 
@@ -117,6 +143,12 @@ private func field(count: Int, _ location: Int, _ length: Int = 0) -> TextFieldS
     let same = PasteLanding(
         before: field(count: 100, 40), pasted: PastedText(text: "abcd", afterCursor: 1, deletedBefore: 4))
     #expect(!same.isObservable)
+    // Nor can one shorter than the keyword: on the way down, the ⌫s pass through the place it would end at.
+    let shorter = PasteLanding(
+        before: field(count: 100, 40), pasted: PastedText(text: "abc", afterCursor: 1, deletedBefore: 5))
+    #expect(!shorter.isObservable)
+    // Where the caret is known, the length alone isn't enough (the reviewer's note).
+    #expect(!plain.landed(field(count: 112, 40)), "the length grew, but the caret hasn't moved")
     // A field that reports only its length.
     let countOnly = PasteLanding(before: TextFieldState(count: 100, selection: nil), pasted: twelve)
     #expect(countOnly.caret == nil && countOnly.count == 112 && countOnly.isObservable)
@@ -180,13 +212,53 @@ private func field(count: Int, _ location: Int, _ length: Int = 0) -> TextFieldS
     #expect(report.path == .arrowsUnreported && report.polls == 0)
 }
 
-@Test func aPasteTheFieldNeverShowsWaitsAboutASecondThenUsesArrows() async {
+@Test func aPasteTheFieldNeverShowsWaitsASecondByTheClockThenUsesArrows() async {
     let pasted = PastedText(text: "Dear , thanks", afterCursor: 8)
     let field = FakeField(before: field(count: 100, 40), after: field(count: 113, 53))
     let report = await paste(pasted, into: field)
-    #expect(field.events.filter { $0.hasPrefix("read") }.count == 1 + CaretPlacer.maxPolls)
+    // Polls 15 ms apart until the clock passes a second after ⌘V: 67 waits, so 68 polls.
+    let polls = Int((CaretPlacer.landingDeadline / CaretPlacer.pollInterval).rounded(.up)) + 1
+    #expect(report.polls == polls && field.events.filter { $0.hasPrefix("read") }.count == 1 + polls)
     #expect(field.events.suffix(2) == ["sleep 150 ms", "← ×8 to 200"])
-    #expect(report.path == .arrowsAfterTimeout && report.polls == CaretPlacer.maxPolls)
+    #expect(report.path == .arrowsAfterTimeout)
+}
+
+@Test func theWaitEndsASecondAfterThePasteHoweverSlowTheReads() async {
+    // The reviewer's REQUIRED item: an app whose reads take 300 ms never shows the paste. Counting polls, the wait
+    // was 66 × 300 ms; by the clock it's about a second, and a few polls.
+    let field = FakeField(before: field(count: 100, 40), after: field(count: 113, 53))
+    field.readDelay = .milliseconds(300)
+    let placer = CaretPlacer(system: field)
+    let pasted = PastedText(text: "Dear , thanks", afterCursor: 8)
+    let before = await placer.read(pid)
+    let posted = ContinuousClock.now
+    let (landed, polls) = await placer.waitForLanding(pasted, before: before, pid: pid, since: posted)
+    let waited = posted.duration(to: .now)
+    #expect(landed == nil && polls <= 5, "\(polls) polls")
+    #expect(waited >= .seconds(1) && waited < .seconds(4), "\(waited)")
+}
+
+@Test func aReadThatFailsEndsTheWaitAtOnce() async {
+    // The second poll times out, as a hung app's read does: no more polls, then the settle time and arrows.
+    let field = FakeField(before: field(count: 100, 40), after: field(count: 113, 53))
+    field.failsFromRead = 3
+    let report = await paste(PastedText(text: "Dear , thanks", afterCursor: 8), into: field)
+    #expect(field.events == ["read 1", "⌘V", "read 2", "sleep 15 ms", "read 3 failed", "sleep 150 ms", "← ×8 to 200"])
+    #expect(report.path == .arrowsAfterTimeout && report.polls == 2)
+}
+
+@Test func aSetTheFieldTookIsTrustedWhenTheReadBackFails() async {
+    // The reviewer's note: ← presses on top of a set that worked would move the caret twice.
+    let took = FakeField(before: field(count: 0, 0), after: field(count: 13, 13), landsOnRead: 2)
+    took.failsFromRead = 3
+    let report = await paste(PastedText(text: "Dear , thanks", afterCursor: 8), into: took)
+    #expect(took.events.suffix(2) == ["set 5", "read 3 failed"])
+    #expect(report.path == .accessibility && report.arrows == 0)
+    let refused = FakeField(before: field(count: 0, 0), after: field(count: 13, 13), landsOnRead: 2)
+    refused.settable = false
+    refused.failsFromRead = 3
+    let arrows = await paste(PastedText(text: "Dear , thanks", afterCursor: 8), into: refused)
+    #expect(arrows.path == .arrows && arrows.arrows == 8, "a set the field refused isn't")
 }
 
 @Test func anExpansionAndAPasteOverASelectionLandWithoutWaitingTheFullSecond() async {
@@ -195,7 +267,7 @@ private func field(count: Int, _ location: Int, _ length: Int = 0) -> TextFieldS
     let typed = FakeField(before: field(count: 100, 40), after: field(count: 113, 53), landsOnRead: 3)
     let placer = placer(typed)
     let before = await placer.read(pid)
-    let (landed, polls) = await placer.waitForLanding(expansion, before: before, pid: pid)
+    let (landed, polls) = await placer.waitForLanding(expansion, before: before, pid: pid, since: placer.now())
     #expect(landed != nil && polls == 2)
     let selected = FakeField(before: field(count: 100, 40, 5), after: field(count: 112, 57), landsOnRead: 2)
     let overSelection = await paste(PastedText(text: "seventeen chars!!", afterCursor: 2), into: selected)

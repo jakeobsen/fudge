@@ -112,8 +112,7 @@ private struct Rig {
         paste = Paste(
             gate: AccessibilityGate(access: access), keys: keys, pasteboard: pasteboard, ownPid: me,
             turns: turns, restoreDelay: restoreDelay,
-            caret: CaretPlacer(
-                system: field, sleep: { field.note("sleep \($0.components.attoseconds / 1_000_000_000_000_000) ms") }),
+            caret: placer(field),
             caretPlaced: { reports.all.append($0) })
     }
 

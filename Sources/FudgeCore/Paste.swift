@@ -158,15 +158,15 @@ public final class Paste {
         let pasted = Self.plainText(of: content).map { PastedText(text: $0, afterCursor: leftArrows) }
         let placer = caret
         let before = pasted == nil ? nil : await placer.read(pid)
-        let posted = ContinuousClock.now
+        let posted = placer.now()
         keys.postPaste(to: pid)
-        let watch = PasteWatch(posted: posted, delay: restoreDelay) {
+        let watch = PasteWatch(posted: .now, delay: restoreDelay) {
             guard let pasted else { return (nil, 0) }
-            return await placer.waitForLanding(pasted, before: before, pid: pid)
+            return await placer.waitForLanding(pasted, before: before, pid: pid, since: posted)
         }
         guard leftArrows > 0, let pasted else { return watch }
         let (landed, polls) = await watch.landing.value
-        let waited = posted.duration(to: .now)
+        let waited = posted.duration(to: placer.now())
         let report = await Task.detached {
             await placer.place(pasted, before: before, landed: landed, polls: polls, waited: waited, pid: pid)
         }.value
