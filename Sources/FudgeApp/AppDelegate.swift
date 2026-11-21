@@ -343,6 +343,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard panel.isVisible else { return }
         model.closeQuickLook()
         model.panelHidden()
+        LinkPointer.shared.release()
         panel.orderOut(nil)
         model.panelReset.panelHidden()
         // A FilePicker's open panel, or a click on the Quick Look preview, made Fudge the active app. Give the

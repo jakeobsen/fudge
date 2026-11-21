@@ -825,7 +825,7 @@ private struct ViewTitle: View {
     let title: String
     let link: LinkAccessory?
     let open: () -> Void
-    @State private var hovering = false
+    private let pointer = LinkPointer.shared
 
     var body: some View {
         GeometryReader { proxy in
@@ -839,7 +839,7 @@ private struct ViewTitle: View {
                     Text(link.text)
                         .font(.system(size: 13))
                         .foregroundStyle(Color.accentColor)
-                        .underline(hovering)
+                        .underline(pointer.isPushed)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(maxWidth: proxy.size.width * 0.4, alignment: .trailing)
@@ -847,20 +847,11 @@ private struct ViewTitle: View {
                         .onTapGesture {
                             // The click hides the panel, and a hidden window's pointer never leaves the link, so the
                             // pointing hand would stay pushed, showing over other apps. Pop it now.
-                            if hovering {
-                                hovering = false
-                                NSCursor.pop()
-                            }
+                            pointer.release()
                             open()
                         }
-                        .onHover { inside in
-                            guard inside != hovering else { return }
-                            hovering = inside
-                            if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-                        }
-                        .onDisappear {
-                            if hovering { NSCursor.pop() }
-                        }
+                        .onHover { inside in pointer.hover(inside) }
+                        .onDisappear { pointer.release() }
                         .help(link.target)
                         .accessibilityElement()
                         .accessibilityLabel(link.text)
@@ -870,6 +861,32 @@ private struct ViewTitle: View {
             }
             .frame(maxHeight: .infinity)
         }
+    }
+}
+
+/// The pointing hand over a Form's link (`ViewTitle`), pushed and popped through `PointerPush` (core), so it's
+/// popped once per push. `AppDelegate.hidePanel` releases it: the panel can hide (Esc, the hotkey, a click elsewhere)
+/// with the pointer resting on the link, and a hidden window's pointer never leaves it.
+@MainActor
+@Observable
+final class LinkPointer {
+    static let shared = LinkPointer()
+
+    private var state = PointerPush()
+
+    /// Whether the hand is pushed: the link is underlined meanwhile.
+    var isPushed: Bool { state.isPushed }
+
+    func hover(_ inside: Bool) {
+        switch state.hover(inside) {
+        case .push: NSCursor.pointingHand.push()
+        case .pop: NSCursor.pop()
+        case nil: break
+        }
+    }
+
+    func release() {
+        if state.release() { NSCursor.pop() }
     }
 }
 
