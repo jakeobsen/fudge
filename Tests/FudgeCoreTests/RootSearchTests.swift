@@ -72,6 +72,66 @@ private func item(_ title: String, subtitle: String? = nil, keywords: [String] =
     #expect(RootSearch.rank(items, query: "  ", history: history, now: now).map(\.title) == ["Zed", "Mail", "Notes"])
 }
 
+// MARK: - A fresh root search (SPEC-114 §4)
+
+/// A bundled extension's commands, from its manifest in `runtime/`, as root search lists them.
+private func bundledCommands(_ folder: String) throws -> [RootItem] {
+    let directory = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("runtime/\(folder)")
+    let manifest = try ExtensionManifest.load(from: directory.appendingPathComponent("package.json"))
+    return RootItem.commands(of: InstalledExtension(manifest: manifest, directory: directory))
+}
+
+private func byTitle(_ titles: [String]) -> [String] {
+    titles.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+}
+
+@Test func aFreshRootSearchListsSomeOfFudgesOwnItemsFirst() throws {
+    let apps = [item("Calendar"), item("Arc"), item("Zed")]
+    let items =
+        try apps + RootSearch.builtInItems + bundledCommands("emoji-extension")
+        + bundledCommands("clipboard-history-extension")
+    let fresh = RootSearch.rank(items, query: "", history: LaunchHistory(), now: now)
+    #expect(
+        fresh.prefix(4).map(\.title) == [
+            "Search Snippets", "Clipboard History", "Search Emoji & Symbols", "Fudge Settings",
+        ])
+    #expect(fresh.prefix(4).map(\.id) == RootSearch.firstRunItemIDs, "the manifests' own commands")
+    // Then everything else by title, as before.
+    let rest = fresh.dropFirst(4).map(\.title)
+    #expect(rest == byTitle(rest) && rest.count == items.count - 4)
+
+    // One item that isn't there (turned off) is left out, and the others keep their order.
+    let withoutEmoji = items.filter { $0.title != "Search Emoji & Symbols" }
+    #expect(
+        RootSearch.rank(withoutEmoji, query: "", history: LaunchHistory(), now: now).prefix(3).map(\.title) == [
+            "Search Snippets", "Clipboard History", "Fudge Settings",
+        ])
+    // A typed search is ranked by its match, as before.
+    #expect(RootSearch.rank(items, query: "zed", history: LaunchHistory(), now: now).first?.title == "Zed")
+}
+
+@Test func anyHistoryPutsAnEmptyRootSearchBackAsItWas() throws {
+    let apps = [item("Calendar"), item("Arc"), item("Zed")]
+    let items = try apps + RootSearch.builtInItems + bundledCommands("emoji-extension")
+    // One launch of anything: most-used first, then everything by title, Fudge's items in their places.
+    var history = LaunchHistory()
+    history.record(apps[2].id, at: now)
+    let used = RootSearch.rank(items, query: "", history: history, now: now).map(\.title)
+    #expect(used.first == "Zed")
+    #expect(Array(used.dropFirst()) == byTitle(Array(used.dropFirst())))
+
+    // Even a launch of an item that's gone since counts.
+    var gone = LaunchHistory()
+    gone.record("app:/Applications/Removed.app", at: now)
+    #expect(RootSearch.rank(items, query: "", history: gone, now: now).map(\.title) == byTitle(items.map(\.title)))
+
+    // Clear Search History empties it, so a new start shows them first again.
+    history.clear()
+    #expect(RootSearch.rank(items, query: "", history: history, now: now).first == .searchSnippets)
+}
+
 @Test func keywordsAndSubtitlesMatchButWeighLess() {
     let byKeyword = item("Say Hello", keywords: ["greeting"])
     let bySubtitle = item("Create Scratch", subtitle: "Greeting Tools")

@@ -96,10 +96,12 @@ public struct Onboarding: Sendable, Equatable {
 
 /// Accessibility on onboarding's step and on Settings → Permissions.
 public enum AccessibilityPermission {
-    /// Why fudge asks for it.
+    /// Why Fudge asks for it: Fudge's own commands that need it first, then extensions (SPEC-114 §3). Onboarding's
+    /// Accessibility step and the Permissions page both show it.
     public static let reason =
-        "Some extensions read the text you've selected, paste into the app you were using, or move your windows. macOS "
-        + "asks you to allow that under Privacy & Security → Accessibility."
+        "Fudge needs it for window management and layouts, Switch Windows, Search Menu Items, and pasting snippets, "
+        + "emoji and clipboard items. Extensions that read your selection or paste need it too. macOS asks you to "
+        + "allow that under Privacy & Security → Accessibility."
 
     /// What Open Accessibility Settings does.
     public enum Request: Equatable, Sendable {

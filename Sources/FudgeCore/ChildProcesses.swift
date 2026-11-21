@@ -55,11 +55,12 @@ public final class ChildProcesses: @unchecked Sendable {
     }
 
     /// Starts `executable` in a new process group, with `environment` as its whole environment and stdin from
-    /// `/dev/null`. Its stdout and stderr go to `output`, a file descriptor, or are this process's own when it's nil.
+    /// `/dev/null`. Its stdout and stderr go to `output`, a file descriptor, or are this process's own when it's nil;
+    /// with `errors` too, stderr goes there instead.
     /// Signals are back to their defaults in the child, and no other descriptor is passed on.
     public func spawn(
         _ executable: URL, _ arguments: [String], environment: [String: String], in directory: URL? = nil,
-        output: Int32? = nil
+        output: Int32? = nil, errors: Int32? = nil
     ) throws -> pid_t {
         var attributes: posix_spawnattr_t?
         posix_spawnattr_init(&attributes)
@@ -81,7 +82,7 @@ public final class ChildProcesses: @unchecked Sendable {
         posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
         if let output {
             posix_spawn_file_actions_adddup2(&actions, output, 1)
-            posix_spawn_file_actions_adddup2(&actions, output, 2)
+            posix_spawn_file_actions_adddup2(&actions, errors ?? output, 2)
         } else {
             posix_spawn_file_actions_addinherit_np(&actions, 1)
             posix_spawn_file_actions_addinherit_np(&actions, 2)

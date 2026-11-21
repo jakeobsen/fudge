@@ -95,9 +95,10 @@ func everyRecordableKeyRoundTrips(text: String, keyCode: UInt32) throws {
     #expect(FudgeSettings.load(from: file) == settings)
     #expect(FudgeSettings.load(from: file).commandHotkeys == ["scratch/scratch-folders": HotKeySpec.parse("option+s")!])
 
-    // Defaults aren't written, and an entry left empty goes away.
+    // Defaults aren't written, and an entry left empty goes away. A command's Enabled is the user's choice when it's
+    // set, true included (SPEC-109), so only an unset one is a default.
     settings.commands["scratch/scratch-folders"] = .init()
-    settings.commands["scratch/create-scratch"] = .init(enabled: true)
+    settings.commands["scratch/create-scratch"] = .init()
     settings.extensions["next-task"] = .init()
     try settings.save(to: file)
     let object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])

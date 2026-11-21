@@ -47,6 +47,22 @@ public enum CompatScanner {
         script.deletingLastPathComponent().appendingPathComponent("raycast-api.d.ts")
     }
 
+    /// Which commands of the extension in `folder` use something Fudge doesn't support: `fudge scan --json`'s
+    /// per-command results, read from its stdout alone. Throws when the scan fails or its report has none.
+    public static func commands(
+        of folder: URL, node: URL, script: URL, esbuild: URL,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) throws -> CommandCompatibility {
+        let (arguments, environment) = invocation(
+            script: script, esbuild: esbuild, arguments: ScanArguments(folder: folder, json: true),
+            environment: environment)
+        let result = try Shell.run(node, arguments, environment: environment, discardingErrors: true)
+        guard let compatibility = CommandCompatibility(report: Data(result.output.utf8)) else {
+            throw ScanArguments.Invalid(description: "the scan's report had no commands")
+        }
+        return compatibility
+    }
+
     /// node's arguments and environment for the scan: the script, the folder and `--json`; `FUDGE_ESBUILD` added to
     /// `environment`, and `FUDGE_RAYCAST_TYPES` only when it isn't set already and the types are beside the script.
     /// So a value the user set wins, and a script with no types beside it (`FUDGE_COMPAT_SCAN` pointing at
