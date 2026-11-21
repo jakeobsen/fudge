@@ -3,6 +3,7 @@
 // selection has rested on it; the list shows only what's cached.
 import { lstat, mkdir, readdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { hasSourceExtension, sourceExtensions } from "../../scripts/compat/source-files.ts";
 import { readRegularFile } from "./files.ts";
 import { RestingWork, type Timers } from "./resting.ts";
 import { spawnProgram } from "./git.ts";
@@ -324,19 +325,32 @@ export async function rememberCompatibility(
 
 // MARK: - Checking one folder
 
-/** What a detail scan fetches: the folder's source files only, never its assets or anything else. */
+/**
+ * What a detail scan checks out: the files under the folder's `src/` with the extensions the scanner reads
+ * (`sourceExtensions`), never its assets or anything else.
+ */
 export function scanPatterns(dir: string): string[] {
-    return ["ts", "tsx", "js", "jsx"].map((extension) => `/extensions/${dir}/src/**/*.${extension}`);
+    return sourceExtensions.map((extension) => `/extensions/${dir}/src/**/*.${extension}`);
 }
-const isFetchedSource = (file: string) => /\.(tsx?|jsx?)$/.test(file);
 
 /**
- * The caps on a scan while browsing. The number of source files is known from the trees before anything is
- * downloaded (no extension in the store has more than about 220); their size only once they're fetched, and it's
- * checked before scanning (only 3 of about 3,600 have more than 5 MiB, all of it generated data). Past either, the
- * row says "Not checked", and installing it scans it anyway.
+ * Whether `scanPatterns` checks out a file under `src/` (`file` is relative to it): a source file. A sparse pattern
+ * matches a path's folders too, so a file in a folder named like a script (`lib.ts/`) is one as well.
+ */
+export const isScanned = (file: string) => file.split("/").some(hasSourceExtension);
+
+/**
+ * The caps on a scan while browsing, the first two known from the trees before anything is downloaded:
+ * - `maxScanFiles`, the source files (`isScanned`): no extension in the store has more than about 220.
+ * - `maxSrcFiles`, every file under `src/`, assets included: the bound on the download, since the fetch brings each
+ *   one of at most `maxScanBytes`, and a partial clone's filter can't pick files by name. The most in the store is
+ *   about 300.
+ * - `maxScanBytes`, each file's size, which the fetch applies, and the source's total, checked before scanning (only 3
+ *   of about 3,600 have more than 5 MiB, all of it generated data).
+ * Past any of them the row says "Not checked", and installing it scans it anyway.
  */
 export const maxScanFiles = 300;
+export const maxSrcFiles = 1000;
 export const maxScanBytes = 5 * 1024 * 1024;
 
 async function sourceBytes(folder: string): Promise<number> {
@@ -346,7 +360,7 @@ async function sourceBytes(folder: string): Promise<number> {
         for (const entry of entries) {
             const target = path.join(dir, entry.name);
             if (entry.isDirectory()) await walk(target);
-            else if (entry.isFile() && isFetchedSource(entry.name)) total += (await lstat(target)).size;
+            else if (entry.isFile() && isScanned(path.relative(folder, target))) total += (await lstat(target)).size;
         }
     };
     await walk(folder);
@@ -366,14 +380,21 @@ export async function checkFolder(
     cancelled: () => boolean,
     signal?: AbortSignal,
 ): Promise<Compatibility | undefined> {
-    // Every file under `src/` is downloaded (its blobs of at most `maxScanBytes` each), so the cap counts them all.
-    const files = await context.repo.sourceFiles(dir);
-    if (files.length > maxScanFiles) return { notChecked: true };
+    // The fetch brings every file under `src/` of at most `maxScanBytes`, assets included, so the download's cap counts
+    // them all; the scan's counts only the source files.
+    const files = await context.repo.srcFiles(dir);
+    const sources = files.filter((file) => isScanned(file.path));
+    if (files.length > maxSrcFiles || sources.length > maxScanFiles) return { notChecked: true };
     if (cancelled()) return undefined;
     const patterns = scanPatterns(dir);
-    let bounded = files.length > 0;
+    // Only a source file that isn't here matters: an asset left out for its size is never read.
+    const missingSources = async () => {
+        const missing = await context.repo.missingObjects(dir);
+        return sources.filter((file) => missing.has(file.object)).length;
+    };
+    let bounded = sources.length > 0;
     // Only what isn't here yet is fetched: a folder checked before in this version downloads nothing again.
-    if (bounded && (await context.repo.missingSource(dir)) > 0) {
+    if (bounded && (await missingSources()) > 0) {
         try {
             // The one step a cancel ends (`signal`), since it writes nothing but new packs; every other step runs to
             // its end, and the check stops between steps.
@@ -385,8 +406,8 @@ export async function checkFolder(
             bounded = false;
         }
         if (cancelled()) return undefined;
-        // A file over the cap wasn't downloaded, and the scan would need it.
-        if (bounded && (await context.repo.missingSource(dir)) > 0) return { notChecked: true };
+        // A source file over the cap wasn't downloaded, and the scan would need it.
+        if (bounded && (await missingSources()) > 0) return { notChecked: true };
     }
     if (bounded) await context.repo.addFetched(...patterns);
     else await context.repo.add(...patterns);

@@ -5,7 +5,8 @@ import { createApiModule } from "../src/api/module.ts";
 import { mark, NOT_DRAWN, notAvailable, NotAvailableError, UNAVAILABLE, unsupported } from "../src/api/stubs.ts";
 import { RAYCAST_UTILS_PATHS } from "../scripts/compat/raycast-utils.generated.ts";
 import { category } from "../scripts/compat/extension.ts";
-import { apiName, gaps, isExtensionSource, support, toJavaScript, uses } from "../scripts/compat/scan.ts";
+import { apiName, gaps, support, toJavaScript, uses } from "../scripts/compat/scan.ts";
+import { isExtensionSource } from "../scripts/compat/source-files.ts";
 import { raycastDeclarations, vendoredTypes } from "../scripts/raycast-types.ts";
 
 const api = createApiModule() as Record<string, unknown>;

@@ -8,11 +8,11 @@ import { basename, join, posix, relative, sep } from "node:path";
 import { maxManifestBytes, maxSourceBytes, readRegularFile } from "./files.ts";
 import { RAYCAST_UTILS_PATHS } from "./raycast-utils.generated.ts";
 import { unsupported } from "../../src/api/stubs.ts";
+import { isExtensionSource, sourceExtensions } from "./source-files.ts";
 import {
     gaps,
     hasComputedImport,
     imports,
-    isExtensionSource,
     toJavaScript,
     uses,
     type Gap,
@@ -269,7 +269,7 @@ export function knownFiles(paths: string[]): KnownFiles {
 }
 
 /** A command's entry, as `fudge build` finds it (`ExtensionBuilder.sourceExtensions`' order). */
-const entryExtensions = ["tsx", "ts", "jsx", "js"];
+const entryExtensions = sourceExtensions;
 /** Files a module may import that aren't code, so they can't reach Raycast's API. */
 const dataFile = /\.(?:json|css|scss|sass|less|svg|png|jpe?g|gif|webp|ico|txt|md|html?|ya?ml|toml|csv|xml|wasm)$/i;
 

@@ -217,18 +217,6 @@ export function gaps(
     return { gaps: sorted, notRaycast: [...notRaycast].sort() };
 }
 
-/**
- * Whether a file under an extension's `src/` is extension code: a script, not a declaration file, and not a test
- * or mock (`*.test.*`, `*.spec.*`, or inside `__mocks__/`, `__tests__/`, `test/` or `tests/`).
- */
-export function isExtensionSource(relativePath: string): boolean {
-    if (!/\.(tsx?|jsx?)$/.test(relativePath) || relativePath.endsWith(".d.ts")) return false;
-    const segments = relativePath.split(/[\\/]/);
-    if (segments.includes("node_modules")) return false;
-    if (segments.slice(0, -1).some((folder) => ["__mocks__", "__tests__", "test", "tests"].includes(folder))) return false;
-    return !/\.(test|spec)\.[^.]+$/.test(segments.at(-1)!);
-}
-
 /** The part of a path that names the missing API: up to its first lowercase segment (`Clipboard.copy`). */
 export function apiName(path: string): string {
     const segments = path.split(".");
