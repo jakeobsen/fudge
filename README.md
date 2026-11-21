@@ -13,6 +13,7 @@ Fudge is an independent project. It is not affiliated with or endorsed by Raycas
 - `runtime/store-extension/`: the Extension Store, an extension bundled with Fudge that lists and installs the extensions published in github.com/raycast/extensions.
 - `runtime/file-search-extension/`: Search Files, an extension bundled with Fudge that finds files and folders by name.
 - `runtime/emoji-extension/`: Search Emoji & Symbols, an extension bundled with Fudge that finds emoji by name and pastes them.
+- `runtime/clipboard-history-extension/`: Clipboard History, an extension bundled with Fudge that lists what you copied.
 
 ## Installing
 
@@ -142,6 +143,15 @@ In **Settings… → Search Files**, **Search In** picks your home folder (the d
 **Search Emoji & Symbols** finds an emoji by its name or a keyword ("thumbs", "+1", "heart"). ↵ pastes it into the app you were in, ⌘↵ copies it, and ⌘⇧C copies its name. The ones you use most recently come first, under **Recently Used**. It shows the emoji your Mac can draw.
 
 In **Settings… → Search Emoji & Symbols**, **Skin Tone** picks the tone for the emoji that have one.
+
+### Clipboard History
+
+**Clipboard History** keeps what you copy, so you can search it and paste it again. It's off until you turn on **Keep Clipboard History** in **Settings… → Clipboard History**. The history is encrypted on this Mac, and copies that password managers mark as private aren't kept. Extensions can read it, as in Raycast.
+
+- ↵ pastes a copy into the app you're in, and ⌘↵ copies it. ⇧⌘P pins it, so it's kept however old it gets.
+- ⌃X deletes a copy, and ⌃⇧X deletes them all, after asking.
+
+On the same page, **Keep For** sets how long copies are kept (7 days by default), **Ignore Apps** lists apps whose copies aren't kept, and **Clear History…** deletes everything. Turning the switch off asks whether to keep or delete what's there.
 
 ### Extension Store
 

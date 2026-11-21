@@ -129,7 +129,7 @@ function checkedFolder(dir: string): string {
 
 /** The extensions Fudge bundles (`BundledExtensions` in the app, `BUNDLED_EXTENSIONS` in the Makefile, which a test
  * pins this to). One installed under the same name would stay hidden behind it, so the store never installs one. */
-export const bundledNames = ["fudge-extension-store", "fudge-file-search", "fudge-emoji"];
+export const bundledNames = ["fudge-extension-store", "fudge-file-search", "fudge-emoji", "fudge-clipboard-history"];
 
 /** Refused: an install under a name another extension has, from another folder of the store or not from the store. */
 export function nameTakenMessage(name: string): string {

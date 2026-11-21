@@ -15,8 +15,25 @@ public final class PasteboardTurns {
     /// ended, so a turn that snapshots the pasteboard waits for it first (`restoreSettled`). The restore never takes a
     /// turn itself: the fallback waits for it while holding one.
     var restore: Task<Void, Never>?
+    /// The change counts of Fudge's own writes (a paste and its restore, the ⌘C fallback's copy and its restore), the
+    /// last `ownLimit`, so clipboard history leaves them out (SPEC-077).
+    private var own: [Int] = []
+    static let ownLimit = 32
 
     public init() {}
+
+    /// Whether a paste or a ⌘C fallback is running, or a paste's restore is still to come: the pasteboard may hold
+    /// Fudge's content, so clipboard history looks again later.
+    public var isBusy: Bool { busy || restore != nil }
+
+    /// Notes that the pasteboard's `changeCount` is now one of Fudge's own writes.
+    func markOwn(_ changeCount: Int) {
+        own.append(changeCount)
+        if own.count > Self.ownLimit { own.removeFirst(own.count - Self.ownLimit) }
+    }
+
+    /// Whether `changeCount` is one of Fudge's own writes.
+    public func isOwn(_ changeCount: Int) -> Bool { own.contains(changeCount) }
 
     /// Runs `body` once the turns before it have ended. The next turn starts when it returns.
     func run<T>(_ body: () async throws -> T) async rethrows -> T {

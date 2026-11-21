@@ -7,8 +7,10 @@ import Security
 // browser returns to. The rules (which providers, the callback's checks, what's stored) are in core's SignIn.swift.
 
 /// Sign-ins in the login Keychain: generic passwords under `OAuthTokenStore.service`, one per account
-/// (`<extension>/<providerId>`), readable only on this Mac.
+/// (`<extension>/<providerId>`), readable only on this Mac. Clipboard history keeps its key the same way, under its own
+/// service (`ClipboardHistoryStore.keychainService`).
 struct KeychainSecretStore: SecretStore {
+    var service = OAuthTokenStore.service
     struct Failure: Error, CustomStringConvertible {
         let status: OSStatus
         var description: String {
@@ -20,7 +22,7 @@ struct KeychainSecretStore: SecretStore {
     private func query(_ account: String? = nil) -> [String: Any] {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: OAuthTokenStore.service,
+            kSecAttrService as String: service,
         ]
         if let account { query[kSecAttrAccount as String] = account }
         return query

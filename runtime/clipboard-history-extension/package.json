@@ -1,0 +1,16 @@
+{
+  "name": "fudge-clipboard-history",
+  "title": "Clipboard History",
+  "description": "Find what you copied and paste it again.",
+  "license": "AGPL-3.0-or-later",
+  "author": "fudge",
+  "type": "module",
+  "commands": [
+    {
+      "name": "clipboard-history",
+      "title": "Clipboard History",
+      "description": "Search what you copied, and paste, copy, pin or delete it.",
+      "mode": "view"
+    }
+  ]
+}

@@ -25,6 +25,75 @@ export async function searchFiles(query: string, limit?: number): Promise<FoundF
     return revive(answer) as FoundFile[];
 }
 
+// Clipboard History's calls. Only the Clipboard History extension may make them; the app refuses any other.
+
+/** One copy in the clipboard history. */
+export type ClipboardEntry = {
+    /** Stable for as long as the entry is kept. */
+    id: string;
+    kind: "text" | "link" | "image" | "files";
+    /** A text's or a link's text: only its first 1 MB when `truncated`. */
+    text?: string;
+    truncated?: boolean;
+    /** Absolute paths, for files. */
+    files?: string[];
+    /** An image's or the first file's display name, when it has one. */
+    name?: string;
+    /** The app it was copied from, when that's known. */
+    app?: { bundleId: string; name?: string };
+    copiedAt: Date;
+    /** Bytes: a text's UTF-8 length, an image's PNG size. For files, use `files.length`. */
+    size: number;
+    pinned: boolean;
+    /** An image's size in pixels. */
+    width?: number;
+    height?: number;
+};
+
+/** The history, newest first, or `on: false` and no entries while it's turned off. */
+export type ClipboardHistory = { on: boolean; entries: ClipboardEntry[] };
+
+export async function listClipboardHistory(): Promise<ClipboardHistory> {
+    return revive(await callApp("clipboardHistory.list")) as ClipboardHistory;
+}
+
+/** A PNG copy of an image entry, which the app deletes when the command ends or Fudge quits. */
+export async function clipboardImage(id: string): Promise<{ path: string }> {
+    return revive(await callApp("clipboardHistory.image", { id })) as { path: string };
+}
+
+/** Pastes the entry into the app the user is in, as it was copied. The app hides Fudge's window. */
+export async function pasteClipboardEntry(id: string): Promise<void> {
+    await callApp("clipboardHistory.paste", { id });
+}
+
+/** Puts the entry on the clipboard, as it was copied. */
+export async function copyClipboardEntry(id: string): Promise<void> {
+    await callApp("clipboardHistory.copy", { id });
+}
+
+export async function pinClipboardEntry(id: string, pinned: boolean): Promise<void> {
+    await callApp("clipboardHistory.pin", { id, pinned });
+}
+
+export async function deleteClipboardEntry(id: string): Promise<void> {
+    await callApp("clipboardHistory.delete", { id });
+}
+
+/** Deletes every entry, pinned ones too. */
+export async function clearClipboardHistory(): Promise<void> {
+    await callApp("clipboardHistory.clear", {});
+}
+
 export function createFudgeAppModule() {
-    return Object.freeze({ searchFiles });
+    return Object.freeze({
+        searchFiles,
+        listClipboardHistory,
+        clipboardImage,
+        pasteClipboardEntry,
+        copyClipboardEntry,
+        pinClipboardEntry,
+        deleteClipboardEntry,
+        clearClipboardHistory,
+    });
 }
