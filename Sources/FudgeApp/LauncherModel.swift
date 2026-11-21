@@ -161,8 +161,8 @@ final class LauncherModel {
     @ObservationIgnored var tokenSecrets: any SecretStore = MemorySecretStore()
     /// Opens a sign-in's URL in the default browser; false when it couldn't.
     @ObservationIgnored var openInBrowser: (URL) -> Bool = { NSWorkspace.shared.open($0) }
-    /// Each session's latest `oauth.prepare`, with its loopback listener.
-    @ObservationIgnored private var preparedSignIns: [String: (request: PreparedSignIn, loopback: OAuthLoopback)] = [:]
+    /// Each session's latest `oauth.prepare` and the one the prompt shows, with their loopback listeners.
+    @ObservationIgnored private var signInRequests = SignInRequests<OAuthLoopback>()
     /// The providers each session has prepared a relay sign-in for (`SignInCalls.pending`).
     @ObservationIgnored private var pendingRelay: [String: Set<String>] = [:]
     /// The user's answer to the prompt on screen: true for ↵, false for Esc or the command going away.
@@ -2926,16 +2926,14 @@ final class LauncherModel {
                 for: string("endpoint") ?? "", providerName: string("providerName") ?? "", server: server
             ).get()
             let loopback = try await OAuthLoopback.start()
-            if signIn?.session != session { preparedSignIns[session]?.loopback.close() }
             let request = PreparedSignIn(provider: provider, authorizeURL: authorize, redirectURI: loopback.redirectURI)
-            preparedSignIns[session] = (request, loopback)
+            // An earlier request this session never used stops listening. One the prompt shows isn't among them.
+            signInRequests.prepare((request, loopback), for: session)?.close()
             pendingRelay[session, default: []].insert(provider.id)
             // A request that's never used to sign in stops listening after 5 minutes.
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(300))
-                guard let self, self.preparedSignIns[session]?.loopback === loopback, self.signIn?.session != session
-                else { return }
-                self.preparedSignIns[session] = nil
+                guard let self, self.signInRequests.expire(loopback, of: session) else { return }
                 loopback.close()
             }
             return .object([
@@ -2968,9 +2966,13 @@ final class LauncherModel {
         guard origin.mayComeForward else { throw SignInRefusal.background }
         guard signIn == nil else { throw SignInRefusal.busy }
         let url: String = if case .string(let url) = values["url"] { url } else { "" }
-        guard let prepared = preparedSignIns[session], let state = prepared.request.state(ofAuthorizeURL: url),
-            let target = URL(string: url)
+        guard let prepared = signInRequests.preparedRequest(of: session),
+            let state = prepared.request.state(ofAuthorizeURL: url), let target = URL(string: url)
         else { throw SignInRefusal.notPrepared }
+        // The prompt takes the request: Esc and the session ending reach its listener, whatever the session prepares
+        // meanwhile.
+        guard signInRequests.show(session) != nil else { throw SignInRefusal.busy }
+        let loopback = prepared.listener
         func text(_ key: String) -> String? {
             if case .string(let value) = values[key], !value.isEmpty { value } else { nil }
         }
@@ -2981,17 +2983,17 @@ final class LauncherModel {
         if !isVisible() { show() }
         let proceed = await withCheckedContinuation { signInAnswer = $0 }
         guard proceed, signIn?.session == session else {
-            finishSignIn(session)
+            finishSignIn(loopback)
             throw SignInRefusal.cancelled
         }
         guard openInBrowser(target) else {
-            finishSignIn(session)
+            finishSignIn(loopback)
             throw SignInRefusal.browser
         }
         signIn?.waiting = true
-        let outcome = await prepared.loopback.wait(state: state, timeout: 300)
+        let outcome = await loopback.wait(state: state, timeout: 300)
         let provider = signIn?.providerName ?? prepared.request.provider.name
-        finishSignIn(session)
+        finishSignIn(loopback)
         switch outcome {
         case .callback(.code(let code)):
             if !isVisible() { show() }
@@ -3025,27 +3027,27 @@ final class LauncherModel {
             signInAnswer = nil
             answer.resume(returning: proceed)
         } else if !proceed, prompt.waiting {
-            preparedSignIns[prompt.session]?.loopback.cancel()
+            signInRequests.waitedOn?.cancel()
         }
     }
 
-    private func finishSignIn(_ session: String) {
-        if signIn?.session == session { signIn = nil }
-        preparedSignIns.removeValue(forKey: session)?.loopback.close()
+    /// The sign-in on `loopback` is over: its listener closes, and the prompt goes when it was the prompt's.
+    private func finishSignIn(_ loopback: OAuthLoopback) {
+        if signInRequests.finish(loopback) { signIn = nil }
+        loopback.close()
     }
 
     /// A session that exits takes its sign-in with it.
     private func endSignIn(of session: String) {
         pendingRelay[session] = nil
-        if signIn?.session == session {
-            if let answer = signInAnswer {
-                signInAnswer = nil
-                answer.resume(returning: false)
-            }
-            preparedSignIns[session]?.loopback.cancel()
-        } else {
-            preparedSignIns.removeValue(forKey: session)?.loopback.close()
+        let (unused, waitedOn) = signInRequests.end(session)
+        unused?.close()
+        guard let waitedOn else { return }
+        if let answer = signInAnswer {
+            signInAnswer = nil
+            answer.resume(returning: false)
         }
+        waitedOn.cancel()
     }
 
     // MARK: - Icons

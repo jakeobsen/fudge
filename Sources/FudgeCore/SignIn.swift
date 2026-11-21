@@ -541,6 +541,59 @@ public struct PreparedSignIn: Equatable, Sendable {
     }
 }
 
+/// Which loopback listener each sign-in uses: every session's latest prepared request, and the one the "Sign in to …"
+/// prompt shows. The prompt takes its request when it's shown, so a request the session prepares meanwhile never
+/// takes its place: Esc, the command going away and the end of the sign-in all reach the listener being waited on.
+public struct SignInRequests<Listener: AnyObject> {
+    public typealias Request = (request: PreparedSignIn, listener: Listener)
+
+    private var prepared: [String: Request] = [:]
+    /// The request the prompt shows, with its session.
+    public private(set) var shown: (session: String, request: Request)?
+
+    public init() {}
+
+    /// Keeps `request` as `session`'s latest. Returns the listener of an earlier one nothing used, to close.
+    public mutating func prepare(_ request: Request, for session: String) -> Listener? {
+        defer { prepared[session] = request }
+        return prepared[session]?.listener
+    }
+
+    /// `session`'s latest prepared request, not yet shown.
+    public func preparedRequest(of session: String) -> Request? { prepared[session] }
+
+    /// The prompt takes `session`'s prepared request; nil when there's none, or a prompt is already up.
+    public mutating func show(_ session: String) -> Request? {
+        guard shown == nil, let request = prepared.removeValue(forKey: session) else { return nil }
+        shown = (session, request)
+        return request
+    }
+
+    /// The listener the prompt waits on, which Esc cancels.
+    public var waitedOn: Listener? { shown?.request.listener }
+
+    /// The sign-in using `listener` is over. True when it was the prompt's, which is then gone.
+    public mutating func finish(_ listener: Listener) -> Bool {
+        guard shown?.request.listener === listener else { return false }
+        shown = nil
+        return true
+    }
+
+    /// A request unused after its time: true, and dropped, when `listener` is still `session`'s prepared one.
+    public mutating func expire(_ listener: Listener, of session: String) -> Bool {
+        guard prepared[session]?.listener === listener else { return false }
+        prepared[session] = nil
+        return true
+    }
+
+    /// `session` is going away: its unused request is dropped, to close, and the prompt's listener, when the prompt
+    /// is its, is returned to cancel. The prompt stays until its sign-in finishes.
+    public mutating func end(_ session: String) -> (unused: Listener?, waitedOn: Listener?) {
+        let unused = prepared.removeValue(forKey: session)?.listener
+        return (unused, shown?.session == session ? shown?.request.listener : nil)
+    }
+}
+
 /// A `data:` URL's bytes, for images such as `@raycast/utils`' provider icons (`data:image/svg+xml,…`).
 public enum DataURL {
     /// The media type and the bytes; nil for anything but a `data:` URL whose media type is an image, or bytes past

@@ -212,6 +212,62 @@ import Testing
     #expect(request.state(ofAuthorizeURL: "https://relay.example/github/authorize?\(other)&state=s1") == nil)
 }
 
+// MARK: - Which listener a sign-in uses
+
+private final class Listener {}
+
+@Test func thePromptKeepsTheListenerItWaitsOnWhateverTheSessionPreparesMeanwhile() {
+    func request(_ listener: Listener) -> SignInRequests<Listener>.Request {
+        let prepared = PreparedSignIn(
+            provider: OAuthProviders.all[0], authorizeURL: "https://relay.example/github/authorize",
+            redirectURI: "http://127.0.0.1:5000/oauth/callback/abc")
+        return (prepared, listener)
+    }
+    var requests = SignInRequests<Listener>()
+    let first = Listener()
+    let second = Listener()
+    let third = Listener()
+
+    // An unused request is replaced, and its listener closed.
+    let none = requests.prepare(request(first), for: "s1")
+    let replaced = requests.prepare(request(second), for: "s1")
+    #expect(none == nil && replaced === first)
+    #expect(requests.preparedRequest(of: "s1")?.listener === second)
+
+    // The prompt takes the request. Preparing again meanwhile closes nothing, and Esc still reaches the prompt's.
+    let shown = requests.show("s1")
+    let again = requests.show("s1")
+    #expect(shown?.listener === second)
+    #expect(again == nil, "one prompt at a time")
+    #expect(requests.preparedRequest(of: "s1") == nil)
+    let closed = requests.prepare(request(third), for: "s1")
+    #expect(closed == nil, "the prompt's listener isn't closed")
+    #expect(requests.waitedOn === second)
+    let expired = requests.expire(second, of: "s1")
+    #expect(!expired, "a shown request never expires")
+
+    // Another session going away leaves the prompt alone; its own going away cancels the prompt's listener and
+    // closes the unused one, and the prompt goes when its sign-in finishes.
+    let other = requests.end("s2")
+    #expect(other.unused == nil && other.waitedOn == nil)
+    let ended = requests.end("s1")
+    #expect(ended.unused === third && ended.waitedOn === second)
+    #expect(requests.waitedOn === second, "the prompt stays until its sign-in finishes")
+    let finishedOther = requests.finish(third)
+    let finished = requests.finish(second)
+    #expect(!finishedOther && finished)
+    #expect(requests.shown == nil && requests.waitedOn == nil)
+
+    // An unused request expires only while it's still the session's latest.
+    _ = requests.prepare(request(first), for: "s1")
+    _ = requests.prepare(request(second), for: "s1")
+    let stale = requests.expire(first, of: "s1")
+    let latest = requests.expire(second, of: "s1")
+    let left = requests.show("s1")
+    #expect(!stale && latest)
+    #expect(left == nil, "nothing left to show")
+}
+
 // MARK: - The callback
 
 @Test func theCallbackIsOneGETOnTheExactPathWithTheSignInsState() {
