@@ -274,7 +274,8 @@ final class LauncherModel {
         settings = FudgeSettings.load(from: paths.settingsFile)
         panelReset.setting = settings.resetAfter
         let commands = installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
-        items = RootSearch.applying(settings, to: commands) + RootSearch.builtInItems + applications
+        items =
+            RootSearch.applying(settings, to: commands) + RootSearch.builtInItems + loadQuicklinks() + applications
         menuBar.update(installed: installedExtensions, settings: settings)
         refreshResults(keepingSelection: keepingSelection)
         refreshCommandHotkeys()
@@ -282,6 +283,12 @@ final class LauncherModel {
 
     @ObservationIgnored private var installedExtensions: [InstalledExtension] = []
     @ObservationIgnored private var applications: [RootItem] = []
+
+    /// Reads `quicklinks.json` for root search. Their icons are looked up again, since an app may have changed.
+    private func loadQuicklinks() -> [RootItem] {
+        icons = icons.filter { !$0.key.hasPrefix("quicklink:") }
+        return QuicklinkStore.load(from: paths.quicklinksFile).quicklinks.map(RootItem.quicklink)
+    }
     /// `settings.json`: command hotkeys, aliases and enabled states.
     @ObservationIgnored private(set) var settings = FudgeSettings()
 
@@ -1205,6 +1212,73 @@ final class LauncherModel {
             showSettings(extension: nil)
         case .retryExchangeRates:
             retryExchangeRates()
+        case .copyQuicklink(let link):
+            Task {
+                _ = try? await SystemCalls.handle(
+                    "clipboard.copy", .object(["text": .string(link)]), origin: .userInitiated)
+            }
+            hide()
+            showHUD("Copied Link")
+        case .deleteQuicklink(let id):
+            deleteQuicklink(id)
+        }
+    }
+
+    // MARK: - Quicklinks
+
+    /// Opens a quicklink: fills in its placeholders, then opens the result with its app, or the default one, through
+    /// `SystemCalls`' open. The panel hides once it has opened; a link that can't be opened shows a failure toast
+    /// and the panel stays.
+    private func openQuicklink(_ quicklink: Quicklink, item: RootItem) {
+        let entered = argumentsItem == item.id ? arguments : ArgumentInput(arguments: item.arguments)
+        let template = QuicklinkTemplate(quicklink.link)
+        let pasteboard = NSPasteboard.general
+        let clipboard = QuicklinkTemplate.clipboardText(
+            pasteboard.string(forType: .string), types: (pasteboard.types ?? []).map(\.rawValue))
+        let filled = template.fill(arguments: entered.launchArguments, context: .init(clipboard: clipboard))
+        let target: QuicklinkOpening.Target
+        switch QuicklinkOpening.target(for: template, filled: filled) {
+        case .success(let opened): target = opened
+        case .failure(let failure):
+            showFailureToast("Can't open \(quicklink.name)", message: failure.description)
+            return
+        }
+        var params: [String: JSONValue] = ["target": .string(target.openText)]
+        if let application = quicklink.application { params["application"] = .string(application) }
+        Task {
+            do {
+                // The user's own pick in root search.
+                _ = try await SystemCalls.handle("open", .object(params), origin: .userInitiated)
+            } catch {
+                showFailureToast("Can't open \(quicklink.name)", message: String(describing: error))
+                return
+            }
+            recordLaunch(item)
+            searchText = ""
+            if argumentsItem == item.id { resetArguments(for: item) }
+            hide()
+        }
+    }
+
+    /// Delete Quicklink…: asks, then removes it from `quicklinks.json`. A file Fudge can't read stays as it is,
+    /// and a toast says why.
+    private func deleteQuicklink(_ id: String) {
+        let file = paths.quicklinksFile
+        guard let quicklink = QuicklinkStore.load(from: file).quicklink(id: id) else { return }
+        let request = AlertRequest(
+            title: "Delete “\(quicklink.name)”?", message: "It's removed from root search.", primary: "Delete",
+            dismiss: "Cancel", destructive: true)
+        Task {
+            guard await confirm(request, .userInitiated) else { return }
+            var store = QuicklinkStore.load(from: file)
+            store.remove(id: id)
+            do {
+                try store.save(to: file)
+            } catch {
+                showFailureToast("Can't delete \(quicklink.name)", message: String(describing: error))
+                return
+            }
+            applySettings()
         }
     }
 
@@ -1390,7 +1464,10 @@ final class LauncherModel {
             }
             guard let item = selectedRootItem else { return }
             // A required argument left empty takes the keyboard instead.
-            if case .command = item.kind, !arguments.checkRequired() { return }
+            switch item.kind {
+            case .command, .quicklink: guard arguments.checkRequired() else { return }
+            default: break
+            }
             open(item)
             // The launch couldn't start (e.g. a required preference is unset). The values stay for the next try,
             // and the failure's search field gets the keyboard.
@@ -1587,6 +1664,8 @@ final class LauncherModel {
             Task {
                 if await confirm(Self.quitRequest, .userInitiated) { NSApp.terminate(nil) }
             }
+        case .quicklink(let quicklink):
+            openQuicklink(quicklink, item: item)
         case .command(let extensionName, let commandName, _, _):
             guard let installed = extensions[extensionName],
                 let command = installed.manifest.commands.first(where: { $0.name == commandName })
@@ -2300,6 +2379,8 @@ final class LauncherModel {
             image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)!
         case .quit:
             image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)!
+        case .quicklink(let quicklink):
+            image = Self.quicklinkIcon(quicklink)
         case .command:
             image =
                 item.iconFile.flatMap(NSImage.init(contentsOf:))
@@ -2307,5 +2388,30 @@ final class LauncherModel {
         }
         icons[item.id] = image
         return image
+    }
+
+    /// The icon of the app that opens a quicklink: its `application`'s, else the default app for its scheme, else a
+    /// path's own Finder icon. Nothing is fetched from a site.
+    private static func quicklinkIcon(_ quicklink: Quicklink) -> NSImage {
+        let workspace = NSWorkspace.shared
+        if let application = quicklink.application,
+            let url = workspace.urlForApplication(withBundleIdentifier: application)
+        {
+            return workspace.icon(forFile: url.path)
+        }
+        let template = QuicklinkTemplate(quicklink.link)
+        if template.isPath {
+            if case .text(let text) = template.segments.first, template.segments.count == 1 {
+                let path = (text as NSString).expandingTildeInPath
+                if FileManager.default.fileExists(atPath: path) { return workspace.icon(forFile: path) }
+            }
+            return workspace.icon(for: .folder)
+        }
+        if let scheme = template.scheme, let probe = URL(string: "\(scheme):"),
+            let app = workspace.urlForApplication(toOpen: probe)
+        {
+            return workspace.icon(forFile: app.path)
+        }
+        return NSImage(systemSymbolName: "link", accessibilityDescription: nil)!
     }
 }

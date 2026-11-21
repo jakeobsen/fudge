@@ -11,6 +11,8 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         case reloadExtensions
         /// Quits fudge, after asking.
         case quit
+        /// Opens a quicklink, with its arguments filled in.
+        case quicklink(Quicklink)
     }
 
     public var id: String
@@ -28,6 +30,8 @@ public struct RootItem: Sendable, Equatable, Identifiable {
     public var arguments: [ExtensionManifest.Argument]
     /// A command's alias, from `settings.json`.
     public var alias: String?
+    /// Matched like the subtitle, but never shown: a quicklink's link.
+    public var secondaryText: String?
 
     public init(
         id: String,
@@ -81,6 +85,16 @@ public struct RootItem: Sendable, Equatable, Identifiable {
     /// "Quit Fudge" at the top.
     public var recordsLaunch: Bool {
         kind != .quit
+    }
+
+    /// A quicklink's item: its name, its link as a secondary match, and its arguments as fields. The row's kind
+    /// says "Quicklink", so there's no subtitle saying it again; "quicklink" still finds them.
+    public static func quicklink(_ quicklink: Quicklink) -> RootItem {
+        var item = RootItem(
+            id: quicklink.rootItemID, title: quicklink.name, keywords: ["quicklink"], kind: .quicklink(quicklink),
+            arguments: QuicklinkTemplate(quicklink.link).fields)
+        item.secondaryText = quicklink.link
+        return item
     }
 
     /// The id of a command's item, which its launches count under in `LaunchHistory`.
@@ -205,7 +219,7 @@ public enum RootSearch {
         for keyword in item.keywords {
             if let score = Fuzzy.match(query, in: keyword)?.score, score - 5 > (best ?? .min) { best = score - 5 }
         }
-        for subtitle in [item.subtitle, item.extensionTitle].compactMap(\.self) {
+        for subtitle in [item.subtitle, item.extensionTitle, item.secondaryText].compactMap(\.self) {
             if let score = Fuzzy.match(query, in: subtitle)?.score, score - 20 > (best ?? .min) { best = score - 20 }
         }
         return best

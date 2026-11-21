@@ -65,6 +65,11 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("menu-bar.json")
     }
 
+    /// The user's quicklinks (`QuicklinkStore`).
+    public var quicklinksFile: URL {
+        supportDirectory.appendingPathComponent("quicklinks.json")
+    }
+
     /// The preference values set for each extension.
     public var preferencesDirectory: URL {
         supportDirectory.appendingPathComponent("preferences", isDirectory: true)
