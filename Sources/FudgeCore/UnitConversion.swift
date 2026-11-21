@@ -16,9 +16,9 @@ public enum UnitConversion {
     }
 
     // Lookarounds, so `5 in to cm` matches both `in` and `to`: a match doesn't use up the spaces around it.
-    nonisolated(unsafe) private static let separator = try! NSRegularExpression(
+    private static let separator = try! NSRegularExpression(
         pattern: #"(?<=\s)(?:to|in|as|into|=|->)(?=\s)"#)
-    nonisolated(unsafe) private static let quantityPattern = try! NSRegularExpression(
+    private static let quantityPattern = try! NSRegularExpression(
         pattern: #"^\s*(-?[\d.,'’]*\d(?:[eE][+-]?\d+)?)\s*(.+?)\s*$"#)
 
     /// The conversion `text` asks for, or nil. Its number is read in `format` (`NumberFormat.number`).
@@ -89,7 +89,7 @@ public enum UnitConversion {
     }
 
     // (unit, symbol, plural name, other spellings). The symbol and the name are spellings too.
-    nonisolated(unsafe) static let units: [(Dimension, String, String, [String])] = [
+    static let units: [(Dimension, String, String, [String])] = [
         (UnitLength.millimeters, "mm", "Millimeters", ["millimeter", "millimetre", "millimetres"]),
         (UnitLength.centimeters, "cm", "Centimeters", ["centimeter", "centimetre", "centimetres"]),
         (UnitLength.meters, "m", "Meters", ["meter", "metre", "metres"]),
