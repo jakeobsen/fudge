@@ -178,6 +178,55 @@ test("readRegularFile refuses links, FIFOs, folders and big files, and reads the
     }
 });
 
+/** An extension in `scratch` with a good source, and links from its `src` to a folder outside it whose source uses
+ * `AI.ask`, to `src` itself (`.`), and to that same outside folder under a name the scan skips (`__tests__`) and under
+ * a source's name (`linked.ts`). */
+function linkedFoldersExtension(): string {
+    const outside = path.join(scratch, `outside-${Date.now()}-${Math.random()}`);
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(path.join(outside, "ai.ts"), 'import { AI } from "@raycast/api";\nAI.ask("hi");\n');
+    const folder = path.join(scratch, `linked-${Date.now()}-${Math.random()}`);
+    mkdirSync(path.join(folder, "src"), { recursive: true });
+    writeFileSync(path.join(folder, "package.json"), JSON.stringify({ name: "linked", title: "Linked", commands: [] }));
+    writeFileSync(path.join(folder, "src/ok.ts"), 'import { showHUD } from "@raycast/api";\nshowHUD("hi");\n');
+    symlinkSync(path.relative(path.join(folder, "src"), outside), path.join(folder, "src/lib"));
+    symlinkSync(".", path.join(folder, "src/self"));
+    symlinkSync(outside, path.join(folder, "src/__tests__"));
+    symlinkSync(outside, path.join(folder, "src/linked.ts"));
+    return folder;
+}
+
+test("the scan never walks into a linked folder: a link out of src/ and a link to . are unreadable", async () => {
+    const folder = linkedFoldersExtension();
+    const result = await scanExtension(folder, {
+        api: createApiModule() as Record<string, unknown>,
+        declared: raycastDeclarations(vendoredTypes()),
+    });
+    assert.deepEqual(
+        result.unreadable.sort(),
+        ["src/lib", "src/linked.ts", "src/self"],
+        "each once, and a skipped name (__tests__) not at all",
+    );
+    assert.deepEqual(result.gaps, [], "AI.ask, outside the extension, isn't read");
+    // The same through fudge scan, as the store runs it.
+    const report = scan(path.join(runtime, "scripts/compat/fudge-scan.ts"), folder) as Report;
+    assert.deepEqual(report.gaps, []);
+    assert.deepEqual(report.unreadable.sort(), ["src/lib", "src/linked.ts", "src/self"]);
+    assert.equal(report.supported, false);
+});
+
+test("scanExtension doesn't follow a src that's a link either, as make compat-scan calls it", async () => {
+    const folder = path.join(scratch, `src-link-${Date.now()}-${Math.random()}`);
+    mkdirSync(folder, { recursive: true });
+    symlinkSync(path.join(fixtures, "gaps/src"), path.join(folder, "src"));
+    const result = await scanExtension(folder, {
+        api: createApiModule() as Record<string, unknown>,
+        declared: raycastDeclarations(vendoredTypes()),
+    });
+    assert.deepEqual(result.unreadable, ["src"]);
+    assert.deepEqual(result.gaps, []);
+});
+
 test("a src that's a link, a file or missing isn't an extension: exit code 2 and one clear line", () => {
     const script = path.join(runtime, "scripts/compat/fudge-scan.ts");
     const folder = path.join(scratch, "not-extensions");
