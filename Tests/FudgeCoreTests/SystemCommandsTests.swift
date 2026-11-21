@@ -107,6 +107,22 @@ private func volume(
     #expect(group.commands.first { $0.title == "Toggle Dark Mode" }?.keywords.contains("appearance") == true)
 }
 
+@Test func theSystemCommandsIconsAreTheirOwn() {
+    let system = BuiltInCommandGroup.system.commands.map(\.symbol)
+    #expect(Set(system).count == system.count, "no two System commands share one")
+    // Nor with another of Fudge's commands, Window Management's included, or Reload Extensions and Quit Fudge.
+    let others = BuiltInCommandGroup.all.filter { $0 != .system }.flatMap(\.commands).map(\.symbol)
+    let fudgeItems: [RootItem.Kind] = [.reloadExtensions, .quit, .createQuicklink, .searchSnippets, .createSnippet]
+    for symbol in system {
+        #expect(!others.contains(symbol), "\(symbol)")
+        #expect(!fudgeItems.compactMap(\.symbol).contains(symbol), "\(symbol)")
+    }
+    for kind in fudgeItems {
+        let symbol = kind.symbol
+        #expect(symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) } != nil, "\(kind)")
+    }
+}
+
 @Test func onlyTheCommandsThatCantBeUndoneAskFirst() {
     #expect(
         Set(SystemCommand.allCases.filter(\.asksFirst)) == [.restart, .shutDown, .logOut, .emptyTrash, .quitAllApps])
