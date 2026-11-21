@@ -574,6 +574,7 @@ Extensions run in a separate Node.js process, the extension host.
       An unreadable `snippets.json` shows the notice and disables changes.
       Each change draws Search Snippets again if it's open in the launcher, and expansion reads the snippets again (`snippetsChanged`).
     - **The Permissions page** (`PermissionsPage.swift`) comes after General: Accessibility's status (`AccessibilityStatus`, read without a prompt when it's shown and every second while it's on screen), its reason, and Open Accessibility Settings.
+      The reason (`AccessibilityPermission.reason`, which onboarding's Accessibility step shows too) names Fudge's own commands that need it first, then extensions that read the selection or paste.
       That button asks for macOS's prompt on the first click and opens the pane on later ones, or at once when something in this run already asked for the prompt (`AccessibilityPermission.request`, `SystemAccessibility.promptShown`), so the prompt and the pane never stack.
       Below it, always shown, are the answers to "Allow <A> to open <B>'s commands?" (`LaunchPermissionsSection`, `LaunchPermissions.entries`), each changeable or forgotten, with the file read again before each change, a line saying none has asked yet when there are none, and the unreadable-file notice.
       Between them is Calendar access as macOS has it, with Open Privacy Settings (`CalendarAccessRow`); My Schedule asks for it, never this page.

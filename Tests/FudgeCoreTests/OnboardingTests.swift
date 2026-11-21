@@ -126,6 +126,18 @@ import Testing
     #expect(AccessibilityPermission.reason.contains("paste"), "Paste needs it too")
 }
 
+@Test func theAccessibilityReasonNamesFudgesOwnCommandsBeforeExtensions() throws {
+    let reason = AccessibilityPermission.reason
+    let extensions = try #require(reason.range(of: "Extensions that read your selection or paste"))
+    for own in [
+        "window management", "layouts", "Switch Windows", "Search Menu Items", "snippets", "emoji", "clipboard items",
+    ] {
+        let named = try #require(reason.range(of: own), "\(own)")
+        #expect(named.upperBound <= extensions.lowerBound, "\(own) comes before the extensions")
+    }
+    #expect(reason.hasSuffix("under Privacy & Security → Accessibility."))
+}
+
 @Test func clipboardHistoryComesAfterSignInAndExistingUsersSeeJustIt() {
     let steps = OnboardingStep.allCases
     #expect(steps.firstIndex(of: .clipboardHistory) == steps.firstIndex(of: .signIn)! + 1)
