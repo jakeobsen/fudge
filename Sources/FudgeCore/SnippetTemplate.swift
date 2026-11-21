@@ -3,11 +3,14 @@ import Foundation
 /// A snippet's text, read into text and placeholders, and filled in when it's pasted or copied (SPEC-078 §2). It
 /// shares `QuicklinkTemplate`'s parser, in snippet mode:
 ///
-/// - Dynamic values: `{clipboard}`, `{uuid}`, `{date}`, `{time}`, `{datetime}` and `{day}` (the day of the week).
+/// - Dynamic values: `{clipboard}`, `{uuid}`, `{date}`, `{time}`, `{datetime}` and `{day}` (the day of the week);
+///   `{date}`, `{time}` and `{datetime}` can take a `format="…"`, a Unicode date pattern.
 /// - `{cursor}`, at most once: where the caret ends up after pasting.
 /// - Modifiers after `|`: `uppercase`, `lowercase`, `trim` (`raw` and `percent-encode` change nothing here).
 ///
-/// Nothing is encoded. A snippet has no fields, so arguments and any other word in braces are a `problem`.
+/// Nothing is encoded. Only those names are placeholders, wherever they sit, as in Raycast; any other text in braces
+/// is the snippet's own (FUD-130). A snippet has no fields, so `{argument}` is a `problem`, as are Raycast's other
+/// names Fudge can't fill, a name used wrongly, and a second `{cursor}`.
 public struct SnippetTemplate: Sendable, Equatable {
     private let template: QuicklinkTemplate
 
@@ -43,7 +46,7 @@ public struct SnippetTemplate: Sendable, Equatable {
                     after = ""
                     continue
                 }
-                piece = template.raw(placeholder.value, values: [:], context: context)
+                piece = template.raw(placeholder.value, values: [:], context: context, format: placeholder.format)
                 for modifier in placeholder.modifiers {
                     switch modifier {
                     case .uppercase: piece = piece.uppercased()

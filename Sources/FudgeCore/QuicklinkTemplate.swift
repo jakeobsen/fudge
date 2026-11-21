@@ -30,9 +30,14 @@ public struct QuicklinkTemplate: Sendable, Equatable {
         /// argument.
         var unsupported: Set<String> {
             self == .link
-                ? ["selection", "day", "cursor", "browser-tab", "snippet"] : ["selection", "browser-tab", "snippet"]
+                ? ["selection", "day", "cursor", "browser-tab", "snippet"]
+                : ["selection", "browser-tab", "snippet", "argument"]
         }
     }
+
+    /// The names a snippet's braces must hold to be a placeholder (FUD-130): Fudge's dynamic values, and Raycast's
+    /// names it refuses, so a snippet brought over from Raycast says what it can't fill rather than pasting `{…}`.
+    static let snippetNames = Set(Dynamic.allCases.map(\.rawValue)).union(Mode.snippet.unsupported)
 
     public enum Modifier: String, Sendable, Equatable, CaseIterable {
         case raw
@@ -58,6 +63,9 @@ public struct QuicklinkTemplate: Sendable, Equatable {
     public struct Placeholder: Sendable, Equatable {
         public var value: Value
         public var modifiers: [Modifier]
+        /// A snippet's `{date format="…"}` (also `{time}` and `{datetime}`): a Unicode date pattern, such as
+        /// `yyyy-MM-dd`, in place of the Mac's format.
+        public var format: String? = nil
     }
 
     public enum Segment: Sendable, Equatable {
@@ -186,7 +194,7 @@ public struct QuicklinkTemplate: Sendable, Equatable {
     }
 
     /// A placeholder's value before its modifiers, shared with `SnippetTemplate`.
-    func raw(_ value: Value, values: [String: String], context: Context) -> String {
+    func raw(_ value: Value, values: [String: String], context: Context, format: String? = nil) -> String {
         switch value {
         case .argument(let name):
             if let entered = values[name], !entered.isEmpty { return entered }
@@ -205,6 +213,14 @@ public struct QuicklinkTemplate: Sendable, Equatable {
             var calendar = context.calendar
             calendar.locale = context.locale
             calendar.timeZone = context.timeZone
+            if let format {
+                let formatter = DateFormatter()
+                formatter.locale = context.locale
+                formatter.calendar = calendar
+                formatter.timeZone = context.timeZone
+                formatter.dateFormat = format
+                return formatter.string(from: context.now)
+            }
             let date: Date.FormatStyle.DateStyle = dynamic == .time ? .omitted : .abbreviated
             let time: Date.FormatStyle.TimeStyle = dynamic == .date ? .omitted : .shortened
             return context.now.formatted(
@@ -238,6 +254,10 @@ public struct QuicklinkTemplate: Sendable, Equatable {
         var problem: String?
 
         mutating func parse(_ link: String) {
+            if mode == .snippet {
+                parseSnippet(link)
+                return
+            }
             var text = ""
             var rest = Substring(link)
             while let character = rest.first {
@@ -267,6 +287,43 @@ public struct QuicklinkTemplate: Sendable, Equatable {
                 rest = inside[inside.index(after: close)...]
             }
             if !text.isEmpty { segments.append(.text(text)) }
+        }
+
+        /// A snippet's text (FUD-130): a `{` starts a placeholder only when what follows it, up to the next `}` on
+        /// the same line with no `{` between, is one of `snippetNames` with its attributes and modifiers. Any other
+        /// brace, lone or paired, is the snippet's own text, as code and JSON need: `{ "a": 1 }`, `{name}`, `{}`.
+        /// A name is a placeholder wherever it sits, so `{{date}}` is a brace, the date and a brace.
+        mutating func parseSnippet(_ text: String) {
+            var literal = ""
+            var rest = Substring(text)
+            while let character = rest.first {
+                if character == "{",
+                    let close = rest.dropFirst().firstIndex(where: { $0 == "}" || $0 == "{" || $0.isNewline }),
+                    rest[close] == "}"
+                {
+                    let body = String(rest[rest.index(after: rest.startIndex)..<close])
+                    if Self.isSnippetPlaceholder(body) {
+                        if !literal.isEmpty { segments.append(.text(literal)) }
+                        literal = ""
+                        guard let placeholder = placeholder(body) else { return }
+                        segments.append(.placeholder(placeholder))
+                        rest = rest[rest.index(after: close)...]
+                        continue
+                    }
+                }
+                literal.append(character)
+                rest = rest.dropFirst()
+            }
+            if !literal.isEmpty { segments.append(.text(literal)) }
+        }
+
+        /// Whether a snippet's `{…}` holds one of `snippetNames`, first thing, then only attributes, and modifiers
+        /// after a `|`. Whether those are right is `placeholder`'s to say.
+        static func isSnippetPlaceholder(_ body: String) -> Bool {
+            guard let head = splitModifiers(body).first,
+                let match = head.wholeMatch(of: /([A-Za-z0-9_\-]+)((?:\s+[A-Za-z]+="[^"]*")*)\s*/)
+            else { return false }
+            return snippetNames.contains(String(match.1).lowercased())
         }
 
         mutating func fail(_ message: String) {
@@ -312,12 +369,21 @@ public struct QuicklinkTemplate: Sendable, Equatable {
                                 options: options))),
                     modifiers: modifiers)
             }
+            // A snippet's date, time and datetime can take a `format`; nothing else takes an attribute.
+            let dynamic = Dynamic(rawValue: word.lowercased())
+            var format: String?
+            if mode == .snippet, let dynamic, [.date, .time, .datetime].contains(dynamic),
+                attributes.keys.allSatisfy({ $0 == "format" })
+            {
+                format = attributes["format"]
+                attributes = [:]
+            }
             guard attributes.isEmpty, !mode.unsupported.contains(word.lowercased()) else {
                 fail("Fudge doesn't support “\(written)” in \(mode.thing).")
                 return nil
             }
-            if let dynamic = Dynamic(rawValue: word.lowercased()) {
-                return Placeholder(value: .dynamic(dynamic), modifiers: modifiers)
+            if let dynamic {
+                return Placeholder(value: .dynamic(dynamic), modifiers: modifiers, format: format)
             }
             // A snippet has no fields: any other word is a problem.
             guard mode == .link else {
