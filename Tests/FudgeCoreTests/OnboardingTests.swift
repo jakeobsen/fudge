@@ -190,6 +190,7 @@ import Testing
         "showOnScreen": "a choice, not a feature",
         "escapeBehavior": "a choice, not a feature",
         "hyperkeyQuickPress": "a detail of Hyperkey, which has its own step",
+        "colorFormat": "the Color Picker's format, not a feature",
     ]
     let defaults = FudgeSettings()
     let properties = Mirror(reflecting: defaults).children.compactMap { child in child.label.map { ($0, child.value) } }

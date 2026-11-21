@@ -61,6 +61,8 @@ public struct FudgeSettings: Sendable, Equatable {
     public var hyperkey = false
     /// **Quick press toggles Caps Lock** (`hyperkeyQuickPress`): a tap of Caps Lock still toggles caps. Off by default.
     public var hyperkeyQuickPress = false
+    /// The Color Picker's **Copy Format** (`colorFormat`): HEX unless set. An unknown value reads as HEX.
+    public var colorFormat: ColorFormat = .default
 
     public struct CommandSettings: Sendable, Equatable {
         /// In `HotKeySpec` text form.
@@ -205,6 +207,7 @@ public struct FudgeSettings: Sendable, Equatable {
         settings.updateCheck = UpdateCheckSetting(settingsValue: object["updateCheck"])
         settings.hyperkey = object["hyperkey"] as? Bool ?? false
         settings.hyperkeyQuickPress = object["hyperkeyQuickPress"] as? Bool ?? false
+        settings.colorFormat = (object["colorFormat"] as? String).flatMap(ColorFormat.init(rawValue:)) ?? .default
         for case (let id, let entry as [String: Any]) in object["commands"] as? [String: Any] ?? [:] {
             settings.commands[id] = CommandSettings(
                 hotkey: entry["hotkey"] as? String, alias: entry["alias"] as? String, enabled: entry["enabled"] as? Bool
@@ -239,6 +242,7 @@ public struct FudgeSettings: Sendable, Equatable {
         object["updateCheck"] = updateCheck?.rawValue
         object["hyperkey"] = hyperkey ? true : nil
         object["hyperkeyQuickPress"] = hyperkeyQuickPress ? true : nil
+        object["colorFormat"] = colorFormat == .default ? nil : colorFormat.rawValue
 
         var commandObjects = object["commands"] as? [String: Any] ?? [:]
         let commandIDs = Set(commandObjects.keys).union(commands.keys)

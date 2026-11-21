@@ -125,6 +125,33 @@ private let left70 = WindowFractions(x: 0, y: 0, width: 0.7, height: 1)
     #expect(!WindowFractions(x: 0, y: 0, width: 1.1, height: 1).isValid)
     #expect(!WindowFractions(x: .nan, y: 0, width: 0.5, height: 1).isValid)
     #expect(!WindowFractions(x: 0, y: 0, width: .infinity, height: 1).isValid)
+    // At least 5% each way, whatever the screen (SPEC-102 §3).
+    #expect(!WindowFractions(x: 1, y: 0, width: 1e-12, height: 1).isValid, "a sliver at the edge")
+    #expect(!WindowFractions(x: 0.98, y: 0, width: 0.05, height: 1).isValid)
+    #expect(!WindowFractions(x: 0, y: 0, width: 0.04, height: 1).isValid)
+    #expect(!WindowFractions(x: 0, y: 0, width: 1, height: 0.049).isValid)
+    #expect(WindowFractions(x: 0.95, y: 0.95, width: 0.05, height: 0.05).isValid)
+}
+
+@Test func aSmallFrameIsPlacedAtLeast100PointsAndOnTheScreen() {
+    let small = CGRect(x: 0, y: 0, width: 800, height: 600)
+    let corner = WindowFractions(x: 0.95, y: 0.95, width: 0.05, height: 0.05)
+    // 40 × 30 pt would be 5% here: it grows to 100 pt, moved back inside the screen.
+    #expect(corner.frame(in: small) == CGRect(x: 700, y: 500, width: 100, height: 100))
+    #expect(
+        WindowFractions(x: 0, y: 0, width: 0.05, height: 1).frame(in: small)
+            == CGRect(x: 0, y: 0, width: 100, height: 600))
+    let big = CGRect(x: 0, y: 0, width: 2560, height: 1440)
+    // On a big screen 5% of its width is already more than 100 pt; its height, 72 pt, grows and moves back up.
+    #expect(corner.frame(in: big) == CGRect(x: 2432, y: 1340, width: 128, height: 100))
+    // A screen narrower than 100 pt gets the whole side.
+    #expect(corner.frame(in: CGRect(x: 0, y: 0, width: 80, height: 600)).width == 80)
+}
+
+@Test func aSavedWindowSmallerThanTheMinimumIsKeptAtTheMinimum() throws {
+    // A 30 × 20 pt window near the right edge of a 1440 pt screen.
+    let saved = try #require(WindowFractions(CGRect(x: 1400, y: 25, width: 30, height: 20), in: displayA.visibleBounds))
+    #expect(saved == WindowFractions(x: 0.95, y: 0, width: 0.05, height: 0.05))
 }
 
 // MARK: - Custom positions
@@ -244,6 +271,23 @@ private func desk() -> Room {
     #expect(frames.frame(of: 21) == before, "Restore can put each back")
 }
 
+@Test func oneAppAndPlaceNamedTwiceIsPlacedOnce() {
+    // A hand-edited file names the browser's front window twice: it's placed once, by the first, and the second is
+    // skipped (SPEC-102 §3).
+    let room = desk()
+    let first = WindowFractions(x: 0, y: 0, width: 0.25, height: 1)
+    let screenA = SavedScreen(name: "Display A", index: 0)
+    let layout = SavedWindowLayout(
+        name: "Twice",
+        windows: [
+            SavedWindow(bundleId: "com.example.browser", index: 0, screen: screenA, frame: first),
+            SavedWindow(bundleId: "com.example.browser", index: 0, screen: screenA, frame: left70),
+        ])
+    var frames = WindowFrames()
+    #expect(manager(room).apply(layout, frames: &frames) == LayoutPlacement(placed: 1, skipped: 1))
+    #expect(room.frame(21) == first.frame(in: displayA.visibleBounds))
+}
+
 @Test func aWindowThatCantMoveIsSkipped() {
     let room = desk()
     room.windows[0].positionSettable = false
@@ -356,6 +400,7 @@ extension WindowLayoutStore {
         #"{"id":"e","name":"","x":0,"y":0,"width":0.5,"height":1}"#,
         #"{"id":"f","name":"No height","x":0,"y":0,"width":0.5}"#,
         #"{"id":"g","name":"Negative","x":-0.1,"y":0,"width":0.5,"height":1}"#,
+        #"{"id":"h","name":"Sliver","x":1,"y":0,"width":1e-12,"height":1}"#,
     ]
     let good = #"{"id":"ok","name":"Left 70%","x":0,"y":0,"width":0.7,"height":1}"#
     let mixed =
@@ -472,7 +517,10 @@ extension WindowLayoutStore {
     #expect(frameProblem("abc", "0", "50", "100") == "Each value is a percentage from 0 to 100.")
     #expect(frameProblem("120", "0", "50", "100") == "Each value is a percentage from 0 to 100.")
     #expect(frameProblem("0", "-5", "50", "100") == "Each value is a percentage from 0 to 100.")
-    #expect(frameProblem("0", "0", "0", "100") == "Width and height must be more than 0%.")
+    #expect(frameProblem("0", "0", "0", "100") == "Width and height must each be at least 5%.")
+    #expect(frameProblem("99.99", "0", "0.01", "100") == "Width and height must each be at least 5%.", "#124's note")
+    #expect(frameProblem("0", "0", "50", "4.9") == "Width and height must each be at least 5%.")
+    #expect(frameProblem("95", "95", "5", "5") == nil)
     #expect(frameProblem("50", "0", "60", "100") == "It must fit on the screen: X + Width and Y + Height at most 100%.")
     #expect(frameProblem("70 %", "0", "30%", "100") == nil)
     #expect(frameProblem("33,5", "0", "66.5", "100") == nil, "a decimal comma reads too")

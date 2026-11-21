@@ -17,8 +17,9 @@ private final class FakeSwitch: WindowSwitchSystem, @unchecked Sendable {
     var ax: [Int32: [SwitchableWindow<Int>]] = [:]
     /// Apps whose read says they didn't answer.
     var silent: Set<Int32> = []
-    /// Apps whose read waits until the semaphore is signalled, or 5 s.
+    /// Apps whose read waits until the semaphore is signalled, or `slowLimit`.
     var slow: [Int32: DispatchSemaphore] = [:]
+    var slowLimit: DispatchTimeInterval = .seconds(5)
     /// Apps whose read, as it starts, signals the semaphore.
     var signals: [Int32: DispatchSemaphore] = [:]
     /// Actions that throw.
@@ -39,7 +40,7 @@ private final class FakeSwitch: WindowSwitchSystem, @unchecked Sendable {
     func windows(of pid: Int32) -> AppWindowsRead<Int> {
         lock.withLock { recordedReads.append(pid) }
         signals[pid]?.signal()
-        _ = slow[pid]?.wait(timeout: .now() + 5)
+        _ = slow[pid]?.wait(timeout: .now() + slowLimit)
         return silent.contains(pid) ? .noAnswer : .answered(ax[pid] ?? [])
     }
 
@@ -256,6 +257,42 @@ private func titles(_ listing: SwitcherListing<Int>) -> [String] {
     #expect(system.reads.filter { $0 == safari }.count == 2)
 }
 
+@Test func aReadWaitsOnTheAppsReadInFlightAndTakesItsAnswer() async throws {
+    // SPEC-102 §1: Safari's read outlives the first read's deadline, so that read names it.
+    // Safari's read is held until the gate opens, however loaded the machine is, so it's still in flight below.
+    let system = desk()
+    let gate = DispatchSemaphore(value: 0)
+    system.slow = [safari: gate]
+    system.slowLimit = .seconds(120)
+    let inFlight = WindowReadsInFlight()
+    let first = switcher(system, inFlight: inFlight).read(deadline: .milliseconds(50))
+    // A stalled runner may leave others out of so short a read too; Safari is the one held.
+    #expect(first.silentApps.contains("Safari"))
+
+    // A second read, with time to spare, on a thread of its own, waits on that read instead of asking again, and
+    // Safari answers meanwhile.
+    let listing: (titles: [String], silent: [String]) = await withCheckedContinuation { continuation in
+        Thread.detachNewThread {
+            let listing = switcher(system, inFlight: inFlight).read(deadline: .seconds(60))
+            continuation.resume(returning: (titles(listing), listing.silentApps))
+        }
+        Thread.detachNewThread {
+            let start = ContinuousClock.now
+            while inFlight.waiting(on: safari) == 0, start.duration(to: .now) < .seconds(60) { usleep(2_000) }
+            gate.signal()
+        }
+    }
+    #expect(listing.silent.isEmpty, "not named: it answered within this read's second")
+    #expect(listing.titles == ["Start Page", "Notes.txt", "Inbox", "Docs", "Groceries", "Recipes"])
+    #expect(system.reads.filter { $0 == safari }.count == 1, "asked once")
+
+    // The answer went to the read that waited, and no further: the next read asks again.
+    system.slow = [:]
+    for _ in 0..<200 where inFlight.reading.contains(safari) { try await Task.sleep(for: .milliseconds(10)) }
+    _ = switcher(system, inFlight: inFlight).read(deadline: .seconds(5))
+    #expect(system.reads.filter { $0 == safari }.count == 2)
+}
+
 @Test func appsAreReadAtOnceNotOneAfterAnother() {
     // Mail's read waits for Notes' to start, and Notes comes after Mail: read one after another, Mail would miss the
     // deadline.
@@ -420,6 +457,23 @@ private func titles(_ listing: SwitcherListing<Int>) -> [String] {
     // Its actions do nothing.
     #expect(listing.switchTo(row: 0) == nil && listing.close(row: 0) == nil && !listing.quit(row: 0))
     #expect(FixedWindowSystem(json: Data("not json".utf8)).apps().isEmpty)
+}
+
+@Test func manyMadeUpWindowsStayOnTheirScreensAndNoneIsTakenForFudge() throws {
+    // SPEC-102 §2: 40 windows of 4 apps across two screens, in a run whose own pid is one the made-up apps would get.
+    let entries = (0..<40).map { index in
+        #"{ "app": "App \#(index % 4)", "title": "Window \#(index)", "screen": "\#(index % 2 == 0 ? "Left" : "Right")" }"#
+    }
+    let json = Data(("[" + entries.joined(separator: ",") + "]").utf8)
+    let ownPid: Int32 = 1001
+    let system = FixedWindowSystem(json: json, ownPid: ownPid)
+    #expect(system.apps().count == 4 && !system.apps().contains { $0.pid == ownPid })
+    let listing = WindowSwitcher(system: system, ownPid: ownPid, inFlight: WindowReadsInFlight()).listing()
+    #expect(listing.rows.count == 40, "no made-up app is left out as Fudge's own")
+    for (row, title) in zip(listing.rows, listing.rows.map(\.title)) {
+        let index = try #require(Int(title.dropFirst("Window ".count)))
+        #expect(row.accessory == (index % 2 == 0 ? "Left" : "Right"), "\(title) keeps its screen's name")
+    }
 }
 
 @Test func recentAppsKeepTheLatestFirst() {
