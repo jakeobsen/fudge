@@ -1144,6 +1144,7 @@ Extensions run in a separate Node.js process, the extension host.
   It builds the app ad hoc first (`make app`), with none of them in its environment, so no code the build runs can reach them.
   Then it imports the certificate into a keychain of its own in a temporary folder, its key usable by codesign alone and not exportable, deleted however the script ends.
   It signs again with the Developer ID identity (`scripts/sign-app.sh`), notarizes the app with `notarytool` and staples it, makes the disk image from it (`make dmg-image`), signs, notarizes and staples that, and checks both with `spctl`.
+  Both signings take the identity from that keychain alone (`codesign --keychain`, `sign-app.sh`'s third argument), so on a Mac whose login keychain has the same Developer ID, `make release` neither finds it twice nor asks for that key's password.
   It never prints a secret or the identity's name: the tools' output shows only when one fails, with those values as `***`.
   Without any of the five, a tag still makes a release, ad hoc, and its notes say so (a fork has none); the dry run fails instead, as does any run with only some of them.
 - **`make release`** does the same on the maintainer's Mac, for a release built without CI, after `secret env apple`, which sets the same five variables.
