@@ -63,7 +63,7 @@ test("without --json, fudge scan lists the gaps for a person, saying Fudge", () 
         [
             "scan-gaps uses things Fudge doesn't have yet:",
             "  captureMemorySnapshot (not in Fudge)",
-            "scan-gaps uses AI, which Fudge leaves out:",
+            "scan-gaps uses Raycast AI, which Fudge doesn't support:",
             "  AI.ask",
         ].join("\n"),
     );
@@ -83,7 +83,7 @@ test("without --json, fudge scan lists the gaps for a person, saying Fudge", () 
             "other uses things Fudge doesn't have yet:",
             "  Action.ToggleQuickLook (shows, but fails when used)",
             "  Form.LinkAccessory (not drawn)",
-            "other uses OAuth, which Fudge leaves out:",
+            "other signs in with OAuth, which needs a sign-in server (Settings → Sign-in):",
             "  OAuth.PKCEClient (through @raycast/utils: OAuthService)",
             "Couldn't read: src/broken.ts",
         ].join("\n"),
@@ -99,8 +99,18 @@ test("without --json, fudge scan lists the gaps for a person, saying Fudge", () 
     };
     assert.equal(
         describe(onlyByDesign),
-        ["asks uses AI, which Fudge leaves out:", "  AI.ask", "  AI.Model"].join("\n"),
-        "nothing under \"doesn't have yet\" when only by-design APIs are used",
+        ["asks uses Raycast AI, which Fudge doesn't support:", "  AI.ask", "  AI.Model"].join("\n"),
+        "nothing under \"doesn't have yet\" when only APIs counted apart are used",
+    );
+    const browser: Report = {
+        extension: "tabs",
+        supported: false,
+        gaps: [{ api: "BrowserExtension.getTabs", kind: "missing", byDesign: "Browser Extension" }],
+        unreadable: [],
+    };
+    assert.equal(
+        describe(browser),
+        ["tabs uses the Raycast Browser Extension, which Fudge doesn't support:", "  BrowserExtension.getTabs"].join("\n"),
     );
 });
 

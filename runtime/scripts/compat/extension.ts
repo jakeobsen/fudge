@@ -6,17 +6,27 @@ import { lstatSync, readdirSync, statSync, type Dirent } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { maxManifestBytes, maxSourceBytes, readRegularFile } from "./files.ts";
 import { RAYCAST_UTILS_PATHS } from "./raycast-utils.generated.ts";
+import { unsupported } from "../../src/api/stubs.ts";
 import { gaps, isExtensionSource, toJavaScript, uses, type Gap, type Transform } from "./scan.ts";
 
 /**
- * APIs left out of fudge on purpose, by category. AI and the Browser Extension depend on Raycast's servers. OAuth
- * (`OAuth.PKCEClient` and the @raycast/utils exports built on it) signs in only to `@raycast/utils`' seven built-in
- * providers, through a sign-in server (decisions D-50 and D-63), which a scan can't tell from an extension's own.
+ * APIs counted apart from gaps, by category, each with what a person is told about it. Fudge doesn't support AI or
+ * the Browser Extension at all (`unsupported`, FUD-118). OAuth (`OAuth.PKCEClient` and the @raycast/utils exports
+ * built on it) signs in through a sign-in server, only to the providers that server supports (D-63), which a scan
+ * can't tell from an extension's own.
  */
-export const byDesign: Record<string, { api: RegExp; utils?: string[] }> = {
-    AI: { api: /^AI(\.|$)/ },
-    "Browser Extension": { api: /^BrowserExtension(\.|$)/ },
-    OAuth: { api: /^OAuth(\.|$)/, utils: ["OAuthService", "withAccessToken", "getAccessToken"] },
+export const byDesign: Record<string, { api: RegExp; utils?: string[]; says: string }> = {
+    ...Object.fromEntries(
+        unsupported.map(({ category, api, name }) => [
+            category,
+            { api, says: `uses ${name}, which Fudge doesn't support` },
+        ]),
+    ),
+    OAuth: {
+        api: /^OAuth(\.|$)/,
+        utils: ["OAuthService", "withAccessToken", "getAccessToken"],
+        says: "signs in with OAuth, which needs a sign-in server (Settings → Sign-in)",
+    },
 };
 
 /** The by-design category a gap belongs to, if any. */
@@ -127,8 +137,8 @@ export async function scanExtension(folder: string, options: ScanOptions): Promi
     };
 }
 
-/** What `fudge scan <folder> --json` prints. `supported` means no gaps at all, by-design ones included, and every
- * source file read. */
+/** What `fudge scan <folder> --json` prints. `supported` means no gaps at all, the ones counted apart included, and
+ * every source file read. A gap counted apart names its category in `byDesign`. */
 export interface Report {
     extension: string;
     supported: boolean;
@@ -166,8 +176,8 @@ const kindWords: Record<Gap["kind"], string> = {
 };
 
 /**
- * `fudge scan <folder>` without `--json`: a short list for a person. What Fudge doesn't have yet comes first; APIs it
- * leaves out on purpose follow, apart, by category.
+ * `fudge scan <folder>` without `--json`: a short list for a person. What Fudge doesn't have yet comes first; the
+ * APIs counted apart follow, by category, each saying why (`byDesign`).
  */
 export function describe(scanned: Report): string {
     if (scanned.supported) return `${scanned.extension}: Fudge supports everything it uses.`;
@@ -177,7 +187,7 @@ export function describe(scanned: Report): string {
     if (missing.length > 0) lines.push(`${scanned.extension} uses things Fudge doesn't have yet:`);
     for (const gap of missing) lines.push(`  ${gap.api} (${via(gap) || kindWords[gap.kind]})`);
     for (const design of new Set(scanned.gaps.flatMap((gap) => (gap.byDesign ? [gap.byDesign] : [])))) {
-        lines.push(`${scanned.extension} uses ${design}, which Fudge leaves out:`);
+        lines.push(`${scanned.extension} ${byDesign[design]?.says ?? `uses ${design}`}:`);
         for (const gap of scanned.gaps.filter((gap) => gap.byDesign === design)) {
             lines.push(`  ${gap.api}${via(gap) ? ` (${via(gap)})` : ""}`);
         }

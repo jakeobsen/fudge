@@ -7,7 +7,7 @@ Fudge is an independent project. It is not affiliated with or endorsed by Raycas
 ## What's here
 
 - `Sources/FudgeApp`: the macOS app. It runs in the menu bar, without a Dock icon.
-- `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for Fudge; `--into <folder>` installs it in that extensions folder instead. `fudge scan <folder>` says what the extension uses that Fudge doesn't have yet, without building it (`--json` for a script). A running Fudge picks up an extension you install, rebuild or remove within a second, with nothing to reload.
+- `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for Fudge; `--into <folder>` installs it in that extensions folder instead. `fudge scan <folder>` says what the extension uses that Fudge doesn't have yet or doesn't support, without building it (`--json` for a script). A running Fudge picks up an extension you install, rebuild or remove within a second, with nothing to reload.
 - `Sources/FudgeCore`: code shared by the app and the tool.
 - `runtime/`: the extension host. This is the Node.js program that runs extensions. The app talks to it over stdin/stdout.
 - `runtime/store-extension/`: the Extension Store, an extension bundled with Fudge that lists and installs the extensions published in github.com/raycast/extensions.
@@ -178,8 +178,8 @@ Turning it off removes the store's downloaded list; the extensions you installed
 
 In the **Extension Store** command, search the extensions, or pick a category in the dropdown; **Installed** shows the ones you installed from it.
 
-- ↵ installs one, after saying whether Fudge supports everything it uses. ⌘U updates one marked **Update available**, and ⌃X uninstalls it, to the Trash.
-- ⌘D shows an extension's details, with each command and whether it opens a view, runs without one, or sits in the menu bar, and its README. ⌘R updates the list, which otherwise happens when you open the store and the list is a day old. If the list couldn't be downloaded, ⌘R tries again.
+- ↵ installs one, after saying whether Fudge supports everything it uses. Fudge doesn't support Raycast AI or the Raycast Browser Extension, so an extension that uses either is marked **Not compatible**: the commands that use them won't work. ⌘U updates one marked **Update available**, and ⌃X uninstalls it, to the Trash.
+- ⌘D shows an extension's details: whether it's compatible (checked once you stay on it for a moment), each command and whether it opens a view, runs without one, or sits in the menu bar, and its README. ⌘R updates the list, which otherwise happens when you open the store and the list is a day old. If the list couldn't be downloaded, ⌘R tries again.
 - The store needs Git. If it's missing, install Apple's Command Line Tools: run `xcode-select --install` in Terminal.
 - It never touches extensions you installed with `fudge build` yourself. An extension installs under its own name, so it can't be installed while another extension of that name is: uninstall that one first.
 
