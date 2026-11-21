@@ -11,6 +11,7 @@ Fudge is an independent project. It is not affiliated with or endorsed by Raycas
 - `Sources/FudgeCore`: code shared by the app and the tool.
 - `runtime/`: the extension host. This is the Node.js program that runs extensions. The app talks to it over stdin/stdout.
 - `runtime/store-extension/`: the Extension Store, an extension bundled with Fudge that lists and installs the extensions published in github.com/raycast/extensions.
+- `runtime/file-search-extension/`: Search Files, an extension bundled with Fudge that finds files and folders by name.
 
 ## Building
 
@@ -119,6 +120,16 @@ Type a calculation in root search and the answer shows above the results: arithm
 Numbers follow your Mac's number format, or the one you pick under **Settings… → General → Number format**: "1,234.5" or "1.234,5". In "1.234,5", `1.000 + 1` is 1.001, and `1.5` isn't a number, so it gets no answer rather than a wrong one.
 
 Currency conversion uses the European Central Bank's daily exchange rates. Turn it on under **Settings… → General**; until then, a currency query shows a card that takes you there.
+
+### Search Files
+
+**Search Files** finds files and folders by name with Spotlight. Type part of a name; with nothing typed, it lists the files you used in the last 30 days.
+
+- ↵ opens the file, ⌘↵ shows it in Finder, ⌘Y previews it with Quick Look, and ⌘O opens it with another app.
+- ⌘⇧C copies its path, ⌘⌥C copies the file, and ⌃X moves it to the Trash, after asking.
+- ⌘⇧D shows or hides the details.
+
+In **Settings… → Search Files**, **Search In** picks your home folder (the default) or the whole Mac, and **Leave Out** lists folders to skip, separated by commas (`~/Library` by default).
 
 ### Extension Store
 

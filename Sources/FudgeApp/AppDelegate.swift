@@ -34,6 +34,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = Self.mainMenu()
         model = LauncherModel(paths: paths)
+        // Snapshots never ask Spotlight: Search Files gets `--found-files`' results, or none.
+        if let snapshot = Snapshot(arguments: CommandLine.arguments) {
+            let files = snapshot.foundFiles.map { FixedFileQuery.load($0, home: FileSearchOptions.home()) } ?? []
+            model.fileSearch = FileSearch { FixedFileQuery(files) }
+        }
         panel = LauncherPanel(content: LauncherView(model: model))
         settingsModel = SettingsModel(paths: paths)
         settingsModel.launcherHotkey = FudgeSettings.load(from: paths.settingsFile).launcherHotkey
@@ -602,6 +607,9 @@ struct Snapshot {
     let signIns: MemorySecretStore
     /// `--sign-in-consent`: picks Fudge's sign-in server on the Sign-in page and saves its consent sheet instead.
     let signInConsent: Bool
+    /// `--found-files <file>`: Search Files' results, a JSON array of `files.search` entries (`~/` paths are in the
+    /// home folder). Snapshots never ask Spotlight, so without it there are none.
+    let foundFiles: URL?
 
     init?(arguments: [String]) {
         guard let index = arguments.firstIndex(of: "--snapshot"), index + 1 < arguments.count else { return nil }
@@ -637,6 +645,7 @@ struct Snapshot {
             try? signIns.write(JSONEncoder().encode(tokens), account: parts[0])
         }
         signInConsent = arguments.contains("--sign-in-consent")
+        foundFiles = value("--found-files").map { URL(fileURLWithPath: $0) }
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1

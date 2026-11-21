@@ -30,10 +30,7 @@ public enum ExtensionStore {
 
     /// The bundled extension: `store-extension/` in the app's resources, when it's there.
     public static func bundledDirectory(resources: URL?) -> URL? {
-        guard let folder = resources?.appendingPathComponent("store-extension", isDirectory: true),
-            FileManager.default.fileExists(atPath: folder.appendingPathComponent("package.json").path)
-        else { return nil }
-        return folder
+        BundledExtensions.directory("store-extension", resources: resources)
     }
 
     /// The store's downloaded copy of the repository. Turning the store off deletes it, and only it: the store's
@@ -81,15 +78,33 @@ public enum ExtensionStore {
     }
 }
 
+/// The extensions bundled with Fudge (SPEC-069 §1): the Extension Store and Search Files. `make app` builds each from
+/// `runtime/<folder>` into the app's resources, under the same folder name. They're always installed. The store keeps
+/// its own off-by-default rule and switch (`ExtensionStore`); the others are enabled by default, like any extension.
+public enum BundledExtensions {
+    /// Their folders, in `runtime/` and in the app's resources.
+    public static let folders = ["store-extension", "file-search-extension"]
+
+    /// The bundled extension in `folder` of the app's resources, when it's there.
+    public static func directory(_ folder: String, resources: URL?) -> URL? {
+        guard let directory = resources?.appendingPathComponent(folder, isDirectory: true),
+            FileManager.default.fileExists(atPath: directory.appendingPathComponent("package.json").path)
+        else { return nil }
+        return directory
+    }
+}
+
 extension InstalledExtension {
-    /// The user's installed extensions, plus the bundled Extension Store, sorted by title. A user's extension with
-    /// the store's name gives way to the bundled one. Only the store's manifest is read here.
+    /// The user's installed extensions, plus the bundled ones, sorted by title. A user's extension with a bundled
+    /// one's name gives way to it. Only the bundled ones' manifests are read here.
     public static func all(paths: FudgePaths, resources: URL?) -> [InstalledExtension] {
         var extensions = all(in: paths.extensionsDirectory)
-        guard let folder = ExtensionStore.bundledDirectory(resources: resources), let store = try? load(from: folder)
-        else { return extensions }
-        extensions.removeAll { $0.manifest.name == store.manifest.name }
-        extensions.append(store)
+        let bundled = BundledExtensions.folders.compactMap { folder in
+            BundledExtensions.directory(folder, resources: resources).flatMap { try? load(from: $0) }
+        }
+        let names = Set(bundled.map(\.manifest.name))
+        extensions.removeAll { names.contains($0.manifest.name) }
+        extensions += bundled
         return extensions.sorted { $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending }
     }
 

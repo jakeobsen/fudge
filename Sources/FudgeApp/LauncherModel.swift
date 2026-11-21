@@ -202,6 +202,8 @@ final class LauncherModel {
     @ObservationIgnored private var host: ExtensionHost?
     /// The sessions host messages may name (SPEC-067).
     @ObservationIgnored private var hostSessions = HostSessions()
+    /// Answers Search Files' `files.search` through Spotlight. `AppDelegate` gives snapshot runs fixed results.
+    @ObservationIgnored var fileSearch = FileSearch { SpotlightFileQuery() }
     /// No-view commands still running, by session.
     @ObservationIgnored private var background: [String: String] = [:]
     /// No-view commands that `launchCommand` started in the background, by session. They leave the panel alone.
@@ -1331,8 +1333,9 @@ final class LauncherModel {
             return
         }
         if let submenu = entry.submenu {
+            // Picked in the panel, or run by its shortcut with the panel shut or showing another submenu.
             var state = actionPanel ?? ActionPanelState()
-            state.path.append(entry.id)
+            state.path = ActionPanelReader.path(to: entry.id, in: currentActions) ?? state.path + [entry.id]
             state.query = ""
             state.selected = ActionPanelReader.flat(submenu).first?.id
             actionPanel = state
@@ -2289,6 +2292,15 @@ final class LauncherModel {
         destructive: false
     )
 
+    /// The preferences of `session`'s command as they are now, resolved as a launch resolves them.
+    private func preferenceValues(of session: String) -> [String: JSONValue] {
+        guard let name = sessionExtensions[session], let installed = extensions[name],
+            let command = installed.manifest.commands.first(where: { $0.name == sessionCommands[session] })
+        else { return [:] }
+        let stored = PreferenceStore(directory: paths.preferencesDirectory).load(name)
+        return PreferenceResolver.resolve(installed.manifest, command: command, stored: stored).values
+    }
+
     /// What a command needs before it launches: its preferences (with the required ones that aren't set in
     /// `missing`) and its environment. Root search and `launchCommand` both prepare launches here, and a
     /// user-initiated launch counts in the launch history.
@@ -2819,6 +2831,20 @@ final class LauncherModel {
             case "form.storeValues":
                 storeFormValues(params, session: session)
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
+            case "files.search":
+                // Search Files (SPEC-069): its own preferences say where, read now so a change applies at once.
+                let caller = sessionExtensions[session]
+                let options = FileSearchOptions(
+                    preferences: preferenceValues(of: session), home: FileSearchOptions.home())
+                Task {
+                    do {
+                        let found = try await fileSearch.search(
+                            params, options: options, session: session, caller: caller)
+                        send(.rpcResult(session: session, id: id, result: .array(found.map(\.json)), error: nil))
+                    } catch {
+                        send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
+                    }
+                }
             case "toast.show", "toast.hide", "hud.show", "window.close", "window.popToRoot", "searchBar.clear":
                 windowCall(method, params, session: session)
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))

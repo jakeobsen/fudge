@@ -10,7 +10,9 @@ SHELL := /bin/bash
 VERSION   := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 CONFIG    ?= debug
 APP       := build/Fudge.app
-SWIFT_BIN  = $(shell swift build -c $(CONFIG) --show-bin-path)
+# The extensions bundled with the app, as BundledExtensions.folders lists them.
+BUNDLED_EXTENSIONS := store-extension file-search-extension
+SWIFT_BIN  =$(shell swift build -c $(CONFIG) --show-bin-path)
 # esbuild's native binary, installed with the extension host's dependencies.
 ESBUILD    = $(firstword $(wildcard runtime/node_modules/@esbuild/darwin-*/bin/esbuild))
 
@@ -77,15 +79,16 @@ app: build
 	@cp runtime/dist/compat-scan.js '$(APP)/Contents/Resources/runtime/'
 	@cp runtime/vendor/raycast-api/index.d.ts '$(APP)/Contents/Resources/runtime/raycast-api.d.ts'
 	@cp runtime/vendor/raycast-api/LICENSE '$(APP)/Contents/Resources/runtime/raycast-api.LICENSE'
-	@# The Extension Store is an extension bundled with the app, built like any other into a scratch folder and
-	@# moved to Contents/Resources/store-extension. Its source is runtime/store-extension; no source, no store.
-	@if [ -f runtime/store-extension/package.json ]; then \
-		scratch='$(abspath build)/store-extension-build' && rm -rf "$$scratch" && mkdir -p "$$scratch" && \
-		FUDGE_ESBUILD='$(abspath $(ESBUILD))' '$(SWIFT_BIN)/fudge' build runtime/store-extension --into "$$scratch" \
+	@# The bundled extensions (BundledExtensions in core), each built like any other into a scratch folder and
+	@# moved to Contents/Resources/<folder>. Their sources are runtime/<folder>; no source, no extension.
+	@for folder in $(BUNDLED_EXTENSIONS); do \
+		[ -f "runtime/$$folder/package.json" ] || continue; \
+		scratch="$(abspath build)/$$folder-build" && rm -rf "$$scratch" && mkdir -p "$$scratch" && \
+		FUDGE_ESBUILD='$(abspath $(ESBUILD))' '$(SWIFT_BIN)/fudge' build "runtime/$$folder" --into "$$scratch" \
 			>/dev/null && \
-		mv "$$scratch"/* '$(APP)/Contents/Resources/store-extension' && rm -rf "$$scratch" \
-		|| { echo 'make app: building runtime/store-extension failed'; exit 1; }; \
-	fi
+		mv "$$scratch"/* "$(APP)/Contents/Resources/$$folder" && rm -rf "$$scratch" \
+		|| { echo "make app: building runtime/$$folder failed"; exit 1; }; \
+	done
 	@# Each failure exits explicitly: make 3.81, the one macOS ships, ignores .SHELLFLAGS. No timestamp, so signing
 	@# never goes over the network. An identity's errors stay visible, and the last line names it as listed.
 	@identity='$(SIGN_IDENTITY)'; \

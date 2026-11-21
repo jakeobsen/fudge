@@ -212,6 +212,23 @@ test("a deferred panel names the shortcuts it uses, each set once per render", a
     assert.equal("$shortcutSets" in mounted.root.snapshot().view!.props, false);
 });
 
+test("a deferred panel names a submenu's own shortcut too, so the key waits for it", async () => {
+    const cmd = (key: string) => ({ modifiers: ["cmd"], key });
+    const panel = () =>
+        h(
+            ActionPanel,
+            null,
+            h(Action, { title: "Open", onAction: () => {} }),
+            h(ActionPanel.Submenu, { title: "Open With…", shortcut: cmd("o") }, h(Action, { title: "TextEdit", shortcut: cmd("t"), onAction: () => {} })),
+        );
+    const mounted = await mount(
+        h(List, null, h(List.Item, { key: 1, title: "first", actions: panel() }), h(List.Item, { key: 2, title: "two", actions: panel() })),
+    );
+    const view = mounted.first.view!;
+    assert.deepEqual(view.props.$shortcutSets, [[cmd("o"), cmd("t")]]);
+    assert.deepEqual(view.children[1]!.props.actions, { $deferred: true, shortcuts: 0 });
+});
+
 test("a Grid's items defer their actions too", async () => {
     const cell = (n: number) =>
         h(Grid.Item, {
