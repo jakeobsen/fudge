@@ -56,8 +56,9 @@ public struct CommandMetadata: Sendable, Equatable {
         public var description: String { "updateCommandMetadata: \(reason)" }
     }
 
-    /// Reads the file tolerantly: a missing or unreadable file is empty, an entry that isn't an object is skipped,
-    /// and a `subtitle` that isn't a string is ignored. An entry's other keys are kept for `save`.
+    /// Reads the file tolerantly: a missing or unreadable file is empty (and `save` then refuses to overwrite it), an
+    /// entry that isn't an object is skipped, and a `subtitle` that isn't a string is ignored. An entry's other keys
+    /// are kept for `save`.
     public static func load(from file: URL) -> CommandMetadata {
         guard let data = try? Data(contentsOf: file),
             let object = try? JSONDecoder().decode([String: JSONValue].self, from: data)
@@ -72,9 +73,27 @@ public struct CommandMetadata: Sendable, Equatable {
         return metadata
     }
 
+    /// The file holds something Fudge can't read, so it leaves it as it is rather than overwrite it.
+    public struct Unreadable: Error, Equatable, CustomStringConvertible {
+        public init() {}
+        public var description: String {
+            "Fudge can't read command-metadata.json, so it leaves the file as it is. Fix or remove it, then try again."
+        }
+    }
+
+    /// Whether `save(to:)` may write `file`: it's missing or blank, or a JSON object. Anything else, or a file that
+    /// can't be read, would be lost by saving over it.
+    public static func isWritable(_ file: URL) -> Bool {
+        guard FileManager.default.fileExists(atPath: file.path) else { return true }
+        guard let data = try? Data(contentsOf: file) else { return false }
+        if String(decoding: data, as: UTF8.self).allSatisfy(\.isWhitespace) { return true }
+        return (try? JSONDecoder().decode([String: JSONValue].self, from: data)) != nil
+    }
+
     /// Writes the file atomically, with each entry's other keys as they were read. An entry left with no keys is
-    /// left out.
+    /// left out. Throws `Unreadable`, leaving the file as it is, when it holds something `load` couldn't read.
     public func save(to file: URL) throws {
+        guard Self.isWritable(file) else { throw Unreadable() }
         var object: [String: JSONValue] = [:]
         for id in Set(subtitles.keys).union(otherKeys.keys) {
             var fields = otherKeys[id] ?? [:]

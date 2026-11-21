@@ -103,6 +103,28 @@ test("a view command renders, handles an event and renders again", async () => {
     assert.equal(await host.close(), 0);
 });
 
+test("slots answers with the items' action panels", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "s1", entry: fixture("counter.cjs"), mode: "view" });
+    const first = await host.next(of("s1", "render"));
+    const item = (first.view as UINode).children[0]!;
+
+    host.send({ type: "slots", session: "s1", nodes: [item.id, 9999] });
+    const answer = await host.next(of("s1", "slots"));
+    assert.deepEqual(answer, {
+        type: "slots",
+        session: "s1",
+        items: [
+            { id: item.id, slots: { actions: item.props.actions } },
+            { id: 9999, slots: {} },
+        ],
+    });
+
+    host.send({ type: "unload", session: "s1" });
+    await host.next(of("s1", "exit"));
+    assert.equal(await host.close(), 0);
+});
+
 test("a menu-bar command renders its MenuBarExtra, and every event is answered once its handler settles", async () => {
     const host = start();
     host.send({ type: "launch", session: "mb", entry: fixture("menu-bar.cjs"), mode: "menu-bar", launchProps: { launchType: "background" } });
@@ -157,6 +179,22 @@ test("a no-view command runs to completion and its console output arrives as log
     const log = await host.next(of("nv", "log"));
     assert.deepEqual(log, { session: "nv", type: "log", level: "info", message: 'ran with {"q":"x"}' });
     assert.equal((await host.next(of("nv", "exit"))).reason, "finished");
+    await host.close();
+});
+
+test("a no-view command's last console output arrives before its exit, every time", async () => {
+    const host = start();
+    for (let run = 0; run < 5; run++) {
+        const session = `burst${run}`;
+        host.send({ type: "launch", session, entry: fixture("log-then-return.cjs"), mode: "no-view" });
+        assert.equal((await host.next(of(session, "exit"))).reason, "finished");
+        const logs = host.arrived.filter(of(session, "log"));
+        assert.equal(logs.length, 202, `run ${run}: every line before the exit`);
+        // Each stream keeps its order; the two streams are separate.
+        const stdout = logs.filter((m) => m.level === "info").map((m) => m.message);
+        assert.deepEqual(stdout, [...Array.from({ length: 200 }, (_, i) => `line ${i + 1}`), "last on stdout"]);
+        assert.deepEqual(logs.filter((m) => m.level === "error").map((m) => m.message), ["last on stderr"]);
+    }
     await host.close();
 });
 

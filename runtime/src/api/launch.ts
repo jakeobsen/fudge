@@ -22,6 +22,8 @@ export type LaunchEnvironment = {
 export type LaunchContext = {
     /** Resolved preference values: extension-wide ones merged with the command's own. */
     preferences: Record<string, unknown>;
+    /** The installed extension's `package.json`, beside its `dist/` folder; for the deprecated `preferences`. */
+    manifestFile?: string;
     environment: LaunchEnvironment;
     launchProps: LaunchProps;
 };
