@@ -123,6 +123,12 @@ export function refusedMessage(host: string, off: boolean): string {
     return off ? signInOffMessage : `Fudge doesn't send requests to ${host}.`;
 }
 
+/** Refused: the relay answered a token or refresh request with a redirect. */
+export const redirectedMessage = "The sign-in server redirected the token request, and Fudge doesn't follow that.";
+
+/** The statuses `fetch` follows. */
+const redirects = new Set([301, 302, 303, 307, 308]);
+
 /**
  * Wraps `original`. `server` is asked only for a request that may go to the relay, so a server changed while a
  * command runs is honoured. A provider's own token URL (Google, Jira, Zoom) goes to the relay only for an extension
@@ -154,7 +160,15 @@ export function rewriteFetch(
             throw new Error(refusedMessage(parsed.host, answer.server === null));
         }
         const target = `${answer.server.replace(/\/+$/, "")}/${where.provider.id}/${where.endpoint}${parsed.search}`;
-        return request ? original(new Request(target, request), init) : original(target, init);
+        // A redirect is never followed: a 307 or 308 would send the body (the code, the verifier or the refresh
+        // token) on to wherever the relay points.
+        const manual = { ...init, redirect: "manual" as const };
+        const response = await (request ? original(new Request(target, request), manual) : original(target, manual));
+        if (redirects.has(response.status)) {
+            await response.body?.cancel().catch(() => {});
+            throw new Error(redirectedMessage);
+        }
+        return response;
     };
     return wrapped as Fetch;
 }

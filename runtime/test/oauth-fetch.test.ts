@@ -5,10 +5,13 @@
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import {
     grantType,
     providersFromEnvironment,
+    redirectedMessage,
     rewriteFetch,
     route,
     type ServerAnswer,
@@ -184,6 +187,78 @@ for (const [state, answer] of [
         }
     });
 }
+
+for (const status of [301, 302, 303, 307, 308]) {
+    test(`a ${status} from the relay is an error, never followed`, async () => {
+        const sent: { url: string; redirect: RequestInit["redirect"] }[] = [];
+        let cancelled = 0;
+        const answer = (async (input: string | URL | Request, init?: RequestInit) => {
+            sent.push({ url: input instanceof Request ? input.url : String(input), redirect: init?.redirect });
+            const body = new ReadableStream({ cancel: () => void cancelled++ });
+            return new Response(body, { status, headers: { Location: "https://elsewhere.example/steal" } });
+        }) as typeof globalThis.fetch;
+        const wrapped = rewriteFetch(answer, providers, async () => on);
+        await assert.rejects(wrapped("https://github.oauth.raycast.com/token", post("authorization_code")), {
+            message: redirectedMessage,
+        });
+        const params = new URLSearchParams({ grant_type: "refresh_token", refresh_token: "r" });
+        await assert.rejects(wrapped(new Request("https://zoom.us/oauth/token", { method: "POST", body: params })), {
+            message: redirectedMessage,
+        });
+        assert.deepEqual(sent, [
+            { url: "https://relay.example/base/github/token", redirect: "manual" },
+            { url: "https://relay.example/base/zoom/refresh-token", redirect: "manual" },
+        ]);
+        assert.equal(cancelled, 2, "the redirect's body isn't left open");
+    });
+}
+
+test("with Node's own fetch, the relay's redirect never reaches its Location", async () => {
+    let reached = 0;
+    const listen = (server: Server) =>
+        new Promise<number>((resolve) => server.listen(0, "127.0.0.1", () => resolve((server.address() as AddressInfo).port)));
+    const elsewhere = createServer((_request, response) => {
+        reached++;
+        response.end("{}");
+    });
+    const elsewherePort = await listen(elsewhere);
+    let status = 307;
+    const relay = createServer((_request, response) => {
+        response.writeHead(status, { Location: `http://127.0.0.1:${elsewherePort}/steal` });
+        response.end();
+    });
+    const relayPort = await listen(relay);
+    try {
+        const wrapped = rewriteFetch(globalThis.fetch, providers, async () => ({
+            server: `http://127.0.0.1:${relayPort}`,
+            signedIn: true,
+        }));
+        for (const answer of [307, 302]) {
+            status = answer;
+            await assert.rejects(wrapped("https://github.oauth.raycast.com/token", post("authorization_code")), {
+                message: redirectedMessage,
+            });
+        }
+        assert.equal(reached, 0, "nothing was sent on");
+    } finally {
+        relay.close();
+        elsewhere.close();
+    }
+});
+
+test("a request that isn't rewritten keeps fetch's own redirects", async () => {
+    const seen: (RequestInit | undefined)[] = [];
+    const answer = (async (_input: string | URL | Request, init?: RequestInit) => {
+        seen.push(init);
+        return new Response("{}", { status: 302, headers: { Location: "https://example.com/next" } });
+    }) as typeof globalThis.fetch;
+    // No relay sign-in for Google here, so its own token URL is left alone.
+    const wrapped = rewriteFetch(answer, providers, async () => ({ server: on.server, signedIn: false }));
+    const response = await wrapped("https://api.github.com/user");
+    assert.equal(response.status, 302, "handed back as fetch gave it");
+    await wrapped("https://oauth2.googleapis.com/token", { ...post("refresh_token"), redirect: "follow" });
+    assert.deepEqual(seen, [undefined, { ...post("refresh_token"), redirect: "follow" }]);
+});
 
 test("routing and grant types", () => {
     assert.deepEqual(route("GET", "https://example.com/", null, providers), { kind: "untouched" });
