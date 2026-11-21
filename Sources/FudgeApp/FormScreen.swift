@@ -21,9 +21,14 @@ struct FormScreen: View {
         }
         .font(.system(size: 13))
         .onAppear { focusFirstField() }
-        // Fields that arrive after the form (loaded text, a remounted field) take focus if nothing has it.
-        .onChange(of: form.fields.filter(\.isEditable).map(\.id)) { _, ids in
-            if focused == nil || !ids.contains(focused!) { focusFirstField() }
+        // Fields that arrive after the form (loaded text, a remounted field) take focus if nothing has it, unless an
+        // overlay holds the keyboard: then they take it when the overlay closes.
+        .onChange(of: editableIDs) { _, ids in
+            if let field = KeyboardFocus.formFieldAfterFieldsChange(
+                focused: focused, editable: ids, first: firstField, overlayOpen: overlayHoldsKeyboard)
+            {
+                focused = field
+            }
         }
         .onChange(of: focused) { _, field in
             if let field {
@@ -37,12 +42,11 @@ struct FormScreen: View {
         // first). Through nil, since setting what `focused` already says does nothing.
         .onChange(of: model.keyboardRequests) { _, _ in
             guard case .formField(let field) = model.keyboardTarget else { return }
-            focused = nil
-            DispatchQueue.main.async { focused = field }
+            refocus(field)
         }
         // The action panel takes the keyboard; give it back to the field after.
         .onChange(of: model.actionPanel == nil) { _, closed in
-            if closed { focused = lastFocused }
+            if closed { focused = fieldAfterOverlay }
         }
         // An Action.PickDate picker has no field of its own to take the keyboard (its keys come through the
         // launcher's key monitor), so the field lets go of it here, or ⌘V and ⌥⌫ would still edit it. It comes back
@@ -53,15 +57,42 @@ struct FormScreen: View {
         // So does a Dropdown's or TagPicker's panel. The launcher view moves its own focus as the panel closes, so
         // this goes after it, through nil.
         .onChange(of: model.dropdownPanel == nil) { _, closed in
-            guard closed, let field = lastFocused else { return }
-            focused = nil
-            DispatchQueue.main.async { focused = field }
+            guard closed, let field = fieldAfterOverlay else { return }
+            refocus(field)
         }
     }
 
-    private func focusFirstField() {
+    private var editableIDs: [Int] { form.fields.filter(\.isEditable).map(\.id) }
+
+    /// The field the form starts in: the first with `autoFocus`, else the first.
+    private var firstField: Int? {
         let editable = form.fields.filter(\.isEditable)
-        focused = (editable.first(where: \.autoFocus) ?? editable.first)?.id
+        return (editable.first(where: \.autoFocus) ?? editable.first)?.id
+    }
+
+    private func focusFirstField() {
+        focused = firstField
+    }
+
+    /// The action panel (with or without an Action.PickDate picker in it) or a dropdown's panel has the keyboard: no
+    /// field takes it until that closes.
+    private var overlayHoldsKeyboard: Bool {
+        model.actionPanel != nil || model.dropdownPanel != nil
+    }
+
+    /// The field that takes the keyboard back when an overlay closes: the last one, or the first if that's gone.
+    private var fieldAfterOverlay: Int? {
+        KeyboardFocus.formFieldAfterOverlay(last: lastFocused, editable: editableIDs, first: firstField)
+    }
+
+    /// Gives `field` the keyboard through nil, since setting what `focused` already says does nothing. That lands a
+    /// turn later, so it's skipped if an overlay has taken the keyboard meanwhile (⌘K or an Action.PickDate's
+    /// shortcut pressed as the panel shows).
+    private func refocus(_ field: Int) {
+        focused = nil
+        DispatchQueue.main.async {
+            if !overlayHoldsKeyboard { focused = field }
+        }
     }
 
     @ViewBuilder private func row(_ field: FormContent.Field) -> some View {

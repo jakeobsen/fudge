@@ -838,7 +838,15 @@ private struct ViewTitle: View {
                         .truncationMode(.tail)
                         .frame(maxWidth: proxy.size.width * 0.4, alignment: .trailing)
                         .contentShape(Rectangle())
-                        .onTapGesture(perform: open)
+                        .onTapGesture {
+                            // The click hides the panel, and a hidden window's pointer never leaves the link, so the
+                            // pointing hand would stay pushed, showing over other apps. Pop it now.
+                            if hovering {
+                                hovering = false
+                                NSCursor.pop()
+                            }
+                            open()
+                        }
                         .onHover { inside in
                             guard inside != hovering else { return }
                             hovering = inside
