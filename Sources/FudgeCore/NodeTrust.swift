@@ -107,13 +107,22 @@ public enum NodeTrust {
         }.joined()
     }
 
-    /// What the host starts with: `--use-system-ca` when the Node has it; otherwise `NODE_EXTRA_CA_CERTS` naming
-    /// `rootsFile`, written afresh from `certificates` (folder 0700, file 0600). With nothing to export, or a file
-    /// that can't be written, the host starts as before.
+    /// What the host starts with: `--use-system-ca` when the Node has it, an inherited `NODE_EXTRA_CA_CERTS` passing
+    /// through unchanged; otherwise `NODE_EXTRA_CA_CERTS` naming `rootsFile`, written afresh from `certificates` (folder
+    /// 0700, file 0600), with the certificates of an inherited `NODE_EXTRA_CA_CERTS` file first, so one set for Fudge (by
+    /// the user or a profile) is never dropped. Only well-formed PEM certificates are taken from that file, so a bad one
+    /// can't make Node refuse ours. With nothing of the Mac's to add, or an inherited file that can't be read, the
+    /// environment stays as it is.
     public static func launch(
-        nodeVersion: String?, certificates: () -> [Certificate], rootsFile: URL
+        nodeVersion: String?, certificates: () -> [Certificate], rootsFile: URL,
+        inherited: [String: String] = ProcessInfo.processInfo.environment
     ) -> (arguments: [String], environment: [String: String]) {
         if let nodeVersion, supportsSystemCA(version: nodeVersion) { return ([systemCAFlag], [:]) }
+        var theirs = ""
+        if let path = inherited[extraCertsVariable], !path.isEmpty, path != rootsFile.path {
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return ([], [:]) }
+            theirs = pemCertificates(in: String(decoding: data, as: UTF8.self)).joined()
+        }
         let roots = exportable(certificates())
         guard !roots.isEmpty else { return ([], [:]) }
         do {
@@ -121,12 +130,28 @@ public enum NodeTrust {
             let folder = rootsFile.deletingLastPathComponent()
             try files.createDirectory(
                 at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            try Data(pem(roots).utf8).write(to: rootsFile, options: .atomic)
+            try Data((theirs + pem(roots)).utf8).write(to: rootsFile, options: .atomic)
             try files.setAttributes([.posixPermissions: 0o600], ofItemAtPath: rootsFile.path)
         } catch {
             return ([], [:])
         }
         return ([], [extraCertsVariable: rootsFile.path])
+    }
+
+    /// The well-formed PEM certificate blocks in `text`, each as one block ending in a newline: a BEGIN and END line
+    /// around base64 that decodes.
+    static func pemCertificates(in text: String) -> [String] {
+        let begin = "-----BEGIN CERTIFICATE-----"
+        let end = "-----END CERTIFICATE-----"
+        var blocks: [String] = []
+        var rest = Substring(text)
+        while let start = rest.range(of: begin), let stop = rest.range(of: end, range: start.upperBound..<rest.endIndex)
+        {
+            let body = rest[start.upperBound..<stop.lowerBound].filter { !$0.isWhitespace }
+            if !body.isEmpty, let der = Data(base64Encoded: String(body)), !der.isEmpty { blocks.append(pem([der])) }
+            rest = rest[stop.upperBound...]
+        }
+        return blocks
     }
 
     /// `node --version`, read when the host starts; nil if it doesn't answer within 5 seconds.

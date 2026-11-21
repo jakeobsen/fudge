@@ -66,20 +66,49 @@ private func cert(_ byte: UInt8, _ settings: [NodeTrust.Domain: [NodeTrust.Setti
     }
 
     // A Node with the flag: no file, and the Mac isn't even read.
-    let flagged = NodeTrust.launch(nodeVersion: "v24.1.0", certificates: mac, rootsFile: file)
+    let flagged = NodeTrust.launch(nodeVersion: "v24.1.0", certificates: mac, rootsFile: file, inherited: [:])
     #expect(flagged.arguments == ["--use-system-ca"] && flagged.environment.isEmpty)
     #expect(asked == 0 && !FileManager.default.fileExists(atPath: file.path))
 
     // An older one: the exportable certificates, in a file only the user can read.
-    let older = NodeTrust.launch(nodeVersion: "v23.1.0", certificates: mac, rootsFile: file)
+    let older = NodeTrust.launch(nodeVersion: "v23.1.0", certificates: mac, rootsFile: file, inherited: [:])
     #expect(older.arguments.isEmpty && older.environment == ["NODE_EXTRA_CA_CERTS": file.path])
     #expect(try String(contentsOf: file, encoding: .utf8) == NodeTrust.pem([Data([0x30, 1])]))
     let mode = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int
     #expect(mode == 0o600)
 
     // Nothing to export, or no version: the host starts as before.
-    let none = NodeTrust.launch(nodeVersion: "v23.1.0", certificates: { [] }, rootsFile: file)
+    let none = NodeTrust.launch(nodeVersion: "v23.1.0", certificates: { [] }, rootsFile: file, inherited: [:])
     #expect(none.arguments.isEmpty && none.environment.isEmpty)
-    let unknown = NodeTrust.launch(nodeVersion: nil, certificates: mac, rootsFile: file)
+    let unknown = NodeTrust.launch(nodeVersion: nil, certificates: mac, rootsFile: file, inherited: [:])
     #expect(unknown.environment == ["NODE_EXTRA_CA_CERTS": file.path])
+}
+
+@Test func anInheritedExtraCertsFileIsKeptNeverDropped() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent("fudge-trust-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let file = folder.appendingPathComponent("trust/roots.pem")
+    let theirs = folder.appendingPathComponent("company.pem")
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let company = NodeTrust.pem([Data([0x30, 9, 9])])
+    try Data(("junk before\n" + company + "-----BEGIN CERTIFICATE-----\n!!!\n-----END CERTIFICATE-----\n").utf8)
+        .write(to: theirs)
+    let mac = { [cert(1, [.user: []])] }
+    let inherited = ["NODE_EXTRA_CA_CERTS": theirs.path]
+
+    // With the flag, theirs passes through as it is: Fudge sets nothing.
+    let flagged = NodeTrust.launch(nodeVersion: "v24.1.0", certificates: mac, rootsFile: file, inherited: inherited)
+    #expect(flagged.arguments == ["--use-system-ca"] && flagged.environment.isEmpty)
+
+    // Without it, our file holds their well-formed certificates first, then the Mac's.
+    let merged = NodeTrust.launch(nodeVersion: "v23.1.0", certificates: mac, rootsFile: file, inherited: inherited)
+    #expect(merged.environment == ["NODE_EXTRA_CA_CERTS": file.path])
+    #expect(try String(contentsOf: file, encoding: .utf8) == company + NodeTrust.pem([Data([0x30, 1])]))
+
+    // Nothing of the Mac's to add, or a file that can't be read: theirs passes through, untouched.
+    let nothing = NodeTrust.launch(nodeVersion: "v23.1.0", certificates: { [] }, rootsFile: file, inherited: inherited)
+    #expect(nothing.environment.isEmpty)
+    let missing = ["NODE_EXTRA_CA_CERTS": folder.appendingPathComponent("gone.pem").path]
+    let unread = NodeTrust.launch(nodeVersion: "v23.1.0", certificates: mac, rootsFile: file, inherited: missing)
+    #expect(unread.arguments.isEmpty && unread.environment.isEmpty)
 }
