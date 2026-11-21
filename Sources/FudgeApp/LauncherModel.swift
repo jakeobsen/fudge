@@ -12,6 +12,9 @@ final class LauncherModel {
         var details: String?
         /// Set when it's a notice rather than an error, like the Extension Store's "off" view.
         var notice: Notice?
+        /// The command it stands in for, whose title the bottom bar keeps (`LauncherFooter`); nil for one that
+        /// belongs to no command, which says "Fudge".
+        var commandTitle: String?
 
         /// A notice is drawn like an empty view: `symbol`, the title and the message. Its actions take Back's place
         /// (↵ runs the first, ⌘K lists them, and their shortcuts work), and ⌘⇧, opens `extensionName`'s settings.
@@ -1573,13 +1576,16 @@ final class LauncherModel {
     // MARK: - Sign-in notices
 
     /// The notice for an error `session` reported as refused on purpose (SPEC-095), or nil for any other error.
-    private func signInNotice(_ notice: String?, message: String, session: String) -> SignInNotice? {
+    private func signInNotice(
+        _ notice: String?, message: String, session: String, commandTitle: String?
+    ) -> SignInNotice? {
         guard notice != nil else { return nil }
         let name = sessionExtensions[session] ?? ""
         return SignInNotice(
             notice: notice, message: message, extensionName: name,
             extensionTitle: extensions[name]?.manifest.title ?? "",
-            commandID: sessionCommands[session].map { FudgeSettings.commandID(extension: name, command: $0) })
+            commandID: sessionCommands[session].map { FudgeSettings.commandID(extension: name, command: $0) },
+            commandTitle: commandTitle)
     }
 
     /// Try Again, on a cancelled or refused sign-in's notice: runs the command again as root search would, or shows
@@ -2737,7 +2743,9 @@ final class LauncherModel {
             else {
                 recordLaunch(item.id)
                 screen = .failure(
-                    Failure(title: "Can't run \(item.title)", message: "The extension is no longer installed."))
+                    Failure(
+                        title: "Can't run \(item.title)", message: "The extension is no longer installed.",
+                        commandTitle: item.title))
                 return
             }
             let prepared = prepareLaunch(of: installed, command: command, userInitiated: true)
@@ -2920,7 +2928,7 @@ final class LauncherModel {
         screen = .failure(
             Failure(
                 title: "\(title) needs settings",
-                message: "Set \(names) in the Settings window, then run the command again."
+                message: "Set \(names) in the Settings window, then run the command again.", commandTitle: title
             )
         )
         openSettings(name, origin)
@@ -2980,7 +2988,10 @@ final class LauncherModel {
             sessionExtensions[session] = nil
             sessionCommands[session] = nil
             quietSessions[session] = nil
-            if !quiet { screen = .failure(Failure(title: "Can't run \(title)", message: String(describing: error))) }
+            if !quiet {
+                screen = .failure(
+                    Failure(title: "Can't run \(title)", message: String(describing: error), commandTitle: title))
+            }
             return String(describing: error)
         }
         return nil
@@ -3401,7 +3412,11 @@ final class LauncherModel {
 
         case .error(let session, let message, let stack, let fatal, let notice):
             // Refused on purpose (SPEC-095), such as signing in while sign-in is off: a notice, never a trace.
-            let signIn = signInNotice(notice, message: message, session: session)
+            let commandTitle: String? =
+                if case .command(let command) = screen, command.session == session { command.title } else {
+                    background[session]
+                }
+            let signIn = signInNotice(notice, message: message, session: session, commandTitle: commandTitle)
             if var quiet = quietSessions[session] {
                 // A background launch: the panel stays as it is, and the failure shows in the HUD, once.
                 let alreadySaid = quiet.unasked.contains { message.contains($0) }
@@ -3422,7 +3437,7 @@ final class LauncherModel {
             } else if let title = background[session] {
                 screen = .failure(
                     signIn.map { Failure($0, extensionName: sessionExtensions[session] ?? "") }
-                        ?? Failure(title: "\(title) failed", message: message, details: stack))
+                        ?? Failure(title: "\(title) failed", message: message, details: stack, commandTitle: title))
             }
             log(session, "error", stack ?? message)
 
@@ -3442,7 +3457,10 @@ final class LauncherModel {
                     refreshResults()
                     hide()
                 } else if reason == "crashed", case .root = screen {
-                    screen = .failure(Failure(title: "\(title) failed", message: "The command stopped unexpectedly."))
+                    screen = .failure(
+                        Failure(
+                            title: "\(title) failed", message: "The command stopped unexpectedly.", commandTitle: title)
+                    )
                 }
             } else if case .command(var command) = screen, command.session == session, reason != "unloaded" {
                 if command.failure == nil {
@@ -3920,6 +3938,7 @@ extension LauncherModel.Failure {
     init(_ notice: SignInNotice, extensionName: String) {
         self.init(
             title: notice.title, message: notice.message,
-            notice: Notice(extensionName: extensionName, actions: notice.actions, symbol: "person.badge.key"))
+            notice: Notice(extensionName: extensionName, actions: notice.actions, symbol: "person.badge.key"),
+            commandTitle: notice.commandTitle)
     }
 }
