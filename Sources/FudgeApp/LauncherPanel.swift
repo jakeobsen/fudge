@@ -71,13 +71,19 @@ final class LauncherPanel: NSPanel {
         onEscape()
     }
 
+    /// Whether the panel holds the keyboard, from its own `becomeKey` and `resignKey`: `isKeyWindow` can answer false
+    /// while Fudge isn't the active app (FUD-104). A snapshot run's panel never does.
+    private(set) var holdsKeyboard = false
+
     override func resignKey() {
         super.resignKey()
+        holdsKeyboard = false
         onResign()
     }
 
     override func becomeKey() {
         super.becomeKey()
+        holdsKeyboard = true
         LauncherLog.note("launcher became key: \(LauncherLog.keyboard)")
     }
 
