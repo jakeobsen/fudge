@@ -254,6 +254,50 @@ test("lockfiles v2/v3 list packages: resolved off the registry, link and file ve
     assert.ok(lockfileProblem(file));
 });
 
+test("a lockfile entry's own dependencies must be registry versions, in both lockfile shapes", () => {
+    const pulls = {
+        tarball: ["https://example.com/x.tgz", /x comes from "https:\/\/example\.com\/x\.tgz"/],
+        git: ["git+https://github.com/a/x.git#abc", /x comes from "git\+https:/],
+        file: ["file:../x", /x comes from "file:\.\.\/x"/],
+    } as const;
+    for (const [kind, [spec, message]] of Object.entries(pulls)) {
+        for (const section of ["dependencies", "optionalDependencies", "peerDependencies", "devDependencies"]) {
+            const v3 = {
+                lockfileVersion: 3,
+                packages: {
+                    "": { name: "ext", dependencies: { a: "^1.0.0" } },
+                    "node_modules/a": { version: "1.0.0", resolved: registryURL("a"), [section]: { x: spec } },
+                },
+            };
+            const problem = lockfileProblem(v3);
+            assert.match(problem ?? "", message, `v3 ${section}, ${kind}`);
+            assert.match(problem ?? "", /^node_modules\/a: /, "names the entry");
+        }
+        const v1 = {
+            lockfileVersion: 1,
+            dependencies: { a: { version: "1.0.0", resolved: registryURL("a"), requires: { x: spec } } },
+        };
+        assert.match(lockfileProblem(v1) ?? "", message, `v1 requires, ${kind}`);
+        const v1Nested = {
+            lockfileVersion: 1,
+            dependencies: { a: { version: "1.0.0", resolved: registryURL("a"), dependencies: { x: spec } } },
+        };
+        assert.match(lockfileProblem(v1Nested) ?? "", message, `v1 dependencies as a spec, ${kind}`);
+    }
+    const fine = {
+        lockfileVersion: 3,
+        packages: {
+            "node_modules/a": {
+                version: "1.0.0",
+                resolved: registryURL("a"),
+                dependencies: { b: "^2.0.0", c: "npm:real@^1", d: "latest" },
+                peerDependencies: { react: "*" },
+            },
+        },
+    };
+    assert.equal(lockfileProblem(fine), undefined, "ranges, npm aliases and dist-tags are registry versions");
+});
+
 test("lockfile v1 nests dependencies, walked recursively; npm aliases are fine", () => {
     const v1 = {
         lockfileVersion: 1,

@@ -70,13 +70,32 @@ function entryProblem(name: string, entry: unknown): string | undefined {
         (version.includes(":") || version.includes("/") || isTarball(version))
     )
         return `${name} comes from "${version}", not the npm registry`;
+    return entrySpecsProblem(name, entry as Record<string, unknown>);
+}
+
+/**
+ * The first problem in a lockfile entry's own dependency specs, checked like `package.json`'s: a version 2 or 3
+ * entry lists them in the dependency sections, a version 1 entry in `requires`. A version 1 entry's `dependencies`
+ * also holds its nested entries, which are walked as entries; any other value there is a spec.
+ */
+function entrySpecsProblem(name: string, entry: Record<string, unknown>): string | undefined {
+    for (const section of [...dependencySections, "requires"]) {
+        const specs = entry[section];
+        if (typeof specs !== "object" || specs === null) continue;
+        for (const [dependency, spec] of Object.entries(specs)) {
+            if (typeof spec === "object" && spec !== null) continue;
+            const problem = specProblem(dependency, spec);
+            if (problem) return `${name}: ${problem}`;
+        }
+    }
     return undefined;
 }
 
 /**
- * The first problem in a lockfile: any `resolved` URL off the registry, a `link: true` entry, or a `file:` (or git,
- * or URL) version. Version 2 and 3 lockfiles list `packages`; version 1 nests `dependencies`, which are walked
- * recursively. A version 2 file has both, and both are checked.
+ * The first problem in a lockfile: any `resolved` URL off the registry, a `link: true` entry, a `file:` (or git, or
+ * URL) version, or an entry whose own dependency specs aren't registry versions. Version 2 and 3 lockfiles list
+ * `packages`; version 1 nests `dependencies`, which are walked recursively. A version 2 file has both, and both are
+ * checked.
  */
 export function lockfileProblem(lockfile: unknown): string | undefined {
     if (typeof lockfile !== "object" || lockfile === null) return "the lockfile isn't a JSON object";
