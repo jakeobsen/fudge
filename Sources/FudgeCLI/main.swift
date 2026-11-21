@@ -51,17 +51,13 @@ func scan(_ arguments: ScanArguments) -> Never {
     }
     let (nodeArguments, environment) = CompatScanner.invocation(
         script: script, esbuild: esbuild, arguments: arguments, environment: ProcessInfo.processInfo.environment)
-    let process = Process()
-    process.executableURL = node
-    process.arguments = nodeArguments
-    process.environment = environment
+    let pid: pid_t
     do {
-        try process.run()
+        pid = try ChildProcesses.shared.spawn(node, nodeArguments, environment: environment)
     } catch {
         fail("couldn't run node: \(error)")
     }
-    process.waitUntilExit()
-    exit(process.terminationStatus)
+    exit(ChildProcesses.shared.wait(pid))
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
@@ -72,12 +68,15 @@ case nil, "help", "-h", "--help":
 case "version", "--version":
     print(FudgeVersion.current)
 case "build":
+    // A signal that ends the tool (the Extension Store's timeout, ⌃C) ends npm and esbuild with it.
+    ChildProcesses.endChildrenOnSignals()
     do {
         build(try BuildArguments.parse(Array(arguments.dropFirst())))
     } catch {
         fail(String(describing: error), status: 2)
     }
 case "scan":
+    ChildProcesses.endChildrenOnSignals()
     do {
         scan(try ScanArguments.parse(Array(arguments.dropFirst())))
     } catch {

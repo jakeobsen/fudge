@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
@@ -17,8 +18,10 @@ import {
     status,
     type StoreEntry,
 } from "../store-extension/src/catalog.ts";
+import { maxReadmeBytes, readRegularFile } from "../store-extension/src/files.ts";
 import {
     gitAvailable,
+    isValidBranch,
     spawnProgram,
     stopRunningGit,
     storeEnvironment,
@@ -253,6 +256,50 @@ test("lockfiles v2/v3 list packages: resolved off the registry, link and file ve
     assert.ok(lockfileProblem(file));
 });
 
+test("a lockfile entry's own dependencies must be registry versions, in both lockfile shapes", () => {
+    const pulls = {
+        tarball: ["https://example.com/x.tgz", /x comes from "https:\/\/example\.com\/x\.tgz"/],
+        git: ["git+https://github.com/a/x.git#abc", /x comes from "git\+https:/],
+        file: ["file:../x", /x comes from "file:\.\.\/x"/],
+    } as const;
+    for (const [kind, [spec, message]] of Object.entries(pulls)) {
+        for (const section of ["dependencies", "optionalDependencies", "peerDependencies", "devDependencies"]) {
+            const v3 = {
+                lockfileVersion: 3,
+                packages: {
+                    "": { name: "ext", dependencies: { a: "^1.0.0" } },
+                    "node_modules/a": { version: "1.0.0", resolved: registryURL("a"), [section]: { x: spec } },
+                },
+            };
+            const problem = lockfileProblem(v3);
+            assert.match(problem ?? "", message, `v3 ${section}, ${kind}`);
+            assert.match(problem ?? "", /^node_modules\/a: /, "names the entry");
+        }
+        const v1 = {
+            lockfileVersion: 1,
+            dependencies: { a: { version: "1.0.0", resolved: registryURL("a"), requires: { x: spec } } },
+        };
+        assert.match(lockfileProblem(v1) ?? "", message, `v1 requires, ${kind}`);
+        const v1Nested = {
+            lockfileVersion: 1,
+            dependencies: { a: { version: "1.0.0", resolved: registryURL("a"), dependencies: { x: spec } } },
+        };
+        assert.match(lockfileProblem(v1Nested) ?? "", message, `v1 dependencies as a spec, ${kind}`);
+    }
+    const fine = {
+        lockfileVersion: 3,
+        packages: {
+            "node_modules/a": {
+                version: "1.0.0",
+                resolved: registryURL("a"),
+                dependencies: { b: "^2.0.0", c: "npm:real@^1", d: "latest" },
+                peerDependencies: { react: "*" },
+            },
+        },
+    };
+    assert.equal(lockfileProblem(fine), undefined, "ranges, npm aliases and dist-tags are registry versions");
+});
+
 test("lockfile v1 nests dependencies, walked recursively; npm aliases are fine", () => {
     const v1 = {
         lockfileVersion: 1,
@@ -423,6 +470,32 @@ test("everything in the detail goes through the filter, the manifest's text incl
     assert.match(detailMarkdown(entry, "c0ffee", undefined), /Loading the README/);
 });
 
+test("the detail lists each command with its mode", () => {
+    const entry = parseManifest(
+        "alpha",
+        manifest("alpha", {
+            commands: [
+                { name: "search", title: "Search Issues", description: "Find issues", mode: "view" },
+                { name: "create", title: "Create Issue", mode: "no-view" },
+                { name: "menu", title: "My Issues", description: "In the menu bar", mode: "menu-bar" },
+                { name: "odd", title: "Odd", mode: "something-else" },
+                { name: "none", title: "No Mode" },
+            ],
+        }),
+    )!;
+    const commands = detailMarkdown(entry, "c0ffee", undefined).split("## Commands\n\n")[1]!.split("\n\n")[0];
+    assert.equal(
+        commands,
+        [
+            "- **Search Issues** (view): Find issues",
+            "- **Create Issue** (no-view)",
+            "- **My Issues** (menu bar): In the menu bar",
+            "- **Odd**",
+            "- **No Mode**",
+        ].join("\n"),
+    );
+});
+
 test("every git operation of the store's waits its turn", async () => {
     const order: string[] = [];
     const slow = oneAtATime(async () => {
@@ -447,7 +520,7 @@ test("every git operation of the store's waits its turn", async () => {
 
 /** A fake runner: records each call and answers from `reply`. */
 function fakeRun(reply: (program: string, args: string[]) => Partial<GitResult> = () => ({})) {
-    const calls: { program: string; args: string[]; cwd?: string; timeout: number; stoppable?: boolean }[] = [];
+    const calls: { program: string; args: string[]; cwd?: string; timeout: number; stoppable?: boolean; input?: string }[] = [];
     const run: Run = async (program, args, options) => {
         calls.push({ program, args, ...options });
         return { code: 0, stdout: "", stderr: "", ...reply(program, args) };
@@ -455,19 +528,27 @@ function fakeRun(reply: (program: string, args: string[]) => Partial<GitResult> 
     return { run, calls };
 }
 
-test("the exact git calls: clone, refresh with gc afterwards, add, commit and trees", async () => {
+test("the exact git calls: clone, refresh keeping only what it reaches, add, commit and trees", async () => {
     const support = await temporary();
     const repoPath = path.join(support, "repo");
     const { run, calls } = fakeRun((_program, args) => {
         if (args[0] === "clone") return {};
         if (args[0] === "symbolic-ref") return { stdout: "origin/main\n" };
+        if (args[0] === "for-each-ref")
+            return { stdout: "refs/heads/main\nrefs/remotes/origin/HEAD\nrefs/remotes/origin/main\nrefs/tags/v1\n" };
         if (args[0] === "ls-tree")
             return { stdout: "040000 tree aaa\textensions/alpha\n040000 tree bbb\textensions/beta\n100644 blob ccc\textensions/README.md\n" };
         if (args[0] === "rev-parse") return { stdout: "c0ffee\n" };
+        if (args[0] === "rev-list") return { stdout: "1111111111111111111111111111111111111111\n" };
+        if (args[0] === "pack-objects") return { stdout: "2222222222222222222222222222222222222222\n" };
         return {};
     });
     const repo = new StoreRepository(repoPath, { run, url: "https://example.invalid/repo.git" });
-    await mkdir(path.join(repoPath, ".git"), { recursive: true });
+    const packs = path.join(repoPath, ".git/objects/pack");
+    await mkdir(packs, { recursive: true });
+    for (const file of ["pack-aaaa.pack", "pack-aaaa.idx", "pack-aaaa.promisor", "pack-bbbb.pack", "pack-bbbb.idx"]) {
+        await writeFile(path.join(packs, file), "");
+    }
     await repo.clone();
     await repo.refresh();
     await repo.add("/extensions/alpha/");
@@ -486,20 +567,35 @@ test("the exact git calls: clone, refresh with gc afterwards, add, commit and tr
             ["sparse-checkout", "set", "--no-cone", "/extensions/*/package.json"],
             ["checkout"],
             ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-            ["fetch", "--depth", "1", "--filter=blob:none", "origin", "main"],
-            ["checkout", "--quiet", "FETCH_HEAD"],
+            ["fetch", "--depth", "1", "--filter=blob:none", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"],
+            ["checkout", "--quiet", "-B", "main", "refs/remotes/origin/main", "--"],
+            ["for-each-ref", "--format=%(refname)"],
+            ["update-ref", "--no-deref", "-d", "refs/tags/v1"],
             ["reflog", "expire", "--expire=now", "--all"],
-            ["gc", "--prune=now", "--quiet"],
+            ["rev-list", "--objects", "--no-object-names", "--all", "--missing=allow-promisor"],
+            ["pack-objects", "--quiet", path.join(packs, "pack")],
+            ["prune", "--expire=now", "--exclude-promisor-objects"],
             ["sparse-checkout", "add", "/extensions/alpha/"],
             ["rev-parse", "HEAD"],
             ["ls-tree", "HEAD", "extensions/"],
         ],
     );
+    assert.equal(
+        calls.find((call) => call.args[0] === "pack-objects")?.input,
+        "1111111111111111111111111111111111111111\n",
+        "pack-objects gets what rev-list found",
+    );
+    assert.deepEqual(
+        (await readdir(packs)).sort(),
+        ["pack-2222222222222222222222222222222222222222.promisor"],
+        "the old packs are gone, and the new one is the remote's",
+    );
     assert.ok(calls.every((call) => call.program === "/usr/bin/git"));
     assert.equal(calls[0]!.cwd, support, "the clone runs beside the repo folder");
     assert.deepEqual(
         calls.map((call) => call.timeout),
-        [120_000, 30_000, 30_000, 30_000, 120_000, 30_000, 30_000, 120_000, 120_000, 30_000, 30_000],
+        // Downloads, checkouts that fetch files, and gc get the long timeout; local commands the short one.
+        [120_000, 30_000, 120_000, 30_000, 120_000, 120_000, 30_000, 30_000, 30_000, 120_000, 120_000, 120_000, 120_000, 30_000, 30_000],
     );
     assert.ok(!(await repo.needsRefresh(new Date())), "just refreshed");
     assert.ok(await repo.needsRefresh(new Date(Date.now() + 25 * 60 * 60 * 1000)), "a day later");
@@ -522,7 +618,19 @@ test("unloading the store stops its running git, and only that", async () => {
     const result = await git;
     assert.notEqual(result.code, 0);
     assert.ok(Date.now() - started < 4000, "stopped, not run to the end");
+    assert.match(result.stderr, /\nsleep stopped \(SIGTERM\)$/, "stopped, but not said to have timed out");
     assert.equal((await other).code, 0, "the CLI's build isn't stoppable");
+});
+
+test("a timeout says so whatever the exit, as when fudge catches SIGTERM and exits 143", async () => {
+    // Like fudge: it catches SIGTERM, ends what it started, and exits with 128 + 15.
+    const fudgeLike = 'trap "exit 143" TERM; while :; do sleep 0.05; done';
+    const result = await spawnProgram("/bin/sh", ["-c", fudgeLike], { timeout: 1000 });
+    assert.equal(result.code, 143);
+    assert.match(result.stderr, /\nsh stopped after 1 s$/);
+    const failed = await spawnProgram("/bin/sh", ["-c", "echo nope >&2; exit 3"], { timeout: 30_000 });
+    assert.equal(failed.code, 3);
+    assert.equal(failed.stderr, "nope\n", "a program that fails by itself gets no note");
 });
 
 test("every git call of the repository is stoppable, and a copy can be removed", async () => {
@@ -694,17 +802,53 @@ test("the confirmation says what the scan found: up to five APIs, and how many m
         "This extension uses things Fudge doesn't have yet: A, B, C, D, E, and 2 more. Some of its commands may not work.",
     );
     assert.equal(
+        compatibilityLine(gaps("A", "B", "C", "D", "E")),
+        "This extension uses things Fudge doesn't have yet: A, B, C, D, E. Some of its commands may not work.",
+        "exactly five: all named",
+    );
+    assert.equal(
+        compatibilityLine(gaps("A", "B", "C", "D", "E", "F")),
+        "This extension uses things Fudge doesn't have yet: A, B, C, D, E, and 1 more. Some of its commands may not work.",
+        "six: five and one more",
+    );
+    assert.equal(
         compatibilityLine({ supported: false, gaps: [], unreadable: ["src/a.ts"] }),
         "Fudge couldn't read all of this extension's source, so some of it may not work.",
     );
     assert.equal(compatibilityLine(undefined), "Fudge couldn't check what this extension uses.");
 });
 
+test("APIs Fudge leaves out on purpose are named apart, never as something it doesn't have yet", () => {
+    const report = (...gaps: { api: string; byDesign?: string }[]) => ({ supported: false, gaps, unreadable: [] });
+    assert.equal(
+        compatibilityLine(report({ api: "AI.ask", byDesign: "AI" }, { api: "AI.Model", byDesign: "AI" })),
+        "This extension uses AI, which Fudge leaves out. Some of its commands may not work.",
+    );
+    assert.equal(
+        compatibilityLine(
+            report({ api: "WindowManagement.getActiveWindow" }, { api: "AI.ask", byDesign: "AI" }, { api: "OAuth.PKCEClient", byDesign: "OAuth" }),
+        ),
+        "This extension uses things Fudge doesn't have yet: WindowManagement.getActiveWindow. It also uses AI and OAuth, which Fudge leaves out. Some of its commands may not work.",
+    );
+    assert.equal(
+        compatibilityLine(
+            report(
+                { api: "AI.ask", byDesign: "AI" },
+                { api: "BrowserExtension.getContent", byDesign: "Browser Extension" },
+                { api: "OAuth.PKCEClient", byDesign: "OAuth" },
+            ),
+        ),
+        "This extension uses AI, Browser Extension and OAuth, which Fudge leaves out. Some of its commands may not work.",
+    );
+    const sixAndAI = report(...["A", "B", "C", "D", "E", "F"].map((api) => ({ api })), { api: "AI.ask", byDesign: "AI" });
+    assert.match(compatibilityLine(sixAndAI), /A, B, C, D, E, and 1 more\. It also uses AI/, "by-design APIs don't count toward the five");
+});
+
 test("install's confirmation carries the scan's gaps, and a failed scan doesn't stop the install", async () => {
     const report = { extension: "alpha", supported: false, gaps: [{ api: "AI.ask", kind: "missing", byDesign: "AI" }], unreadable: [] };
     const withGaps = await storeContext({ scan: { stdout: JSON.stringify(report) } });
     assert.equal(await install(alphaEntry, withGaps.context), true);
-    assert.match(withGaps.asked[0]!.message, /\n\nThis extension uses things Fudge doesn't have yet: AI\.ask\. Some of its commands may not work\.$/);
+    assert.match(withGaps.asked[0]!.message, /\n\nThis extension uses AI, which Fudge leaves out\. Some of its commands may not work\.$/);
 
     for (const scan of [{ code: 1, stdout: "" }, { stdout: "not json" }, { stdout: "{}" }]) {
         const failed = await storeContext({ scan });
@@ -784,4 +928,137 @@ test("clone, list, fetch a README on demand, and see an update after a refresh",
     assert.equal(status(parseManifest("alpha", manifest("alpha"))!, installed, after), "update");
     assert.equal(await repo.commit(), (await sh(source, "rev-parse", "HEAD")).trim());
     assert.equal(await repo.defaultBranch(), "main");
+});
+
+test("a default branch name is used only when it's a plain branch name", async () => {
+    for (const name of ["main", "master", "release/2026", "v1.2", "dev_branch", "a+b"]) assert.ok(isValidBranch(name), name);
+    for (const name of [
+        "",
+        "-c",
+        "--upload-pack=x",
+        ".hidden",
+        "a/.b",
+        "a..b",
+        "a//b",
+        "a/",
+        "/a",
+        "a.",
+        "a.lock",
+        "a/b.lock/c",
+        "a b",
+        "a:b",
+        "a~1",
+        "a^",
+        "a?",
+        "a*",
+        "a[b",
+        "a\\b",
+        "@{-1}",
+        "a\nb",
+    ]) {
+        assert.ok(!isValidBranch(name), JSON.stringify(name));
+    }
+    const { run, calls } = fakeRun((_program, args) => (args[0] === "symbolic-ref" ? { stdout: "origin/--upload-pack=x\n" } : {}));
+    const repo = new StoreRepository(await temporary(), { run });
+    await assert.rejects(repo.refresh(), /default branch it can't use: "--upload-pack=x"/);
+    assert.deepEqual(
+        calls.map((call) => call.args[0]),
+        ["symbolic-ref"],
+        "nothing is fetched with it",
+    );
+});
+
+test("refreshing many times keeps the copy one commit deep: only the newest commit is reachable or kept", async () => {
+    const root = await temporary();
+    const source = path.join(root, "source");
+    const bare = path.join(root, "bare.git");
+    await mkdir(source);
+    await sh(source, "init", "--quiet", "-b", "main");
+    await writeJSON(path.join(source, "extensions/alpha/package.json"), manifest("alpha"));
+    await writeFile(path.join(source, "extensions/alpha/README.md"), "# Alpha\n");
+    await sh(source, "add", "-A");
+    await sh(source, "commit", "--quiet", "-m", "one");
+    await sh(source, "tag", "v1");
+    await sh(root, "clone", "--quiet", "--bare", source, bare);
+    await sh(bare, "config", "uploadpack.allowFilter", "true");
+    await sh(bare, "config", "uploadpack.allowAnySHA1InWant", "true");
+
+    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}` });
+    await repo.clone();
+    const commits = [(await sh(source, "rev-parse", "HEAD")).trim()];
+    for (const round of [2, 3, 4]) {
+        await writeJSON(path.join(source, "extensions/alpha/package.json"), { ...manifest("alpha"), version: `${round}.0.0` });
+        await sh(source, "commit", "--quiet", "-am", `round ${round}`);
+        await sh(source, "push", "--quiet", bare, "main");
+        await repo.refresh();
+        commits.push((await sh(source, "rev-parse", "HEAD")).trim());
+    }
+    const newest = commits.at(-1)!;
+    assert.equal(await repo.commit(), newest);
+    assert.deepEqual((await sh(repo.path, "rev-list", "--all")).trim().split("\n"), [newest], "from every ref");
+    assert.equal((await sh(repo.path, "reflog", "--all")).trim(), "", "no reflog keeps an old commit");
+    assert.deepEqual(
+        (await sh(repo.path, "for-each-ref", "--format=%(refname)")).trim().split("\n").sort(),
+        ["refs/heads/main", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"],
+        "the clone's tag and any other ref are gone",
+    );
+    assert.equal(
+        (await readFile(path.join(repo.path, ".git/shallow"), "utf8")).trim(),
+        newest,
+        ".git/shallow names only the newest commit",
+    );
+    // Only the objects stored here, so nothing is fetched from the remote to answer.
+    const stored = await sh(repo.path, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)");
+    for (const old of commits.slice(0, -1)) assert.ok(!stored.includes(old), `${old} was deleted`);
+    const packs = (await readdir(path.join(repo.path, ".git/objects/pack"))).filter((file) => file.endsWith(".pack"));
+    assert.equal(packs.length, 1, "one pack");
+    assert.ok(
+        (await readdir(path.join(repo.path, ".git/objects/pack"))).includes(packs[0]!.replace(/\.pack$/, ".promisor")),
+        "kept as the remote's, so files it leaves out are still fetched on demand",
+    );
+    await repo.add("/extensions/alpha/README.md");
+    assert.equal(await readFile(path.join(repo.path, "extensions/alpha/README.md"), "utf8"), "# Alpha\n");
+    assert.equal(await repo.defaultBranch(), "main");
+    assert.equal(
+        JSON.parse(await readFile(path.join(repo.path, "extensions/alpha/package.json"), "utf8")).version,
+        "4.0.0",
+        "the newest manifest is checked out",
+    );
+});
+
+// MARK: - Regular files only
+
+test("the store reads regular files only: links, FIFOs, folders and big files are refused", async () => {
+    const folder = await temporary();
+    await writeFile(path.join(folder, "README.md"), "# Fine\n");
+    await symlink("/dev/zero", path.join(folder, "zero.md"));
+    assert.equal(spawnSync("/usr/bin/mkfifo", [path.join(folder, "fifo.md")]).status, 0);
+    await mkdir(path.join(folder, "dir.md"));
+    await writeFile(path.join(folder, "big.md"), "x".repeat(maxReadmeBytes + 1));
+    assert.equal(await readRegularFile(path.join(folder, "README.md"), maxReadmeBytes), "# Fine\n");
+    const started = Date.now();
+    for (const name of ["zero.md", "fifo.md", "dir.md", "big.md", "missing.md"]) {
+        await assert.rejects(readRegularFile(path.join(folder, name), maxReadmeBytes), name);
+    }
+    assert.ok(Date.now() - started < 2_000, "nothing is waited on");
+});
+
+test("a linked package.json leaves the list, and a linked or missing file fails the package-source check", async () => {
+    const repo = await temporary();
+    await writeJSON(path.join(repo, "extensions/alpha/package.json"), manifest("alpha"));
+    await mkdir(path.join(repo, "extensions/beta"), { recursive: true });
+    await symlink("/dev/zero", path.join(repo, "extensions/beta/package.json"));
+    assert.deepEqual(
+        (await readCatalog(repo)).map((entry) => entry.name),
+        ["alpha"],
+    );
+
+    const source = await temporary();
+    await writeJSON(path.join(source, "package.json"), manifest("gamma"));
+    await symlink("/dev/zero", path.join(source, "package-lock.json"));
+    assert.equal(await sourceProblem(source), "Its package-lock.json isn't a regular file of at most 50 MB");
+    const linkedManifest = await temporary();
+    await symlink(path.join(source, "package.json"), path.join(linkedManifest, "package.json"));
+    assert.equal(await sourceProblem(linkedManifest), "Its package.json isn't a regular file of at most 1 MB");
+    assert.equal(await sourceProblem(await temporary()), "It has no package.json");
 });

@@ -85,13 +85,20 @@ export function rendererPass(markdown: string): string {
         .join("\n");
 }
 
+/** How the detail pane names a command's manifest `mode`; an unknown mode isn't shown. */
+const modeNames: Record<string, string> = { view: "view", "no-view": "no-view", "menu-bar": "menu bar" };
+
 /**
- * The detail pane: the manifest's facts, then the README once it's fetched. Everything in it, the manifest's own
- * text included, goes through `filterImages`.
+ * The detail pane: the manifest's facts, each command with its mode, then the README once it's fetched. Everything
+ * in it, the manifest's own text included, goes through `filterImages`.
  */
 export function detailMarkdown(entry: StoreEntry, commit: string, readme: string | undefined): string {
     const commands = entry.commands
-        .map((command) => `- **${command.title}**${command.description ? `: ${command.description}` : ""}`)
+        .map((command) => {
+            const mode = command.mode !== undefined && Object.hasOwn(modeNames, command.mode) ? modeNames[command.mode] : "";
+            const description = command.description ? `: ${command.description}` : "";
+            return `- **${command.title}**${mode ? ` (${mode})` : ""}${description}`;
+        })
         .join("\n");
     const facts = [
         entry.author && `**Author:** ${entry.author}`,
