@@ -16,7 +16,7 @@ import { createApiModule } from "./api/module.ts";
 import { explainRenderError } from "./api/oauth.ts";
 import { NavigationRoot, type NavigationHandle } from "./api/navigation.ts";
 import { recordRender } from "./api/render.ts";
-import { connect, settle } from "./bridge.ts";
+import { connect, holdWhilePending, settle } from "./bridge.ts";
 import { revive, type CommandMode, type HostToWorker, type LaunchProps, type WorkerMessage } from "./protocol.ts";
 import { createRoot, StaleCallbackError, type Root } from "./renderer/root.ts";
 
@@ -142,11 +142,17 @@ try {
     // `() => element`. The app shows nothing a no-view command renders, so that one fails, saying why.
     const fromRender = typeof exportedCommand !== "function" && rendered !== undefined;
     const command = fromRender ? () => rendered?.element : exportedCommand;
-    if (typeof command !== "function") throw new Error(`${entry} has no default export to run`);
     if (fromRender && mode === "no-view") throw new Error(`${entry} shows a view with render(), but it's a no-view command`);
 
-    // A menu-bar command renders like a view command: its MenuBarExtra is the view.
-    if (mode === "view" || mode === "menu-bar") {
+    if (typeof command !== "function") {
+        // An old no-view command exports nothing: its work is the module's top-level code, which ran as it loaded.
+        // The worker ends when that work does. Its timers, sockets and child processes keep it alive as Node's
+        // always do, and the message port only while a call into the app waits for its answer. The host then
+        // reports `finished`.
+        if (mode !== "no-view") throw new Error(`${entry} has no default export to run`);
+        holdWhilePending(port);
+    } else if (mode === "view" || mode === "menu-bar") {
+        // A menu-bar command renders like a view command: its MenuBarExtra is the view.
         root = createRoot({
             onRender: (snapshot) => post({ type: "render", ...snapshot }),
             onError: (error) => report(explainRenderError(error), true),
