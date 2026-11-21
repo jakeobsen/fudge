@@ -156,6 +156,22 @@ Extensions run in a separate Node.js process, the extension host.
       ↵ and ⌘D (Look Up in Dictionary) open `dict://` and the word, percent-encoded and cut (`DefineWord.dictionaryURL`); ⌘↵ (Copy Definition) copies the dictionary's text with a HUD.
       With no definition it says so, with Look Up in Dictionary only.
       A run from root search shows its result only if root search is still on Define Word when the selection and the dictionary have answered.
+    - **My Schedule** (`BuiltInCommandGroup.calendar`, SPEC-092) lists the Mac's events through EventKit, behind `CalendarSource` (core).
+      The app's `EventKitCalendarSource` implements it, reading only; tests and snapshot runs fake it with `FixedCalendarSource` (`--calendar-events <file>`, made-up events with times relative to now), so nothing reads the real calendars there.
+      `Schedule` (core) holds the logic: the days from today to **Days Ahead** (`calendarDaysAhead`: 1, 3, 7 or 14), each titled Today, Tomorrow or its date, with the events not over yet that overlap it.
+      An event spanning days is on each, as "From 22:00", "All day" or "Until 10:00"; all-day ones come first; "Now" or "in N min" marks what's within the hour; and the calendars unticked on the Calendar page are left out (`calendarHidden`, so a new calendar shows).
+      `ScheduleList` (core) is the List, built like Search Snippets and shown under its own session (`ScheduleList.session`), so nothing of it reaches the host.
+      **Invites are written by other people.** `MeetingLinks` (core) takes a link from the event's URL, then location, then notes, only when its parsed host, written plainly (no user, no percent encoding), is a known meeting host or a subdomain of one (`MeetingLinks.hosts`).
+      Its scheme must be `https` with a path, or a meeting app's on that service's hosts (`zoommtg`, `msteams`; `facetime:` calls whoever it names, so FaceTime counts only as `https://facetime.apple.com/…`), never matched by substring and never another scheme.
+      Only the first 20,000 characters of a location or notes are looked through (`MeetingLinks.searchedLength`), and the detail shows the first 5,000, since an invite's notes can be megabytes.
+      The notes are shown in a code block, so nothing in them is read as markdown and no image loads.
+      Nothing from an event is logged or written anywhere, its row id is its position (`event-<n>`), and only the command counts in `LaunchHistory`.
+      ↵ is Join Meeting when there's a link, else Open in Calendar (⌘O, `ical://ekevent/<id>?method=show&options=more`), then Copy Meeting Link (⌘⇧C) and Copy Details; Show Details (⌘D) shows the detail pane, which hides the rows' times.
+      Calendar access (`NSCalendarsFullAccessUsageDescription`) is asked for only when My Schedule runs, the first time; refused, it shows an empty view with Open Privacy Settings.
+      Its hotkey hides it again when it's on screen, and `EKEventStoreChanged` draws it again.
+      The calendars are read off the main thread (`LauncherModel.readSchedule`, and the Calendar page's `loadCalendars`), since every EventKit call waits on the calendar agent: the list shows as loading until the read lands, and ⌘D draws again from it without reading again.
+      `EventKitCalendarSource` runs every call on one serial queue, and makes its store on first use.
+      **Settings → Calendar** (`CalendarPage.swift`, after Sign-in) has Days Ahead and a checkbox per calendar.
     - **Arguments.**
       A selected command's `arguments` get fields after the query, which then shrinks to its text.
       `ArgumentInput` (core) holds what's entered and which field has the keyboard, and takes the keys: Tab and ⇧Tab between the fields, Esc back to the query, ⌫ in an empty field back one, ↑↓ on a dropdown argument. ↵ with a required argument empty moves the keyboard there and outlines it.
@@ -527,6 +543,7 @@ Extensions run in a separate Node.js process, the extension host.
     - **The Permissions page** (`PermissionsPage.swift`) comes after General: Accessibility's status (`AccessibilityStatus`, read without a prompt when it's shown and every second while it's on screen), its reason, and Open Accessibility Settings.
       That button asks for macOS's prompt on the first click and opens the pane on later ones, or at once when something in this run already asked for the prompt (`AccessibilityPermission.request`, `SystemAccessibility.promptShown`), so the prompt and the pane never stack.
       Below it, always shown, are the answers to "Allow <A> to open <B>'s commands?" (`LaunchPermissionsSection`, `LaunchPermissions.entries`), each changeable or forgotten, with the file read again before each change, a line saying none has asked yet when there are none, and the unreadable-file notice.
+      Between them is Calendar access as macOS has it, with Open Privacy Settings (`CalendarAccessRow`); My Schedule asks for it, never this page.
       Show Onboarding Again restarts onboarding from Welcome.
     - **Onboarding** (`OnboardingWindow.swift`) opens at every launch until it's complete, once the extensions have loaded; never in snapshot runs, tests or the CLI.
       `Onboarding` (core) keeps the answered step ids in `onboarding.json` and decides what to show (`pending`): the unanswered steps, in order, then Done.
@@ -586,6 +603,7 @@ Extensions run in a separate Node.js process, the extension host.
     Anything else is dropped and logged once per id, the sessions of Fudge's own views included (`LauncherModel.builtInSessions`):
     - Define Word
     - its forms
+    - My Schedule
     - Recent Colors
     - Search Menu Items
     - Search Snippets
@@ -907,6 +925,7 @@ Extensions run in a separate Node.js process, the extension host.
     - `--run-action <title>`, given once or more, runs those actions in order, half a second apart (e.g. an extension's Create Quicklink, then Save Quicklink).
     - `--search text` types into its search field.
   - `--accessibility allowed|missing`, `--input-monitoring allowed|missing` and `--login-item <status>` fix what Accessibility, the Snippets page's Input Monitoring and Open at Login show, so nothing asks the system.
+  - `--calendar-events <file>` gives My Schedule made-up events (`FixedCalendarSource.load`), and without it nothing has been asked.
   - `--clipboard-consent` saves Clipboard History's consent sheet, laid out off-screen like the sign-in one; it implies `--settings` and that page, as `--sign-in-consent` does.
   - `--clipboard-entries <file>` gives Clipboard History made-up entries (a JSON array of `clipboardHistory.list` entries); snapshots never read the clipboard or watch it.
   - `--definitions <file>` gives Define Word made-up definitions; snapshots never read the selection or the Mac's dictionaries.
@@ -914,6 +933,7 @@ Extensions run in a separate Node.js process, the extension host.
   - `--menu-items <file>` gives Search Menu Items a made-up app and menus (`FixedMenuFile`: `{ "app", "path"?, "menus": [{ "title", "key"?, "modifiers"?, "glyph"?, "enabled"?, "items"? }] }`, the app's own menu first), and without it there's no app to search; snapshots never read another app's menus.
   - `--onboarding [<step>]` renders the onboarding window.
   - `--settings` renders the Settings window instead, and `--settings <page>` one of these pages:
+    - `:calendar`
     - `:color-picker`
     - `:commands --search text`, the Commands page searched for that text
     - `:permissions`

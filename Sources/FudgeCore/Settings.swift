@@ -61,6 +61,11 @@ public struct FudgeSettings: Sendable, Equatable {
     public var updateCheck: UpdateCheckSetting?
     /// The Color Picker's **Copy Format** (`colorFormat`): HEX unless set. An unknown value reads as HEX.
     public var colorFormat: ColorFormat = .default
+    /// The calendars My Schedule leaves out (`calendarHidden`, by EventKit's calendar id), so a new one shows.
+    public var calendarHidden: [String] = []
+    /// My Schedule's **Days Ahead** (`calendarDaysAhead`): one of `Schedule.daysAheadChoices`; anything else reads
+    /// as the default.
+    public var calendarDaysAhead = Schedule.defaultDaysAhead
 
     public struct CommandSettings: Sendable, Equatable {
         /// In `HotKeySpec` text form.
@@ -205,6 +210,10 @@ public struct FudgeSettings: Sendable, Equatable {
         settings.escapeBehavior = EscapeBehavior(settingsValue: object["escapeBehavior"])
         settings.updateCheck = UpdateCheckSetting(settingsValue: object["updateCheck"])
         settings.colorFormat = (object["colorFormat"] as? String).flatMap(ColorFormat.init(rawValue:)) ?? .default
+        settings.calendarHidden = (object["calendarHidden"] as? [Any] ?? []).compactMap { $0 as? String }
+        if let days = object["calendarDaysAhead"] as? Int, Schedule.daysAheadChoices.contains(days) {
+            settings.calendarDaysAhead = days
+        }
         for case (let id, let entry as [String: Any]) in object["commands"] as? [String: Any] ?? [:] {
             settings.commands[id] = CommandSettings(
                 hotkey: entry["hotkey"] as? String, alias: entry["alias"] as? String, enabled: entry["enabled"] as? Bool
@@ -239,6 +248,8 @@ public struct FudgeSettings: Sendable, Equatable {
         object["escapeBehavior"] = escapeBehavior.settingsValue
         object["updateCheck"] = updateCheck?.rawValue
         object["colorFormat"] = colorFormat == .default ? nil : colorFormat.rawValue
+        object["calendarHidden"] = calendarHidden.isEmpty ? nil : calendarHidden
+        object["calendarDaysAhead"] = calendarDaysAhead == Schedule.defaultDaysAhead ? nil : calendarDaysAhead
 
         var commandObjects = object["commands"] as? [String: Any] ?? [:]
         let commandIDs = Set(commandObjects.keys).union(commands.keys)

@@ -1,4 +1,5 @@
 import AppKit
+import EventKit
 import FudgeCore
 import Quartz
 
@@ -17,6 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsModel: SettingsModel!
     /// Expanding snippets as they're typed (SPEC-078 B). Never in snapshot runs.
     private var snippetExpansion: SnippetExpansion?
+    /// The observer that redraws My Schedule when the calendars change.
+    private var calendarChanges: NSObjectProtocol?
     private var settingsWindow: SettingsWindowController!
     private var onboardingWindow: OnboardingWindowController!
     /// The menu bar item's "Open Fudge (⌥Space)".
@@ -67,6 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Define Word reads no selection and no dictionary: it gets `--definitions`' made-up ones, or none.
             model.selectedText = { nil }
             model.definitionLookup = snapshot.definitions.map(FixedDefinitions.load) ?? FixedDefinitions([:])
+            // Nor the calendars: My Schedule gets `--calendar-events`' made-up ones, and asks no one for access.
+            model.calendarSource =
+                snapshot.calendarEvents.map { FixedCalendarSource.load($0, now: Date()) }
+                ?? FixedCalendarSource(access: .notDetermined)
             // Nor the clipboard or the Keychain: Clipboard History gets `--clipboard-entries`' made-up entries.
             if let file = snapshot.clipboardEntries {
                 model.clipboardHistory = ClipboardHistoryService(
@@ -81,6 +88,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 settingsModel.windowPositions.first { $0.name == editing }.map(PositionDraft.init(editing:))
                 ?? PositionDraft()
         }
+        // One calendar source for both, so the Calendar and Permissions pages say what My Schedule reads.
+        settingsModel.calendarSource = model.calendarSource
+        settingsModel.loadCalendars()
+        settingsModel.calendarChanged = { [weak self] in self?.model.reloadSchedule() }
         settingsModel.launcherHotkey = FudgeSettings.load(from: paths.settingsFile).launcherHotkey
         // Snapshots and tests never register fudge as a login item; only the real app talks to the system.
         settingsModel.loginItem =
@@ -204,6 +215,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 snapshot.take(of: panel, model: model) { [weak self] in self?.snapshotAlert?.contentView }
             }
             return
+        }
+
+        // An event added, changed or removed in any app: My Schedule, if it's on screen, shows it.
+        calendarChanges = NotificationCenter.default.addObserver(
+            forName: .EKEventStoreChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.model.reloadSchedule() }
         }
 
         SystemCalls.accessibilitySettingsOffer = AccessibilitySettingsOffer(
@@ -752,6 +770,8 @@ struct Snapshot {
     /// `--found-files <file>`: Search Files' results, a JSON array of `files.search` entries (`~/` paths are in the
     /// home folder). Snapshots never ask Spotlight, so without it there are none.
     let foundFiles: URL?
+    /// `--calendar-events <file>`: My Schedule's made-up calendars and events (`FixedCalendarSource.load`).
+    let calendarEvents: URL?
     /// `--clipboard-entries <file>`: Clipboard History's made-up entries, a JSON array of `clipboardHistory.list`
     /// entries. Snapshots never read the clipboard.
     let clipboardEntries: URL?
@@ -812,6 +832,7 @@ struct Snapshot {
         signInConsent = arguments.contains("--sign-in-consent")
         clipboardConsent = arguments.contains("--clipboard-consent")
         foundFiles = value("--found-files").map { URL(fileURLWithPath: $0) }
+        calendarEvents = value("--calendar-events").map { URL(fileURLWithPath: $0) }
         clipboardEntries = value("--clipboard-entries").map { URL(fileURLWithPath: $0) }
         menuItems = value("--menu-items").map { URL(fileURLWithPath: $0) }
         definitions = value("--definitions").map { URL(fileURLWithPath: $0) }

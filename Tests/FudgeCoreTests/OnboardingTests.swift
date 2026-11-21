@@ -192,6 +192,8 @@ import Testing
         "showOnScreen": "a choice, not a feature",
         "escapeBehavior": "a choice, not a feature",
         "colorFormat": "the Color Picker's format, not a feature",
+        "calendarHidden": "which calendars My Schedule shows; it asks for access when first run",
+        "calendarDaysAhead": "a detail of My Schedule",
     ]
     let defaults = FudgeSettings()
     let properties = Mirror(reflecting: defaults).children.compactMap { child in child.label.map { ($0, child.value) } }

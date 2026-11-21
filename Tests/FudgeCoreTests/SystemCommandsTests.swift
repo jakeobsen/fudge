@@ -94,7 +94,9 @@ private func volume(
 @Test func theSystemGroupListsTheCommands() {
     let group = BuiltInCommandGroup.system
     #expect(group.name == ":system" && BuiltInCommandGroup.isValidName(group.name))
-    #expect(BuiltInCommandGroup.all.map(\.title) == ["Apps", "System", "Tools", "Window Management"], "by title")
+    #expect(
+        BuiltInCommandGroup.all.map(\.title) == ["Apps", "Calendar", "System", "Tools", "Window Management"],
+        "by title")
     #expect(
         group.commands.map(\.title) == [
             "Lock Screen", "Sleep", "Restart", "Shut Down", "Log Out", "Empty Trash", "Eject All Disks",

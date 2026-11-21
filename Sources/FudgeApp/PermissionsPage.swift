@@ -121,6 +121,9 @@ struct PermissionsPage: View {
             Section("Accessibility") {
                 AccessibilityControls(status: model.accessibility)
             }
+            Section("Calendar") {
+                CalendarAccessRow(model: model)
+            }
             LaunchPermissionsSection(model: model)
             Section {
                 LabeledContent {
