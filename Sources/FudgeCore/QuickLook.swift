@@ -148,21 +148,47 @@ public enum LauncherResign: Sendable, Equatable {
         /// Whether Fudge's preview shows something, and whether it's the key window.
         public var previewOpen: Bool
         public var previewIsKey: Bool
+        /// Whether the preview's own notifications say it has the keyboard (`PreviewKey`). `isKeyWindow` alone
+        /// answers false while Fudge isn't active, which is how Quick Look leaves it when it takes the keyboard by
+        /// itself after ⌘Y.
+        public var previewSaysKey: Bool
 
         public init(
-            launcherShown: Bool, sheetAttached: Bool, launcherIsKey: Bool, previewOpen: Bool, previewIsKey: Bool
+            launcherShown: Bool, sheetAttached: Bool, launcherIsKey: Bool, previewOpen: Bool, previewIsKey: Bool,
+            previewSaysKey: Bool = false
         ) {
             self.launcherShown = launcherShown
             self.sheetAttached = sheetAttached
             self.launcherIsKey = launcherIsKey
             self.previewOpen = previewOpen
             self.previewIsKey = previewIsKey
+            self.previewSaysKey = previewSaysKey
         }
     }
 
     public static func decide(_ settled: Settled) -> LauncherResign {
         if !settled.launcherShown || settled.sheetAttached || settled.launcherIsKey { return .stay }
-        if settled.previewOpen, settled.previewIsKey { return .takeKeyBack }
+        if settled.previewOpen, settled.previewIsKey || settled.previewSaysKey { return .takeKeyBack }
         return .hide
+    }
+}
+
+/// The Quick Look preview's key state as its own notifications tell it (`didBecomeKey`, `didResignKey`), cleared when
+/// it closes. On ⌘Y, Quick Look takes the keyboard by itself about 200 ms after the preview opens, and Fudge stops
+/// being the active app as it does; `QLPreviewPanel.isKeyWindow` then answers false, though the panel has just said
+/// it became key (FUD-104, from the architect's log). A click on the preview activates Fudge, so there both agree.
+public struct PreviewKey: Sendable, Equatable {
+    public private(set) var saysKey = false
+
+    public init() {}
+
+    public enum Event: Sendable, Equatable {
+        case becameKey
+        case resignedKey
+        case closed
+    }
+
+    public mutating func record(_ event: Event) {
+        saysKey = event == .becameKey
     }
 }
