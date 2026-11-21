@@ -82,11 +82,13 @@ public struct ActionEntry: Sendable, Equatable, Identifiable {
     public var isSubmenu: Bool { submenu != nil }
 }
 
-/// What an action panel entry runs: an extension's `Action` node, or one of fudge's own actions in root search.
+/// What an action panel entry runs: an extension's `Action` node, or one of Fudge's own actions in root search.
 public enum ActionTarget: Sendable, Equatable {
     /// The node's `onAction`, in the running command.
     case node(Int)
     case root(RootAction)
+    /// `Action.ToggleQuickLook`, which the app performs itself on the selected item (SPEC-049).
+    case toggleQuickLook
 }
 
 /// fudge's own actions on a root search item.
@@ -192,6 +194,9 @@ public struct ActionSection: Sendable, Equatable {
 
 /// The actions of an ActionPanel node, as sections.
 public enum ActionPanelReader {
+    /// The prop a built-in action the app performs itself carries (`src/api/actions.ts`), e.g. "toggleQuickLook".
+    public static let builtInProp = "fudgeBuiltIn"
+
     public static func sections(of panel: UINode?) -> [ActionSection] {
         guard let panel else { return [] }
         return sections(in: panel.children)
@@ -228,7 +233,7 @@ public enum ActionPanelReader {
                 destructive: node.string("style") == "destructive",
                 submenu: nil,
                 isLoading: false,
-                target: .node(node.id),
+                target: node.string(builtInProp) == "toggleQuickLook" ? .toggleQuickLook : .node(node.id),
                 pickDate: pickDate(node)
             )
         case "ActionPanel.Submenu":

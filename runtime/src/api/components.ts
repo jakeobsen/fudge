@@ -25,13 +25,25 @@ export function host(type: string): FunctionComponent<Props> {
         const slots: ReactNode[] = [];
         for (const [key, value] of Object.entries(props)) {
             if (isValidElement(value)) slots.push(createElement(SLOT, { key: `$slot:${key}`, name: key }, value));
-            else plain[key] = value;
+            else plain[key] = key === "quickLook" ? quickLookProp(value) : value;
         }
         plain.children = slots.length === 0 ? children : [...slots, children];
         return createElement(type, plain);
     };
     component.displayName = type;
     return component;
+}
+
+/**
+ * A List or Grid item's `quickLook`, with its `path` (a `PathLike`) as text: a `URL` as its `href`, a `Buffer` as
+ * UTF-8. The app reads paths and `file://` URLs.
+ */
+export function quickLookProp(value: unknown): unknown {
+    if (typeof value !== "object" || value === null || !("path" in value)) return value;
+    const { path } = value as { path: unknown };
+    if (path instanceof URL) return { ...value, path: path.href };
+    if (path instanceof Uint8Array) return { ...value, path: new TextDecoder().decode(path) };
+    return value;
 }
 
 // Constants, with @raycast/api's own values (generated from its type definitions).

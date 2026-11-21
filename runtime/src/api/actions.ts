@@ -159,7 +159,20 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
         });
     }
 
-    /** An action fudge can't perform yet: it shows, and says so when picked. */
+    /**
+     * Quick Look's preview of the selected item's `quickLook` file. The app performs it itself, so it has no
+     * `onAction`: the `fudgeBuiltIn` prop tells the app what it is (`ActionPanelReader.builtInProp`).
+     */
+    function ToggleQuickLook(props: Props) {
+        return createElement(ActionHost, {
+            title: "Quick Look",
+            icon: Icon.Eye,
+            ...withoutOwn(props),
+            fudgeBuiltIn: "toggleQuickLook",
+        });
+    }
+
+    /** An action Fudge can't perform yet: it shows, and says so when picked. */
     const unavailable = (name: string, title: string) => {
         function Unavailable(props: Props) {
             return action({ title }, props, async () => {
@@ -182,7 +195,7 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
         Paste,
         CreateQuicklink: unavailable("Action.CreateQuicklink", "Create Quicklink"),
         CreateSnippet: unavailable("Action.CreateSnippet", "Create Snippet"),
-        ToggleQuickLook: unavailable("Action.ToggleQuickLook", "Quick Look"),
+        ToggleQuickLook,
         PickDate: Object.assign(PickDate, { Type: PickDateType, isFullDay }),
         InstallMCPServer: unavailable("Action.InstallMCPServer", "Install MCP Server"),
     };

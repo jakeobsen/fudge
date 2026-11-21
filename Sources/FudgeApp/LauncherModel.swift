@@ -79,7 +79,9 @@ final class LauncherModel {
         case failure(Failure)
     }
 
-    private(set) var screen: Screen = .root
+    private(set) var screen: Screen = .root {
+        didSet { followQuickLook() }
+    }
     private(set) var results: [RootItem] = []
     var selectedItem: String? {
         didSet {
@@ -130,6 +132,12 @@ final class LauncherModel {
     @ObservationIgnored var reloadAll: () -> Void = {}
     /// Shows a HUD message; set by the app delegate.
     @ObservationIgnored var showHUD: (String) -> Void = { _ in }
+    /// Shows the Quick Look preview of an item, or closes it for nil (SPEC-049); set by the app delegate.
+    @ObservationIgnored var quickLookChanged: (QuickLookItem?) -> Void = { _ in }
+    /// Whether a file exists, for Quick Look.
+    @ObservationIgnored var fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
+    /// What the Quick Look preview shows.
+    @ObservationIgnored private(set) var quickLook = QuickLookState()
     /// Whether the launcher panel is on screen; set by the app delegate.
     @ObservationIgnored var isVisible: () -> Bool = { false }
     /// Asks the user to confirm (title, message, primary, dismiss, destructive); set by the app delegate.
@@ -1184,6 +1192,8 @@ final class LauncherModel {
             case .root, .failure: perform(action)  // a failure's are its notice's
             case .command: return
             }
+        case .toggleQuickLook:
+            toggleQuickLook()
         }
     }
 
@@ -1457,6 +1467,45 @@ final class LauncherModel {
         }
     }
 
+    // MARK: - Quick Look
+
+    /// The view on screen, as Quick Look tells views apart: the command's session and how deep it is.
+    private var quickLookView: String? {
+        command.map { "\($0.session)/\($0.depth)" }
+    }
+
+    /// `Action.ToggleQuickLook`: the preview of the selected item's file, or closing it.
+    private func toggleQuickLook() {
+        switch quickLook.toggle(selected: selectedListItem?.quickLook, in: quickLookView, exists: fileExists) {
+        case .opened, .closed:
+            quickLookChanged(quickLook.shown)
+        case .nothingToPreview:
+            showFailureToast("Nothing to preview")
+        case .missing(let name):
+            showFailureToast("\(name) doesn't exist")
+        }
+    }
+
+    /// Every screen change: an open preview follows the selection, and closes for another view.
+    private func followQuickLook() {
+        guard quickLook.isOpen else { return }
+        let before = quickLook.shown
+        quickLook.follow(selected: selectedListItem?.quickLook, in: quickLookView, exists: fileExists)
+        if quickLook.shown != before { quickLookChanged(quickLook.shown) }
+    }
+
+    /// The launcher hid: the preview closes with it.
+    func closeQuickLook() {
+        guard quickLook.isOpen else { return }
+        quickLook.close()
+        quickLookChanged(nil)
+    }
+
+    /// The user closed the preview with its own button.
+    func quickLookClosedByUser() {
+        quickLook.close()
+    }
+
     // MARK: - Keys
 
     func moveSelection(by offset: Int) {
@@ -1535,7 +1584,8 @@ final class LauncherModel {
             return
         }
         let state = EscapeAction.State(
-            dropdownOpen: dropdownPanel != nil, actionPanelOpen: actionPanel != nil, screen: escapeScreen)
+            dropdownOpen: dropdownPanel != nil, actionPanelOpen: actionPanel != nil,
+            quickLookOpen: quickLook.isOpen, screen: escapeScreen)
         switch EscapeAction.next(behavior: settings.escapeBehavior, state: state) {
         case .closeDropdown:
             closeDropdownPanel()
@@ -1552,6 +1602,9 @@ final class LauncherModel {
                 let first = ActionPanelReader.flat(actionPanelSections).first?.id
                 actionPanel?.selected = first
             }
+        case .closeQuickLook:
+            quickLook.close()
+            quickLookChanged(nil)
         case .popView:
             if case .command(let command) = screen { send(.pop(session: command.session)) }
         case .clearSearch:
@@ -1897,7 +1950,7 @@ final class LauncherModel {
     }
 
     /// A failure toast in the bottom bar that no command showed.
-    private func showFailureToast(_ title: String, message: String) {
+    private func showFailureToast(_ title: String, message: String? = nil) {
         let shown = ToastState(session: "", id: 0, title: title, message: message, style: "FAILURE")
         toast = shown
         expireToast(shown)
