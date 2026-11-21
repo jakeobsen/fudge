@@ -43,10 +43,16 @@ private func decode(_ json: String) throws -> ExtensionManifest {
     #expect(throws: (any Error).self) { try decode(#"{ "title": "no name" }"#) }
 }
 
-@Test(arguments: [
-    ("scratch", true), ("better-visual-studio-code-project-manager", true), ("a1", true),
-    ("", false), ("-leading", false), ("Upper", false), ("../escape", false), ("with space", false),
-])
-func validatesNames(name: String, valid: Bool) {
-    #expect(ExtensionManifest.isValidName(name) == valid)
+/// The Extension Store's `catalog.ts` is tested against the same file, so the two rules can't drift apart.
+@Test func validatesNamesAsTheSharedFixtureSays() throws {
+    let fixture = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("runtime/test/fixtures/extension-names.json")
+    let names = try #require(
+        try JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any])
+    let valid = try #require(names["valid"] as? [String])
+    let invalid = try #require(names["invalid"] as? [String])
+    #expect(!valid.isEmpty && !invalid.isEmpty)
+    for name in valid { #expect(ExtensionManifest.isValidName(name), "\(name)") }
+    for name in invalid { #expect(!ExtensionManifest.isValidName(name), "\(name)") }
 }
