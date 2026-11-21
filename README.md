@@ -77,7 +77,7 @@ Untick **Enabled** to turn a command off, or a whole extension. A command that's
 
 The first time Fudge starts, it walks you through a few choices: the launcher hotkey, Accessibility, Open at Login and currency conversion. Each takes effect at once, and **Settings…** has them all. Until you click **Start Using Fudge** at the end, Fudge shows these steps again at its next start, from where you left off.
 
-**Settings… → Permissions** shows whether Fudge may use Accessibility, which extensions need to read the text you've selected or to paste. **Open Accessibility Settings** lets macOS ask you first; if it doesn't ask, click it again to open **System Settings → Privacy & Security → Accessibility** and turn Fudge on there. **Show Onboarding Again** goes through the first-run choices again.
+**Settings… → Permissions** shows whether Fudge may use Accessibility, which extensions need to read the text you've selected, to paste, or to move windows. **Open Accessibility Settings** lets macOS ask you first; if it doesn't ask, click it again to open **System Settings → Privacy & Security → Accessibility** and turn Fudge on there. **Show Onboarding Again** goes through the first-run choices again.
 
 ### Open at Login and search history
 
@@ -166,6 +166,10 @@ Extensions can paste into the app you were in (`Clipboard.paste`, the Paste acti
 - If you copy something within that second, Fudge leaves your new copy alone.
 - If your clipboard held a password that a password manager marked as concealed, Fudge leaves the clipboard empty instead of putting the password back, for the same reason as above.
 - Apps that read the clipboard late, such as virtual machines or remote desktops that sync it, may paste what Fudge put back instead of the content.
+
+### Windows
+
+Extensions can list your windows, and move, resize or make full screen any of them (`WindowManagement`). That needs the same Accessibility permission. macOS doesn't let apps see your Spaces, so to extensions each screen is one desktop, and Fudge can't move a window to another Space.
 
 ## License
 
