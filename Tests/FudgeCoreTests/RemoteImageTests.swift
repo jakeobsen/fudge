@@ -504,9 +504,108 @@ func aBodyOverTheLimitIsDroppedWhateverContentLengthSays(contentLength: String?)
     for kept in [0, 2, 3] { #expect(cache.read(urls[kept]) != nil, "\(kept)") }
 }
 
+// MARK: - The store (SPEC-065)
+
+@MainActor
+@Test func oneAskOnAStaleCachedImageShowsItAndRefreshesItOnce() async throws {
+    let old = png(width: 8, height: 8)
+    let fetcher = FakeImageFetcher { request in .status(304, request.url!) }
+    let clock = TestClock(start)
+    let (store, cache) = try makeStore(fetcher, clock: clock)
+    let source = "https://example.com/a.png"
+    let stale = RemoteImageCache.Entry(fetchedAt: start - 25 * 3600, etag: "\"v1\"", lastModified: "then")
+    try cache.store(URL(string: source)!, body: old, entry: stale)
+
+    // One ask: the cached image shows, and exactly one conditional request goes out.
+    let entry = store.entry(for: source)
+    await store.loadsFinished()
+    #expect(entry.image == old)
+    #expect(!entry.failed)
+    #expect(fetcher.requests.count == 1)
+    let request = try #require(fetcher.requests.first)
+    #expect(request.value(forHTTPHeaderField: "If-None-Match") == "\"v1\"")
+    #expect(request.value(forHTTPHeaderField: "If-Modified-Since") == "then")
+
+    // The 304 made it fresh: later asks, an hour on, start nothing.
+    clock.now = start + 3600
+    for _ in 0..<5 { _ = store.entry(for: source) }
+    await store.loadsFinished()
+    #expect(fetcher.requests.count == 1)
+}
+
+@MainActor
+@Test func aStaleCachedImageWhoseRefreshFailsStaysAndIsntAskedAgainAtOnce() async throws {
+    let old = png(width: 8, height: 8)
+    let fetcher = FakeImageFetcher { request in .status(503, request.url!) }
+    let clock = TestClock(start)
+    let (store, cache) = try makeStore(fetcher, clock: clock)
+    let source = "https://example.com/a.png"
+    try cache.store(URL(string: source)!, body: old, entry: .init(fetchedAt: start - 25 * 3600, etag: "\"v1\""))
+
+    let entry = store.entry(for: source)
+    await store.loadsFinished()
+    #expect(entry.image == old, "a failed refresh keeps the image")
+    #expect(!entry.failed)
+    #expect(fetcher.requests.count == 1)
+    _ = store.entry(for: source)
+    await store.loadsFinished()
+    #expect(fetcher.requests.count == 1, "the next refresh waits another day")
+}
+
+@MainActor
+@Test func aFreshCachedImageOrANewOneStartsNoSecondRequest() async throws {
+    let image = png(width: 8, height: 8)
+    let fetcher = FakeImageFetcher { request in .ok(request.url!, image) }
+    let clock = TestClock(start)
+    let (store, cache) = try makeStore(fetcher, clock: clock)
+    try cache.store(URL(string: "https://example.com/fresh.png")!, body: image, entry: .init(fetchedAt: start - 3600))
+
+    let fresh = store.entry(for: "https://example.com/fresh.png")
+    let new = store.entry(for: "https://example.com/new.png")
+    await store.loadsFinished()
+    #expect(fresh.image == image)
+    #expect(new.image == image)
+    #expect(fetcher.requests.map(\.url?.lastPathComponent) == ["new.png"])
+    #expect(fetcher.requests.first?.value(forHTTPHeaderField: "If-None-Match") == nil)
+}
+
 // MARK: - Helpers
 
 private let start = Date(timeIntervalSince1970: 1_800_000_000)
+
+/// A clock tests move by hand.
+private final class TestClock: @unchecked Sendable {
+    // @unchecked: `current` is behind `lock`.
+    private let lock = NSLock()
+    private var current: Date
+
+    init(_ start: Date) { current = start }
+
+    var now: Date {
+        get { lock.withLock { current } }
+        set { lock.withLock { current = newValue } }
+    }
+}
+
+@MainActor
+private final class TestEntry: RemoteImageEntry {
+    var image: Data?
+    var failed = false
+
+    init() {}
+}
+
+/// A store whose loader and retries read `clock`, and whose "decoding" takes any body that isn't empty.
+@MainActor
+private func makeStore(
+    _ fetcher: FakeImageFetcher, clock: TestClock, capacity: Int = RemoteImageStore<TestEntry>.defaultCapacity
+) throws -> (RemoteImageStore<TestEntry>, RemoteImageCache) {
+    let cache = RemoteImageCache(directory: try Fixtures.temporaryDirectory().appendingPathComponent("image-cache"))
+    let loader = RemoteImageLoader(cache: cache, fetcher: fetcher, now: { clock.now }, log: { _ in })
+    let store = RemoteImageStore<TestEntry>(
+        loader: loader, capacity: capacity, now: { clock.now }, decode: { $0.isEmpty ? nil : $0 })
+    return (store, cache)
+}
 
 private func makeLoader(
     _ fetcher: FakeImageFetcher, log: LogLines = LogLines()
