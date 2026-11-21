@@ -14,7 +14,7 @@ This is its first release.
 
 - Root search for applications and commands, with a hotkey and an alias for any command.
 - Raycast extensions, from the Extension Store (Raycast's open-source extensions) or built from a folder with the `fudge` tool.
-- Signing in to services for extensions, through a sign-in server.
+- Signing in to services for extensions: GitHub and Atlassian (Jira and Confluence) through Fudge's sign-in server, and more through one you run.
 - Fudge's own commands: quicklinks, snippets that can expand as you type, a calculator with units, time zones and currencies, Search Files, Search Emoji & Symbols, Clipboard History, a Color Picker, Define Word, window management with your own positions and layouts, Switch Windows, system commands, Search Menu Items and My Schedule.
 - A backup of everything you've set up, encrypted with a password.
 

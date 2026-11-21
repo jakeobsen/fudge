@@ -64,6 +64,7 @@ Both read the `@raycast/api` features the extension's code uses, without running
   The store marks an extension with some such commands **Partly compatible**, and one with only such commands **Not compatible**.
 - **A feature Fudge doesn't have yet** makes the command that uses it stop with a message naming it.
 - **Signing in:** extensions that sign in to a service with OAuth go through a sign-in server, which you pick under **Settings… → Sign-in** (see [Signing in](#signing-in)).
+  Fudge's sign-in server offers GitHub and Atlassian (Jira and Confluence), and a company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth).
   An extension that takes a token in its settings works without one.
 
 ## Using it
@@ -167,10 +168,10 @@ In the **Extension Store** command, search the extensions, or pick a category in
 
 ### Signing in
 
-Some extensions sign in to a service, such as GitHub or Linear.
+Some extensions sign in to a service, such as GitHub or Jira.
 Pick a sign-in server under **Settings… → Sign-in**: **Fudge's sign-in server**, or **Your own server…**.
-A company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth).
-Extensions can sign in to GitHub, Linear, Slack, Asana, Google, Atlassian (Jira and Confluence) and Zoom, as far as the server offers them.
+Fudge's sign-in server offers GitHub and Atlassian (Jira and Confluence).
+A company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth), which can also offer Linear, Slack, Asana, Google and Zoom.
 When an extension needs to sign in, Fudge shows **Sign in to** the service, and ↵ continues in your browser.
 Sign-ins are kept in your Keychain, and the Sign-in page lists them, each with **Sign Out**.
 Changing the server signs you out of everything.
