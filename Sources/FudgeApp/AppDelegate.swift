@@ -49,6 +49,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let snapshot = Snapshot(arguments: CommandLine.arguments) {
             let files = snapshot.foundFiles.map { FixedFileQuery.load($0, home: FileSearchOptions.home()) } ?? []
             model.fileSearch = FileSearch { FixedFileQuery(files) }
+            model.templateClipboard = { nil }
             // Nor the clipboard or the Keychain: Clipboard History gets `--clipboard-entries`' made-up entries.
             if let file = snapshot.clipboardEntries {
                 model.clipboardHistory = ClipboardHistoryService(
@@ -110,6 +111,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The store stays installed either way; the launcher reads settings.json again.
         settingsModel.extensionStoreChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.quicklinksChanged = { [weak self] in self?.model.applySettings() }
+        settingsModel.snippetsChanged = { [weak self] in self?.model.reloadSnippetList() }
         settingsModel.clipboardHistoryChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.deleteClipboardHistory = { [weak self] in self?.model.clipboardHistory.deleteAll() }
         settingsModel.stopExtensionStore = { [weak self] in

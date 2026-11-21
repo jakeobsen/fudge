@@ -111,6 +111,14 @@ enum SystemCalls {
             hideWindow: hideWindow, frontmost: frontmost)
     }
 
+    /// Pastes a snippet's filled-in text into the frontmost app as `Clipboard.paste` does, in its turn, then puts the
+    /// caret where its `{cursor}` was with `leftArrows` ← presses. Run from Search Snippets, by the user.
+    static func pasteSnippet(_ text: String, leftArrows: Int, hideWindow: () async -> Void) async throws {
+        try await paster.paste(
+            PasteboardContents.forPaste(text: text, html: nil, file: nil), closeMainWindow: true,
+            origin: .userInitiated, leftArrows: leftArrows, hideWindow: hideWindow, frontmost: frontmost)
+    }
+
     /// Pastes `contents` into the frontmost app as `clipboard.paste` does: clipboard history's Paste.
     static func paste(
         _ contents: PasteboardContents, origin: CallOrigin, hideWindow: () async -> Void
