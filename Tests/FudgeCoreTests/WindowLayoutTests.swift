@@ -81,7 +81,8 @@ private func frame(_ command: WindowCommand, _ visible: CGRect = landscape, curr
     for command in [WindowCommand.restore, .nextDisplay, .previousDisplay, .toggleFullScreen] {
         #expect(frame(command) == nil, "\(command)")
     }
-    for command in WindowCommand.allCases where ![.restore, .nextDisplay, .previousDisplay, .toggleFullScreen].contains(command) {
+    let elsewhere: [WindowCommand] = [.restore, .nextDisplay, .previousDisplay, .toggleFullScreen]
+    for command in WindowCommand.allCases where !elsewhere.contains(command) {
         let target = frame(command)
         #expect(target.map { landscape.contains($0) } == true, "\(command) stays inside the visible frame")
     }

@@ -17,6 +17,9 @@ struct SystemWindows: WindowSystem, Sendable {
     let frontmost: Int32?
     /// Raycast's `Application` for each regular app (one with a Dock icon), by pid.
     let applications: [Int32: JSONValue]
+    /// Each screen's visible frame (no menu bar or Dock) in top-left coordinates, by display id, read with the rest
+    /// on the main thread.
+    let visibleFrames: [UInt32: CGRect]
 
     @MainActor
     static func current() -> SystemWindows {
@@ -26,8 +29,19 @@ struct SystemWindows: WindowSystem, Sendable {
                 applications[app.processIdentifier] = ApplicationResolver.application(at: url)
             }
         }
+        // `visibleFrame` is in Cocoa coordinates; flipped against the primary screen (`screens[0]`, at the origin),
+        // never against the screen's own, it lines up with `CGDisplayBounds`.
+        let primaryHeight = NSScreen.screens.first?.frame.maxY ?? 0
+        var visibleFrames: [UInt32: CGRect] = [:]
+        for screen in NSScreen.screens {
+            if let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber {
+                visibleFrames[number.uint32Value] = PanelScreen.topLeftFrame(
+                    cocoa: screen.visibleFrame, primaryHeight: primaryHeight)
+            }
+        }
         return SystemWindows(
-            frontmost: NSWorkspace.shared.frontmostApplication?.processIdentifier, applications: applications)
+            frontmost: NSWorkspace.shared.frontmostApplication?.processIdentifier, applications: applications,
+            visibleFrames: visibleFrames)
     }
 
     func listedWindows() -> [ListedWindow] {
@@ -56,7 +70,7 @@ struct SystemWindows: WindowSystem, Sendable {
         guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return [] }
         let main = CGMainDisplayID()
         return ids.prefix(Int(count)).sorted { $0 == main && $1 != main }.map {
-            WindowScreen(id: $0, bounds: CGDisplayBounds($0))
+            WindowScreen(id: $0, bounds: CGDisplayBounds($0), visibleBounds: visibleFrames[$0])
         }
     }
 

@@ -109,3 +109,48 @@ extension WindowManager {
         }
     }
 }
+
+extension BuiltInCommandGroup {
+    /// Window Management: one command per `WindowCommand`, named by its raw value.
+    public static let windowManagement = BuiltInCommandGroup(
+        name: ":window-management", title: "Window Management",
+        commands: WindowCommand.allCases.map { command in
+            let (title, keywords, symbol) = command.presentation
+            return BuiltInCommand(
+                name: command.rawValue, title: title, keywords: keywords + ["window"], symbol: symbol)
+        })
+}
+
+extension WindowCommand {
+    /// The command's title, extra search words and SF Symbol.
+    var presentation: (String, [String], String) {
+        switch self {
+        case .leftHalf: ("Left Half", ["half", "split"], "rectangle.lefthalf.inset.filled")
+        case .rightHalf: ("Right Half", ["half", "split"], "rectangle.righthalf.inset.filled")
+        case .topHalf: ("Top Half", ["half", "split"], "rectangle.tophalf.inset.filled")
+        case .bottomHalf: ("Bottom Half", ["half", "split"], "rectangle.bottomhalf.inset.filled")
+        case .topLeftQuarter: ("Top Left Quarter", ["quarter", "corner"], "rectangle.inset.topleft.filled")
+        case .topRightQuarter: ("Top Right Quarter", ["quarter", "corner"], "rectangle.inset.topright.filled")
+        case .bottomLeftQuarter: ("Bottom Left Quarter", ["quarter", "corner"], "rectangle.inset.bottomleft.filled")
+        case .bottomRightQuarter:
+            ("Bottom Right Quarter", ["quarter", "corner"], "rectangle.inset.bottomright.filled")
+        case .firstThird: ("First Third", ["third", "left"], "rectangle.leadingthird.inset.filled")
+        case .centerThird: ("Center Third", ["third", "middle"], "rectangle.center.inset.filled")
+        case .lastThird: ("Last Third", ["third", "right"], "rectangle.trailingthird.inset.filled")
+        case .firstTwoThirds: ("First Two Thirds", ["thirds", "left"], "rectangle.split.3x1")
+        case .lastTwoThirds: ("Last Two Thirds", ["thirds", "right"], "rectangle.split.3x1")
+        case .maximize: ("Maximize", ["fill", "zoom"], "rectangle.inset.filled")
+        case .almostMaximize: ("Almost Maximize", ["fill", "zoom"], "inset.filled.center.rectangle")
+        case .maximizeWidth: ("Maximize Width", ["wide", "stretch"], "arrow.left.and.right.square")
+        case .maximizeHeight: ("Maximize Height", ["tall", "stretch"], "arrow.up.and.down.square")
+        case .center: ("Center", ["middle"], "macwindow")
+        case .reasonableSize: ("Reasonable Size", ["resize"], "rectangle.dashed")
+        case .makeLarger: ("Make Larger", ["grow", "bigger", "resize"], "plus.rectangle")
+        case .makeSmaller: ("Make Smaller", ["shrink", "smaller", "resize"], "minus.rectangle")
+        case .restore: ("Restore", ["undo", "back"], "arrow.uturn.backward.square")
+        case .nextDisplay: ("Next Display", ["screen", "monitor"], "arrow.right.square")
+        case .previousDisplay: ("Previous Display", ["screen", "monitor"], "arrow.left.square")
+        case .toggleFullScreen: ("Toggle Full Screen", ["fullscreen"], "arrow.up.left.and.arrow.down.right")
+        }
+    }
+}

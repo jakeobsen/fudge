@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import Testing
@@ -180,4 +181,20 @@ private func run(_ command: WindowCommand, on desk: Desk, _ frames: inout Window
     // One below it, with a Dock of 70 points at its bottom.
     #expect(
         topLeft(CGRect(x: 0, y: -1010, width: 1920, height: 1010)) == CGRect(x: 0, y: 900, width: 1920, height: 1010))
+}
+
+// MARK: - The group
+
+@Test func windowManagementHasOneCommandPerWindowCommand() {
+    let group = BuiltInCommandGroup.windowManagement
+    #expect(BuiltInCommandGroup.all.contains(group))
+    #expect(BuiltInCommandGroup.isValidName(group.name) && !ExtensionManifest.isValidName(group.name))
+    #expect(group.commands.map(\.name) == WindowCommand.allCases.map(\.rawValue))
+    #expect(group.commandID(group.commands[0]) == ":window-management/left-half")
+    #expect(group.commands.allSatisfy { $0.keywords.contains("window") })
+    for command in group.commands {
+        #expect(NSImage(systemSymbolName: command.symbol, accessibilityDescription: nil) != nil, "\(command.symbol)")
+    }
+    let found = RootSearch.rank(RootItem.builtInCommands(of: group), query: "half", history: LaunchHistory())
+    #expect(Set(found.prefix(4).map(\.title)) == ["Left Half", "Right Half", "Top Half", "Bottom Half"])
 }
