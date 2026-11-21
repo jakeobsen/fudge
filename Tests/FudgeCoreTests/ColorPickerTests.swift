@@ -87,6 +87,28 @@ private func bytes(_ color: PickedColor) -> [Int] {
     }
 }
 
+@Test func hslIsRoundedToWholeDegreesAndPercent() throws {
+    // As CSS writes it, so it can read back a little off: #3A7BD5 is hsl(215, 65%, 53%), which reads as #397AD5.
+    let parsed = try #require(ExtensionColor(ColorFormat.hsl.string(for: blue)))
+    guard case .rgb(let r, let g, let b, _) = parsed else {
+        Issue.record("not read as a color")
+        return
+    }
+    #expect(ColorFormat.hex.string(for: PickedColor(red: r, green: g, blue: b)) == "#397AD5")
+    // Never more than 5 off on a channel (the review measured 636,056 colors).
+    var generator = SystemRandomNumberGenerator()
+    for _ in 0..<500 {
+        let color = PickedColor(
+            red: .random(in: 0...1, using: &generator), green: .random(in: 0...1, using: &generator),
+            blue: .random(in: 0...1, using: &generator))
+        guard case .rgb(let r, let g, let b, _) = try #require(ExtensionColor(ColorFormat.hsl.string(for: color)))
+        else { continue }
+        let read = PickedColor(red: r, green: g, blue: b).bytes
+        let bytes = color.bytes
+        #expect(max(abs(read.red - bytes.red), abs(read.green - bytes.green), abs(read.blue - bytes.blue)) <= 5)
+    }
+}
+
 // MARK: - sRGB
 
 @Test func componentsAreClampedAndNaNIsZero() {

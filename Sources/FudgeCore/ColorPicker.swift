@@ -38,8 +38,9 @@ public struct PickedColor: Sendable, Equatable {
         value.isNaN ? 0 : min(1, max(0, value))
     }
 
-    /// The components as bytes, 0–255, rounded to the nearest. Every format is written from these, so each one
-    /// names exactly the color its HEX does.
+    /// The components as bytes, 0–255, rounded to the nearest. Every format is written from these. HEX, RGB, SwiftUI
+    /// and UIColor name exactly the color the HEX does; HSL is rounded to whole degrees and percent, as CSS writes it,
+    /// so it can read back a step or so off on a channel.
     public var bytes: (red: Int, green: Int, blue: Int, alpha: Int) {
         (Self.byte(red), Self.byte(green), Self.byte(blue), Self.byte(alpha))
     }
@@ -81,7 +82,7 @@ public enum ColorFormat: String, Sendable, CaseIterable, Identifiable {
     /// except UIColor's initializer, which needs one.
     /// - HEX: `#3A7BD5`, or `#3A7BD580` with alpha.
     /// - RGB: `rgb(58, 123, 213)`, or `rgba(58, 123, 213, 0.502)`.
-    /// - HSL: `hsl(215, 65%, 53%)`, or `hsla(…, 0.502)`.
+    /// - HSL: `hsl(215, 65%, 53%)`, or `hsla(…, 0.502)`, in whole degrees and percent, so it's rounded.
     /// - SwiftUI: `Color(red: 0.227, green: 0.482, blue: 0.835)`, with `opacity:` when there's alpha.
     /// - UIColor: `UIColor(red: 0.227, green: 0.482, blue: 0.835, alpha: 1)`.
     public func string(for color: PickedColor) -> String {

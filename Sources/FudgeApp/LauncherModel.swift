@@ -2008,13 +2008,20 @@ final class LauncherModel {
         }
     }
 
+    /// Whether the loupe is open: a second Pick Color meanwhile (its hotkey again) does nothing.
+    @ObservationIgnored private var pickingColor = false
+
     /// Pick Color: macOS's loupe, then the color copied in the Copy Format, with a HUD, and added to Recent Colors.
     /// Esc copies nothing. Recent Colors, if it's the screen under the hidden panel, is drawn again.
     private func pickColor() {
+        guard !pickingColor else { return }
+        pickingColor = true
         let format = FudgeSettings.load(from: paths.settingsFile).colorFormat
         let pick = ColorPick(sampler: colorSampler, copy: { await Self.copyText($0) }, file: paths.colorsFile)
         Task {
-            if let message = await pick.run(format: format) { showHUD(message) }
+            let message = await pick.run(format: format)
+            pickingColor = false
+            if let message { showHUD(message) }
             reloadRecentColors()
         }
     }
