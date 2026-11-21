@@ -884,6 +884,10 @@ Extensions run in a separate Node.js process, the extension host.
     That needs Xcode 26 or later.
   - the bundled extensions (`BUNDLED_EXTENSIONS`, as `BundledExtensions.folders` lists them) are built with `fudge build` from `runtime/<folder>` into `Contents/Resources/<folder>`
   - the host and worker bundles go into `Contents/Resources/runtime/`, with `fudge scan`'s `compat-scan.js` and Raycast's types beside it (`raycast-api.d.ts`, with its MIT notice as `raycast-api.LICENSE`)
+  - Fudge's `LICENSE` goes into `Contents/Resources/LICENSE.txt`, and `runtime/scripts/notices.ts --text` writes `Contents/Resources/Third-Party Notices.txt`: each third-party component the app ships, with its version and its own license file's text.
+    Its `components` list is the one place they're named, and the repo's `THIRD-PARTY-NOTICES.md` is the same, written by `npm run generate`.
+    Node.js's entry is the `LICENSE` of the Node.js the `Makefile` pins (`NODE_VERSION`), read from `.cache/node`: the same file `make app` copies to `Contents/Resources/node/LICENSE`.
+    `npm run typecheck` fails while that file is stale, or when a bundle Fudge ships (the host, the worker, `compat-scan.js`, a bundled extension) takes in an npm package the list doesn't have; anything else the app ships, such as a binary in `Helpers/`, adds its entry by hand.
   - the helpers and the bundle are signed with `SIGN_IDENTITY`.
     From what `security find-identity -v -p codesigning` lists, the default is "fudge local signing", else the first `Apple Development:` identity, else ad hoc (see the README).
     It's picked by SHA-1, since two certificates can share a name.

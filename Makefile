@@ -130,6 +130,9 @@ app: build
 	@cp runtime/dist/compat-scan.js '$(APP)/Contents/Resources/runtime/'
 	@cp runtime/vendor/raycast-api/index.d.ts '$(APP)/Contents/Resources/runtime/raycast-api.d.ts'
 	@cp runtime/vendor/raycast-api/LICENSE '$(APP)/Contents/Resources/runtime/raycast-api.LICENSE'
+	@# Fudge's own license, and the notices of the third-party code and data it ships, from their own license files.
+	@cp LICENSE '$(APP)/Contents/Resources/LICENSE.txt'
+	@cd runtime && node scripts/notices.ts --text '$(abspath $(APP))/Contents/Resources/Third-Party Notices.txt'
 	@# The bundled extensions (BundledExtensions in core), each built like any other into a scratch folder and
 	@# moved to Contents/Resources/<folder>. Their sources are runtime/<folder>; no source, no extension.
 	@for folder in $(BUNDLED_EXTENSIONS); do \
