@@ -92,21 +92,10 @@ app: build
 		mv "$$scratch"/* "$(APP)/Contents/Resources/$$folder" && rm -rf "$$scratch" \
 		|| { echo "make app: building runtime/$$folder failed"; exit 1; }; \
 	done
-	@# Each failure exits explicitly: make 3.81, the one macOS ships, ignores .SHELLFLAGS. No timestamp, so signing
-	@# never goes over the network. An identity's errors stay visible, and the last line names it as listed.
-	@identity='$(SIGN_IDENTITY)'; \
-	if [ "$$identity" = - ]; then \
-		codesign --force --sign - '$(APP)'/Contents/Helpers/* 2>/dev/null && codesign --force --sign - '$(APP)' 2>/dev/null && \
-		signed='ad hoc'; \
-	else \
-		name=$$(security find-identity -v -p codesigning 2>/dev/null | \
-			awk -F'"' -v id="$$identity" '{ split($$1, f, " ") } f[2] == id || $$2 == id { print $$2; exit }'); \
-		{ codesign --force --timestamp=none --sign "$$identity" '$(APP)'/Contents/Helpers/* && \
-			codesign --force --timestamp=none --sign "$$identity" '$(APP)'; } || \
-			{ printf 'codesign could not sign with "%s" (see its error above)\n' "$${name:-$$identity}"; exit 1; }; \
-		signed="with $${name:-$$identity}"; \
-	fi && \
-	printf '→ built %s (%s, %s, signed %s)\n' '$(APP)' '$(VERSION)' '$(CONFIG)' "$$signed"
+	@# Signed inside-out with the hardened runtime and App/Fudge.entitlements (scripts/sign-app.sh), with no timestamp
+	@# unless it's a Developer ID. Each failure exits explicitly: make 3.81, the one macOS ships, ignores .SHELLFLAGS.
+	@signed=$$(scripts/sign-app.sh '$(APP)' '$(SIGN_IDENTITY)') && \
+	printf '→ built %s (%s, %s, signed %s, hardened runtime)\n' '$(APP)' '$(VERSION)' '$(CONFIG)' "$$signed"
 
 # The user's fudge: Fudge processes launched as the app, by LaunchServices (their parent is launchd), with no
 # arguments. `--snapshot` runs, key probes and test harnesses that agents start from a shell are left alone.

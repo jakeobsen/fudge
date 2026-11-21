@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Fudge is signed with the hardened runtime (FUD-44), which denies a protected resource without its entitlement,
+     whatever the user allows. Only what Fudge uses is here. Accessibility, Input Monitoring, Full Disk Access and
+     Screen Recording are permissions the user grants in System Settings, with no entitlement. -->
+<plist version="1.0">
+<dict>
+	<!-- Apple Events: Finder (the selection for extensions, counting and emptying the Trash), System Events
+	     (Toggle Dark Mode) and the login window (Restart, Shut Down and Log Out). -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+	<!-- Calendars: My Schedule reads the user's events through EventKit. -->
+	<key>com.apple.security.personal-information.calendars</key>
+	<true/>
+</dict>
+</plist>
