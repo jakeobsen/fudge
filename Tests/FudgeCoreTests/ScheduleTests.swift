@@ -367,7 +367,7 @@ private func content(_ events: [CalendarEvent], daysAhead: Int = 7) -> ScheduleL
     #expect(ScheduleList.target(of: settingsNode, in: none, calendar: utc, locale: british) == .openSettings)
 }
 
-// MARK: - Reloads (SPEC-110 §3)
+// MARK: - Reloads and searches (SPEC-110 §3, §4)
 
 /// What My Schedule draws from `source`, read as the app reads it.
 private func read(_ source: FixedCalendarSource) -> ScheduleList.Content {
@@ -411,6 +411,32 @@ private func fixed(_ events: [CalendarEvent]) -> FixedCalendarSource {
     let syncs = read(fixed([first, second]))
     let moved = read(fixed([event("Early call", "23T09:00", "23T09:30"), first, second]))
     #expect(ScheduleList.row(after: syncs, selected: "event-1", in: moved) == "event-2")
+}
+
+@Test func aSearchWithNoMatchSaysSoNotThatThereAreNoEvents() throws {
+    let events = content([event("Standup", "23T10:00", "23T10:30")])
+    var list = ListContent(ScheduleList.view(events, now: now, calendar: utc, locale: british), searchText: "")
+    #expect(list.emptyView == nil)
+    list.search("zzyzx")
+    #expect(list.items.isEmpty)
+    #expect(list.emptyView?.title == "No events match")
+    #expect(list.emptyView?.description == "No event in the list matches your search.")
+    let matchEntries = ActionPanelReader.sections(of: list.emptyView?.actions).flatMap(\.entries)
+    #expect(matchEntries.isEmpty, "nothing to do")
+
+    // With no events, it's still "No upcoming events", searched or not, with Open Calendar Settings.
+    var none = ListContent(ScheduleList.view(content([]), now: now, calendar: utc, locale: british), searchText: "")
+    #expect(none.emptyView?.title == "No upcoming events")
+    none.search("zzyzx")
+    #expect(none.emptyView?.title == "No upcoming events")
+    let noneEntries = ActionPanelReader.sections(of: none.emptyView?.actions).flatMap(\.entries)
+    let settings = try #require(noneEntries.first)
+    guard case .node(let settingsNode) = settings.target else {
+        Issue.record("Open Calendar Settings runs a node")
+        return
+    }
+    // That node opens nothing while events are listed, since their empty view has no action.
+    #expect(ScheduleList.target(of: settingsNode, in: events, calendar: utc, locale: british) == nil)
 }
 
 @Test func theCalendarGroupHasMySchedule() {

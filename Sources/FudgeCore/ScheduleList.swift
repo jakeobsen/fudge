@@ -148,11 +148,19 @@ public enum ScheduleList {
                         id: Node.firstSection + number, type: "List.Section", props: ["title": .string(day.title)],
                         children: items))
             }
-            let days = daysAhead == 1 ? "today and tomorrow" : "the next \(daysAhead) days"
-            sections.append(
-                emptyView(
-                    title: "No upcoming events", description: "Nothing on your calendars for \(days).",
-                    action: "Open Calendar Settings", icon: "calendar-16"))
+            // With events listed, the list is only empty when a search matches none of them.
+            if days.isEmpty {
+                let window = daysAhead == 1 ? "today and tomorrow" : "the next \(daysAhead) days"
+                sections.append(
+                    emptyView(
+                        title: "No upcoming events", description: "Nothing on your calendars for \(window).",
+                        action: "Open Calendar Settings", icon: "calendar-16"))
+            } else {
+                sections.append(
+                    emptyView(
+                        title: "No events match", description: "No event in the list matches your search.",
+                        action: nil, icon: "magnifying-glass-16"))
+            }
             return UINode(id: Node.list, type: "List", props: props, children: sections)
         }
     }
@@ -165,7 +173,7 @@ public enum ScheduleList {
         case .refused:
             return node == Node.emptyAction ? .openPrivacySettings : nil
         case .days(let days, _, _):
-            if node == Node.emptyAction { return .openSettings }
+            if node == Node.emptyAction { return days.isEmpty ? .openSettings : nil }
             guard node >= Node.firstItem else { return nil }
             let all = rows(days)
             let index = (node - Node.firstItem) / Node.stride
@@ -258,14 +266,15 @@ public enum ScheduleList {
         UINode(id: id, type: "Metadata.Label", props: ["title": .string(title), "text": .string(text)])
     }
 
-    private static func emptyView(title: String, description: String, action: String, icon: String) -> UINode {
-        let button = Self.action(Node.emptyAction, action, icon: "cog-16", shortcut: nil)
-        return UINode(
-            id: Node.empty, type: "List.EmptyView",
-            props: [
-                "title": .string(title), "description": .string(description), "icon": .string(icon),
-                "actions": UINode(id: Node.emptyActions, type: "ActionPanel", children: [button]).json,
-            ])
+    private static func emptyView(title: String, description: String, action: String?, icon: String) -> UINode {
+        var props: [String: JSONValue] = [
+            "title": .string(title), "description": .string(description), "icon": .string(icon),
+        ]
+        if let action {
+            let button = Self.action(Node.emptyAction, action, icon: "cog-16", shortcut: nil)
+            props["actions"] = UINode(id: Node.emptyActions, type: "ActionPanel", children: [button]).json
+        }
+        return UINode(id: Node.empty, type: "List.EmptyView", props: props)
     }
 
     private static func action(_ id: Int, _ title: String, icon: String, shortcut: KeyShortcut?) -> UINode {
