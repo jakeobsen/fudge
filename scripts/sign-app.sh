@@ -1,6 +1,8 @@
 #!/bin/bash
 # Signs Fudge.app as it is, inside-out: each executable in Contents/Helpers (the `fudge` tool and esbuild), then the
 # app with App/Fudge.entitlements. Every signature has the hardened runtime, which notarizing needs (FUD-44).
+# A helper that needs entitlements of its own has them in App/Helpers/<its file name>.entitlements, so every signing,
+# a release's again with the Developer ID included, gives them; the others get none.
 #
 #   scripts/sign-app.sh <app> <identity>
 #
@@ -13,7 +15,7 @@ set -euo pipefail
 [ $# -eq 2 ] || { printf 'usage: scripts/sign-app.sh <app> <identity>\n' >&2; exit 2; }
 app=$1
 identity=$2
-entitlements="$(cd "$(dirname "$0")/.." && pwd)/App/Fudge.entitlements"
+root=$(cd "$(dirname "$0")/.." && pwd)
 
 name=
 if [ "$identity" = - ]; then
@@ -46,7 +48,12 @@ sign() {
 }
 
 for helper in "$app"/Contents/Helpers/*; do
-	sign "$helper"
+	own="$root/App/Helpers/${helper##*/}.entitlements"
+	if [ -f "$own" ]; then
+		sign --entitlements "$own" "$helper"
+	else
+		sign "$helper"
+	fi
 done
-sign --entitlements "$entitlements" "$app"
+sign --entitlements "$root/App/Fudge.entitlements" "$app"
 printf '%s\n' "$shown"
