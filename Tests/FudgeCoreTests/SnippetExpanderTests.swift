@@ -163,3 +163,19 @@ private func type(
     }
     #expect(Mirror(reflecting: expander).children.isEmpty)
 }
+
+@Test func expandingAsYouTypeIsOffUntilSwitchedOn() throws {
+    let folder = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let file = folder.appendingPathComponent("settings.json")
+    #expect(!FudgeSettings.load(from: file).expandSnippets)
+    var settings = FudgeSettings()
+    settings.expandSnippets = true
+    try settings.save(to: file)
+    #expect(try String(contentsOf: file, encoding: .utf8).contains(#""expandSnippets" : true"#))
+    #expect(FudgeSettings.load(from: file).expandSnippets)
+    settings.expandSnippets = false
+    try settings.save(to: file)
+    #expect(
+        !(try String(contentsOf: file, encoding: .utf8)).contains("expandSnippets"), "off is the default, not written")
+}
