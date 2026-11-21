@@ -353,6 +353,68 @@ struct ExtensionsWatcherTests {
         expectOnce(try await reloads(queue: late) { extensions in try install(in: extensions) })
     }
 
+    /// FUD-156: FSEvents never reports a change made before the stream exists, so one made after `start` while the
+    /// stream is still to start (a slow `fseventsd`, here a queue that runs only after the install) is found by
+    /// comparing the folder with what it was at `start`, and is one reload.
+    @Test func aChangeBeforeTheStreamStartsReloadsOnce() async throws {
+        let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
+        let slow = DispatchQueue(label: "a slow fseventsd")
+        slow.suspend()
+        var resumed = false
+        defer { if !resumed { slow.resume() } }
+        let reloads = Reloads()
+        let watcher = ExtensionsWatcher(directory: extensions, queue: slow) { reloads.record() }
+        try watcher.start()
+        defer { watcher.stop() }
+        try install(in: extensions)
+        // Long enough for FSEvents to place the install before the stream, which it can report when it's only
+        // just before.
+        try await Task.sleep(for: .milliseconds(500))
+        let started = ContinuousClock.now
+        slow.resume()
+        resumed = true
+        try #require(await streamStarted(on: slow), "the watcher's stream didn't start")
+        _ = await reloads.first(within: noHang)
+        try await Task.sleep(for: .seconds(1))
+        expectOnce(reloads.all.map { $0 - started })
+    }
+
+    /// Nothing changed between `start` and the stream starting, so the stamp adds no reload.
+    @Test func aStreamThatStartsLateWithNothingChangedDoesntReload() async throws {
+        let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
+        try FileManager.default.createDirectory(at: extensions, withIntermediateDirectories: true)
+        try install(in: extensions)
+        let slow = DispatchQueue(label: "a slow fseventsd")
+        slow.suspend()
+        var resumed = false
+        defer { if !resumed { slow.resume() } }
+        let reloads = Reloads()
+        let watcher = ExtensionsWatcher(directory: extensions, queue: slow) { reloads.record() }
+        // Past FSEvents' latency, so the install before `start` isn't reported either.
+        try await Task.sleep(for: .milliseconds(500))
+        try watcher.start()
+        defer { watcher.stop() }
+        try await Task.sleep(for: .milliseconds(500))
+        slow.resume()
+        resumed = true
+        try #require(await streamStarted(on: slow), "the watcher's stream didn't start")
+        #expect(await reloads.first(within: .seconds(1.5)) == nil, "reloads: \(reloads.all)")
+    }
+
+    @Test func aFolderStampChangesWithAnEntryAddedOrRemovedOrTheFolderReplaced() throws {
+        let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
+        try FileManager.default.createDirectory(at: extensions, withIntermediateDirectories: true)
+        let empty = try #require(FolderStamp(path: extensions.path))
+        #expect(FolderStamp(path: extensions.path) == empty)
+        try install(in: extensions)
+        let installed = try #require(FolderStamp(path: extensions.path))
+        #expect(installed != empty)
+        try FileManager.default.removeItem(at: extensions.appendingPathComponent("x"))
+        #expect(FolderStamp(path: extensions.path) != installed)
+        try FileManager.default.removeItem(at: extensions)
+        #expect(FolderStamp(path: extensions.path) == nil)
+    }
+
     /// The reviewer's MUST on SPEC-125: waiting for a stream that never starts ends at its deadline, saying so.
     @Test func waitingForAStreamThatNeverStartsEndsAtItsDeadline() async {
         let stuck = DispatchQueue(label: "a stuck fseventsd")
