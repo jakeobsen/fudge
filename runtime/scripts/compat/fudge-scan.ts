@@ -3,7 +3,8 @@
 // `FUDGE_ESBUILD` and `FUDGE_RAYCAST_TYPES`. Run from a checkout without them, it uses esbuild's JS API and the
 // vendored types. Nothing is built or run.
 
-import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createApiModule } from "../../src/api/module.ts";
 import { raycastDeclarations, vendoredTypes } from "../raycast-types.ts";
@@ -17,13 +18,30 @@ if (folders.length !== 1 || folders[0]!.startsWith("--")) {
     process.exit(2);
 }
 const folder = folders[0]!;
-if (!existsSync(join(folder, "package.json")) || !existsSync(join(folder, "src"))) {
-    console.error(`${folder} isn't an extension: it needs a package.json and a src folder`);
-    process.exit(1);
+// Neither is followed if it's a link: `src` must be a folder of the extension's own, and package.json a file.
+const kind = (path: string) => {
+    try {
+        return lstatSync(path);
+    } catch {
+        return undefined;
+    }
+};
+if (!kind(join(folder, "package.json"))?.isFile() || !kind(join(folder, "src"))?.isDirectory()) {
+    console.error(`${folder} isn't an extension: it needs a package.json file and a src folder`);
+    process.exit(2);
 }
 
 const types = process.env.FUDGE_RAYCAST_TYPES ? readFileSync(process.env.FUDGE_RAYCAST_TYPES, "utf8") : vendoredTypes();
 const esbuild = process.env.FUDGE_ESBUILD;
+// An esbuild that can't run would make every source unreadable: say so once instead.
+if (esbuild) {
+    const check = spawnSync(esbuild, ["--version"], { encoding: "utf8", timeout: 30_000 });
+    if (check.status !== 0) {
+        const why = check.error?.message ?? (check.stderr.trim() || `exit ${check.status ?? check.signal}`);
+        console.error(`can't run esbuild at ${esbuild}: ${why}`);
+        process.exit(1);
+    }
+}
 const result = await scanExtension(folder, {
     api: createApiModule() as Record<string, unknown>,
     declared: raycastDeclarations(types),

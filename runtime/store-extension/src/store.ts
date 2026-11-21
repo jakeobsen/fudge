@@ -5,6 +5,7 @@ import path from "node:path";
 import { isValidName, type Installed, type InstallRecord, type StoreEntry } from "./catalog.ts";
 import { spawnProgram, type Run, type StoreRepository } from "./git.ts";
 import { sourceProblem } from "./sources.ts";
+import { buildTimeout, scanTimeout } from "./timeouts.ts";
 
 /** A step that refused or failed; its message is shown in a failure toast. */
 export class StoreError extends Error {}
@@ -24,23 +25,36 @@ export type StoreContext = {
     now?: () => Date;
 };
 
-/** The CLI build is the longest step: npm may install the extension's packages first. */
-export const buildTimeout = 600_000;
+/** What the install confirmation needs from `fudge scan <folder> --json`. `byDesign` names the category of an API
+ * Fudge leaves out on purpose (AI, Browser Extension, OAuth). */
+export type ScanReport = { supported: boolean; gaps: { api: string; byDesign?: string }[]; unreadable: string[] };
 
-/** `fudge scan` reads the extension's source without building it. */
-export const scanTimeout = 120_000;
+/** "AI", "AI and OAuth", "AI, Browser Extension and OAuth". */
+function listed(names: string[]): string {
+    return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
 
-/** What the install confirmation needs from `fudge scan <folder> --json`. */
-export type ScanReport = { supported: boolean; gaps: { api: string }[]; unreadable: string[] };
-
-/** The install confirmation's line about what works: from the scan, or saying the scan couldn't run. */
+/**
+ * The install confirmation's line about what works: from the scan, or saying the scan couldn't run. APIs Fudge
+ * leaves out on purpose are named apart, by category, so one never reads as something Fudge doesn't have yet.
+ */
 export function compatibilityLine(report: ScanReport | undefined): string {
     if (!report) return "Fudge couldn't check what this extension uses.";
     if (report.supported) return "Fudge supports everything this extension uses.";
-    const names = [...new Set(report.gaps.map((gap) => gap.api))];
-    if (names.length === 0) return "Fudge couldn't read all of this extension's source, so some of it may not work.";
-    const more = names.length > 5 ? `, and ${names.length - 5} more` : "";
-    return `This extension uses things Fudge doesn't have yet: ${names.slice(0, 5).join(", ")}${more}. Some of its commands may not work.`;
+    const designed = (gap: { byDesign?: unknown }) => typeof gap.byDesign === "string" && gap.byDesign !== "";
+    const missing = [...new Set(report.gaps.filter((gap) => !designed(gap)).map((gap) => gap.api))];
+    const leftOut = [...new Set(report.gaps.filter(designed).map((gap) => gap.byDesign!))];
+    const sentences: string[] = [];
+    if (missing.length > 0) {
+        const more = missing.length > 5 ? `, and ${missing.length - 5} more` : "";
+        sentences.push(`This extension uses things Fudge doesn't have yet: ${missing.slice(0, 5).join(", ")}${more}.`);
+    }
+    if (leftOut.length > 0) {
+        const subject = missing.length > 0 ? "It also uses" : "This extension uses";
+        sentences.push(`${subject} ${listed(leftOut)}, which Fudge leaves out.`);
+    }
+    if (sentences.length === 0) return "Fudge couldn't read all of this extension's source, so some of it may not work.";
+    return `${sentences.join(" ")} Some of its commands may not work.`;
 }
 
 /** Runs `$FUDGE_CLI scan <source> --json`. Undefined when it fails or says something unexpected. */

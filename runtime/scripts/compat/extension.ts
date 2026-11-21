@@ -2,8 +2,9 @@
 // `fudge scan <folder>` does for one.
 
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { lstatSync, readdirSync, statSync, type Dirent } from "node:fs";
 import { basename, join, relative } from "node:path";
+import { maxManifestBytes, maxSourceBytes, readRegularFile } from "./files.ts";
 import { RAYCAST_UTILS_PATHS } from "./raycast-utils.generated.ts";
 import { gaps, isExtensionSource, toJavaScript, uses, type Gap, type Transform } from "./scan.ts";
 
@@ -58,17 +59,61 @@ export function binaryTransform(esbuild: string): Transform {
     };
 }
 
-function sources(src: string): string[] {
-    return (readdirSync(src, { recursive: true }) as string[]).filter(isExtensionSource).map((file) => join(src, file));
+/**
+ * The source files under `folder`'s `src`, found without following a link: only real folders are walked. A link with
+ * a source's name is a source like any other, which `readRegularFile` then refuses. A link to a folder (`src/lib ->
+ * ../../elsewhere`, `src/self -> .`) is never walked, and goes in `unwalked` unless the scan would skip that folder
+ * anyway (`__tests__`, `node_modules`, …); so do a `src` that's a link and a folder that can't be listed.
+ */
+function sources(folder: string): { files: string[]; unwalked: string[] } {
+    const files: string[] = [];
+    const unwalked: string[] = [];
+    const walk = (dir: string, relativeDir: string) => {
+        let entries: Dirent[];
+        try {
+            entries = readdirSync(dir, { withFileTypes: true });
+        } catch {
+            unwalked.push(relative(folder, dir));
+            return;
+        }
+        for (const entry of entries) {
+            const path = join(dir, entry.name);
+            const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+            // Anything with a source's name is a source, even a folder or a link, which `readRegularFile` refuses.
+            if (isExtensionSource(relativePath)) files.push(path);
+            // Only stat (never read or list) what a link points to, to tell a folder from anything else.
+            else if (entry.isSymbolicLink() && isFolder(path) && isExtensionSource(`${relativePath}/index.ts`)) {
+                unwalked.push(relative(folder, path));
+            }
+            if (entry.isDirectory()) walk(path, relativePath);
+        }
+    };
+    const src = join(folder, "src");
+    if (lstatSync(src, { throwIfNoEntry: false })?.isDirectory()) walk(src, "");
+    else unwalked.push("src");
+    return { files, unwalked };
 }
 
-/** Scans the extension in `folder`: every source file under its `src/`. Nothing is built or run. */
+function isFolder(path: string): boolean {
+    try {
+        return statSync(path).isDirectory();
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * Scans the extension in `folder`: every source file under its `src/`. Nothing is built or run, and no link is
+ * followed. Only regular files of at most `maxSourceBytes` are read (`readRegularFile`); a link, FIFO, device or folder
+ * with a source's name, a bigger file, and a link to a folder (`sources`) are listed as unreadable.
+ */
 export async function scanExtension(folder: string, options: ScanOptions): Promise<Result> {
     const found = { api: new Set<string>(), utils: new Set<string>() };
-    const unreadable: string[] = [];
-    for (const file of sources(join(folder, "src"))) {
+    const { files, unwalked } = sources(folder);
+    const unreadable = [...unwalked];
+    for (const file of files) {
         try {
-            const used = uses(await toJavaScript(readFileSync(file, "utf8"), file, options.transform));
+            const used = uses(await toJavaScript(readRegularFile(file, maxSourceBytes), file, options.transform));
             for (const path of used.api) found.api.add(path);
             for (const name of used.utils) found.utils.add(name);
         } catch {
@@ -95,7 +140,9 @@ export interface Report {
 export function report(folder: string, result: Result): Report {
     let name = basename(folder);
     try {
-        const manifest = JSON.parse(readFileSync(join(folder, "package.json"), "utf8")) as { name?: unknown };
+        const manifest = JSON.parse(readRegularFile(join(folder, "package.json"), maxManifestBytes)) as {
+            name?: unknown;
+        };
         if (typeof manifest.name === "string" && manifest.name) name = manifest.name;
     } catch {
         // The folder's name will do.
@@ -118,14 +165,22 @@ const kindWords: Record<Gap["kind"], string> = {
     "via @raycast/utils": "through @raycast/utils",
 };
 
-/** `fudge scan <folder>` without `--json`: a short list for a person. */
+/**
+ * `fudge scan <folder>` without `--json`: a short list for a person. What Fudge doesn't have yet comes first; APIs it
+ * leaves out on purpose follow, apart, by category.
+ */
 export function describe(scanned: Report): string {
     if (scanned.supported) return `${scanned.extension}: Fudge supports everything it uses.`;
-    const lines =
-        scanned.gaps.length === 0 ? [] : [`${scanned.extension} uses things Fudge doesn't have yet:`];
-    for (const gap of scanned.gaps) {
-        const how = gap.kind === "via @raycast/utils" ? `${kindWords[gap.kind]}: ${gap.via!.join(", ")}` : kindWords[gap.kind];
-        lines.push(`  ${gap.api} (${how}${gap.byDesign ? `; ${gap.byDesign}, left out on purpose` : ""})`);
+    const via = (gap: Gap) => (gap.kind === "via @raycast/utils" ? `through @raycast/utils: ${gap.via!.join(", ")}` : "");
+    const lines: string[] = [];
+    const missing = scanned.gaps.filter((gap) => !gap.byDesign);
+    if (missing.length > 0) lines.push(`${scanned.extension} uses things Fudge doesn't have yet:`);
+    for (const gap of missing) lines.push(`  ${gap.api} (${via(gap) || kindWords[gap.kind]})`);
+    for (const design of new Set(scanned.gaps.flatMap((gap) => (gap.byDesign ? [gap.byDesign] : [])))) {
+        lines.push(`${scanned.extension} uses ${design}, which Fudge leaves out:`);
+        for (const gap of scanned.gaps.filter((gap) => gap.byDesign === design)) {
+            lines.push(`  ${gap.api}${via(gap) ? ` (${via(gap)})` : ""}`);
+        }
     }
     if (scanned.unreadable.length > 0) lines.push(`Couldn't read: ${scanned.unreadable.join(", ")}`);
     return lines.join("\n");
