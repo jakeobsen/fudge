@@ -79,7 +79,7 @@ function ranked<T>(pick: (result: Result) => T[], key: (item: T) => string): [T,
 
 const gapKey = (gap: Gap) => `${gap.api} ${gap.kind}`;
 
-// Extensions with exactly one gap that isn't by design, by that gap: what fixing it alone would unlock.
+// Extensions with exactly one gap that isn't counted apart, by that gap: what fixing it alone would unlock.
 const unlocks = new Map<string, number>();
 for (const result of all) {
     const open = result.gaps.filter((gap) => !category(gap));
@@ -99,22 +99,23 @@ const lines: string[] = [
     `${total} extensions scanned. Nothing was built or run: this reads their source, so it's an upper bound.`,
     "",
     `- No gaps: **${clean}** (${percent(clean)})`,
-    `- Only gaps left out by design: ${onlyByDesign.length} (${percent(onlyByDesign.length)}): ${perCategory.join(", ")}`,
+    `- Only APIs counted apart: ${onlyByDesign.length} (${percent(onlyByDesign.length)}): ${perCategory.join(", ")}`,
     `- The rest: ${rest} (${percent(rest)})`,
     `- Have a source file that couldn't be read: ${unreadable}`,
     "",
-    "By design: AI and the Browser Extension depend on Raycast's servers, and OAuth is left out by decision D-50. " +
-        "An extension that lacks more than one of these counts under each.",
+    "Counted apart: AI and the Browser Extension, which Fudge doesn't support (FUD-118), and OAuth, which needs a " +
+        "sign-in server and works for the providers that server supports. An extension that uses more than one of " +
+        "these counts under each.",
     "",
     "## Missing APIs",
     "",
-    "Ranked by how many extensions use each. *Alone* counts the extensions it's the only gap for, apart from " +
-        "by-design ones. An API reached in two ways has a row for each; an extension that uses it directly counts " +
-        "only there.",
+    "Ranked by how many extensions use each. *Alone* counts the extensions it's the only gap for, leaving out the " +
+        "APIs counted apart. An API reached in two ways has a row for each; an extension that uses it directly " +
+        "counts only there.",
     "",
     ...Object.entries(kinds).map(([kind, meaning]) => `- \`${kind}\`: ${meaning}`),
     "",
-    "| API | Kind | Extensions | Alone | By design |",
+    "| API | Kind | Extensions | Alone | Counted apart |",
     "|---|---|---:|---:|---|",
 ];
 for (const [gap, users] of ranked((result) => result.gaps, gapKey)) {
