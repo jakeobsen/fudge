@@ -659,6 +659,12 @@ final class SettingsModel {
     }
 }
 
+/// A snapshot run's alert, laid out but never ordered in, which never takes the keyboard.
+final class SnapshotSheet: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+}
+
 /// The Settings window: extensions on the left, the selected one's preferences on the right.
 /// The Settings window, which can refuse the keyboard: snapshots render it without taking anyone's typing.
 final class SettingsNSWindow: NSWindow {
@@ -668,6 +674,12 @@ final class SettingsNSWindow: NSWindow {
 
     override var canBecomeKey: Bool { !refusesKey && super.canBecomeKey }
     override var canBecomeMain: Bool { !refusesKey && super.canBecomeMain }
+
+    /// A snapshot run's window stays where it's put, off every screen: AppKit would otherwise move a titled window
+    /// back onto one when it's ordered front. It's transparent too, but nothing of a snapshot run belongs on a screen.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        refusesKey ? frameRect : super.constrainFrameRect(frameRect, to: screen)
+    }
 
     /// ⌘Q closes the window as ⌘W and its close button do, and fudge keeps running (`WindowShortcut`). The key is
     /// the one that types "q" in the current layout, as for the panel's shortcuts.
@@ -746,7 +758,7 @@ final class SettingsWindowController {
             window.contentView = NSHostingView(rootView: SettingsView(model: model))
             window.center()
             self.window = window
-            model.confirm = { [weak window] request in
+            model.confirm = { [weak self, weak window] request in
                 guard let window else { return false }
                 let alert = NSAlert()
                 alert.messageText = request.title
@@ -754,6 +766,10 @@ final class SettingsWindowController {
                 if let footnote = request.footnote { alert.accessoryView = Self.footnoteView(footnote) }
                 alert.addButton(withTitle: request.primary).hasDestructiveAction = request.destructive
                 alert.addButton(withTitle: request.dismiss)
+                if window.refusesKey {
+                    self?.snapshotSheet = Self.snapshotSheet(of: alert)
+                    return false
+                }
                 return await withCheckedContinuation { continuation in
                     alert.beginSheetModal(for: window) { continuation.resume(returning: $0 == .alertFirstButtonReturn) }
                 }
@@ -783,8 +799,24 @@ final class SettingsWindowController {
     }
 
     var contentView: NSView? { window?.contentView }
-    /// A sheet on the window, for snapshot runs.
-    var attachedSheet: NSWindow? { window?.attachedSheet }
+    /// In a snapshot run, the alert a `confirm` would have shown, for the run to save.
+    private(set) var snapshotSheet: NSWindow?
+
+    /// A snapshot run's alert, which no one may see: it's laid out without being shown (`layout()` never orders its
+    /// window in), and its content moves to a panel that can't become key and is never ordered in either, transparent
+    /// for good measure. It isn't begun as a sheet: the Settings window a snapshot renders is transparent, but ordering
+    /// it front puts it back on screen, and a sheet on it is a window of its own, which would show there. Nobody answers
+    /// it: the run saves it and quits.
+    private static func snapshotSheet(of alert: NSAlert) -> NSWindow {
+        alert.layout()
+        let laidOut = alert.window
+        let sheet = SnapshotSheet(
+            contentRect: laidOut.frame, styleMask: laidOut.styleMask, backing: .buffered, defer: false)
+        sheet.alphaValue = 0
+        sheet.ignoresMouseEvents = true
+        sheet.contentView = laidOut.contentView
+        return sheet
+    }
 
     /// A sheet's last paragraph, as selectable text with a working link: an alert's own text can't hold one.
     /// Clicking the link opens the browser and leaves the sheet open.

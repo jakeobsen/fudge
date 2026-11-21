@@ -93,6 +93,36 @@ private final class FakeClock {
     #expect(reset.takeDue(), "the next hide counts as usual")
 }
 
+@Test func aSignInInProgressHoldsTheResetOffUntilItEnds() {
+    let clock = FakeClock()
+    let reset = PanelReset(setting: .after90Seconds, now: { clock.now })
+    reset.hold("s-1")  // "Sign in to GitHub" is up
+    reset.panelHidden()  // the browser opened
+    clock.advance(.seconds(600))
+    #expect(!reset.takeDue(), "the command signing in stays")
+
+    // Another hold keeps it off; the hide counts from when the last one ends.
+    reset.hold("s-2")
+    reset.release("s-1")
+    clock.advance(.seconds(600))
+    #expect(!reset.takeDue())
+    reset.release("s-2")
+    clock.advance(.seconds(89))
+    #expect(!reset.takeDue(), "89 s since the sign-in ended")
+    clock.advance(.seconds(1))
+    #expect(reset.takeDue())
+
+    // Released while shown: nothing to restart, and the next hide counts as usual.
+    reset.panelShown()
+    reset.hold("s-3")
+    reset.release("s-3")
+    #expect(reset.hiddenAt == nil)
+    reset.release("s-3")  // a second release changes nothing
+    reset.panelHidden()
+    clock.advance(.seconds(90))
+    #expect(reset.takeDue())
+}
+
 /// The launcher's state as far as a reset goes, with the paths that show the panel built as `LauncherModel`
 /// builds them: each puts its screen together inside `PanelReset.enter`, and shows the panel after.
 private final class FakePanel {

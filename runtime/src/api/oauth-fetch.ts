@@ -181,7 +181,17 @@ export function rewriteFetch(
         const decision = await decide(method, parsed, body, providers, server);
         if (decision.kind === "untouched") return original(input, init);
         if (decision.kind === "refused") throw new Error(decision.message);
-        return request ? original(new Request(decision.target, request), init) : original(decision.target, init);
+        // A redirect is never followed: a 307 or 308 would send the body (the code, the verifier or the refresh
+        // token) on to wherever the relay points.
+        const manual = { ...init, redirect: "manual" as const };
+        const response = await (request
+            ? original(new Request(decision.target, request), manual)
+            : original(decision.target, manual));
+        if (redirectStatuses.has(response.status)) {
+            await response.body?.cancel().catch(() => {});
+            throw new Error(redirectedMessage);
+        }
+        return response;
     };
     return wrapped as Fetch;
 }

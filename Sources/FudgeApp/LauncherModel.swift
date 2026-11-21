@@ -172,10 +172,9 @@ final class LauncherModel {
     @ObservationIgnored var tokenSecrets: any SecretStore = MemorySecretStore()
     /// Opens a sign-in's URL in the default browser; false when it couldn't.
     @ObservationIgnored var openInBrowser: (URL) -> Bool = { NSWorkspace.shared.open($0) }
-    /// Each session's latest `oauth.prepare` and the one the prompt shows, with their loopback listeners.
+    /// Each session's latest `oauth.prepare` and the one the prompt shows, with their loopback listeners, and the relay
+    /// sign-ins pending (`SignInCalls.pending`).
     @ObservationIgnored private var signInRequests = SignInRequests<OAuthLoopback>()
-    /// The providers each session has prepared a relay sign-in for (`SignInCalls.pending`).
-    @ObservationIgnored private var pendingRelay: [String: Set<String>] = [:]
     /// The user's answer to the prompt on screen: true for ↵, false for Esc or the command going away.
     @ObservationIgnored private var signInAnswer: CheckedContinuation<Bool, Never>?
 
@@ -3063,7 +3062,6 @@ final class LauncherModel {
             let request = PreparedSignIn(provider: provider, authorizeURL: authorize, redirectURI: loopback.redirectURI)
             // An earlier request this session never used stops listening. One the prompt shows isn't among them.
             signInRequests.prepare((request, loopback), for: session)?.close()
-            pendingRelay[session, default: []].insert(provider.id)
             // A request that's never used to sign in stops listening after 5 minutes.
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(300))
@@ -3089,7 +3087,7 @@ final class LauncherModel {
         guard let extensionName = sessionExtensions[session] else { return nil }
         return SignInCalls(
             store: OAuthTokenStore(secrets: tokenSecrets), extensionName: extensionName,
-            pending: pendingRelay[session] ?? [])
+            pending: signInRequests.pending(of: session))
     }
 
     /// Signs in for `session`: shows "Sign in to <provider>", opens the browser on ↵, and waits up to 5 minutes for
@@ -3116,20 +3114,23 @@ final class LauncherModel {
         actionPanel = nil
         // Nothing reaches the command while the prompt is up, a key held for the selected item's actions included.
         hold(nil)
+        // Nor does Pop to Root Search: the user is in the browser, and a reset would unload the command signing in.
+        panelReset.hold(session)
         if !isVisible() { show() }
         let proceed = await withCheckedContinuation { signInAnswer = $0 }
         guard proceed, signIn?.session == session else {
-            finishSignIn(loopback)
+            finishSignIn(loopback, signedIn: false)
             throw SignInRefusal.cancelled
         }
         guard openInBrowser(target) else {
-            finishSignIn(loopback)
+            finishSignIn(loopback, signedIn: false)
             throw SignInRefusal.browser
         }
         signIn?.waiting = true
         let outcome = await loopback.wait(state: state, timeout: 300)
         let provider = signIn?.providerName ?? prepared.request.provider.name
-        finishSignIn(loopback)
+        // Only a code keeps the provider pending, for the token exchange that follows.
+        finishSignIn(loopback, signedIn: outcome.isCode)
         switch outcome {
         case .callback(.code(let code)):
             if !isVisible() { show() }
@@ -3167,15 +3168,19 @@ final class LauncherModel {
         }
     }
 
-    /// The sign-in on `loopback` is over: its listener closes, and the prompt goes when it was the prompt's.
-    private func finishSignIn(_ loopback: OAuthLoopback) {
-        if signInRequests.finish(loopback) { signIn = nil }
+    /// The sign-in on `loopback` is over, with a code or without: its listener closes, and the prompt goes when it was
+    /// the prompt's.
+    private func finishSignIn(_ loopback: OAuthLoopback, signedIn: Bool) {
+        let session = signInRequests.shown?.session
+        if signInRequests.finish(loopback, signedIn: signedIn) {
+            signIn = nil
+            if let session { panelReset.release(session) }
+        }
         loopback.close()
     }
 
     /// A session that exits takes its sign-in with it.
     private func endSignIn(of session: String) {
-        pendingRelay[session] = nil
         let (unused, waitedOn) = signInRequests.end(session)
         unused?.close()
         guard let waitedOn else { return }

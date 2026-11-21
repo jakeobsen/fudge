@@ -199,6 +199,11 @@ test("tokens are kept by the app per provider, with isExpired from expiresIn", a
     assert.equal((await client.getTokens()).isExpired(), true, "10 seconds early");
     tokens.set("github", { ...stored, expiresIn: undefined });
     assert.equal((await client.getTokens()).isExpired(), false, "never without expiresIn");
+    // A provider's `expires_in: 0` counts as not set, so @raycast/utils doesn't refresh on every call.
+    await client.setTokens({ access_token: "a", refresh_token: "r", expires_in: 0 });
+    assert.equal(tokens.get("github").expiresIn, 0, "stored as given");
+    tokens.set("github", { ...tokens.get("github"), updatedAt: new Date(Date.now() - 86_400_000).toISOString() });
+    assert.equal((await client.getTokens()).isExpired(), false, "never with expiresIn 0, a day later");
 
     await client.removeTokens();
     assert.equal(await client.getTokens(), undefined);

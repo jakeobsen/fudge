@@ -253,8 +253,8 @@ private final class Listener {}
     let ended = requests.end("s1")
     #expect(ended.unused === third && ended.waitedOn === second)
     #expect(requests.waitedOn === second, "the prompt stays until its sign-in finishes")
-    let finishedOther = requests.finish(third)
-    let finished = requests.finish(second)
+    let finishedOther = requests.finish(third, signedIn: false)
+    let finished = requests.finish(second, signedIn: false)
     #expect(!finishedOther && finished)
     #expect(requests.shown == nil && requests.waitedOn == nil)
 
@@ -266,6 +266,59 @@ private final class Listener {}
     let left = requests.show("s1")
     #expect(!stale && latest)
     #expect(left == nil, "nothing left to show")
+}
+
+@Test func aRelaySignInIsPendingOnlyUntilItEndsWithoutACode() {
+    func request(_ provider: Int, _ listener: Listener) -> SignInRequests<Listener>.Request {
+        let prepared = PreparedSignIn(
+            provider: OAuthProviders.all[provider], authorizeURL: "https://relay.example/x/authorize",
+            redirectURI: "http://127.0.0.1:5000/oauth/callback/abc")
+        return (prepared, listener)
+    }
+    let github = OAuthProviders.all[0].id
+    let linear = OAuthProviders.all[1].id
+    var requests = SignInRequests<Listener>()
+    let first = Listener()
+    let second = Listener()
+    let third = Listener()
+
+    // Prepared, then shown: pending, for this session only.
+    _ = requests.prepare(request(0, first), for: "s1")
+    #expect(requests.pending(of: "s1") == [github])
+    #expect(requests.pending(of: "s2").isEmpty)
+    _ = requests.show("s1")
+    #expect(requests.pending(of: "s1") == [github])
+
+    // Esc, an error or the timeout: no code, so no longer pending.
+    let cancelled = requests.finish(first, signedIn: false)
+    #expect(cancelled)
+    #expect(requests.pending(of: "s1").isEmpty)
+
+    // A request replaced by another provider's, or one that expires, is pending no more either.
+    _ = requests.prepare(request(0, first), for: "s1")
+    _ = requests.prepare(request(1, second), for: "s1")
+    #expect(requests.pending(of: "s1") == [linear])
+    let expired = requests.expire(second, of: "s1")
+    #expect(expired)
+    #expect(requests.pending(of: "s1").isEmpty)
+
+    // A code keeps it pending for the token exchange that follows, until the session ends.
+    _ = requests.prepare(request(0, third), for: "s1")
+    _ = requests.show("s1")
+    let signedIn = requests.finish(third, signedIn: true)
+    #expect(signedIn)
+    #expect(requests.pending(of: "s1") == [github])
+    _ = requests.prepare(request(1, first), for: "s1")
+    #expect(requests.pending(of: "s1") == [github, linear])
+    _ = requests.end("s1")
+    #expect(requests.pending(of: "s1").isEmpty)
+
+    // Only the prompt's own listener finishes it.
+    _ = requests.prepare(request(1, second), for: "s2")
+    _ = requests.show("s2")
+    let other = requests.finish(first, signedIn: true)
+    #expect(!other)
+    #expect(requests.pending(of: "s2") == [linear])
 }
 
 // MARK: - The callback
