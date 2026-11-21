@@ -13,7 +13,7 @@ import {
 } from "@raycast/api";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     accessoryTexts,
     allFilter,
@@ -57,6 +57,8 @@ export default function Command() {
 function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     const repo = useMemo(() => new StoreRepository(path.join(environment.supportPath, "repo")), []);
     const [loaded, setLoaded] = useState<Loaded>();
+    // Whether anything has loaded yet, for `refresh`, which mustn't change with every load.
+    const hasLoaded = useRef(false);
     const [noGit, setNoGit] = useState(false);
     const [loadError, setLoadError] = useState<string>();
     const [filter, setFilter] = useState(allFilter);
@@ -72,11 +74,14 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
             repo.commit(),
         ]);
         setLoaded({ entries, installed, trees, commit });
+        hasLoaded.current = true;
+        setLoadError(undefined);
     }, [repo]);
 
     /**
      * Clones the first time, refreshes after that; the list stays usable meanwhile. Like every git operation of the
-     * store's, it waits its turn (`oneAtATime`), so it never runs during an install or a README fetch.
+     * store's, it waits its turn (`oneAtATime`), so it never runs during an install or a README fetch. A failure
+     * before anything has loaded shows in the load-error view, whose Refresh tries again.
      */
     const refresh = useCallback(
         () =>
@@ -96,14 +101,19 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                     toast.style = Toast.Style.Failure;
                     toast.title = first ? "Couldn't download the store's list" : "Couldn't update the store's list";
                     toast.message = message(error);
-                    if (first) setLoadError(message(error));
+                    if (!hasLoaded.current) setLoadError(message(error));
                 }
             }),
         [repo, load],
     );
 
-    useEffect(() => {
-        void (async () => {
+    /**
+     * Opens the copy: clones it the first time, clones it again when it can't be read (a clone stopped halfway), and
+     * refreshes it when it's a day old, or always when `retry` (the load-error view's Refresh).
+     */
+    const open = useCallback(
+        async (retry: boolean) => {
+            if (retry) setLoadError(undefined);
             if (!(await gitAvailable())) {
                 setNoGit(true);
                 return;
@@ -115,16 +125,20 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
             try {
                 await load();
             } catch {
-                // A copy that can't be read (a clone stopped halfway) is downloaded again.
                 await repo.remove();
                 await refresh();
                 return;
             }
-            if (await repo.needsRefresh(new Date())) await refresh();
-        })();
+            if (retry || (await repo.needsRefresh(new Date()))) await refresh();
+        },
+        [repo, load, refresh],
+    );
+
+    useEffect(() => {
+        void open(false);
         // Unloading the store (leaving it, or turning it off) ends its git, which mustn't go on writing into `repo/`.
         return stopRunningGit;
-    }, [repo, load, refresh]);
+    }, [open]);
 
     // The README of the selected extension, fetched on demand while the detail pane is open.
     useEffect(() => {
@@ -302,7 +316,21 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
             }
         >
             {loadError && !loaded ? (
-                <List.EmptyView icon={Icon.ExclamationMark} title="Couldn't load the store" description={loadError} />
+                <List.EmptyView
+                    icon={Icon.ExclamationMark}
+                    title="Couldn't load the store"
+                    description={loadError}
+                    actions={
+                        <ActionPanel>
+                            <Action
+                                title="Refresh"
+                                icon={Icon.ArrowClockwise}
+                                shortcut={{ modifiers: ["cmd"], key: "r" }}
+                                onAction={() => void open(true)}
+                            />
+                        </ActionPanel>
+                    }
+                />
             ) : (
                 <List.EmptyView icon={Icon.MagnifyingGlass} title="No extensions found" />
             )}
