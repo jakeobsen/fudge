@@ -509,10 +509,7 @@ struct Snapshot {
         panel.setFrameOrigin(NSPoint(x: -20_000, y: -20_000))
         panel.orderFrontRegardless()
         if let query { model.searchText = query }
-        if activate {
-            Timing.log("app.activate")
-            model.activate()
-        }
+        if activate { model.activate() }
         let inCommand = search != nil || dropdown != nil
         if inCommand {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [search, dropdown] in
@@ -534,21 +531,8 @@ struct Snapshot {
         if openDate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { _ = model.openFirstFormPicker(.datePicker) }
         }
-        // FUD-81 timing: FUDGE_TIMING_TYPE types its text a character at a time, FUDGE_TIMING_INTERVAL ms apart,
-        // from FUDGE_TIMING_START s; the picture is saved after FUDGE_TIMING_WAIT s.
-        let environment = ProcessInfo.processInfo.environment
-        if let typed = environment["FUDGE_TIMING_TYPE"] {
-            let start = Double(environment["FUDGE_TIMING_START"] ?? "") ?? 4
-            let interval = (Double(environment["FUDGE_TIMING_INTERVAL"] ?? "") ?? 3000) / 1000
-            for count in 1...typed.count {
-                DispatchQueue.main.asyncAfter(deadline: .now() + start + interval * Double(count - 1)) {
-                    model.searchText = String(typed.prefix(count))
-                }
-            }
-        }
         let waits = actions || openDropdown || openTags || openDate || inCommand
-        let wait = Double(environment["FUDGE_TIMING_WAIT"] ?? "") ?? (waits ? 3.5 : activate ? 3 : 1)
-        DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + (waits ? 3.5 : activate ? 3 : 1)) {
             guard let view = panel.contentView else { exit(1) }
             save(view)
         }

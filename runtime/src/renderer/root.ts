@@ -9,7 +9,6 @@ import type { ReactNode } from "react";
 import { ConcurrentRoot } from "react-reconciler/constants.js";
 import { createContainer, reconciler, type HostInstance } from "./host.ts";
 import { firstVisible, type UINode } from "./serialize.ts";
-import { now, timing } from "../timing.ts";
 
 export const VIEW = "$view";
 
@@ -43,15 +42,9 @@ export function createRoot(options: RootOptions): Root {
     const container = createContainer(() => {
         if (scheduled) return;
         scheduled = true;
-        timing("worker.commit");
         setImmediate(() => {
             scheduled = false;
-            const t0 = now();
-            const taken = snapshot();
-            const t1 = now();
-            options.onRender(taken);
-            const t2 = now();
-            timing("worker.sent", `serialize=${(t1 - t0).toFixed(1)} post=${(t2 - t1).toFixed(1)}`);
+            options.onRender(snapshot());
             for (const callback of afterRender.splice(0)) callback();
         });
     });

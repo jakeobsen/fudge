@@ -32,11 +32,7 @@ public final class ExtensionHost: Sendable {
                 return
             }
             for line in lines.append(data) {
-                let start = Timing.now()
                 if let message = try? decoder.decode(HostMessage.self, from: line) {
-                    if line.count > 20_000 {
-                        Timing.log("app.decoded", "bytes=\(line.count) ms=\(Timing.ms(since: start))")
-                    }
                     continuation.yield(message)
                 }
             }
