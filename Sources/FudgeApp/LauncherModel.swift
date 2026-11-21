@@ -149,6 +149,8 @@ final class LauncherModel {
     @ObservationIgnored var reloadAll: () -> Void = {}
     /// Shows a HUD message; set by the app delegate.
     @ObservationIgnored var showHUD: (String) -> Void = { _ in }
+    /// Snippet expansion reads `snippets.json` again after the launcher changed it; set by the app delegate.
+    @ObservationIgnored var snippetsChanged: () -> Void = {}
     /// Shows the Quick Look preview of an item, or closes it for nil (SPEC-049); set by the app delegate.
     @ObservationIgnored var quickLookChanged: (QuickLookItem?) -> Void = { _ in }
     /// Whether a file exists, for Quick Look.
@@ -1770,6 +1772,7 @@ final class LauncherModel {
                 return
             }
             saved = "Snippet saved"
+            snippetsChanged()
         }
         let fromRootSearch = form.returnTo == nil
         closeBuiltInForm()
@@ -1928,6 +1931,7 @@ final class LauncherModel {
                 return
             }
             reloadSnippetList()
+            snippetsChanged()
         }
     }
 

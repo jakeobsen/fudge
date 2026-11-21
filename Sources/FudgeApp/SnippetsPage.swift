@@ -11,6 +11,8 @@ struct SnippetsPage: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            ExpandSnippetsRow(model: model)
+            Divider()
             if model.snippetsUnreadable {
                 Label(SnippetStore.Unreadable().description, systemImage: "exclamationmark.triangle.fill")
                     .font(.system(size: 12))
@@ -101,6 +103,71 @@ struct SnippetsPage: View {
         Task {
             guard await model.confirm(request) else { return }
             model.deleteSnippet(id: id)
+        }
+    }
+}
+
+/// **Expand Snippets as You Type** (SPEC-078 §5): the switch, and Input Monitoring's status while it's on. Turning it
+/// on without Input Monitoring says why it's needed, then asks macOS (its prompt the first time, its pane after that).
+private struct ExpandSnippetsRow: View {
+    @Bindable var model: SettingsModel
+
+    static let explanation = "Type a snippet's keyword in any app to replace it with the snippet."
+    static let permissionRequest = LauncherModel.AlertRequest(
+        title: "Allow Input Monitoring?",
+        message: "To notice a keyword as you type it, Fudge needs macOS's Input Monitoring permission. What you type "
+            + "isn't saved or sent anywhere, and nothing is read in password fields.",
+        primary: "Open System Settings", dismiss: "Cancel", destructive: false)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Expand Snippets as You Type")
+                    Text(Self.explanation).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Toggle("", isOn: Binding(get: { model.expandSnippets }, set: switched))
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+            }
+            if model.expandSnippets {
+                HStack(spacing: 6) {
+                    if model.inputMonitoring.isAllowed {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        Text("Input Monitoring is allowed.").font(.caption)
+                    } else {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        Text("Fudge needs Input Monitoring to expand snippets.").font(.caption)
+                        Spacer()
+                        Button("Open Input Monitoring Settings") { InputMonitoring.request() }
+                            .controlSize(.small)
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .task {
+            while !Task.isCancelled {
+                model.inputMonitoring.refresh()
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    private func switched(_ on: Bool) {
+        guard on else {
+            model.setExpandSnippets(false)
+            return
+        }
+        guard !model.inputMonitoring.isAllowed else {
+            model.setExpandSnippets(true)
+            return
+        }
+        Task {
+            guard await model.confirm(Self.permissionRequest) else { return }
+            model.setExpandSnippets(true)
+            InputMonitoring.request()
         }
     }
 }
