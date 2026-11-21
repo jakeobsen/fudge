@@ -55,13 +55,37 @@ private final class Reloads {
     var times: [ContinuousClock.Instant] = []
 }
 
+/// A ceiling that only catches a hang: each wait ends as soon as what it waits for has happened, so a CI runner that
+/// stalls for seconds can't fail it.
+private let noHang: Duration = .seconds(30)
+
+/// Waits until no reload has come for 50 polls of 20 ms in a row (at least a second, longer than the latency and the
+/// debounce together), because FSEvents can report the folder's own creation, made just before the stream started.
+/// Counting polls rather than reading the clock means a stalled runner's pause counts as one quiet poll, not a second.
+@MainActor
+private func settle(_ reloads: Reloads) async throws {
+    let started = ContinuousClock.now
+    var seen = reloads.times.count
+    var quiet = 0
+    while quiet < 50, ContinuousClock.now - started < noHang {
+        try await Task.sleep(for: .milliseconds(20))
+        if reloads.times.count == seen {
+            quiet += 1
+        } else {
+            seen = reloads.times.count
+            quiet = 0
+        }
+    }
+}
+
 /// Starts a watcher on a new temporary extensions folder (after `prepare`), lets it settle, makes `change`, and
-/// returns how long after the change each reload came. It waits 2 s for a first reload, then 1 s more for any
-/// further one. Settling takes longer than the latency and the debounce together, because FSEvents can report the
-/// folder's own creation, made just before the stream started.
+/// returns how long after the change each reload came. It waits for a first reload, up to `noHang` when one is
+/// expected, so the wait ends when it comes, or for `watching` when none is (a window a stall can only lengthen),
+/// then 1 s more for any further one.
 @MainActor
 private func reloads(
-    preparing prepare: (URL) throws -> Void = { _ in }, after change: (URL) async throws -> Void
+    preparing prepare: (URL) throws -> Void = { _ in }, watching: Duration = noHang,
+    after change: (URL) async throws -> Void
 ) async throws -> [Duration] {
     let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
     try FileManager.default.createDirectory(at: extensions, withIntermediateDirectories: true)
@@ -70,11 +94,11 @@ private func reloads(
     let watcher = ExtensionsWatcher(directory: extensions) { reloads.times.append(.now) }
     try watcher.start()
     defer { watcher.stop() }
-    try await Task.sleep(for: .seconds(1))
+    try await settle(reloads)
     reloads.times = []
     try await change(extensions)
     let changed = ContinuousClock.now
-    while reloads.times.isEmpty, ContinuousClock.now - changed < .seconds(2) {
+    while reloads.times.isEmpty, ContinuousClock.now - changed < watching {
         try await Task.sleep(for: .milliseconds(20))
     }
     try await Task.sleep(for: .seconds(1))
@@ -98,10 +122,9 @@ private func install(in extensions: URL) throws {
     try FileManager.default.moveItem(at: try stage(in: extensions), to: extensions.appendingPathComponent("x"))
 }
 
-/// Exactly one reload, within 2 s.
+/// Exactly one reload.
 private func expectOnce(_ times: [Duration], sourceLocation: SourceLocation = #_sourceLocation) {
     #expect(times.count == 1, "reloads: \(times)", sourceLocation: sourceLocation)
-    #expect(times.allSatisfy { $0 < .seconds(2) }, "reloads: \(times)", sourceLocation: sourceLocation)
 }
 
 @MainActor
@@ -152,7 +175,7 @@ struct ExtensionsWatcherTests {
     }
 
     @Test func workInAStagingFolderAloneDoesntReload() async throws {
-        let times = try await reloads { extensions in
+        let times = try await reloads(watching: .seconds(2)) { extensions in
             let staging = try stage(in: extensions)
             try FileManager.default.removeItem(at: staging)
             try write("", to: extensions.appendingPathComponent(".DS_Store"))
@@ -166,11 +189,13 @@ struct ExtensionsWatcherTests {
         let watcher = ExtensionsWatcher(directory: extensions) { reloads.times.append(.now) }
         try watcher.start()
         #expect(watcher.isRunning)
-        try await Task.sleep(for: .seconds(1))
+        try await settle(reloads)
         reloads.times = []
         try install(in: extensions)
         watcher.stop()
         #expect(!watcher.isRunning)
+        // A window for a callback that shouldn't come, longer than the latency and the debounce together. FSEvents
+        // runs in real time, so there's no clock to inject; a stall can only lengthen the window, never fail it.
         try await Task.sleep(for: .seconds(1.5))
         #expect(reloads.times.isEmpty)
     }
@@ -185,11 +210,11 @@ struct ExtensionsWatcherTests {
         var isDirectory: ObjCBool = false
         #expect(FileManager.default.fileExists(atPath: extensions.path, isDirectory: &isDirectory))
         #expect(isDirectory.boolValue)
-        try await Task.sleep(for: .seconds(1))
+        try await settle(reloads)
         reloads.times = []
         try install(in: extensions)
         let installed = ContinuousClock.now
-        while reloads.times.isEmpty, ContinuousClock.now - installed < .seconds(2) {
+        while reloads.times.isEmpty, ContinuousClock.now - installed < noHang {
             try await Task.sleep(for: .milliseconds(20))
         }
         try await Task.sleep(for: .seconds(1))

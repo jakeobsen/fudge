@@ -85,8 +85,6 @@ private func clip(_ text: String, concealed: Bool = false) -> PasteboardContents
 private let me: Int32 = 100
 private let textEdit = FrontmostApplication(pid: 200, bundleIdentifier: "com.apple.TextEdit")
 private let restoreDelay: Duration = .milliseconds(30)
-/// Comfortably past the restore.
-private func afterRestore() async { try? await Task.sleep(for: .milliseconds(150)) }
 
 @MainActor
 private struct Rig {
@@ -94,6 +92,7 @@ private struct Rig {
     let access: FakeAccess
     let keys: FakePasteKeys
     let pasteboard: FakePasteboard
+    let turns = PasteboardTurns()
     let paste: Paste
 
     init(clipboard: PasteboardContents = clip("user's clipboard")) {
@@ -102,7 +101,13 @@ private struct Rig {
         pasteboard = FakePasteboard(clipboard, log: log)
         paste = Paste(
             gate: AccessibilityGate(access: access), keys: keys, pasteboard: pasteboard, ownPid: me,
-            turns: PasteboardTurns(), restoreDelay: restoreDelay)
+            turns: turns, restoreDelay: restoreDelay)
+    }
+
+    /// Once the pending restore has run, or been dropped: waits on the restore itself, never a fixed time, which a
+    /// stalled CI runner can outlast.
+    func afterRestore() async {
+        await turns.restoreSettled()
     }
 
     func run(
@@ -127,7 +132,7 @@ private struct Rig {
     #expect(rig.log.events == ["snapshot", "write pasted", "trust", "hide", "hidden", "post"])
     #expect(rig.keys.posted == [textEdit.pid], "into the app the user is in")
     #expect(rig.pasteboard.plainText() == "pasted", "resolved before the restore")
-    await afterRestore()
+    await rig.afterRestore()
     #expect(rig.log.events.last == "write user's clipboard")
     #expect(rig.pasteboard.plainText() == "user's clipboard")
 }
@@ -142,7 +147,7 @@ private struct Rig {
     let rig = Rig()
     try await rig.run("pasted")
     rig.pasteboard.copied("copied meanwhile")
-    await afterRestore()
+    await rig.afterRestore()
     #expect(rig.pasteboard.plainText() == "copied meanwhile")
     #expect(!rig.log.events.contains("write user's clipboard"))
 }
@@ -150,7 +155,7 @@ private struct Rig {
 @Test @MainActor func clearsAPasswordInsteadOfWritingItBack() async throws {
     let rig = Rig(clipboard: clip("hunter2", concealed: true))
     try await rig.run("pasted")
-    await afterRestore()
+    await rig.afterRestore()
     #expect(rig.log.events.last == "clear")
     #expect(rig.pasteboard.current.items.isEmpty)
 }
@@ -160,7 +165,7 @@ private struct Rig {
     try await rig.run("first")
     try await rig.run("second")
     #expect(rig.keys.posted.count == 2)
-    await afterRestore()
+    await rig.afterRestore()
     #expect(rig.pasteboard.plainText() == "user's clipboard", "not the first paste's content")
     #expect(rig.log.events.filter { $0 == "write user's clipboard" }.count == 1, "one restore")
 }
@@ -177,7 +182,7 @@ private struct Rig {
             "snapshot", "write A", "trust", "hide", "hidden", "post",
             "write B", "trust", "hide", "hidden", "post",
         ], "each ⌘V pastes its own content, and the second paste keeps the first one's snapshot")
-    await afterRestore()
+    await rig.afterRestore()
     #expect(rig.pasteboard.plainText() == "user's clipboard", "not fudge's first write")
     #expect(rig.log.events.filter { $0 == "write user's clipboard" }.count == 1, "one restore")
 }
@@ -187,7 +192,7 @@ private struct Rig {
     try await rig.run("first")
     rig.pasteboard.copied("copied meanwhile")
     try await rig.run("second")
-    await afterRestore()
+    await rig.afterRestore()
     #expect(rig.pasteboard.plainText() == "copied meanwhile", "the user's newer copy, not the older snapshot")
 }
 
@@ -209,7 +214,7 @@ private struct Rig {
     await #expect(throws: PasteError.accessibilityNeeded) { try await rig.run("again") }
     #expect(rig.access.prompts == [true, false], "macOS asks once per run")
     #expect(!rig.log.events.contains("hide") && rig.keys.posted.isEmpty)
-    await afterRestore()
+    await rig.afterRestore()
     #expect(rig.pasteboard.plainText() == "again", "left for the user to paste")
     #expect(
         PasteError.accessibilityNeeded.description
