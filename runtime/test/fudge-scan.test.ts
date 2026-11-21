@@ -35,7 +35,7 @@ const withGaps = {
     supported: false,
     gaps: [
         { api: "AI.ask", kind: "missing", byDesign: "AI" },
-        { api: "WindowManagement.getActiveWindow", kind: "missing" },
+        { api: "captureMemorySnapshot", kind: "missing" },
     ],
     unreadable: [],
 };
@@ -60,7 +60,7 @@ test("without --json, fudge scan lists the gaps for a person, saying Fudge", () 
         [
             "scan-gaps uses things Fudge doesn't have yet:",
             "  AI.ask (not in Fudge; AI, left out on purpose)",
-            "  WindowManagement.getActiveWindow (not in Fudge)",
+            "  captureMemorySnapshot (not in Fudge)",
         ].join("\n"),
     );
     const other: Report = {
