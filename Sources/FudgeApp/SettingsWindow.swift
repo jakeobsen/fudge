@@ -89,7 +89,7 @@ final class SettingsModel {
     func select(_ page: String?) {
         if recorder.pageChanged(from: selected, to: page) { resumeHotkeys() }
         selected = page
-        if page == Self.quicklinksPage { loadQuicklinks() }
+        if page == Self.quicklinksPage || page == Self.commandsPage { loadQuicklinks() }
         if page == Self.snippetsPage { loadSnippets() }
         if page == Self.windowManagementPage || page == Self.commandsPage { loadWindowLayouts() }
     }
@@ -100,13 +100,22 @@ final class SettingsModel {
         showOnboarding()
     }
 
-    /// The ids of every installed command, menu-bar ones included, and of Fudge's own (`BuiltInCommandGroup`). Only
-    /// their hotkeys block a key.
+    /// The ids of every installed command, menu-bar ones included, of Fudge's own (`BuiltInCommandGroup`) and of
+    /// the quicklinks (`QuicklinkCommands`). Only their hotkeys block a key.
     private var installedCommandIDs: Set<String> {
         Set(
             allExtensions.flatMap { item in
                 item.manifest.commands.map { FudgeSettings.commandID(extension: item.manifest.name, command: $0.name) }
-            } + BuiltInCommandGroup.commandIDs(in: builtInGroups))
+            } + BuiltInCommandGroup.commandIDs(in: builtInGroups) + QuicklinkCommands.commandIDs(quicklinks))
+    }
+
+    /// What the Commands page's search starts with: a snapshot run's `--search`, else nothing.
+    @ObservationIgnored var commandsSearch: String?
+
+    /// Fudge's own command groups (`builtInGroups`), then the quicklinks as a group of their own
+    /// (`QuicklinkCommands.group`), as the Commands page lists them and conflicts name them.
+    var commandGroups: [BuiltInCommandGroup] {
+        builtInGroups + [QuicklinkCommands.group(quicklinks)]
     }
 
     // MARK: - General
@@ -293,6 +302,11 @@ final class SettingsModel {
         store.remove(id: id)
         do {
             try store.save(to: file)
+            // Its alias, hotkey and Enabled go with it (`QuicklinkCommands.prune`).
+            var pruned = FudgeSettings.load(from: paths.settingsFile)
+            if QuicklinkCommands.prune(&pruned, keeping: store.quicklinks) {
+                change { QuicklinkCommands.prune(&$0, keeping: store.quicklinks) }
+            }
         } catch {
             FileHandle.standardError.write(Data("fudge: couldn't delete the quicklink: \(error)\n".utf8))
         }
@@ -868,13 +882,13 @@ final class SettingsModel {
         case .needsModifier: "Use ⌘, ⌥ or ⌃, or an F-key"
         case .launcher: "That's Fudge's own shortcut"
         case .command(let other):
-            "Used by \(CommandNames.name(of: other, in: allExtensions, groups: builtInGroups) ?? other)"
+            "Used by \(CommandNames.name(of: other, in: allExtensions, groups: commandGroups) ?? other)"
         }
     }
 
-    /// A command's title, from its id: an installed command's or one of Fudge's own.
+    /// A command's title, from its id: an installed command's, one of Fudge's own or a quicklink's.
     func title(ofCommand commandID: String) -> String {
-        for group in builtInGroups {
+        for group in commandGroups {
             for command in group.commands where group.commandID(command) == commandID { return command.title }
         }
         for installed in allExtensions {

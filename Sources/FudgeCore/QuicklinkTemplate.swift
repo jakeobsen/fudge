@@ -443,6 +443,18 @@ public enum QuicklinkOpening {
         public var description: String
     }
 
+    /// What `quicklink` opens, filled in with `arguments` (by name; one left empty takes its default, or stays empty)
+    /// and the dynamic values `context` holds: the clipboard, the date and time, a new UUID. Root search's ↵ reads
+    /// them on ↵, and a quicklink's hotkey at the press, with no arguments.
+    public static func target(
+        for quicklink: Quicklink, arguments: [String: String] = [:], context: QuicklinkTemplate.Context,
+        home: String = NSHomeDirectory(), exists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+    ) -> Result<Target, Failure> {
+        let template = QuicklinkTemplate(quicklink.link)
+        return target(
+            for: template, filled: template.fill(arguments: arguments, context: context), home: home, exists: exists)
+    }
+
     /// The template's problem, if it has one; else what the filled link opens, or why it can't be opened.
     public static func target(
         for template: QuicklinkTemplate, filled: String, home: String = NSHomeDirectory(),

@@ -155,6 +155,9 @@ final class LauncherModel {
     @ObservationIgnored var showHUD: (String) -> Void = { _ in }
     /// Snippet expansion reads `snippets.json` again after the launcher changed it; set by the app delegate.
     @ObservationIgnored var snippetsChanged: () -> Void = {}
+    /// Registers the command hotkeys again from the settings last read, after a quicklink and its hotkey went; set
+    /// by the app delegate.
+    @ObservationIgnored var commandHotkeysChanged: () -> Void = {}
     /// Shows the Quick Look preview of an item, or closes it for nil (SPEC-049); set by the app delegate.
     @ObservationIgnored var quickLookChanged: (QuickLookItem?) -> Void = { _ in }
     /// Whether a file exists, for Quick Look.
@@ -351,7 +354,7 @@ final class LauncherModel {
         windowLayouts = WindowLayoutStore.load(from: paths.windowLayoutsFile)
         items =
             RootSearch.applying(settings, to: commands + builtInGroups.flatMap(RootItem.builtInCommands))
-            + RootSearch.builtInItems + loadQuicklinks() + applications
+            + RootSearch.builtInItems + RootSearch.applying(settings, to: loadQuicklinks()) + applications
         menuBar.update(installed: installedExtensions, settings: settings)
         clipboardHistory.apply(settings, watch: watchesClipboard)
         refreshResults(keepingSelection: keepingSelection)
@@ -370,8 +373,12 @@ final class LauncherModel {
 
     private func loadQuicklinks() -> [RootItem] {
         icons = icons.filter { !$0.key.hasPrefix("quicklink:") }
-        return QuicklinkStore.load(from: paths.quicklinksFile).quicklinks.map(RootItem.quicklink)
+        quicklinks = QuicklinkStore.load(from: paths.quicklinksFile).quicklinks
+        return quicklinks.map(RootItem.quicklink)
     }
+
+    /// Every quicklink, enabled or not, as `applySettings` last read them.
+    @ObservationIgnored private var quicklinks: [Quicklink] = []
     /// `settings.json`: command hotkeys, aliases and enabled states.
     @ObservationIgnored private(set) var settings = FudgeSettings()
 
@@ -1607,30 +1614,44 @@ final class LauncherModel {
 
     /// Opens a quicklink: fills in its placeholders, then opens the result with its app, or the default one, through
     /// `SystemCalls`' open. The panel hides once it has opened; a link that can't be opened shows a failure toast
-    /// and the panel stays.
-    private func openQuicklink(_ quicklink: Quicklink, item: RootItem) {
-        let entered = argumentsItem == item.id ? arguments : ArgumentInput(arguments: item.arguments)
-        let template = QuicklinkTemplate(quicklink.link)
-        let clipboard = template.usesClipboard ? templateClipboard() : nil
-        let filled = template.fill(arguments: entered.launchArguments, context: .init(clipboard: clipboard))
+    /// and the panel stays. From its hotkey (`fromHotkey`), with every field at its default, it's filled in at the
+    /// press, root search's query and fields stay as they are, and a failure shows in the HUD, since the panel
+    /// may not be up.
+    private func openQuicklink(_ quicklink: Quicklink, item: RootItem, fromHotkey: Bool = false) {
+        let entered =
+            !fromHotkey && argumentsItem == item.id ? arguments : ArgumentInput(arguments: item.arguments)
+        let clipboard = QuicklinkTemplate(quicklink.link).usesClipboard ? templateClipboard() : nil
+        let failed = { [weak self] (message: String) in
+            if fromHotkey {
+                self?.showHUD("Can't open \(quicklink.name) — \(message)")
+            } else {
+                self?.showFailureToast("Can't open \(quicklink.name)", message: message)
+            }
+        }
         let target: QuicklinkOpening.Target
-        switch QuicklinkOpening.target(for: template, filled: filled) {
+        switch QuicklinkOpening.target(
+            for: quicklink, arguments: entered.launchArguments, context: .init(clipboard: clipboard))
+        {
         case .success(let opened): target = opened
         case .failure(let failure):
-            showFailureToast("Can't open \(quicklink.name)", message: failure.description)
+            failed(failure.description)
             return
         }
         var params: [String: JSONValue] = ["target": .string(target.openText)]
         if let application = quicklink.application { params["application"] = .string(application) }
         Task {
             do {
-                // The user's own pick in root search.
+                // The user's own pick in root search, or their own hotkey.
                 _ = try await SystemCalls.handle("open", .object(params), origin: .userInitiated)
             } catch {
-                showFailureToast("Can't open \(quicklink.name)", message: SystemCalls.message(of: error))
+                failed(SystemCalls.message(of: error))
                 return
             }
             recordLaunch(item)
+            if fromHotkey {
+                if isVisible() { hide() }
+                return
+            }
             searchText = ""
             if argumentsItem == item.id { resetArguments(for: item) }
             hide()
@@ -2047,7 +2068,22 @@ final class LauncherModel {
                 showFailureToast("Can't delete \(quicklink.name)", message: String(describing: error))
                 return
             }
+            pruneQuicklinkSettings(keeping: store.quicklinks)
             applySettings()
+            commandHotkeysChanged()
+        }
+    }
+
+    /// Takes a deleted quicklink's alias, hotkey and Enabled out of `settings.json` (`QuicklinkCommands.prune`).
+    /// A `settings.json` Fudge can't read stays as it is: the leftovers do no harm, since no quicklink has that id.
+    private func pruneQuicklinkSettings(keeping quicklinks: [Quicklink]) {
+        var pruned = FudgeSettings.load(from: paths.settingsFile)
+        guard QuicklinkCommands.prune(&pruned, keeping: quicklinks) else { return }
+        do {
+            try pruned.save(to: paths.settingsFile)
+        } catch {
+            FileHandle.standardError.write(
+                Data("fudge: couldn't remove a deleted quicklink's settings: \(error)\n".utf8))
         }
     }
 
@@ -2799,30 +2835,48 @@ final class LauncherModel {
 
     // MARK: - Command hotkeys
 
-    /// The `FudgeSettings` ids ("<extension>/<command>") of the installed commands and Fudge's own
-    /// (`BuiltInCommandGroup`), enabled or not.
+    /// The `FudgeSettings` ids ("<extension>/<command>") of the installed commands, Fudge's own
+    /// (`BuiltInCommandGroup`) and the quicklinks (`QuicklinkCommands`), enabled or not.
     var installedCommandIDs: [String] {
         installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
             .compactMap(\.commandSettingsID) + BuiltInCommandGroup.commandIDs(in: builtInGroups)
+            + QuicklinkCommands.commandIDs(quicklinks)
     }
 
-    /// A command's hotkey was pressed anywhere (`HotKeyLaunch`): open it as root search would, hide the panel if
-    /// it's the view command already on screen, or show root search with its fields when a required argument is
-    /// needed.
+    /// A command's or quicklink's hotkey was pressed anywhere (`HotKeyLaunch`): open it as root search would, hide
+    /// the panel if it's the view command already on screen, or show root search with its fields when a required
+    /// argument is needed. A quicklink opens as a no-view command does (`QuicklinkCommands.hotkeyLaunch`).
     func openFromHotkey(_ commandID: String) {
-        guard let item = items.first(where: { $0.id == "command:\(commandID)" }) else { return }
+        guard let item = items.first(where: { $0.id == RootItem.id(forCommandSettingsID: commandID) }) else { return }
         if case .builtInCommand(let group, let command) = item.kind {
             runBuiltIn(item, group: group, command: command, fromHotkey: true)
             return
         }
-        guard case .command(let extensionName, let commandName, let mode, _) = item.kind else { return }
+        let mode: String
+        var running: (extensionName: String, commandName: String)?
+        switch item.kind {
+        case .command(let extensionName, let commandName, let commandMode, _):
+            mode = commandMode
+            running = (extensionName, commandName)
+        case .quicklink:
+            mode = "no-view"
+        default:
+            return
+        }
         // The reset comes first, so the hotkey's target is built on top of it. A no-view command's hotkey resets
         // too while the panel is hidden: the panel's next show would reset it anyway, so this changes nothing.
         resettingFirst {
             let onScreen =
-                isVisible() && command?.extensionName == extensionName && command?.commandName == commandName
-            let action = HotKeyLaunch.action(
-                mode: mode, hasRequiredArgument: item.arguments.contains { $0.required == true }, isOnScreen: onScreen)
+                isVisible() && running != nil && command?.extensionName == running?.extensionName
+                && command?.commandName == running?.commandName
+            let action: HotKeyLaunch
+            if case .quicklink(let quicklink) = item.kind {
+                action = QuicklinkCommands.hotkeyLaunch(quicklink)
+            } else {
+                action = HotKeyLaunch.action(
+                    mode: mode, hasRequiredArgument: item.arguments.contains { $0.required == true },
+                    isOnScreen: onScreen)
+            }
             switch action {
             case .hidePanel:
                 hide()
@@ -2835,6 +2889,10 @@ final class LauncherModel {
                 arguments.focus = 0
                 show()
             case .open:
+                if case .quicklink(let quicklink) = item.kind {
+                    openQuicklink(quicklink, item: item, fromHotkey: true)
+                    return
+                }
                 if mode == "view", case .command = screen { leaveCommand() }
                 launchOrigin = .hotkey
                 open(item)
@@ -2876,14 +2934,15 @@ final class LauncherModel {
         resetArguments(for: selectedRootItem)
     }
 
-    /// The hotkeys of installed commands, by root item id, for their rows.
+    /// The hotkeys of installed commands and quicklinks, by root item id, for their rows.
     private(set) var commandHotkeys: [String: HotKeySpec] = [:]
 
     /// Reads the command hotkeys from `settings.json` again, after Settings changed them.
     func refreshCommandHotkeys() {
         commandHotkeys = Dictionary(
-            uniqueKeysWithValues: settings.availableHotkeys(installed: Set(installedCommandIDs))
-                .map { ("command:\($0.key)", $0.value) })
+            settings.availableHotkeys(installed: Set(installedCommandIDs))
+                .map { (RootItem.id(forCommandSettingsID: $0.key), $0.value) },
+            uniquingKeysWith: { first, _ in first })
     }
 
     /// Where the launch being opened came from.
