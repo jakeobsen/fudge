@@ -16,6 +16,7 @@ final class SettingsModel {
     static let permissionsPage = ":permissions"
     static let quicklinksPage = ":quicklinks"
     static let snippetsPage = ":snippets"
+    static let colorPickerPage = ":color-picker"
     static let windowManagementPage = ":window-management"
     static let signInPage = ":sign-in"
     static let calendarPage = ":calendar"
@@ -80,7 +81,7 @@ final class SettingsModel {
         loadCalendars()
         if selected != Self.generalPage, selected != Self.commandsPage, selected != Self.permissionsPage,
             selected != Self.quicklinksPage, selected != Self.snippetsPage, selected != Self.signInPage,
-            selected != Self.windowManagementPage, selected != Self.calendarPage,
+            selected != Self.colorPickerPage, selected != Self.windowManagementPage, selected != Self.calendarPage,
             !extensions.contains(where: { $0.manifest.name == selected })
         {
             select(Self.generalPage)
@@ -91,7 +92,7 @@ final class SettingsModel {
     func select(_ page: String?) {
         if recorder.pageChanged(from: selected, to: page) { resumeHotkeys() }
         selected = page
-        if page == Self.quicklinksPage { loadQuicklinks() }
+        if page == Self.quicklinksPage || page == Self.commandsPage { loadQuicklinks() }
         if page == Self.snippetsPage { loadSnippets() }
         if page == Self.windowManagementPage || page == Self.commandsPage { loadWindowLayouts() }
         if page == Self.calendarPage || page == Self.permissionsPage { loadCalendars() }
@@ -103,13 +104,22 @@ final class SettingsModel {
         showOnboarding()
     }
 
-    /// The ids of every installed command, menu-bar ones included, and of Fudge's own (`BuiltInCommandGroup`). Only
-    /// their hotkeys block a key.
+    /// The ids of every installed command, menu-bar ones included, of Fudge's own (`BuiltInCommandGroup`) and of
+    /// the quicklinks (`QuicklinkCommands`). Only their hotkeys block a key.
     private var installedCommandIDs: Set<String> {
         Set(
             allExtensions.flatMap { item in
                 item.manifest.commands.map { FudgeSettings.commandID(extension: item.manifest.name, command: $0.name) }
-            } + BuiltInCommandGroup.commandIDs(in: builtInGroups))
+            } + BuiltInCommandGroup.commandIDs(in: builtInGroups) + QuicklinkCommands.commandIDs(quicklinks))
+    }
+
+    /// What the Commands page's search starts with: a snapshot run's `--search`, else nothing.
+    @ObservationIgnored var commandsSearch: String?
+
+    /// Fudge's own command groups (`builtInGroups`), then the quicklinks as a group of their own
+    /// (`QuicklinkCommands.group`), as the Commands page lists them and conflicts name them.
+    var commandGroups: [BuiltInCommandGroup] {
+        builtInGroups + [QuicklinkCommands.group(quicklinks)]
     }
 
     // MARK: - General
@@ -124,6 +134,16 @@ final class SettingsModel {
         guard FudgeSettings.load(from: paths.settingsFile).currencyRates != on, change({ $0.currencyRates = on })
         else { return }
         currencyRatesChanged(on)
+    }
+
+    /// The Color Picker's Copy Format (`colorFormat` in `settings.json`).
+    var colorFormat: ColorFormat { fudgeSettings.colorFormat }
+    /// Recent Colors, if it's open in the launcher, is drawn again with the new format first; set by the app delegate.
+    @ObservationIgnored var colorFormatChanged: () -> Void = {}
+
+    func setColorFormat(_ format: ColorFormat) {
+        guard format != colorFormat, change({ $0.colorFormat = format }) else { return }
+        colorFormatChanged()
     }
 
     /// How the calculator reads and shows numbers (`numberFormat` in `settings.json`).
@@ -296,6 +316,11 @@ final class SettingsModel {
         store.remove(id: id)
         do {
             try store.save(to: file)
+            // Its alias, hotkey and Enabled go with it (`QuicklinkCommands.prune`).
+            var pruned = FudgeSettings.load(from: paths.settingsFile)
+            if QuicklinkCommands.prune(&pruned, keeping: store.quicklinks) {
+                change { QuicklinkCommands.prune(&$0, keeping: store.quicklinks) }
+            }
         } catch {
             FileHandle.standardError.write(Data("fudge: couldn't delete the quicklink: \(error)\n".utf8))
         }
@@ -888,13 +913,13 @@ final class SettingsModel {
         case .needsModifier: "Use ⌘, ⌥ or ⌃, or an F-key"
         case .launcher: "That's Fudge's own shortcut"
         case .command(let other):
-            "Used by \(CommandNames.name(of: other, in: allExtensions, groups: builtInGroups) ?? other)"
+            "Used by \(CommandNames.name(of: other, in: allExtensions, groups: commandGroups) ?? other)"
         }
     }
 
-    /// A command's title, from its id: an installed command's or one of Fudge's own.
+    /// A command's title, from its id: an installed command's, one of Fudge's own or a quicklink's.
     func title(ofCommand commandID: String) -> String {
-        for group in builtInGroups {
+        for group in commandGroups {
             for command in group.commands where group.commandID(command) == commandID { return command.title }
         }
         for installed in allExtensions {
@@ -1147,6 +1172,7 @@ struct SettingsView: View {
                 Label("Snippets", systemImage: "doc.text").tag(SettingsModel.snippetsPage)
                 Label("Window Management", systemImage: "macwindow").tag(SettingsModel.windowManagementPage)
                 Label("Sign-in", systemImage: "person.badge.key").tag(SettingsModel.signInPage)
+                Label("Color Picker", systemImage: "eyedropper").tag(SettingsModel.colorPickerPage)
                 Label("Calendar", systemImage: "calendar").tag(SettingsModel.calendarPage)
                 Section("Extensions") {
                     ForEach(model.extensions, id: \.manifest.name) { installed in
@@ -1174,6 +1200,8 @@ struct SettingsView: View {
                     WindowManagementPage(model: model)
                 } else if model.selected == SettingsModel.signInPage {
                     SignInPage(model: model)
+                } else if model.selected == SettingsModel.colorPickerPage {
+                    ColorPickerPage(model: model)
                 } else if model.selected == SettingsModel.calendarPage {
                     CalendarPage(model: model)
                 } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {

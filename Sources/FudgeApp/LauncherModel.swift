@@ -153,6 +153,9 @@ final class LauncherModel {
     @ObservationIgnored var reloadAll: () -> Void = {}
     /// Shows a HUD message; set by the app delegate.
     @ObservationIgnored var showHUD: (String) -> Void = { _ in }
+    /// Registers the command hotkeys again from the settings last read, after a quicklink and its hotkey went; set
+    /// by the app delegate.
+    @ObservationIgnored var commandHotkeysChanged: () -> Void = {}
     /// Shows the Quick Look preview of an item, or closes it for nil (SPEC-049); set by the app delegate.
     @ObservationIgnored var quickLookChanged: (QuickLookItem?) -> Void = { _ in }
     /// Whether a file exists, for Quick Look.
@@ -166,6 +169,8 @@ final class LauncherModel {
     @ObservationIgnored var panelOnScreen: () -> Bool = { true }
     /// Whether the launcher panel is on screen; set by the app delegate.
     @ObservationIgnored var isVisible: () -> Bool = { false }
+    /// Pick Color's loupe. `AppDelegate` gives snapshot runs one that never shows it.
+    @ObservationIgnored var colorSampler: any ColorSampling = ScreenColorSampler()
     /// Asks the user to confirm (title, message, primary, dismiss, destructive); set by the app delegate.
     /// Asks the user, for a call from `origin`; a background call gets `CallOrigin.unaskedAnswer` without an alert.
     @ObservationIgnored var confirm: (AlertRequest, CallOrigin) async -> Bool = { _, _ in false }
@@ -351,7 +356,7 @@ final class LauncherModel {
         windowLayouts = WindowLayoutStore.load(from: paths.windowLayoutsFile)
         items =
             RootSearch.applying(settings, to: commands + builtInGroups.flatMap(RootItem.builtInCommands))
-            + RootSearch.builtInItems + loadQuicklinks() + applications
+            + RootSearch.builtInItems + RootSearch.applying(settings, to: loadQuicklinks()) + applications
         menuBar.update(installed: installedExtensions, settings: settings)
         clipboardHistory.apply(settings, watch: watchesClipboard)
         refreshResults(keepingSelection: keepingSelection)
@@ -370,8 +375,12 @@ final class LauncherModel {
 
     private func loadQuicklinks() -> [RootItem] {
         icons = icons.filter { !$0.key.hasPrefix("quicklink:") }
-        return QuicklinkStore.load(from: paths.quicklinksFile).quicklinks.map(RootItem.quicklink)
+        quicklinks = QuicklinkStore.load(from: paths.quicklinksFile).quicklinks
+        return quicklinks.map(RootItem.quicklink)
     }
+
+    /// Every quicklink, enabled or not, as `applySettings` last read them.
+    @ObservationIgnored private var quicklinks: [Quicklink] = []
     /// `settings.json`: command hotkeys, aliases and enabled states.
     @ObservationIgnored private(set) var settings = FudgeSettings()
 
@@ -1607,30 +1616,44 @@ final class LauncherModel {
 
     /// Opens a quicklink: fills in its placeholders, then opens the result with its app, or the default one, through
     /// `SystemCalls`' open. The panel hides once it has opened; a link that can't be opened shows a failure toast
-    /// and the panel stays.
-    private func openQuicklink(_ quicklink: Quicklink, item: RootItem) {
-        let entered = argumentsItem == item.id ? arguments : ArgumentInput(arguments: item.arguments)
-        let template = QuicklinkTemplate(quicklink.link)
-        let clipboard = template.usesClipboard ? templateClipboard() : nil
-        let filled = template.fill(arguments: entered.launchArguments, context: .init(clipboard: clipboard))
+    /// and the panel stays. From its hotkey (`fromHotkey`), with every field at its default, it's filled in at the
+    /// press, root search's query and fields stay as they are, and a failure shows in the HUD, since the panel
+    /// may not be up.
+    private func openQuicklink(_ quicklink: Quicklink, item: RootItem, fromHotkey: Bool = false) {
+        let entered =
+            !fromHotkey && argumentsItem == item.id ? arguments : ArgumentInput(arguments: item.arguments)
+        let clipboard = QuicklinkTemplate(quicklink.link).usesClipboard ? templateClipboard() : nil
+        let failed = { [weak self] (message: String) in
+            if fromHotkey {
+                self?.showHUD("Can't open \(quicklink.name) — \(message)")
+            } else {
+                self?.showFailureToast("Can't open \(quicklink.name)", message: message)
+            }
+        }
         let target: QuicklinkOpening.Target
-        switch QuicklinkOpening.target(for: template, filled: filled) {
+        switch QuicklinkOpening.target(
+            for: quicklink, arguments: entered.launchArguments, context: .init(clipboard: clipboard))
+        {
         case .success(let opened): target = opened
         case .failure(let failure):
-            showFailureToast("Can't open \(quicklink.name)", message: failure.description)
+            failed(failure.description)
             return
         }
         var params: [String: JSONValue] = ["target": .string(target.openText)]
         if let application = quicklink.application { params["application"] = .string(application) }
         Task {
             do {
-                // The user's own pick in root search.
+                // The user's own pick in root search, or their own hotkey.
                 _ = try await SystemCalls.handle("open", .object(params), origin: .userInitiated)
             } catch {
-                showFailureToast("Can't open \(quicklink.name)", message: SystemCalls.message(of: error))
+                failed(SystemCalls.message(of: error))
                 return
             }
             recordLaunch(item)
+            if fromHotkey {
+                if isVisible() { hide() }
+                return
+            }
             searchText = ""
             if argumentsItem == item.id { resetArguments(for: item) }
             hide()
@@ -1720,11 +1743,11 @@ final class LauncherModel {
         }
     }
 
-    /// The sessions of Fudge's own views, its forms, Search Snippets, Switch Windows, Search Menu Items and My
-    /// Schedule, which never reach the host.
+    /// The sessions of Fudge's own views, its forms, Search Snippets, Switch Windows, Search Menu Items, Recent Colors
+    /// and My Schedule, which never reach the host.
     static let builtInSessions: Set<String> = [
         QuicklinkForm.session, SnippetForm.session, SnippetList.session, SwitchWindowsList.session, LayoutForm.session,
-        MenuItemsList.session, ScheduleList.session,
+        MenuItemsList.session, RecentColorsGrid.session, ScheduleList.session,
     ]
 
     @ObservationIgnored private var builtInForm: BuiltInFormState?
@@ -2138,6 +2161,136 @@ final class LauncherModel {
         }
     }
 
+    // MARK: - Color Picker
+
+    /// One of the Tools group's commands (SPEC-090).
+    private func runTool(_ command: ToolCommand, fromHotkey: Bool) {
+        switch command {
+        case .pickColor:
+            // The loupe needs the screen, so the panel goes first, as for window commands; it never shows.
+            if !fromHotkey { searchText = "" }
+            if isVisible() { hide() }
+            pickColor()
+        case .recentColors:
+            guard fromHotkey else {
+                showRecentColors()
+                return
+            }
+            // As a view command's hotkey does: it hides the panel when Recent Colors is already on screen.
+            resettingFirst {
+                if isVisible(), case .command(let command) = screen, command.session == RecentColorsGrid.session {
+                    hide()
+                    return
+                }
+                if case .command = screen { leaveCommand() }
+                showRecentColors()
+                show()
+            }
+        }
+    }
+
+    /// Whether the loupe is open: a second Pick Color meanwhile (its hotkey again) does nothing.
+    @ObservationIgnored private var pickingColor = false
+
+    /// Pick Color: macOS's loupe, then the color copied in the Copy Format, with a HUD, and added to Recent Colors.
+    /// Esc copies nothing. Recent Colors, if it's the screen under the hidden panel, is drawn again.
+    private func pickColor() {
+        guard !pickingColor else { return }
+        pickingColor = true
+        let format = FudgeSettings.load(from: paths.settingsFile).colorFormat
+        let pick = ColorPick(sampler: colorSampler, copy: { await Self.copyText($0) }, file: paths.colorsFile)
+        Task {
+            let message = await pick.run(format: format)
+            pickingColor = false
+            if let message { showHUD(message) }
+            reloadRecentColors()
+        }
+    }
+
+    /// Puts `text` on the clipboard as `Clipboard.copy` does.
+    private static func copyText(_ text: String) async -> Bool {
+        (try? await SystemCalls.handle("clipboard.copy", .object(["text": .string(text)]), origin: .userInitiated))
+            != nil
+    }
+
+    /// The colors Recent Colors was last drawn from, which its actions' nodes are read in (`RecentColorsGrid.target`).
+    @ObservationIgnored private var listedColors: [RecentColor] = []
+
+    /// Shows Recent Colors (SPEC-090), from root search or its hotkey.
+    private func showRecentColors() {
+        actionPanel = nil
+        dropdownPanel = nil
+        datePanel = nil
+        var command = CommandScreen(session: RecentColorsGrid.session, title: RecentColorsGrid.title)
+        renderRecentColors(&command)
+        screen = .command(command)
+    }
+
+    /// Reads `colors.json` and the Copy Format again and draws the grid, keeping the search text and the selection
+    /// on the same color where it can.
+    private func renderRecentColors(_ command: inout CommandScreen) {
+        let colors = RecentColorStore.load(from: paths.colorsFile).colors
+        listedColors = colors
+        command.view = RecentColorsGrid.view(
+            colors: colors, format: FudgeSettings.load(from: paths.settingsFile).colorFormat)
+        refreshList(&command, selectFirst: false)
+    }
+
+    /// Draws Recent Colors again, if it's on screen: after a pick, a removal, or a new Copy Format in Settings.
+    func reloadRecentColors() {
+        guard case .command(var command) = screen, command.session == RecentColorsGrid.session else { return }
+        renderRecentColors(&command)
+        screen = .command(command)
+    }
+
+    /// One of its actions, as `send` hands it over.
+    private func recentColorsAction(node: Int) {
+        guard let target = RecentColorsGrid.target(of: node, in: listedColors),
+            case .command(let grid) = screen, grid.session == RecentColorsGrid.session
+        else { return }
+        switch target {
+        case .copy(let id, let format):
+            guard let color = listedColors.first(where: { $0.id == id }) else { return }
+            let text = format.string(for: color.color)
+            Task {
+                guard await Self.copyText(text) else {
+                    showFailureToast("Couldn't copy \(text)")
+                    return
+                }
+                hide()
+                showHUD("Copied \(text)")
+            }
+        case .remove(let id):
+            changeRecentColors("Can't remove the color") { $0.remove(id: id) }
+        case .clear:
+            let count = listedColors.count
+            let request = AlertRequest(
+                title: "Clear Recent Colors?",
+                message: count == 1 ? "The color is removed." : "All \(count) colors are removed.", primary: "Clear",
+                dismiss: "Cancel", destructive: true)
+            Task {
+                guard await confirm(request, .userInitiated) else { return }
+                changeRecentColors("Can't clear Recent Colors") { $0.clear() }
+            }
+        case .pick:
+            hide()
+            pickColor()
+        }
+    }
+
+    /// Changes `colors.json` and draws the grid again. A file Fudge can't read stays as it is, and a toast says why.
+    private func changeRecentColors(_ failure: String, _ edit: (inout RecentColorStore) -> Void) {
+        let file = paths.colorsFile
+        var store = RecentColorStore.load(from: file)
+        edit(&store)
+        do {
+            try store.save(to: file)
+        } catch {
+            showFailureToast(failure, message: String(describing: error))
+        }
+        reloadRecentColors()
+    }
+
     /// Delete Quicklink…: asks, then removes it from `quicklinks.json`. A file Fudge can't read stays as it is,
     /// and a toast says why.
     private func deleteQuicklink(_ id: String) {
@@ -2156,7 +2309,22 @@ final class LauncherModel {
                 showFailureToast("Can't delete \(quicklink.name)", message: String(describing: error))
                 return
             }
+            pruneQuicklinkSettings(keeping: store.quicklinks)
             applySettings()
+            commandHotkeysChanged()
+        }
+    }
+
+    /// Takes a deleted quicklink's alias, hotkey and Enabled out of `settings.json` (`QuicklinkCommands.prune`).
+    /// A `settings.json` Fudge can't read stays as it is: the leftovers do no harm, since no quicklink has that id.
+    private func pruneQuicklinkSettings(keeping quicklinks: [Quicklink]) {
+        var pruned = FudgeSettings.load(from: paths.settingsFile)
+        guard QuicklinkCommands.prune(&pruned, keeping: quicklinks) else { return }
+        do {
+            try pruned.save(to: paths.settingsFile)
+        } catch {
+            FileHandle.standardError.write(
+                Data("fudge: couldn't remove a deleted quicklink's settings: \(error)\n".utf8))
         }
     }
 
@@ -2908,30 +3076,48 @@ final class LauncherModel {
 
     // MARK: - Command hotkeys
 
-    /// The `FudgeSettings` ids ("<extension>/<command>") of the installed commands and Fudge's own
-    /// (`BuiltInCommandGroup`), enabled or not.
+    /// The `FudgeSettings` ids ("<extension>/<command>") of the installed commands, Fudge's own
+    /// (`BuiltInCommandGroup`) and the quicklinks (`QuicklinkCommands`), enabled or not.
     var installedCommandIDs: [String] {
         installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
             .compactMap(\.commandSettingsID) + BuiltInCommandGroup.commandIDs(in: builtInGroups)
+            + QuicklinkCommands.commandIDs(quicklinks)
     }
 
-    /// A command's hotkey was pressed anywhere (`HotKeyLaunch`): open it as root search would, hide the panel if
-    /// it's the view command already on screen, or show root search with its fields when a required argument is
-    /// needed.
+    /// A command's or quicklink's hotkey was pressed anywhere (`HotKeyLaunch`): open it as root search would, hide
+    /// the panel if it's the view command already on screen, or show root search with its fields when a required
+    /// argument is needed. A quicklink opens as a no-view command does (`QuicklinkCommands.hotkeyLaunch`).
     func openFromHotkey(_ commandID: String) {
-        guard let item = items.first(where: { $0.id == "command:\(commandID)" }) else { return }
+        guard let item = items.first(where: { $0.id == RootItem.id(forCommandSettingsID: commandID) }) else { return }
         if case .builtInCommand(let group, let command) = item.kind {
             runBuiltIn(item, group: group, command: command, fromHotkey: true)
             return
         }
-        guard case .command(let extensionName, let commandName, let mode, _) = item.kind else { return }
+        let mode: String
+        var running: (extensionName: String, commandName: String)?
+        switch item.kind {
+        case .command(let extensionName, let commandName, let commandMode, _):
+            mode = commandMode
+            running = (extensionName, commandName)
+        case .quicklink:
+            mode = "no-view"
+        default:
+            return
+        }
         // The reset comes first, so the hotkey's target is built on top of it. A no-view command's hotkey resets
         // too while the panel is hidden: the panel's next show would reset it anyway, so this changes nothing.
         resettingFirst {
             let onScreen =
-                isVisible() && command?.extensionName == extensionName && command?.commandName == commandName
-            let action = HotKeyLaunch.action(
-                mode: mode, hasRequiredArgument: item.arguments.contains { $0.required == true }, isOnScreen: onScreen)
+                isVisible() && running != nil && command?.extensionName == running?.extensionName
+                && command?.commandName == running?.commandName
+            let action: HotKeyLaunch
+            if case .quicklink(let quicklink) = item.kind {
+                action = QuicklinkCommands.hotkeyLaunch(quicklink)
+            } else {
+                action = HotKeyLaunch.action(
+                    mode: mode, hasRequiredArgument: item.arguments.contains { $0.required == true },
+                    isOnScreen: onScreen)
+            }
             switch action {
             case .hidePanel:
                 hide()
@@ -2944,6 +3130,10 @@ final class LauncherModel {
                 arguments.focus = 0
                 show()
             case .open:
+                if case .quicklink(let quicklink) = item.kind {
+                    openQuicklink(quicklink, item: item, fromHotkey: true)
+                    return
+                }
                 if mode == "view", case .command = screen { leaveCommand() }
                 launchOrigin = .hotkey
                 open(item)
@@ -2985,14 +3175,15 @@ final class LauncherModel {
         resetArguments(for: selectedRootItem)
     }
 
-    /// The hotkeys of installed commands, by root item id, for their rows.
+    /// The hotkeys of installed commands and quicklinks, by root item id, for their rows.
     private(set) var commandHotkeys: [String: HotKeySpec] = [:]
 
     /// Reads the command hotkeys from `settings.json` again, after Settings changed them.
     func refreshCommandHotkeys() {
         commandHotkeys = Dictionary(
-            uniqueKeysWithValues: settings.availableHotkeys(installed: Set(installedCommandIDs))
-                .map { ("command:\($0.key)", $0.value) })
+            settings.availableHotkeys(installed: Set(installedCommandIDs))
+                .map { (RootItem.id(forCommandSettingsID: $0.key), $0.value) },
+            uniquingKeysWith: { first, _ in first })
     }
 
     /// Where the launch being opened came from.
@@ -3123,6 +3314,8 @@ final class LauncherModel {
                 }
                 if let message { showHUD(message) }
             }
+        } else if group == BuiltInCommandGroup.tools.name, let command = ToolCommand(rawValue: command) {
+            runTool(command, fromHotkey: fromHotkey)
         } else if group == BuiltInCommandGroup.calendar.name, command == ScheduleList.commandName {
             showSchedule(fromHotkey: fromHotkey)
         }
@@ -3589,6 +3782,8 @@ final class LauncherModel {
                 switchWindowsAction(node: node)
             } else if session == MenuItemsList.session, path == ["onAction"] {
                 menuItemsAction(node: node)
+            } else if session == RecentColorsGrid.session, path == ["onAction"] {
+                recentColorsAction(node: node)
             } else if session == ScheduleList.session, path == ["onAction"] {
                 scheduleListAction(node: node)
             }

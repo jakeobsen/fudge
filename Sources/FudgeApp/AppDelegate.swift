@@ -59,6 +59,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model.windowSwitching = FixedWindowSwitching(file: snapshot.windows)
             // Nor do the System commands do anything: no lock, sleep, restart, Apple Event, eject, hide or quit.
             model.systemActions = InertSystemActions(trashCount: snapshot.trashCount)
+            // Nor does Pick Color show the loupe: it picks nothing, as Esc would.
+            model.colorSampler = InertColorSampler()
             // Nor the windows: Save Layout… gets `--layout-windows`' made-up ones, and nothing is moved.
             model.windowLayoutActions = .inert(windows: snapshot.layoutWindows)
             // Nor other apps' menus: Search Menu Items gets `--menu-items`' made-up app and menus.
@@ -136,8 +138,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.resetAfterChanged = { [weak self] setting in self?.model.panelReset.setting = setting }
         // The store stays installed either way; the launcher reads settings.json again.
         settingsModel.extensionStoreChanged = { [weak self] in self?.model.applySettings() }
-        settingsModel.quicklinksChanged = { [weak self] in self?.model.applySettings() }
+        // A quicklink deleted in Settings takes its hotkey with it.
+        settingsModel.quicklinksChanged = { [weak self] in _ = self?.applyCommandHotkeys() }
+        model.commandHotkeysChanged = { [weak self] in self?.registerCommandHotkeys() }
         settingsModel.snippetsChanged = { [weak self] in self?.model.reloadSnippetList() }
+        settingsModel.colorFormatChanged = { [weak self] in self?.model.reloadRecentColors() }
         model.windowLayoutsChanged = { [weak self] in self?.settingsModel.loadWindowLayouts() }
         settingsModel.clipboardHistoryChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.deleteClipboardHistory = { [weak self] in self?.model.clipboardHistory.deleteAll() }
@@ -826,6 +831,8 @@ struct Snapshot {
         let page =
             signInConsent
             ? SettingsModel.signInPage : clipboardConsent ? ClipboardHistory.extensionName : settingsExtension
+        // `--settings :commands --search text` searches the Commands page, as typing in its field does.
+        controller.model.commandsSearch = search
         controller.renderOffscreen(extension: page)
         if signInConsent || clipboardConsent {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [signInConsent] in

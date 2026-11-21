@@ -184,6 +184,7 @@ import Testing
         "resetAfter": "a choice that's on by default",
         "showOnScreen": "a choice, not a feature",
         "escapeBehavior": "a choice, not a feature",
+        "colorFormat": "the Color Picker's format, not a feature",
         "calendarHidden": "which calendars My Schedule shows; it asks for access when first run",
         "calendarDaysAhead": "a detail of My Schedule",
     ]

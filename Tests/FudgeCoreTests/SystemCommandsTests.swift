@@ -78,7 +78,8 @@ private func volume(
     let group = BuiltInCommandGroup.system
     #expect(group.name == ":system" && BuiltInCommandGroup.isValidName(group.name))
     #expect(
-        BuiltInCommandGroup.all.map(\.title) == ["Apps", "Calendar", "System", "Window Management"], "by title")
+        BuiltInCommandGroup.all.map(\.title) == ["Apps", "Calendar", "System", "Tools", "Window Management"],
+        "by title")
     #expect(
         group.commands.map(\.title) == [
             "Lock Screen", "Sleep", "Restart", "Shut Down", "Log Out", "Empty Trash", "Eject All Disks",

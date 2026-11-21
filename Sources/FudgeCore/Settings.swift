@@ -57,6 +57,8 @@ public struct FudgeSettings: Sendable, Equatable {
     /// How often Fudge checks for a new release (`updateCheck`); nil until the user chooses, and nothing is checked
     /// until then. An unknown value reads as unset.
     public var updateCheck: UpdateCheckSetting?
+    /// The Color Picker's **Copy Format** (`colorFormat`): HEX unless set. An unknown value reads as HEX.
+    public var colorFormat: ColorFormat = .default
     /// The calendars My Schedule leaves out (`calendarHidden`, by EventKit's calendar id), so a new one shows.
     public var calendarHidden: [String] = []
     /// My Schedule's **Days Ahead** (`calendarDaysAhead`): one of `Schedule.daysAheadChoices`; anything else reads
@@ -204,6 +206,7 @@ public struct FudgeSettings: Sendable, Equatable {
         settings.showOnScreen = ShowOnScreen(settingsValue: object["showOnScreen"])
         settings.escapeBehavior = EscapeBehavior(settingsValue: object["escapeBehavior"])
         settings.updateCheck = UpdateCheckSetting(settingsValue: object["updateCheck"])
+        settings.colorFormat = (object["colorFormat"] as? String).flatMap(ColorFormat.init(rawValue:)) ?? .default
         settings.calendarHidden = (object["calendarHidden"] as? [Any] ?? []).compactMap { $0 as? String }
         if let days = object["calendarDaysAhead"] as? Int, Schedule.daysAheadChoices.contains(days) {
             settings.calendarDaysAhead = days
@@ -240,6 +243,7 @@ public struct FudgeSettings: Sendable, Equatable {
         object["showOnScreen"] = showOnScreen.settingsValue
         object["escapeBehavior"] = escapeBehavior.settingsValue
         object["updateCheck"] = updateCheck?.rawValue
+        object["colorFormat"] = colorFormat == .default ? nil : colorFormat.rawValue
         object["calendarHidden"] = calendarHidden.isEmpty ? nil : calendarHidden
         object["calendarDaysAhead"] = calendarDaysAhead == Schedule.defaultDaysAhead ? nil : calendarDaysAhead
 
