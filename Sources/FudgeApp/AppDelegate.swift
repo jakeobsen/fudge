@@ -60,6 +60,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model.colorSampler = InertColorSampler()
             // Nor the windows: Save Layout… gets `--layout-windows`' made-up ones, and nothing is moved.
             model.windowLayoutActions = .inert(windows: snapshot.layoutWindows)
+            // Define Word reads no selection and no dictionary: it gets `--definitions`' made-up ones, or none.
+            model.selectedText = { nil }
+            model.definitionLookup = snapshot.definitions.map(FixedDefinitions.load) ?? FixedDefinitions([:])
             // Nor the clipboard or the Keychain: Clipboard History gets `--clipboard-entries`' made-up entries.
             if let file = snapshot.clipboardEntries {
                 model.clipboardHistory = ClipboardHistoryService(
@@ -723,6 +726,8 @@ struct Snapshot {
     /// `--clipboard-entries <file>`: Clipboard History's made-up entries, a JSON array of `clipboardHistory.list`
     /// entries. Snapshots never read the clipboard.
     let clipboardEntries: URL?
+    /// Made-up definitions for Define Word (a JSON object of word to definition), so no run reads the dictionaries.
+    let definitions: URL?
     /// `--update-available <version>` (`0.9.0` or `v0.9.0`): an update check found that release.
     let updateAvailable: Release?
     /// `--windows <file>`: Switch Windows' made-up windows (`FixedWindowSystem`). Snapshots never read the window
@@ -772,6 +777,7 @@ struct Snapshot {
         clipboardConsent = arguments.contains("--clipboard-consent")
         foundFiles = value("--found-files").map { URL(fileURLWithPath: $0) }
         clipboardEntries = value("--clipboard-entries").map { URL(fileURLWithPath: $0) }
+        definitions = value("--definitions").map { URL(fileURLWithPath: $0) }
         updateAvailable = value("--update-available").flatMap { Release(tag: $0.hasPrefix("v") ? $0 : "v" + $0) }
         windows = value("--windows").map { URL(fileURLWithPath: $0) }
         layoutWindows =
