@@ -94,6 +94,23 @@ public struct Onboarding: Sendable, Equatable {
     }
 }
 
+/// Done's line saying how to open Fudge and where it is (SPEC-114 §2): it has no Dock icon, so after Start Using
+/// Fudge nothing on screen says so.
+public enum OnboardingDone: Equatable, Sendable {
+    /// "Press", the hotkey's keycaps, then the rest.
+    case press(before: String, after: String)
+    /// The hotkey didn't register, since another app has it: pressing it would do nothing.
+    case hotkeyTaken(String)
+
+    public static func line(hotkeyRegistered: Bool) -> OnboardingDone {
+        hotkeyRegistered
+            ? .press(before: "Press", after: "to open Fudge. It stays in the menu bar.")
+            : .hotkeyTaken(
+                "Open Fudge from its icon in the menu bar. Another app has its hotkey: change it in Settings → General."
+            )
+    }
+}
+
 /// Accessibility on onboarding's step and on Settings → Permissions.
 public enum AccessibilityPermission {
     /// Why Fudge asks for it: Fudge's own commands that need it first, then extensions (SPEC-114 §3). Onboarding's

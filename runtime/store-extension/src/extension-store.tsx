@@ -41,10 +41,10 @@ import {
     type Compatibility,
 } from "./compatibility.ts";
 import { gitAvailable, stopRunningGit, StoreRepository } from "./git.ts";
-import { maxReadmeBytes, readRegularFile } from "./files.ts";
-import { detailMarkdown } from "./readme.ts";
+import { detailMarkdown, fetchReadme } from "./readme.ts";
+import { RestingWork } from "./resting.ts";
 import type { FailureDetails } from "./failure.ts";
-import { FailureView, LoadFailure } from "./failure-view.tsx";
+import { FailureView, LoadFailure, NeedsGit } from "./failure-view.tsx";
 import { failureDetails, install, oneAtATime, readInstalled, uninstall, type StoreContext } from "./store.ts";
 
 type Loaded = { entries: StoreEntry[]; installed: Installed; trees: Map<string, string>; commit: string };
@@ -89,7 +89,12 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     const [filter, setFilter] = useState(allFilter);
     const [showingDetail, setShowingDetail] = useState(false);
     const [selected, setSelected] = useState<string | null>(null);
+    // The READMEs fetched, by their folder's tree id, so a folder that hasn't changed is never fetched again.
     const [readmes, setReadmes] = useState<Record<string, string>>({});
+    const readmesNow = useRef(readmes);
+    readmesNow.current = readmes;
+    // The trees whose README couldn't be fetched (git failed): shown as none, and fetched again by ⌘R, never kept.
+    const [readmeFailed, setReadmeFailed] = useState<ReadonlySet<string>>(new Set());
     const [checked, setChecked] = useState<Checked>({ scanner: "", results: new Map(), failed: new Set() });
     // The latest, for the checks' callbacks, which outlive a render.
     const checkedNow = useRef(checked);
@@ -131,7 +136,6 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                     if (first) await repo.clone();
                     else await repo.refresh();
                     await load();
-                    setReadmes({});
                     await toast.hide();
                 } catch (error) {
                     const title = first ? "Couldn't download the store's list" : "Couldn't update the store's list";
@@ -146,7 +150,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
 
     /**
      * Opens the copy: clones it the first time, clones it again when it can't be read (a clone stopped halfway), and
-     * refreshes it when it's a day old, or always when `retry` (the load-error view's Refresh).
+     * refreshes it when it's a day old, or always when `retry` (the load-error view's Refresh, or the needs-Git view's).
      */
     const open = useCallback(
         async (retry: boolean) => {
@@ -155,6 +159,8 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                 setNoGit(true);
                 return;
             }
+            // Refresh after installing the Command Line Tools finds git now.
+            setNoGit(false);
             if (!(await repo.exists())) {
                 await refresh();
                 return;
@@ -177,23 +183,23 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
         return stopRunningGit;
     }, [open]);
 
-    // The README of the selected extension, fetched on demand while the detail pane is open.
-    useEffect(() => {
-        if (!showingDetail || !selected || !loaded || readmes[selected] !== undefined) return;
-        // A row's id is its folder in the repository (`StoreEntry.dir`), which `readCatalog` checked.
-        const dir = selected;
-        void oneAtATime(async () => {
-            let readme = "";
-            try {
-                await repo.add(`/extensions/${dir}/README.md`);
-                readme = await readRegularFile(path.join(repo.path, "extensions", dir, "README.md"), maxReadmeBytes);
-            } catch {
-                // No README, one that couldn't be fetched, or one that isn't a regular file of at most 1 MB: the
-                // detail shows the manifest alone.
-            }
-            setReadmes((current) => ({ ...current, [dir]: readme }));
-        });
-    }, [showingDetail, selected, loaded, readmes, repo]);
+    // The README of the row the selection rests on, with the detail pane open, as the compatibility check waits
+    // (`RestingWork`): moving through rows fetches nothing, and a folder's README is fetched once per tree.
+    const readmeFetches = useMemo(
+        () =>
+            new RestingWork<string>({
+                done: (key) => readmesNow.current[key.split("\0")[1]!] !== undefined,
+                run: (key, cancelled) =>
+                    oneAtATime(async () => (cancelled() ? undefined : fetchReadme(repo, key.split("\0")[0]!))),
+                changed: (key, readme) => {
+                    const tree = key.split("\0")[1]!;
+                    if (readme === "failed") setReadmeFailed((current) => new Set(current).add(tree));
+                    else setReadmes((current) => ({ ...current, [tree]: readme }));
+                },
+            }),
+        [repo],
+    );
+    useEffect(() => () => readmeFetches.stop(), [readmeFetches]);
 
     const context: StoreContext = useMemo(
         () => ({
@@ -213,9 +219,9 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
         () =>
             new CompatibilityChecks({
                 cached: (tree) => checkedNow.current.results.get(tree),
-                check: (dir, tree, cancelled) =>
+                check: (dir, tree, cancelled, signal) =>
                     oneAtATime(async () => {
-                        const result = await checkFolder(dir, context, cancelled);
+                        const result = await checkFolder(dir, context, cancelled, signal);
                         if (!result) return undefined;
                         await rememberCompatibility(environment.supportPath, checkedNow.current.scanner, tree, result);
                         return result;
@@ -287,16 +293,18 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     const actionsFor = selected ?? (installedRows[0] ?? other[0])?.dir;
     const checking = showingDetail ? actionsFor : undefined;
     const checkingTree = checking ? loaded?.trees.get(checking) : undefined;
-    useEffect(() => checks.select(checking, checkingTree), [checks, checking, checkingTree]);
+    // A row's id is its folder in the repository (`StoreEntry.dir`), which `readCatalog` checked. The README is
+    // selected first: both wait the same half second and the git queue runs in order, so its quick fetch goes ahead of
+    // the check's download and scan.
+    useEffect(() => {
+        readmeFetches.select(checking && checkingTree ? `${checking}\0${checkingTree}` : undefined);
+        checks.select(checking, checkingTree);
+    }, [readmeFetches, checks, checking, checkingTree]);
 
     if (noGit) {
         return (
             <List>
-                <List.EmptyView
-                    icon={Icon.ExclamationMark}
-                    title="The Extension Store needs Git"
-                    description="Install Apple's Command Line Tools: run `xcode-select --install` in Terminal."
-                />
+                <NeedsGit refresh={() => void open(true)} />
             </List>
         );
     }
@@ -336,7 +344,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                             markdown={detailMarkdown(
                                 entry,
                                 loaded?.commit ?? "",
-                                readmes[entry.dir],
+                                tree === undefined ? undefined : (readmes[tree] ?? (readmeFailed.has(tree) ? "" : undefined)),
                                 compatibilityFor(entry, tree),
                             )}
                         />
@@ -380,7 +388,11 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                                 title="Refresh"
                                 icon={Icon.ArrowClockwise}
                                 shortcut={{ modifiers: ["cmd"], key: "r" }}
-                                onAction={() => void refresh()}
+                                onAction={() => {
+                                    // A README that couldn't be fetched is tried again too.
+                                    readmeFetches.again();
+                                    void refresh();
+                                }}
                             />
                         </ActionPanel.Section>
                     </ActionPanel>

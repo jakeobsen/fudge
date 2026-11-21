@@ -23,7 +23,7 @@ import {
     lastLines,
     shownLines,
 } from "../store-extension/src/failure.ts";
-import { GitError, storeEnvironment } from "../store-extension/src/git.ts";
+import { GitError, installCommandLineTools, storeEnvironment, type Run } from "../store-extension/src/git.ts";
 import { proxyVariables, systemProxy } from "../store-extension/src/proxy.ts";
 import { failureDetails } from "../store-extension/src/store.ts";
 import { mount, type Mounted } from "./support/mount.ts";
@@ -306,6 +306,7 @@ afterEach(() => {
 type Views = {
     FailureView: FunctionComponent<{ title: string; details: object; cli: string; retry: () => void; retryTitle?: string }>;
     LoadFailure: FunctionComponent<{ title: string; details: object; cli: string; refresh: () => void }>;
+    NeedsGit: FunctionComponent<{ refresh: () => void; run?: Run }>;
 };
 let compiled: Promise<string> | null = null;
 
@@ -438,4 +439,63 @@ test("the store's list failing before it has loaded: its cause, Refresh, Copy Er
         if (saved === undefined) delete process.env.FUDGE_SYSTEM_PROXY;
         else process.env.FUDGE_SYSTEM_PROXY = saved;
     }
+});
+
+// The store without git (N8, SPEC-114): never runs `xcode-select` here, only a fake.
+
+/** A fake `xcode-select`: records each call and answers as given. */
+function fakeXcodeSelect(answer: { code: number; stdout?: string; stderr?: string }) {
+    const calls: { program: string; args: string[] }[] = [];
+    const run: Run = async (program, args) => {
+        calls.push({ program, args });
+        return { stdout: "", stderr: "", ...answer };
+    };
+    return { run, calls };
+}
+
+test("Install Command Line Tools asks macOS's installer with xcode-select --install, and says why it couldn't", async () => {
+    const started = fakeXcodeSelect({ code: 0 });
+    assert.equal(await installCommandLineTools(started.run), undefined);
+    assert.deepEqual(started.calls, [{ program: "/usr/bin/xcode-select", args: ["--install"] }]);
+    const installed = fakeXcodeSelect({
+        code: 1,
+        stderr: 'xcode-select: note: Command line tools are already installed. Use "Software Update" in System Settings to install updates\n',
+    });
+    assert.match((await installCommandLineTools(installed.run))!, /already installed/);
+    assert.equal(await installCommandLineTools(fakeXcodeSelect({ code: 2 }).run), "xcode-select exited with 2");
+});
+
+test("the store without git says what it needs in plain words, offers the installer, and Refresh checks again", async () => {
+    const { NeedsGit } = await loadViews();
+    const installer = fakeXcodeSelect({ code: 0 });
+    let refreshes = 0;
+    const mounted = await mount(createElement("List", {}, createElement(NeedsGit, { refresh: () => refreshes++, run: installer.run })));
+    const empty = all(top(mounted), "List.EmptyView")[0]!;
+    assert.equal(empty.props.title, "The Extension Store needs Git");
+    assert.equal(empty.props.description, "Git comes with Apple's Command Line Tools. Install them, then refresh.");
+    assert.doesNotMatch(String(empty.props.description), /`/, "drawn as written, so no Markdown");
+    assert.deepEqual(
+        all(empty, "Action").map((each) => [each.props.title, (each.props.shortcut as { key?: string } | undefined)?.key]),
+        [["Install Command Line Tools", undefined], ["Refresh", "r"]],
+        "↵ installs",
+    );
+
+    await mounted.root.dispatch(action(mounted, "Install Command Line Tools").id, ["onAction"], []);
+    assert.deepEqual(installer.calls, [{ program: "/usr/bin/xcode-select", args: ["--install"] }]);
+    const toast = calls.find((call) => call.method === "toast.show")?.params as { title?: string; message?: string };
+    assert.equal(toast.title, "Follow macOS's installer");
+    assert.equal(toast.message, "Then refresh the store.");
+
+    mounted.root.dispatch(action(mounted, "Refresh").id, ["onAction"], []);
+    assert.equal(refreshes, 1);
+});
+
+test("a failure whose cause is a missing git offers the installer too; others don't", async () => {
+    const { FailureView } = await loadViews();
+    const titles = async (output: string) => {
+        const mounted = await mount(createElement(FailureView, { title: "Couldn't install Jira", details: { output }, cli, retry: () => {} }));
+        return all(top(mounted), "Action").map((each) => each.props.title);
+    };
+    assert.ok((await titles("xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools)")).includes("Install Command Line Tools"));
+    assert.ok(!(await titles("something odd")).includes("Install Command Line Tools"));
 });

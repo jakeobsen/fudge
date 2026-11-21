@@ -46,6 +46,7 @@ import {
     gitAvailable,
     GitError,
     isValidBranch,
+    cancelGrace,
     spawnProgram,
     stopRunningGit,
     storeEnvironment,
@@ -55,11 +56,13 @@ import {
 } from "../store-extension/src/git.ts";
 import {
     detailMarkdown,
+    fetchReadme,
     filterImages,
     imageSource,
     isGitHubImage,
     rendererPass,
 } from "../store-extension/src/readme.ts";
+import { RestingWork } from "../store-extension/src/resting.ts";
 import {
     caseClash,
     lockfileProblem,
@@ -610,7 +613,15 @@ test("every git operation of the store's waits its turn", async () => {
 
 /** A fake runner: records each call and answers from `reply`. */
 function fakeRun(reply: (program: string, args: string[]) => Partial<GitResult> = () => ({})) {
-    const calls: { program: string; args: string[]; cwd?: string; timeout: number; stoppable?: boolean; input?: string }[] = [];
+    const calls: {
+        program: string;
+        args: string[];
+        cwd?: string;
+        timeout: number;
+        stoppable?: boolean;
+        input?: string;
+        env?: NodeJS.ProcessEnv;
+    }[] = [];
     const run: Run = async (program, args, options) => {
         calls.push({ program, args, ...options });
         return { code: 0, stdout: "", stderr: "", ...reply(program, args) };
@@ -788,8 +799,21 @@ async function storeContext(
     }
     // The sparse-checkout patterns, as `add`, `list` and `set --stdin` see them.
     const sparse = ["/extensions/*/package.json"];
+    // A folder's source is missing until a fetch of its `src/` tree (named by the `rev-parse` before it) brings it.
+    const fetched = new Set<string>();
+    let parsedFolder = "";
     const git = fakeRun((_program, args) => {
-        if (args[0] === "rev-parse") return { stdout: "c0ffee1234\n" };
+        const folderOf = (spec: string | undefined) => /^HEAD:extensions\/([^/]+)\/src$/.exec(spec ?? "")?.[1];
+        if (args[0] === "rev-parse") {
+            parsedFolder = folderOf(args.at(-1)) ?? parsedFolder;
+            return { stdout: "c0ffee1234\n" };
+        }
+        if (args[0] === "fetch") fetched.add(parsedFolder);
+        if (args[0] === "rev-list" && args.includes("--missing=print")) {
+            const dir = folderOf(args.at(-1))!;
+            if (fetched.has(dir)) return {};
+            return { stdout: (options.sources?.[dir] ?? []).map((_file, i) => `?${String(i).padStart(40, "0")}\n`).join("") };
+        }
         if (args[0] === "ls-tree" && args.includes("-r")) {
             const prefix = args.at(-1)!;
             const dir = /^extensions\/([^/]+)\/src\/$/.exec(prefix)![1]!;
@@ -1275,7 +1299,7 @@ test("the cache lets in only valid entries, and keeps the newest", async () => {
     assert.equal([...(await readCompatibility(support, "s")).keys()].at(-1), treeOf(5), "remembering makes it the newest");
 });
 
-test("a detail scan fetches only the folder's source files, scans them, and takes the patterns out again", async () => {
+test("a detail scan fetches the folder's src/ with a per-file cap, checks out its source, scans it, and takes the patterns out again", async () => {
     const report = { extension: "alpha", supported: false, gaps: [{ api: "AI.ask", kind: "missing", byDesign: "AI" }], unreadable: [] };
     const { context, git, cli, repoPath } = await storeContext({
         sources: { alpha: ["index.ts", "lib/util.tsx", "data.json", "logo.png"] },
@@ -1286,30 +1310,56 @@ test("a detail scan fetches only the folder's source files, scans them, and take
         git.calls.map((call) => call.args),
         [
             ["ls-tree", "-r", "-z", "--name-only", "HEAD", "--", "extensions/alpha/src/"],
+            // What's missing first: nothing is fetched when it's all here.
+            ["rev-list", "--objects", "--missing=print", "HEAD:extensions/alpha/src"],
+            ["rev-parse", "--verify", "HEAD:extensions/alpha/src"],
+            [
+                "fetch",
+                "--refetch",
+                "--no-write-fetch-head",
+                "--no-tags",
+                "--no-auto-maintenance",
+                "--no-auto-gc",
+                `--filter=blob:limit=${maxScanBytes}`,
+                "origin",
+                "c0ffee1234",
+            ],
+            ["rev-list", "--objects", "--missing=print", "HEAD:extensions/alpha/src"],
             ["sparse-checkout", "add", ...scanPatterns("alpha")],
             ["sparse-checkout", "list"],
             ["sparse-checkout", "set", "--no-cone", "--stdin"],
         ],
     );
+    assert.deepEqual(git.calls[5]!.env, { GIT_NO_LAZY_FETCH: "1" }, "the checkout never downloads");
     assert.deepEqual(scanPatterns("alpha"), [
         "/extensions/alpha/src/**/*.ts",
         "/extensions/alpha/src/**/*.tsx",
         "/extensions/alpha/src/**/*.js",
         "/extensions/alpha/src/**/*.jsx",
     ]);
-    assert.equal(git.calls[3]!.input, "/extensions/*/package.json\n", "only the scan's own patterns go");
+    assert.equal(git.calls[7]!.input, "/extensions/*/package.json\n", "only the scan's own patterns go");
     assert.deepEqual(cli.calls.map((call) => call.args), [["scan", path.join(repoPath, "extensions/alpha"), "--json"]]);
 });
 
-test("past the caps a row isn't checked: too many source files fetches nothing, too many bytes scans nothing", async () => {
-    const many = Array.from({ length: maxScanFiles + 1 }, (_, n) => `file${n}.ts`);
-    const counted = await storeContext({ sources: { alpha: [...many, "a.png", "b.json"] } });
+test("past the caps a row isn't checked: too many files under src/ fetches nothing, too many bytes scans nothing", async () => {
+    const many = Array.from({ length: maxScanFiles }, (_, n) => `file${n}.ts`);
+    // Every file under src/ is downloaded, so every one counts, source or not.
+    const counted = await storeContext({ sources: { alpha: [...many, "a.png"] } });
     assert.deepEqual(await checkFolder("alpha", counted.context, () => false), { notChecked: true });
     assert.deepEqual(counted.git.calls.map((call) => call.args[0]), ["ls-tree"], "nothing fetched");
     assert.deepEqual(counted.cli.calls, []);
     const atCap = await storeContext({ sources: { alpha: [...many.slice(1), "a.png"] } });
     await checkFolder("alpha", atCap.context, () => false);
-    assert.equal(atCap.cli.calls.length, 1, "exactly the cap, and other files, are fine");
+    assert.equal(atCap.cli.calls.length, 1, "exactly the cap is fine");
+
+    const missing = await storeContext({ sources: { alpha: ["index.ts"] } });
+    const reply = missing.git.run;
+    const withMissing: Run = async (program, args, options) =>
+        args[0] === "rev-list" ? { code: 0, stdout: "abc1 extensions/alpha/src\n?def2\n", stderr: "" } : reply(program, args, options);
+    const overCap = { ...missing.context, repo: new StoreRepository(missing.repoPath, { run: withMissing }) };
+    assert.deepEqual(await checkFolder("alpha", overCap, () => false), { notChecked: true }, "a file over the per-file cap");
+    assert.equal(missing.git.calls.filter((call) => call.args[0] === "sparse-checkout").length, 0, "nothing checked out");
+    assert.deepEqual(missing.cli.calls, []);
 
     const big = await storeContext({ sources: { alpha: ["huge.js"] } });
     await mkdir(path.join(big.repoPath, "extensions/alpha/src"), { recursive: true });
@@ -1428,6 +1478,137 @@ test("moving on cancels a check before its fetch, and a failed check says so", a
     clock.advance(500);
     await settle();
     assert.deepEqual(changes, [["alpha", "failed"]]);
+});
+
+test("moving through 20 rows fetches no README; the row the selection rests on is fetched once, by its tree", async () => {
+    const { context, git } = await storeContext();
+    await writeFile(path.join(context.repo.path, "extensions/alpha/README.md"), "# Alpha\n");
+    const clock = manualTimers();
+    const readmes = new Map<string, string>();
+    const fetches = new RestingWork<string>({
+        timers: clock.timers,
+        done: (key) => readmes.has(key.split("\0")[1]!),
+        run: (key, cancelled) =>
+            oneAtATime(async () => (cancelled() ? undefined : fetchReadme(context.repo, key.split("\0")[0]!))),
+        // As the view keeps them: a failed fetch isn't kept (the view shows it as no README).
+        changed: (key, readme) => {
+            if (readme !== "failed") readmes.set(key.split("\0")[1]!, readme);
+        },
+    });
+    const adds = () => git.calls.filter((call) => call.args[0] === "sparse-checkout" && call.args[1] === "add");
+    for (let row = 0; row < 20; row++) {
+        fetches.select(`row${row}\0${treeOf(row)}`);
+        clock.advance(100);
+        await settle();
+    }
+    assert.equal(adds().length, 0, "no README fetched while moving");
+    fetches.select(`alpha\0${treeOf(7)}`);
+    clock.advance(499);
+    await settle();
+    assert.equal(adds().length, 0, "not before half a second of rest");
+    clock.advance(1);
+    await settle();
+    assert.deepEqual(adds().map((call) => call.args.slice(2)), [["/extensions/alpha/README.md"]]);
+    assert.equal(readmes.get(treeOf(7)), "# Alpha\n");
+
+    fetches.select(undefined);
+    fetches.select(`alpha\0${treeOf(7)}`);
+    clock.advance(5000);
+    await settle();
+    assert.equal(adds().length, 1, "a README already fetched for that tree never fetches again");
+    fetches.select(`alpha\0${treeOf(8)}`);
+    clock.advance(500);
+    await settle();
+    assert.equal(adds().length, 2, "a changed folder is a new tree, fetched again");
+});
+
+test("a README git couldn't fetch isn't kept as missing: selecting it again waits, and ⌘R (again) fetches it", async () => {
+    let gitFails = true;
+    const { context } = await storeContext();
+    const failing = fakeRun((_program, args) =>
+        gitFails && args[0] === "sparse-checkout" && args[1] === "add"
+            ? { code: 128, stderr: "fatal: unable to access 'https://github.com/raycast/extensions/': Could not resolve host" }
+            : {},
+    );
+    const repo = new StoreRepository(context.repo.path, { run: failing.run });
+    await writeFile(path.join(repo.path, "extensions/alpha/README.md"), "# Alpha\n");
+    await assert.rejects(fetchReadme(repo, "alpha"), /Could not resolve host/, "a failed fetch throws");
+    gitFails = false;
+    assert.equal(await fetchReadme(repo, "alpha"), "# Alpha\n");
+    assert.equal(await fetchReadme(repo, "beta"), "", "a folder with no README has none, which is kept");
+
+    gitFails = true;
+    const clock = manualTimers();
+    const readmes = new Map<string, string>();
+    const failures: string[] = [];
+    const fetches = new RestingWork<string>({
+        timers: clock.timers,
+        done: (key) => readmes.has(key),
+        run: (key) => fetchReadme(repo, key),
+        changed: (key, readme) => (readme === "failed" ? failures.push(key) : readmes.set(key, readme)),
+    });
+    const adds = () => failing.calls.filter((call) => call.args[1] === "add").length;
+    const before = adds();
+    fetches.select("alpha");
+    clock.advance(500);
+    await settle();
+    assert.deepEqual(failures, ["alpha"]);
+    assert.equal(readmes.has("alpha"), false, "not kept as missing");
+    fetches.select("alpha");
+    clock.advance(5000);
+    await settle();
+    assert.equal(adds() - before, 1, "a render selecting it again doesn't fetch again");
+
+    gitFails = false;
+    fetches.again();
+    clock.advance(500);
+    await settle();
+    assert.equal(readmes.get("alpha"), "# Alpha\n", "⌘R fetched it");
+    fetches.again();
+    clock.advance(5000);
+    await settle();
+    assert.equal(adds() - before, 2, "and once it's kept, ⌘R doesn't fetch it again");
+
+    // One that failed and was left: ⌘R with nothing selected fetches nothing.
+    gitFails = true;
+    fetches.select("gamma");
+    clock.advance(500);
+    await settle();
+    assert.deepEqual(failures, ["alpha", "gamma"]);
+    fetches.select(undefined);
+    gitFails = false;
+    fetches.again();
+    clock.advance(5000);
+    await settle();
+    assert.equal(adds() - before, 3, "with nothing selected, again does nothing");
+    assert.equal(readmes.has("gamma"), false);
+});
+
+test("resting work: moving on cancels and aborts, and a result that comes in after it is still kept", async () => {
+    const clock = manualTimers();
+    const kept: [string, unknown][] = [];
+    const runs: { key: string; cancelled: () => boolean; signal: AbortSignal; finish: (value: string) => void }[] = [];
+    const work = new RestingWork<string>({
+        timers: clock.timers,
+        done: () => false,
+        run: (key, cancelled, signal) =>
+            new Promise((resolve) => runs.push({ key, cancelled, signal, finish: (value) => resolve(value) })),
+        changed: (key, result) => kept.push([key, result]),
+    });
+    work.select("a");
+    clock.advance(500);
+    assert.equal(runs.length, 1);
+    work.select("a");
+    assert.equal(runs[0]!.cancelled(), false, "the same key again changes nothing");
+    work.select("b");
+    assert.equal(runs[0]!.cancelled(), true);
+    assert.equal(runs[0]!.signal.aborted, true, "its fetch is ended");
+    runs[0]!.finish("A");
+    await settle();
+    assert.deepEqual(kept, [["a", "A"]]);
+    work.stop();
+    clock.advance(500);
+    assert.equal(runs.length, 1, "a stopped wait never runs");
 });
 
 test("install uses this version's cached result instead of scanning, and caches its own scan", async () => {
@@ -1584,6 +1765,167 @@ test("a detail scan's patterns fetch the source files alone, from the trees' lis
     assert.match(await readFile(path.join(repo.path, "extensions/alpha/README.md"), "utf8"), /^# Alpha/);
     await repo.drop(scanPatterns("alpha"));
     assert.equal((await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean).length, 2, "dropping again changes nothing");
+});
+
+/** The files under `extensions/<dir>` whose contents aren't downloaded, asked without downloading them. */
+async function notDownloaded(repoPath: string, dir: string): Promise<string[]> {
+    const objects = await sh(repoPath, "rev-list", "--objects", "--missing=print", "HEAD", "--", `extensions/${dir}`);
+    const names = new Map(
+        (await sh(repoPath, "ls-tree", "-r", "HEAD", `extensions/${dir}`)).split("\n").filter(Boolean).map((line) => {
+            const [meta, name] = line.split("\t");
+            return [meta!.split(" ")[2]!, name!.replace(`extensions/${dir}/`, "")];
+        }),
+    );
+    return objects.split("\n").filter((line) => line.startsWith("?")).map((line) => names.get(line.slice(1))!).sort();
+}
+
+/** A partial clone, as the store makes, of a local remote that lets clients filter, as GitHub does. */
+async function partialClone(files: Record<string, string | Buffer>) {
+    const root = await temporary();
+    const source = path.join(root, "source");
+    const bare = path.join(root, "bare.git");
+    await mkdir(source);
+    await sh(source, "init", "--quiet", "-b", "main");
+    for (const [name, contents] of Object.entries(files)) {
+        await mkdir(path.dirname(path.join(source, name)), { recursive: true });
+        await writeFile(path.join(source, name), contents);
+    }
+    await sh(source, "add", "-A");
+    await sh(source, "commit", "--quiet", "-m", "one");
+    await sh(root, "clone", "--quiet", "--bare", source, bare);
+    // Filters only: protocol v2 takes a tree's id in a `want` with no setting, so a fall back to v0 would fail here.
+    await sh(bare, "config", "uploadpack.allowFilter", "true");
+    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}` });
+    await repo.clone();
+    const { context, cli } = await storeContext();
+    return { repo, context: { ...context, repo }, cli };
+}
+
+test("a check downloads no source file over the cap: that folder isn't checked, and its blob never comes", async () => {
+    const big = Buffer.alloc(maxScanBytes + 1024, "a");
+    const { repo, context, cli } = await partialClone({
+        "extensions/big/package.json": JSON.stringify(manifest("big")),
+        "extensions/big/src/index.ts": "export {};\n",
+        "extensions/big/src/generated.ts": big,
+        "extensions/big/assets/icon.png": "not really a png\n",
+        "extensions/small/package.json": JSON.stringify(manifest("small")),
+        "extensions/small/src/index.ts": "export {};\n",
+        "extensions/small/src/data.json": "{}\n",
+        "extensions/small/README.md": "# Small\n",
+    });
+    assert.deepEqual(await notDownloaded(repo.path, "big"), ["assets/icon.png", "src/generated.ts", "src/index.ts"]);
+
+    assert.deepEqual(await checkFolder("big", context, () => false), { notChecked: true });
+    assert.deepEqual(
+        await notDownloaded(repo.path, "big"),
+        ["assets/icon.png", "src/generated.ts"],
+        "the file over the cap never came, nor anything outside src/",
+    );
+    assert.deepEqual(
+        (await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean),
+        ["/extensions/*/package.json"],
+        "nothing was checked out",
+    );
+    assert.equal(cli.calls.length, 0, "nor scanned");
+
+    assert.deepEqual(await checkFolder("small", context, () => false), fromReport(supportedScan));
+    assert.deepEqual(await notDownloaded(repo.path, "small"), ["README.md"], "only src/ came");
+    assert.deepEqual(cli.calls.map((call) => call.args[0]), ["scan"]);
+    assert.deepEqual(
+        (await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean),
+        ["/extensions/*/package.json"],
+        "the scan's patterns went again",
+    );
+    assert.deepEqual(await notDownloaded(repo.path, "big"), ["assets/icon.png", "src/generated.ts"]);
+
+    // Checked again (a new build of Fudge, say): the source is here already, so nothing is fetched.
+    const calls: string[] = [];
+    const recording = new StoreRepository(repo.path, {
+        run: (program, args, options) => {
+            calls.push(args[0]!);
+            return spawnProgram(program, args, options);
+        },
+    });
+    assert.deepEqual(await checkFolder("small", { ...context, repo: recording }, () => false), fromReport(supportedScan));
+    assert.ok(calls.includes("rev-list") && !calls.includes("fetch"), `no fetch the second time: ${calls.join(", ")}`);
+});
+
+/** Every `*.lock` file under the copy's `.git`: a git ended while writing leaves one, and later git calls then fail. */
+async function locks(repoPath: string): Promise<string[]> {
+    const found: string[] = [];
+    const walk = async (folder: string) => {
+        for (const entry of await readdir(folder, { withFileTypes: true })) {
+            const target = path.join(folder, entry.name);
+            if (entry.isDirectory()) await walk(target);
+            else if (entry.name.endsWith(".lock")) found.push(path.relative(repoPath, target));
+        }
+    };
+    await walk(path.join(repoPath, ".git"));
+    return found;
+}
+
+test("cancelling a check at each step ends only the download, leaves no lock, and the next check and an install work", async () => {
+    const { repo, context, cli } = await partialClone({
+        "extensions/small/package.json": JSON.stringify(manifest("small")),
+        "extensions/small/src/index.ts": "export {};\n",
+    });
+    const patterns = async () => (await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean);
+    const settledState = async (step: string, scans = 0) => {
+        assert.deepEqual(await locks(repo.path), [], `${step}: no lock left`);
+        await sh(repo.path, "status", "--porcelain");
+        assert.deepEqual(await patterns(), ["/extensions/*/package.json"], `${step}: nothing stays checked out`);
+        assert.equal(cli.calls.length, scans, `${step}: scanned ${scans} times`);
+    };
+
+    // During the download: a remote that takes 30 s to answer, and a cancel after half a second.
+    await sh(repo.path, "config", "remote.origin.uploadpack", "sleep 30; git-upload-pack");
+    const controller = new AbortController();
+    const started = Date.now();
+    const during = checkFolder("small", context, () => controller.signal.aborted, controller.signal);
+    setTimeout(() => controller.abort(), 500);
+    assert.equal(await during, undefined);
+    assert.ok(Date.now() - started < 500 + cancelGrace + 2000, `the fetch ended within the grace period (${Date.now() - started} ms)`);
+    await settledState("during the fetch");
+    await sh(repo.path, "config", "--unset", "remote.origin.uploadpack");
+
+    // While a step that writes the index runs (MUST 2): the checkout of the fetched source, and taking its patterns out
+    // again. The cancel's real signal is aborted as the step starts, with its git already running, and that git must
+    // still run to its end: ended, it would leave `index.lock` for every later checkout and install. So every git the
+    // check ran exits 0, including the steps after the cancel.
+    for (const [step, expected, scans] of [
+        ["sparse-checkout add", undefined, 0],
+        ["sparse-checkout set", fromReport(supportedScan), 1],
+    ] as const) {
+        const controller = new AbortController();
+        const exits: { command: string; code: number }[] = [];
+        const run: Run = async (program, args, options) => {
+            // `spawnProgram` starts the program before it returns, so the abort lands while it runs.
+            const running = spawnProgram(program, args, options);
+            const command = args.slice(0, 2).join(" ");
+            if (command === step) controller.abort();
+            const result = await running;
+            exits.push({ command, code: result.code });
+            return result;
+        };
+        const stepped = new StoreRepository(repo.path, { run });
+        assert.deepEqual(
+            await checkFolder("small", { ...context, repo: stepped }, () => controller.signal.aborted, controller.signal),
+            expected,
+            `cancelled during ${step}`,
+        );
+        assert.ok(controller.signal.aborted, `${step}: the cancel came`);
+        assert.ok(exits.some((exit) => exit.command === step), `${step}: ran`);
+        assert.deepEqual(
+            exits.filter((exit) => exit.code !== 0),
+            [],
+            `${step}: every git ran to its end, the one the cancel landed in and those after it`,
+        );
+        await settledState(`during ${step}`, scans);
+    }
+
+    assert.deepEqual(await checkFolder("small", context, () => false), fromReport(supportedScan), "the next check works");
+    assert.equal(await install(parseManifest("small", manifest("small"))!, context), true, "and an install");
+    assert.deepEqual(await locks(repo.path), []);
 });
 
 test("a default branch name is used only when it's a plain branch name", async () => {

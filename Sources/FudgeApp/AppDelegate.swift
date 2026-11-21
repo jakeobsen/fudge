@@ -107,6 +107,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Snapshot.isRequested(CommandLine.arguments)
             ? FixedLoginItem(Snapshot(arguments: CommandLine.arguments)?.loginItem ?? .notRegistered)
             : SMAppServiceLoginItem()
+        // Where the app runs from: the disk image or a translocated copy can't become a login item. Snapshot runs
+        // count as installed.
+        settingsModel.appLocation = Snapshot.isRequested(CommandLine.arguments) ? .installed : AppMover.location()
         // Snapshots get a fixed Accessibility answer: no prompt, nothing read from the system.
         settingsModel.accessibility =
             Snapshot.isRequested(CommandLine.arguments)
@@ -369,6 +372,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             FileHandle.standardError.write(Data("fudge: couldn't watch \(watcher.directory.path): \(error)\n".utf8))
         }
         extensionsWatcher = watcher
+
+        // Run from the disk image or a translocated copy, Fudge offers to move itself first (SPEC-114 §1), before
+        // onboarding; moving quits this copy and opens the one in Applications.
+        if AppMover.offer(settingsModel.appLocation) { return }
 
         // Onboarding opens at every launch until it's completed; only the real app's launch opens it.
         let onboarding = Onboarding.load(from: paths.onboardingFile)

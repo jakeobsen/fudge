@@ -44,7 +44,10 @@ jobs:
 
       # No setup-node: the Makefile downloads the Node.js Fudge bundles, checks it against its pinned checksum, and
       # runs every Node step with it, the release build's included.
+
+      # Well above a normal run (4 to 5 minutes), so a hang fails the job instead of holding a runner (FUD-153).
       - name: Test
+        timeout-minutes: 20
         run: make test
 
       # The signing secrets reach this step only, and the script builds with none of them in its environment. Without

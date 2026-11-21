@@ -4,6 +4,7 @@
 import { lstat, mkdir, readdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { readRegularFile } from "./files.ts";
+import { RestingWork, type Timers } from "./resting.ts";
 import { spawnProgram } from "./git.ts";
 import type { StoreContext } from "./store.ts";
 import { scanTimeout } from "./timeouts.ts";
@@ -352,6 +353,8 @@ async function sourceBytes(folder: string): Promise<number> {
     return total;
 }
 
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
 /**
  * Fetches `dir`'s source files, scans them with `fudge scan`, and takes the patterns out again. Resolves undefined
  * when `cancelled()` turns true before the fetch or before the scan; throws when git or the scan fails. Call it in
@@ -361,12 +364,32 @@ export async function checkFolder(
     dir: string,
     context: StoreContext,
     cancelled: () => boolean,
+    signal?: AbortSignal,
 ): Promise<Compatibility | undefined> {
-    const files = (await context.repo.sourceFiles(dir)).filter(isFetchedSource);
+    // Every file under `src/` is downloaded (its blobs of at most `maxScanBytes` each), so the cap counts them all.
+    const files = await context.repo.sourceFiles(dir);
     if (files.length > maxScanFiles) return { notChecked: true };
     if (cancelled()) return undefined;
     const patterns = scanPatterns(dir);
-    await context.repo.add(...patterns);
+    let bounded = files.length > 0;
+    // Only what isn't here yet is fetched: a folder checked before in this version downloads nothing again.
+    if (bounded && (await context.repo.missingSource(dir)) > 0) {
+        try {
+            // The one step a cancel ends (`signal`), since it writes nothing but new packs; every other step runs to
+            // its end, and the check stops between steps.
+            await context.repo.fetchSource(dir, maxScanBytes, signal);
+        } catch (error) {
+            if (cancelled()) return undefined;
+            // A server that won't send a folder's tree: the source comes as before, its size checked after it's here.
+            console.error(`The store's bounded fetch failed, so it fetches as before: ${errorText(error)}`);
+            bounded = false;
+        }
+        if (cancelled()) return undefined;
+        // A file over the cap wasn't downloaded, and the scan would need it.
+        if (bounded && (await context.repo.missingSource(dir)) > 0) return { notChecked: true };
+    }
+    if (bounded) await context.repo.addFetched(...patterns);
+    else await context.repo.add(...patterns);
     try {
         const source = path.join(context.repo.path, "extensions", dir);
         if ((await sourceBytes(path.join(source, "src"))) > maxScanBytes) return { notChecked: true };
@@ -381,69 +404,44 @@ export async function checkFolder(
 
 // MARK: - Checking the selected row
 
-type Timers = { set: (run: () => void, ms: number) => unknown; clear: (handle: unknown) => void };
-const realTimers: Timers = {
-    set: (run, ms) => setTimeout(run, ms),
-    clear: (handle) => clearTimeout(handle as NodeJS.Timeout),
-};
-
 /**
- * Scans the row the selection rests on, one at a time. `select` starts a check only after the selection has stayed
- * on an uncached row for `delay` ms, and a new `select` cancels the last: its timer, or the check itself before its
- * fetch or scan. So moving through rows fetches nothing, and a cached row never fetches.
+ * Scans the row the selection rests on, one at a time (`RestingWork`): a check starts only after the selection has
+ * stayed on an uncached row for `delay` ms, and a new `select` cancels the last: its timer, or the check itself, which
+ * stops before its fetch or scan, and whose fetch is ended (`signal`). So moving through rows fetches nothing, and a
+ * cached row never fetches.
  */
 export class CompatibilityChecks {
-    readonly #delay: number;
-    readonly #timers: Timers;
-    readonly #cached: (tree: string) => Compatibility | undefined;
-    readonly #check: (dir: string, tree: string, cancelled: () => boolean) => Promise<Compatibility | undefined>;
-    readonly #changed: (dir: string, tree: string, result: Compatibility | "failed") => void;
-    #timer: unknown;
-    #current = { cancelled: true, key: "" };
+    readonly #work: RestingWork<Compatibility>;
 
     constructor(options: {
         delay?: number;
         timers?: Timers;
         cached: (tree: string) => Compatibility | undefined;
-        check: (dir: string, tree: string, cancelled: () => boolean) => Promise<Compatibility | undefined>;
+        check: (
+            dir: string,
+            tree: string,
+            cancelled: () => boolean,
+            signal: AbortSignal,
+        ) => Promise<Compatibility | undefined>;
         changed: (dir: string, tree: string, result: Compatibility | "failed") => void;
     }) {
-        this.#delay = options.delay ?? 500;
-        this.#timers = options.timers ?? realTimers;
-        this.#cached = options.cached;
-        this.#check = options.check;
-        this.#changed = options.changed;
+        const split = (key: string) => key.split("\0") as [string, string];
+        this.#work = new RestingWork({
+            delay: options.delay,
+            timers: options.timers,
+            done: (key) => options.cached(split(key)[1]) !== undefined,
+            run: (key, cancelled, signal) => options.check(...split(key), cancelled, signal),
+            changed: (key, result) => options.changed(...split(key), result),
+        });
     }
 
-    /**
-     * The row now selected with the detail showing, or nothing. Selecting the row already being checked again (a
-     * render that changed something else) changes nothing; a check that failed is tried again only after the
-     * selection has left the row.
-     */
+    /** The row now selected with the detail showing, or nothing. */
     select(dir: string | undefined, tree: string | undefined): void {
-        const key = dir && tree ? `${dir}\0${tree}` : "";
-        if (key && key === this.#current.key && !this.#current.cancelled) return;
-        this.stop();
-        if (!dir || !tree || this.#cached(tree)) return;
-        const token = { cancelled: false, key };
-        this.#current = token;
-        this.#timer = this.#timers.set(() => {
-            this.#timer = undefined;
-            void this.#check(dir, tree, () => token.cancelled).then(
-                (result) => {
-                    if (result) this.#changed(dir, tree, result);
-                },
-                () => {
-                    if (!token.cancelled) this.#changed(dir, tree, "failed");
-                },
-            );
-        }, this.#delay);
+        this.#work.select(dir && tree ? `${dir}\0${tree}` : undefined);
     }
 
     /** Cancels the waiting or running check. */
     stop(): void {
-        this.#current.cancelled = true;
-        if (this.#timer !== undefined) this.#timers.clear(this.#timer);
-        this.#timer = undefined;
+        this.#work.stop();
     }
 }

@@ -117,7 +117,7 @@ private enum MenuTestError: Error {
     }
 }
 
-@Test func aReadStoppedAtItsDeadlineListsWhatItFound() throws {
+@Test func aReadStoppedAtItsDeadlineListsWhatItFound() async throws {
     let system = FixedMenuSystem(menus: menus)
     let reachedEdit = DispatchSemaphore(value: 0)
     let release = DispatchSemaphore(value: 0)
@@ -130,7 +130,8 @@ private enum MenuTestError: Error {
     defer { release.signal() }
     let reader = MenuReader(system: system)
     let walk = reader.start(app.pid)
-    #expect(reachedEdit.wait(timeout: .now() + 30) == .success)
+    // Waited for on a thread of its own, never Swift's shared pool (FUD-153).
+    #expect(try await OffThePool.run { reachedEdit.wait(timeout: .now() + 30) == .success })
     guard case .items(let items, let complete) = walk.finish(within: .zero) else {
         Issue.record("expected items")
         return
@@ -139,7 +140,7 @@ private enum MenuTestError: Error {
     #expect(items.map(\.title) == ["About Notes Pro", "Settings…", "New Note", "New Folder", "As PDF…", "As Text"])
 }
 
-@Test func anAppStillBeingReadIsntAskedAgain() {
+@Test func anAppStillBeingReadIsntAskedAgain() async throws {
     let system = FixedMenuSystem(menus: menus)
     let reached = DispatchSemaphore(value: 0)
     let release = DispatchSemaphore(value: 0)
@@ -151,25 +152,29 @@ private enum MenuTestError: Error {
     }
     let reader = MenuReader(system: system)
     let first = reader.start(app.pid)
-    #expect(reached.wait(timeout: .now() + 30) == .success)
+    // Every wait here happens on a thread of its own, never Swift's shared pool (FUD-153).
+    #expect(try await OffThePool.run { reached.wait(timeout: .now() + 30) == .success })
     let readsBefore = system.reads
-    guard case .noAnswer = reader.start(app.pid).finish(within: .seconds(30)) else {
+    let noAnswer = try await OffThePool.run {
+        if case .noAnswer = reader.start(app.pid).finish(within: .seconds(30)) { return true }
+        return false
+    }
+    guard noAnswer else {
         Issue.record("a hung app holds one read at most")
         release.signal()
         return
     }
     #expect(system.reads == readsBefore, "the second read asked nothing")
     release.signal()
-    _ = first.finish(within: .seconds(30))
+    try await OffThePool.run { _ = first.finish(within: .seconds(30)) }
     // Once the first read has ended, the app is asked again.
     system.onRead = nil
-    var ended = false
-    for _ in 0..<300 where !ended {
-        if case .items(_, true) = reader.start(app.pid).finish(within: .seconds(30)) {
-            ended = true
-        } else {
+    let ended = try await OffThePool.run {
+        for _ in 0..<300 {
+            if case .items(_, true) = reader.start(app.pid).finish(within: .seconds(30)) { return true }
             Thread.sleep(forTimeInterval: 0.01)
         }
+        return false
     }
     #expect(ended)
 }

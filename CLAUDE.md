@@ -432,6 +432,7 @@ Extensions run in a separate Node.js process, the extension host.
       **Open at Login** goes through the `LoginItem` protocol (core): `SMAppServiceLoginItem` (`SMAppService.mainApp`) in the app, and a `FixedLoginItem` in snapshot runs, so they never register anything (`--login-item <status>` sets its status).
       The switch shows the system's real status (`LoginItemState`, core), read whenever the page appears or the window becomes key, so changes made in System Settings show; nothing is stored.
       `LoginItemState.change` registers or unregisters, then reads the status back, with any error to show.
+      It turns nothing on while Fudge runs from its disk image or a translocated copy (`AppLocation.loginItemRefusal`), since that path goes away, and says to move Fudge to Applications first.
       **Clear Search History…** confirms in a sheet, then `LauncherModel.clearHistory()` empties `LaunchHistory` and `history.json`.
     - **Import / Export** (`BackupSection.swift`, at the bottom of General) writes and reads a `.fudgebackup` (declared in `App/Info.plist`).
       `Backup` (core) collects the parts from the support folder:
@@ -591,6 +592,14 @@ Extensions run in a separate Node.js process, the extension host.
       Below it, always shown, are the answers to "Allow <A> to open <B>'s commands?" (`LaunchPermissionsSection`, `LaunchPermissions.entries`), each changeable or forgotten, with the file read again before each change, a line saying none has asked yet when there are none, and the unreadable-file notice.
       Between them is Calendar access as macOS has it, with Open Privacy Settings (`CalendarAccessRow`); My Schedule asks for it, never this page.
       Show Onboarding Again restarts onboarding from Welcome.
+    - **Moving to Applications** (SPEC-114 §1).
+      At launch, before onboarding, `AppLocation` (core) reads where the app runs from: a read-only volume is the disk image, and a path through `AppTranslocation` is macOS's read-only copy of a quarantined download.
+      Either gets one alert, **Move to Applications** (↵) or **Not Now**, which keeps it running and asks nothing more this run.
+      `AppMover` (app) copies it into `/Applications`, or `~/Applications` for an account that can't write there, and never asks for an administrator's password (`AppLocation.destination`).
+      It copies under a hidden name, asks before replacing a copy already there (asking a Fudge running from there to quit), puts the old one in the Trash and moves the new one into place, so a failed copy never leaves half an app.
+      It clears the new copy's quarantine, since this copy has already passed Gatekeeper and a quarantined copy not moved by Finder would be translocated again, then opens it once this one has quit (a shell waiting on its pid, the paths as arguments).
+      The moved copy is opened with `--moved-to-applications`; if macOS still runs it from a read-only place, it says so once instead of offering the move again (`AppLocation.launchStep`), so the offer can't loop.
+      Snapshot runs leave launch before it.
     - **Onboarding** (`OnboardingWindow.swift`) opens at every launch until it's complete, once the extensions have loaded; never in snapshot runs, tests or the CLI.
       `Onboarding` (core) keeps the answered step ids in `onboarding.json` and decides what to show (`pending`): the unanswered steps, in order, then Done.
       Once it has been completed, Welcome isn't shown again, and a step added later shows on its own, then Done, under "Something new to decide" (`hasSomethingNew`).
@@ -603,6 +612,7 @@ Extensions run in a separate Node.js process, the extension host.
       **Expand snippets as you type**, after Clipboard history, works the same way: it explains Input Monitoring, and that pasting the snippet needs Accessibility (`SnippetExpander.permissionsExplanation`, the Snippets page's sheet's own words), **Turn On** does what the switch does (`SettingsModel.turnOnSnippetExpansion`, then macOS's prompt or pane), and **Not Now** is ↵.
       **Use Caps Lock as Hyper?** (after Snippet expansion) shows General's `HyperkeyControls`, with **Not Now** as ↵ while it's off.
       Updates, after Hyperkey, is `UpdateCheckChoice`: Daily, Weekly, Monthly or Off, with Daily preselected, and its Continue saves the choice, since nothing is checked until one is saved.
+      **Done** says how to open Fudge and that it stays in the menu bar, since it has no Dock icon (`OnboardingDone`): "Press", the launcher hotkey's keycaps, "to open Fudge.", or, while another app has that hotkey (`launcherHotkeyInUse`), to open it from the menu bar icon.
       Welcome also has **Restore from a Backup…**, General's import flow with its own sheets on the onboarding window (`SettingsModel.onboardingBackup`); a backup never holds `onboarding.json`, so onboarding carries on after an import.
       A step is answered when it's left with Get Started, Continue or Not Now, and saved straight away, so closing the window keeps the answers so far.
       Leaving a step or closing the window ends a hotkey recording. ⌘W and ⌘Q close the window as they do Settings (`WindowShortcut`), without completing onboarding.
@@ -826,12 +836,16 @@ Extensions run in a separate Node.js process, the extension host.
   `npm run typecheck` checks it with its own `tsconfig.json`, and `runtime/test/store.test.ts` tests its modules, with a fake git runner and a local bare repository (no network).
   - `git.ts` keeps a shallow, blobless, sparse clone of github.com/raycast/extensions in its support folder's `repo/`, with only `/extensions/*/package.json` checked out.
     A README or an extension's source comes on demand through `sparse-checkout add`; the detail's scan adds only a folder's source files (`scanPatterns`: `src/**/*.ts`, `.tsx`, `.js`, `.jsx`) and takes those patterns out again afterwards (`drop`, through `sparse-checkout set --no-cone --stdin` with every other pattern), so a later refresh doesn't fetch their changes.
+    What was downloaded stays in `.git` while the copy's commit reaches it (a refresh prunes only what its new commit doesn't), so a checked folder's source is downloaded once per version.
+    Nothing else prunes it, since a repack that left out blobs would also drop the checked-out manifests.
     `sourceFiles` lists a folder's `src/` from the trees alone, which a blobless clone has in full, so it downloads nothing.
     The copy is refreshed when it's a day old or on ⌘R: the default branch's name (checked by `isValidBranch`) is fetched as `refs/heads/<branch>` into its remote-tracking ref, the branch moves there, every other ref and the reflogs go, and only what the refs reach is packed again, into one pack marked as the remote's, before `git prune`.
     So the copy stays one commit deep and `.git/shallow` names only that commit.
     `gc` can't do this in a blobless clone: it keeps every object that came from the remote, reachable or not, and its repack asks the remote for the old commits `.git/shallow` still names.
     Every git call is an argument array with a timeout (`timeouts.ts`: the long one for anything that downloads or rewrites the copy), and runs with `GIT_TERMINAL_PROMPT=0` and without the user's git configuration (`storeEnvironment`), so an `insteadOf` rule can't redirect it.
     Git isn't run until `xcode-select -p` succeeds, so macOS's offer to install the Command Line Tools never shows.
+    Without them the store shows `NeedsGit` (`failure-view.tsx`): ↵ Install Command Line Tools runs `xcode-select --install`, macOS's own installer, only from that action (`installCommandLineTools`), and ⌘R Refresh checks again.
+    A failure whose cause is Git missing has the same action.
     Unloading the store ends its running git (`stopRunningGit`, in the command's effect cleanup, which `unload` runs), and turning the store off unloads its sessions and waits for them to exit (`LauncherModel.unloadSessions(ofExtension:)`) before Part A deletes `repo/`.
     A copy that can't be read, such as a clone stopped halfway, is deleted and cloned again.
     A failure before the list has ever loaded, which can only be the clone, shows in the load-error view (`LoadFailure` in `failure-view.tsx`), whose Refresh (↵, ⌘R) opens the copy again the same way and then refreshes it.
@@ -857,9 +871,17 @@ Extensions run in a separate Node.js process, the extension host.
     A result keeps which commands do (`byCommand`, from the scan's per-command results); one without it, or whose scan has none, counts the whole extension, as before SPEC-109.
     What only an AI tool uses counts for no command, so it isn't mentioned.
     The detail pane's first fact is **Compatibility** (`compatibilityText`): Checking…, Compatible, Partly compatible: 2 of 9 commands use Raycast AI: and their titles, Not compatible: Raycast AI, Missing: the APIs, Signs in with OAuth, Couldn't check, or Not checked.
-    **Browsing never turns into downloading** (`CompatibilityChecks`): only the row the selection rests on, with the detail showing, is checked, after half a second, and moving on cancels its timer, or the check itself before its fetch or its scan; selecting the same row again changes nothing, and a cached row is never fetched.
-    A check (`checkFolder`) runs in the git queue, one at a time: it counts the folder's source files from the trees (more than `maxScanFiles`, 300, isn't checked;
-    no extension in the store has more than about 220), fetches only those, checks their size before scanning (more than `maxScanBytes`, 5 MiB, isn't checked), scans with `fudge scan`, caches the result, and always takes its patterns out again.
+    **Browsing never turns into downloading** (`CompatibilityChecks`): only the row the selection rests on, with the detail showing, is checked, after half a second, and moving on cancels its timer, or the check itself: its download ends at once, and the check stops between its other steps; selecting the same row again changes nothing, and a cached row is never fetched.
+    Only the download (`fetchSource`) is ever ended, since it writes nothing but new packs: it runs in a process group of its own, which the cancel's `signal` sends SIGTERM, then SIGKILL after `cancelGrace` (a second).
+    Every other git step runs to its end, since one that writes the index holds `index.lock`, and ending it would leave that behind for every later checkout and install.
+    The README waits the same way: both run through `RestingWork` (`resting.ts`), and only the resting row's README is fetched (`fetchReadme`), once per folder tree, since READMEs are kept by tree id.
+    It's selected before the check, so its quick fetch goes ahead of the check's download in the git queue.
+    A README git couldn't fetch isn't kept (it shows as none), and ⌘R fetches it again (`RestingWork.again`).
+    A check (`checkFolder`) runs in the git queue, one at a time: it counts the files under the folder's `src/` from the trees (more than `maxScanFiles`, 300, isn't checked), then downloads those that aren't here yet with each one's size capped (`fetchSource`); `missingSource` comes first, so a folder checked before in this version downloads nothing again.
+    That's the `src/` tree fetched again (`--refetch`) with a `blob:limit` of `maxScanBytes`, which the server applies to what it finds under the tree; blobs asked for by their own ids would come whatever their size.
+    A file left out for its size means the row isn't checked (`missingSource`, `rev-list --missing=print`, which downloads nothing on any git).
+    It then checks out the source files with git's lazy fetch off (`addFetched`, `GIT_NO_LAZY_FETCH`), checks their total (more than `maxScanBytes`, 5 MiB, isn't checked), scans with `fudge scan`, caches the result, and always takes its patterns out again.
+    A server that won't send a folder's tree gets the fetch as before, with the size checked after the download.
     A blobless clone has no sizes before a download, so the first cap is on the number of files.
     Install shares the cache both ways.
   - `store.ts` installs with `$FUDGE_CLI build <source> --into $FUDGE_EXTENSIONS_DIR`.
@@ -897,6 +919,7 @@ Extensions run in a separate Node.js process, the extension host.
   - Extensions live in `FudgePaths.extensionsDirectory`: `~/Library/Application Support/fudge/extensions`, or under `$FUDGE_SUPPORT_DIR`.
   - **The running app picks it up.**
     `ExtensionsWatcher` (core) watches the extensions folder through FSEvents, with file-level events.
+    Its stream is made, started, stopped and released on a serial queue of its own, which it delivers on, never on the main thread, since each of those calls asks `fseventsd`, which can take seconds or not answer (FUD-153); `start` and `stop` return at once, and a batch goes on to the main queue.
     A path counts unless its first component under the folder starts with `.` (`.staging-*`, `.old-*`, `.DS_Store`), and a trailing 0.3 s debounce makes each install, rebuild or removal one reload: `LauncherModel.reloadExtensions()` (the installed extensions only, keeping the scanned applications, the query and the selection), the command hotkeys, and the Settings window if it's open.
     The menu's Reload Extensions also scans applications again.
     Snapshot runs don't watch.
@@ -994,6 +1017,11 @@ Extensions run in a separate Node.js process, the extension host.
 - **Fudge runs only its own Node.js** (SPEC-115, D-74), never one the user has installed, so no setting, variable, Homebrew or `PATH` changes it.
   The app and the `fudge` tool find it beside themselves (`Runtime.locateNode`: `Contents/Helpers/node`, the tool's folder with links resolved), and a missing or broken one says to reinstall Fudge (`Runtime.nodeMissing`).
   The tests get it from `FUDGE_TEST_NODE`, which `make test` sets and only the test target reads; the tool's tests run a copy of `fudge` with a Node.js beside it, as in the bundle.
+- **A test never holds up the main actor or Swift's shared pool waiting for another program, a pipe or a semaphore** (FUD-153).
+  CI's runners have three cores, so the pool has about three threads, and Swift Testing itself needs the pool to start and report tests: with it full, nothing runs, fails or prints until a thread frees.
+  A child process, a pipe read, a build or a long semaphore wait runs on a thread of its own (`OffThePool.run`, in the tests), never in `Task.detached`, which takes a pool thread.
+  A deadline fires from Dispatch (`OffThePool.after`, or `run(within:)`), not from a `Task.sleep`, and a wait for an event ends as it comes (`Reloads` in `ExtensionsWatcherTests`).
+  A pool that's full for good can still stop the run, so CI's 20-minute step timeout is the last net.
 - **SwiftUI's `TextField` writes its unchanged text back** now and then, three times on ↵ before `onSubmit` and again when it loses the keyboard.
   Setters bound to a field must ignore writes that change nothing, or they'll redo work such as resetting the selection.
 - **`.onAppear` runs once for the panel's lifetime**, not each time it's shown.
@@ -1090,6 +1118,7 @@ Extensions run in a separate Node.js process, the extension host.
 ## CI and releases
 
 - **CI** (`.github/workflows/ci.yml`) runs `make lint` and `make test` on pull requests and pushes to `mainline`.
+  The test step, here and in the release workflow, stops after 20 minutes (`timeout-minutes`), so a hang fails the job instead of holding a runner.
   `swift test` compiles every target, so the app's code is checked, but the app bundle is not assembled.
 - **The release workflow** (`.github/workflows/release.yml`) is the only place a release is built, and it runs on a pushed `v*` tag.
   Tags are pushed only with the maintainer's explicit permission, never by an agent.
