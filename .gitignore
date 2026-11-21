@@ -12,3 +12,6 @@ runtime/node_modules/
 runtime/dist/
 
 .DS_Store
+
+# The Node.js make downloads and checks (SPEC-115)
+.cache/
