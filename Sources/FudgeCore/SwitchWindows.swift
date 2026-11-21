@@ -230,15 +230,16 @@ public struct WindowSwitcher<System: WindowSwitchSystem>: Sendable {
             let (flight, starts) = inFlight.begin(pid)
             group.enter()
             if starts {
-                DispatchQueue.global(qos: .userInitiated).async { [system, inFlight] in
+                // `answers` holds this read's titles; a hung app's thread mustn't keep them once the read is over.
+                DispatchQueue.global(qos: .userInitiated).async { [system, inFlight, weak answers] in
                     let answer = system.windows(of: pid)
-                    answers.set(answer, for: pid)
+                    answers?.set(answer, for: pid)
                     inFlight.end(pid, flight, with: answer)
                     group.leave()
                 }
             } else {
-                flight.done.notify(queue: .global(qos: .userInitiated)) {
-                    if let answer = flight.answer as? AppWindowsRead<System.Handle> { answers.set(answer, for: pid) }
+                flight.done.notify(queue: .global(qos: .userInitiated)) { [weak answers] in
+                    if let answer = flight.answer as? AppWindowsRead<System.Handle> { answers?.set(answer, for: pid) }
                     group.leave()
                 }
             }
