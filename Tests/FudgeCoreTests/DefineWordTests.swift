@@ -77,7 +77,7 @@ private actor SelectionReads {
 
             **2** informal a person who is quietly cheerful\\.
 
-            **ORIGIN** early 21st century: made up for a test\\.
+            **ORIGIN** early 21st century\\: made up for a test\\.
             """)
 }
 
@@ -92,7 +92,7 @@ private actor SelectionReads {
 
             *adjective*
 
-            sitting very still, as if on a pedestal: the dog sat plinth\\-cat\\.
+            sitting very still, as if on a pedestal\\: the dog sat plinth\\-cat\\.
             """)
 }
 
@@ -141,6 +141,51 @@ private actor SelectionReads {
     #expect(markdown.contains("\\# not a heading \\- not a list 1\\. not numbered \\[not\\]\\(a link\\) \\*not em\\*"))
     #expect(markdown.contains("\\`no code\\` \\> no quote"))
     #expect(DefinitionText.escaped("a\\b") == "a\\\\b")
+}
+
+/// What `MarkdownView` draws of `text` once it's escaped: its characters, and whether any of it is formatted or linked.
+private func drawn(_ text: String) -> (text: String, formatted: Bool) {
+    let drawn = Markdown.inline(DefinitionText.escaped(text))
+    return (String(drawn.characters), drawn.runs.contains { $0.inlinePresentationIntent != nil || $0.link != nil })
+}
+
+@Test func markdownWithCombiningOrPrependedMarksIsDrawnAsItIs() {
+    let shapes = [
+        // A combining mark after the punctuation: one Character, but Markdown still reads the `*`.
+        "*\u{0301}word*\u{0301}", "**\u{0301}word**\u{0301}", "_\u{0301}word_\u{0301}",
+        "`\u{0301}code`\u{0301}", "~\u{0301}~\u{0301}gone~\u{0301}~\u{0301}",
+        // A prepended mark takes the backslash after it into its Character; escaped per character, the backslash
+        // cancelled the escape after it, and two of them drew the text in italics.
+        "\u{0600}\\*x*", "\u{0600}\\*x\u{0600}\\*",
+        // Links, images, autolinks and entities stay text too.
+        "[a](https://example.com)", "![a](https://example.com/a.png)", "[\u{0301}a](https://example.com)",
+        "<https://example.com>", "see https://example.com/a.b", "&amp; &lt;b&gt;", "a\\b",
+    ]
+    for shape in shapes {
+        let (text, formatted) = drawn(shape)
+        #expect(text == shape, "drawn as it is: \(shape.debugDescription)")
+        #expect(!formatted, "nothing formatted or linked: \(shape.debugDescription)")
+    }
+}
+
+@Test func aCraftedHeadwordOrWordIsDrawnAsItIs() throws {
+    let crafted = "*\u{0301}x*\u{0301}"
+    let markdown = DefinitionText.markdown(word: "x", text: "\(crafted) | x | noun a thing.")
+    guard case .heading(level: 1, let heading) = Markdown.blocks(markdown).first else {
+        Issue.record("no heading in \(markdown.debugDescription)")
+        return
+    }
+    #expect(String(Markdown.inline(heading).characters) == crafted)
+    #expect(!Markdown.inline(heading).runs.contains { $0.inlinePresentationIntent != nil })
+
+    // With no definition, the word the user typed or selected is in the heading.
+    let missing = try #require(DefineWordView.view(word: crafted, definition: nil).string("markdown"))
+    guard case .heading(_, let title) = Markdown.blocks(missing).first else {
+        Issue.record("no heading in \(missing.debugDescription)")
+        return
+    }
+    #expect(String(Markdown.inline(title).characters) == "No definition for “\(crafted)”")
+    #expect(!Markdown.inline(title).runs.contains { $0.inlinePresentationIntent != nil })
 }
 
 // MARK: - The view
