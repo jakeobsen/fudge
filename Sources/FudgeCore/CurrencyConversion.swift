@@ -20,9 +20,9 @@ public enum CurrencyConversion {
     }
 
     // Lookarounds, so the spaces around a separator belong to both sides.
-    nonisolated(unsafe) private static let separator = try! NSRegularExpression(
+    private static let separator = try! NSRegularExpression(
         pattern: #"(?<=\s)(?:to|in|=)(?=\s)"#)
-    nonisolated(unsafe) private static let quantityPattern = try! NSRegularExpression(
+    private static let quantityPattern = try! NSRegularExpression(
         pattern: #"^([^\d\s.,-]*)\s*(-?[\d.,'’]*\d(?:[eE][+-]?\d+)?)\s*([^\d\s.,-]*)$"#)
 
     /// The conversion `text` asks for, or nil. The amount is read like the calculator's numbers, in `format` (by
