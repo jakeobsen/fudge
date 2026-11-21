@@ -196,7 +196,9 @@ Extensions run in a separate Node.js process, the extension host.
       Nothing from an event is logged or written anywhere, its row id is its position (`event-<n>`), and only the command counts in `LaunchHistory`.
       ↵ is Join Meeting when there's a link, else Open in Calendar (⌘O, `ical://ekevent/<id>?method=show&options=more`), then Copy Meeting Link (⌘⇧C) and Copy Details; Show Details (⌘D) shows the detail pane, which hides the rows' times.
       Calendar access (`NSCalendarsFullAccessUsageDescription`) is asked for only when My Schedule runs, the first time; refused, it shows an empty view with Open Privacy Settings.
+      A search that matches none of the events listed says "No events match", with no action; "No upcoming events", with Open Calendar Settings, is for days with no events.
       Its hotkey hides it again when it's on screen, and `EKEventStoreChanged` draws it again.
+      After a new read (a calendar change, Days Ahead, a refresh), the selection stays on the event it was on (`ScheduleList.row(after:selected:in:)`), known by its day, its start and a hash of its title held in memory only, or keeps its place when that event is gone.
       The calendars are read off the main thread (`LauncherModel.readSchedule`, and the Calendar page's `loadCalendars`), since every EventKit call waits on the calendar agent: the list shows as loading until the read lands, and ⌘D draws again from it without reading again.
       `EventKitCalendarSource` runs every call on one serial queue, and makes its store on first use.
       **Settings → Calendar** (`CalendarPage.swift`, after Sign-in) has Days Ahead and a checkbox per calendar.

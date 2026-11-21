@@ -2020,8 +2020,10 @@ final class LauncherModel {
                 Self.scheduleContent(from: source, chosen: chosen, now: Date(), calendar: .current)
             }.value
             guard !Task.isCancelled else { return }
+            // The selection stays on the event it was on, wherever the read puts it (SPEC-110 §3).
+            let previous = scheduleContent
             scheduleContent = content
-            drawSchedule()
+            drawSchedule(after: previous)
         }
     }
 
@@ -2054,10 +2056,17 @@ final class LauncherModel {
         refreshList(&command, selectFirst: false)
     }
 
-    /// Draws My Schedule again from what was last read, if it's on screen.
-    private func drawSchedule() {
+    /// Draws My Schedule again from what was last read, if it's on screen. After a new read (`previous` is what was
+    /// drawn before it), the selection moves to the row with the event it was on, else the list keeps its place.
+    private func drawSchedule(after previous: ScheduleList.Content? = nil) {
         guard case .command(var command) = screen, command.session == ScheduleList.session else { return }
+        let selected = command.list?.items.first { $0.id == command.selectedNode }?.itemId
         renderSchedule(&command)
+        if let previous, let row = ScheduleList.row(after: previous, selected: selected, in: scheduleContent),
+            let item = command.list?.items.first(where: { $0.itemId == row })
+        {
+            command.selectedNode = item.id
+        }
         screen = .command(command)
     }
 
