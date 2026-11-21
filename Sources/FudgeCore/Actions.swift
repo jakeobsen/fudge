@@ -110,6 +110,16 @@ public enum RootAction: Sendable, Equatable {
     case turnOnCurrencyConversion
     /// Downloads the exchange rates again, from the "Couldn't download exchange rates" card.
     case retryExchangeRates
+    /// Copies a quicklink's link as saved, placeholders included.
+    case copyQuicklink(String)
+    /// Deletes a quicklink, by id, after asking.
+    case deleteQuicklink(String)
+
+    /// Drawn in red in the action panel.
+    var isDestructive: Bool {
+        if case .deleteQuicklink = self { return true }
+        return false
+    }
 }
 
 /// The action panel of a root search item, and fudge's keys for the Settings window.
@@ -120,6 +130,8 @@ public enum RootActions {
     public static let configureExtensionShortcut = KeyShortcut(key: ",", modifiers: ["cmd", "shift"])
     public static let showInFinderShortcut = KeyShortcut(key: "f", modifiers: ["cmd", "shift"])
     public static let copyQuestionAndAnswerShortcut = KeyShortcut(key: "c", modifiers: ["cmd", "shift"])
+    public static let copyLinkShortcut = KeyShortcut(key: "c", modifiers: ["cmd", "shift"])
+    public static let deleteQuicklinkShortcut = KeyShortcut(key: "x", modifiers: ["ctrl"])
     static let enter = KeyShortcut(key: "return", modifiers: [])
 
     /// The entries for the Calculator card, the first one being what ↵ does (`CalculatorResult.enter`).
@@ -169,6 +181,12 @@ public enum RootActions {
                 [("Reload Extensions", enter, .open)]
             case .quit:
                 [("Quit Fudge", enter, .open)]
+            case .quicklink(let quicklink):
+                [
+                    ("Open Quicklink", enter, .open),
+                    ("Copy Link", copyLinkShortcut, .copyQuicklink(quicklink.link)),
+                    ("Delete Quicklink…", deleteQuicklinkShortcut, .deleteQuicklink(quicklink.id)),
+                ]
             }
         return section(entries)
     }
@@ -179,8 +197,8 @@ public enum RootActions {
                 title: nil,
                 entries: entries.enumerated().map { index, entry in
                     ActionEntry(
-                        id: index + 1, title: entry.0, icon: nil, shortcut: entry.1, destructive: false, submenu: nil,
-                        isLoading: false, target: .root(entry.2))
+                        id: index + 1, title: entry.0, icon: nil, shortcut: entry.1, destructive: entry.2.isDestructive,
+                        submenu: nil, isLoading: false, target: .root(entry.2))
                 }
             )
         ]
