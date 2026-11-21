@@ -232,6 +232,9 @@ final class SettingsModel {
 
     /// fudge as a login item; the app delegate sets the real one, and snapshots a fake.
     @ObservationIgnored var loginItem: any LoginItem = FixedLoginItem(.notRegistered)
+    /// Where the running app is: Open at Login can't be turned on from the disk image or a translocated copy. The
+    /// app delegate reads it at launch; snapshots keep `.installed`.
+    @ObservationIgnored var appLocation = AppLocation.installed
     /// The Open at Login switch, from the system's real status (`refreshLoginItem()`), never a stored value.
     private(set) var loginItemState = LoginItemState(.notRegistered)
     /// Why turning Open at Login on or off failed, until the next try.
@@ -254,7 +257,7 @@ final class SettingsModel {
     }
 
     func setOpenAtLogin(_ on: Bool) {
-        (loginItemState, loginItemError) = LoginItemState.change(loginItem, to: on)
+        (loginItemState, loginItemError) = LoginItemState.change(loginItem, to: on, location: appLocation)
     }
 
     func openLoginItemsSettings() {

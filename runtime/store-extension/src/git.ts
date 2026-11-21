@@ -158,6 +158,18 @@ export async function gitAvailable(run: Run = spawnProgram, git = "/usr/bin/git"
     return version.code === 0 && !/developer tools/i.test(version.stderr);
 }
 
+/**
+ * Asks macOS to install the Command Line Tools, which bring git: `xcode-select --install` shows macOS's own installer
+ * and returns at once. Only ever run from the user's own action (Install Command Line Tools), never by itself.
+ * Resolves undefined once the installer is up, or what `xcode-select` said when it couldn't start it (the tools are
+ * installed already, say).
+ */
+export async function installCommandLineTools(run: Run = spawnProgram): Promise<string | undefined> {
+    const result = await run("/usr/bin/xcode-select", ["--install"], { timeout: shortTimeout });
+    if (result.code === 0) return undefined;
+    return (result.stderr || result.stdout).trim() || `xcode-select exited with ${result.code}`;
+}
+
 /** The clone in `<supportPath>/repo`. Every path or pattern built from an extension's name is checked by the caller. */
 export class StoreRepository {
     readonly path: string;

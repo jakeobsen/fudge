@@ -432,6 +432,7 @@ Extensions run in a separate Node.js process, the extension host.
       **Open at Login** goes through the `LoginItem` protocol (core): `SMAppServiceLoginItem` (`SMAppService.mainApp`) in the app, and a `FixedLoginItem` in snapshot runs, so they never register anything (`--login-item <status>` sets its status).
       The switch shows the system's real status (`LoginItemState`, core), read whenever the page appears or the window becomes key, so changes made in System Settings show; nothing is stored.
       `LoginItemState.change` registers or unregisters, then reads the status back, with any error to show.
+      It turns nothing on while Fudge runs from its disk image or a translocated copy (`AppLocation.loginItemRefusal`), since that path goes away, and says to move Fudge to Applications first.
       **Clear Search History…** confirms in a sheet, then `LauncherModel.clearHistory()` empties `LaunchHistory` and `history.json`.
     - **Import / Export** (`BackupSection.swift`, at the bottom of General) writes and reads a `.fudgebackup` (declared in `App/Info.plist`).
       `Backup` (core) collects the parts from the support folder:
@@ -591,6 +592,14 @@ Extensions run in a separate Node.js process, the extension host.
       Below it, always shown, are the answers to "Allow <A> to open <B>'s commands?" (`LaunchPermissionsSection`, `LaunchPermissions.entries`), each changeable or forgotten, with the file read again before each change, a line saying none has asked yet when there are none, and the unreadable-file notice.
       Between them is Calendar access as macOS has it, with Open Privacy Settings (`CalendarAccessRow`); My Schedule asks for it, never this page.
       Show Onboarding Again restarts onboarding from Welcome.
+    - **Moving to Applications** (SPEC-114 §1).
+      At launch, before onboarding, `AppLocation` (core) reads where the app runs from: a read-only volume is the disk image, and a path through `AppTranslocation` is macOS's read-only copy of a quarantined download.
+      Either gets one alert, **Move to Applications** (↵) or **Not Now**, which keeps it running and asks nothing more this run.
+      `AppMover` (app) copies it into `/Applications`, or `~/Applications` for an account that can't write there, and never asks for an administrator's password (`AppLocation.destination`).
+      It copies under a hidden name, asks before replacing a copy already there (asking a Fudge running from there to quit), puts the old one in the Trash and moves the new one into place, so a failed copy never leaves half an app.
+      It clears the new copy's quarantine, since this copy has already passed Gatekeeper and a quarantined copy not moved by Finder would be translocated again, then opens it once this one has quit (a shell waiting on its pid, the paths as arguments).
+      The moved copy is opened with `--moved-to-applications`; if macOS still runs it from a read-only place, it says so once instead of offering the move again (`AppLocation.launchStep`), so the offer can't loop.
+      Snapshot runs leave launch before it.
     - **Onboarding** (`OnboardingWindow.swift`) opens at every launch until it's complete, once the extensions have loaded; never in snapshot runs, tests or the CLI.
       `Onboarding` (core) keeps the answered step ids in `onboarding.json` and decides what to show (`pending`): the unanswered steps, in order, then Done.
       Once it has been completed, Welcome isn't shown again, and a step added later shows on its own, then Done, under "Something new to decide" (`hasSomethingNew`).
@@ -603,6 +612,7 @@ Extensions run in a separate Node.js process, the extension host.
       **Expand snippets as you type**, after Clipboard history, works the same way: it explains Input Monitoring, and that pasting the snippet needs Accessibility (`SnippetExpander.permissionsExplanation`, the Snippets page's sheet's own words), **Turn On** does what the switch does (`SettingsModel.turnOnSnippetExpansion`, then macOS's prompt or pane), and **Not Now** is ↵.
       **Use Caps Lock as Hyper?** (after Snippet expansion) shows General's `HyperkeyControls`, with **Not Now** as ↵ while it's off.
       Updates, after Hyperkey, is `UpdateCheckChoice`: Daily, Weekly, Monthly or Off, with Daily preselected, and its Continue saves the choice, since nothing is checked until one is saved.
+      **Done** says how to open Fudge and that it stays in the menu bar, since it has no Dock icon (`OnboardingDone`): "Press", the launcher hotkey's keycaps, "to open Fudge.", or, while another app has that hotkey (`launcherHotkeyInUse`), to open it from the menu bar icon.
       Welcome also has **Restore from a Backup…**, General's import flow with its own sheets on the onboarding window (`SettingsModel.onboardingBackup`); a backup never holds `onboarding.json`, so onboarding carries on after an import.
       A step is answered when it's left with Get Started, Continue or Not Now, and saved straight away, so closing the window keeps the answers so far.
       Leaving a step or closing the window ends a hotkey recording. ⌘W and ⌘Q close the window as they do Settings (`WindowShortcut`), without completing onboarding.
@@ -834,6 +844,8 @@ Extensions run in a separate Node.js process, the extension host.
     `gc` can't do this in a blobless clone: it keeps every object that came from the remote, reachable or not, and its repack asks the remote for the old commits `.git/shallow` still names.
     Every git call is an argument array with a timeout (`timeouts.ts`: the long one for anything that downloads or rewrites the copy), and runs with `GIT_TERMINAL_PROMPT=0` and without the user's git configuration (`storeEnvironment`), so an `insteadOf` rule can't redirect it.
     Git isn't run until `xcode-select -p` succeeds, so macOS's offer to install the Command Line Tools never shows.
+    Without them the store shows `NeedsGit` (`failure-view.tsx`): ↵ Install Command Line Tools runs `xcode-select --install`, macOS's own installer, only from that action (`installCommandLineTools`), and ⌘R Refresh checks again.
+    A failure whose cause is Git missing has the same action.
     Unloading the store ends its running git (`stopRunningGit`, in the command's effect cleanup, which `unload` runs), and turning the store off unloads its sessions and waits for them to exit (`LauncherModel.unloadSessions(ofExtension:)`) before Part A deletes `repo/`.
     A copy that can't be read, such as a clone stopped halfway, is deleted and cloned again.
     A failure before the list has ever loaded, which can only be the clone, shows in the load-error view (`LoadFailure` in `failure-view.tsx`), whose Refresh (↵, ⌘R) opens the copy again the same way and then refreshes it.
