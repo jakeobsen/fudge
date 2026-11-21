@@ -1,21 +1,22 @@
 // The store's local copy of github.com/raycast/extensions: a shallow, blobless, sparse clone made with the system git.
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { longTimeout, shortTimeout } from "./timeouts.ts";
 
 export const repositoryURL = "https://github.com/raycast/extensions.git";
-/** Clone, fetch and fetching files on demand can take a while on a slow connection. */
-export const longTimeout = 120_000;
-export const shortTimeout = 30_000;
 /** The copy is refreshed when the store opens and it's older than this. */
 export const refreshAge = 24 * 60 * 60 * 1000;
 
 export type GitResult = { code: number; stdout: string; stderr: string };
-/** Runs a program with an argument array, never through a shell. A `stoppable` one ends with `stopRunningGit()`. */
+/**
+ * Runs a program with an argument array, never through a shell, writing `input` to its stdin when given. A
+ * `stoppable` one ends with `stopRunningGit()`.
+ */
 export type Run = (
     program: string,
     args: string[],
-    options: { cwd?: string; timeout: number; stoppable?: boolean },
+    options: { cwd?: string; timeout: number; stoppable?: boolean; input?: string },
 ) => Promise<GitResult>;
 
 /** The git processes running now, which `stopRunningGit()` ends. */
@@ -38,14 +39,24 @@ export function storeEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.
 }
 
 /** `spawn` with no shell, a timeout, and `storeEnvironment()`. */
-export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable }) =>
+export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable, input }) =>
     new Promise((resolve) => {
-        const child = spawn(program, args, { cwd, timeout, stdio: ["ignore", "pipe", "pipe"], env: storeEnvironment() });
+        const child = spawn(program, args, {
+            cwd,
+            timeout,
+            stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+            env: storeEnvironment(),
+        });
         if (stoppable) running.add(child);
+        if (input !== undefined && child.stdin) {
+            // A program that exits early closes its stdin; its exit status says what went wrong.
+            child.stdin.on("error", () => undefined);
+            child.stdin.end(input);
+        }
         let stdout = "";
         let stderr = "";
-        child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
-        child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+        child.stdout?.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+        child.stderr?.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
         child.on("error", (error) => {
             running.delete(child);
             resolve({ code: -1, stdout, stderr: error.message });
@@ -59,6 +70,20 @@ export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable }) =>
 
 /** A git command that failed; its message is git's stderr. */
 export class GitError extends Error {}
+
+/**
+ * Whether `name` is a plain branch name, by `git check-ref-format --branch`'s rules and stricter: letters, digits and
+ * `._/+-`, not starting with `-`, `.` or `/`, with no `..` or `//`, and no part that starts with `.`, ends with `.lock`
+ * or is empty. The default branch's name comes from the remote, so it's checked before it's used in a ref.
+ */
+export function isValidBranch(name: string): boolean {
+    return (
+        /^[A-Za-z0-9_][A-Za-z0-9._/+-]*$/.test(name) &&
+        !name.includes("..") &&
+        !name.endsWith(".") &&
+        name.split("/").every((part) => part.length > 0 && !part.startsWith(".") && !part.endsWith(".lock"))
+    );
+}
 
 /**
  * Whether git can run, checked without ever triggering macOS's offer to install the Command Line Tools: `/usr/bin/git`
@@ -90,8 +115,8 @@ export class StoreRepository {
         return path.join(this.path, ".git", "fudge-refreshed-at");
     }
 
-    async #exec(args: string[], timeout = shortTimeout, cwd = this.path): Promise<string> {
-        const result = await this.#run(this.#git, args, { cwd, timeout, stoppable: true });
+    async #exec(args: string[], timeout = shortTimeout, cwd = this.path, input?: string): Promise<string> {
+        const result = await this.#run(this.#git, args, { cwd, timeout, stoppable: true, input });
         if (result.code !== 0) throw new GitError(result.stderr.trim() || `git ${args[0]} failed`);
         return result.stdout;
     }
@@ -117,24 +142,74 @@ export class StoreRepository {
             path.dirname(this.path),
         );
         await this.#exec(["sparse-checkout", "set", "--no-cone", "/extensions/*/package.json"]);
-        await this.#exec(["checkout"]);
+        // Fetches every extension's package.json.
+        await this.#exec(["checkout"], longTimeout);
         await this.#markRefreshed();
     }
 
-    /** Fetches the default branch's newest commit, checks it out, and drops what the old one left behind. */
+    /**
+     * Fetches the default branch's newest commit into its remote-tracking ref, moves the branch there and checks it
+     * out, then drops every other ref, the reflogs, and every object they no longer reach (`#keepOnlyReachable`).
+     * `.git/shallow` then names only the new commit: the copy stays one commit deep however often it's refreshed.
+     */
     async refresh(): Promise<void> {
         const branch = await this.defaultBranch();
-        await this.#exec(["fetch", "--depth", "1", "--filter=blob:none", "origin", branch], longTimeout);
-        await this.#exec(["checkout", "--quiet", "FETCH_HEAD"]);
+        const local = `refs/heads/${branch}`;
+        const tracking = `refs/remotes/origin/${branch}`;
+        await this.#exec(
+            ["fetch", "--depth", "1", "--filter=blob:none", "--no-tags", "origin", `+${local}:${tracking}`],
+            longTimeout,
+        );
+        // Fetches the manifests that changed.
+        await this.#exec(["checkout", "--quiet", "-B", branch, tracking, "--"], longTimeout);
+        const kept = new Set([local, tracking, "refs/remotes/origin/HEAD"]);
+        const refs = (await this.#exec(["for-each-ref", "--format=%(refname)"])).split("\n").filter(Boolean);
+        for (const ref of refs.filter((ref) => !kept.has(ref))) {
+            await this.#exec(["update-ref", "--no-deref", "-d", ref]);
+        }
         await this.#exec(["reflog", "expire", "--expire=now", "--all"]);
-        await this.#exec(["gc", "--prune=now", "--quiet"], longTimeout);
+        await this.#keepOnlyReachable();
         await this.#markRefreshed();
     }
 
-    /** `main`, from the clone's `origin/HEAD`. */
+    /**
+     * Packs the objects the refs reach into one new pack, marked as the remote's (`.promisor`), deletes every other
+     * pack, then prunes loose objects and the `.git/shallow` entries of commits that are gone. `gc` can't do this in a
+     * blobless clone: it keeps every object that came from the remote, reachable or not, and its repack asks the
+     * remote for the old commits `.git/shallow` still names. Nothing here downloads.
+     */
+    async #keepOnlyReachable(): Promise<void> {
+        const objects = await this.#exec(
+            ["rev-list", "--objects", "--no-object-names", "--all", "--missing=allow-promisor"],
+            longTimeout,
+        );
+        const packs = path.join(this.path, ".git", "objects", "pack");
+        const before = await readdir(packs).catch((): string[] => []);
+        const hash = (
+            await this.#exec(["pack-objects", "--quiet", path.join(packs, "pack")], longTimeout, this.path, objects)
+        ).trim();
+        if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(hash)) throw new GitError("git pack-objects didn't name its pack");
+        await writeFile(path.join(packs, `pack-${hash}.promisor`), "");
+        for (const file of before) {
+            const old = /^(pack-[0-9a-f]+)\.pack$/.exec(file)?.[1];
+            if (!old || old === `pack-${hash}`) continue;
+            for (const suffix of [".pack", ".idx", ".rev", ".promisor", ".bitmap", ".mtimes", ".keep"]) {
+                await rm(path.join(packs, `${old}${suffix}`), { force: true });
+            }
+        }
+        // An index of several packs would still name the deleted ones.
+        await rm(path.join(packs, "multi-pack-index"), { force: true });
+        await this.#exec(["prune", "--expire=now", "--exclude-promisor-objects"], longTimeout);
+    }
+
+    /** `main`, from the clone's `origin/HEAD`. A name that isn't a plain branch name is refused (`isValidBranch`). */
     async defaultBranch(): Promise<string> {
         const ref = (await this.#exec(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])).trim();
-        return ref.replace(/^origin\//, "");
+        const branch = ref.replace(/^origin\//, "");
+        if (!isValidBranch(branch)) {
+            throw new GitError(`The store's copy names a default branch it can't use: ${JSON.stringify(branch)}`);
+        }
+        return branch;
     }
 
     /** Adds a pattern to the checkout, fetching its files. `pattern` is built from a checked name. */

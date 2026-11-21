@@ -5,6 +5,7 @@ import path from "node:path";
 import { isValidName, type Installed, type InstallRecord, type StoreEntry } from "./catalog.ts";
 import { spawnProgram, type Run, type StoreRepository } from "./git.ts";
 import { sourceProblem } from "./sources.ts";
+import { buildTimeout, scanTimeout } from "./timeouts.ts";
 
 /** A step that refused or failed; its message is shown in a failure toast. */
 export class StoreError extends Error {}
@@ -23,12 +24,6 @@ export type StoreContext = {
     run?: Run;
     now?: () => Date;
 };
-
-/** The CLI build is the longest step: npm may install the extension's packages first. */
-export const buildTimeout = 600_000;
-
-/** `fudge scan` reads the extension's source without building it. */
-export const scanTimeout = 120_000;
 
 /** What the install confirmation needs from `fudge scan <folder> --json`. */
 export type ScanReport = { supported: boolean; gaps: { api: string }[]; unreadable: string[] };
