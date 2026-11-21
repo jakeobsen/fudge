@@ -133,6 +133,11 @@ test("a URL object or a Request is rewritten the same way", async () => {
     assert.equal(sent.at(-1)!.body, "grant_type=refresh_token&refresh_token=r");
     await wrapped("HTTPS://GitHub.oauth.raycast.com/token", post("authorization_code"));
     assert.equal(sent.at(-1)!.url, "https://relay.example/github/token", "matched as fetch would request it");
+    await wrapped({ toString: () => "https://slack.oauth.raycast.com/token" } as unknown as string, post("authorization_code"));
+    assert.equal(sent.at(-1)!.url, "https://relay.example/slack/token", "any other input, read as a string");
+    const elsewhere = { toString: () => "https://api.github.com/user" };
+    await wrapped(elsewhere as unknown as string);
+    assert.equal(sent.at(-1)!.url, "https://api.github.com/user", "and anything else goes where it was going");
 });
 
 for (const [state, answer] of [
@@ -149,10 +154,20 @@ for (const [state, answer] of [
             ["https://slack.oauth.raycast.com/authorize", undefined],
             ["https://notion.oauth.raycast.com/token", post("authorization_code")],
             ["https://oauth.raycast.com/", undefined],
+            // DNS ignores a trailing dot, so these are the same hosts.
+            ["https://github.oauth.raycast.com./token", post("authorization_code")],
+            ["https://github.oauth.raycast.com../anything-else", undefined],
+            ["https://OAUTH.raycast.com./", undefined],
         ];
         for (const [url, init] of refused) {
             await assert.rejects(wrapped(url, init), /Fudge doesn't send requests to|Sign-in is off/, url);
+            // Any other input is read as `fetch` reads it, as a string: an object with a `toString()`, or a URL
+            // from another realm.
+            const stringy = { toString: () => url } as unknown as string;
+            await assert.rejects(wrapped(stringy, init), /Fudge doesn't send requests to|Sign-in is off/, `{ ${url} }`);
         }
+        const foreign = { href: "https://github.oauth.raycast.com/x", toString: () => "https://github.oauth.raycast.com/x" };
+        await assert.rejects(wrapped(foreign as unknown as URL), /Fudge doesn't send requests to|Sign-in is off/);
         if (state === "off") {
             await assert.rejects(wrapped("https://github.oauth.raycast.com/token", post("authorization_code")), {
                 message: signInOffMessage,

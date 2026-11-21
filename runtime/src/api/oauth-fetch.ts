@@ -29,9 +29,11 @@ export function providersFromEnvironment(value = process.env[providersVariable])
     }
 }
 
-/** Raycast's sign-in proxies, `*.oauth.raycast.com`: Fudge never sends anything there. */
+/** Raycast's sign-in proxies, `*.oauth.raycast.com`: Fudge never sends anything there. DNS ignores a trailing dot,
+ * so `github.oauth.raycast.com.` is one of them too. */
 export function isRaycastHost(hostname: string): boolean {
-    return hostname === "oauth.raycast.com" || hostname.endsWith(".oauth.raycast.com");
+    const host = hostname.toLowerCase().replace(/\.+$/, "");
+    return host === "oauth.raycast.com" || host.endsWith(".oauth.raycast.com");
 }
 
 function parse(url: string): URL | null {
@@ -133,8 +135,9 @@ export function rewriteFetch(
 ): Fetch {
     const wrapped = async function fetch(input: Parameters<Fetch>[0], init?: Parameters<Fetch>[1]) {
         const request = typeof Request !== "undefined" && input instanceof Request ? input : null;
-        const url = request ? request.url : input instanceof URL ? input.href : typeof input === "string" ? input : null;
-        const parsed = url === null ? null : parse(url);
+        // Anything but a Request is read as `fetch` reads it, as a string: a URL, a URL from another realm, or any
+        // object with a `toString()`.
+        const parsed = parse(request ? request.url : String(input));
         if (parsed === null) return original(input, init);
         const raycast = isRaycastHost(parsed.hostname);
         if (!raycast && providerFor(parsed, providers) === null) return original(input, init);
