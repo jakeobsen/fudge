@@ -54,8 +54,9 @@ func pathsUnderAnExtensionFolderCount(_ relative: String) {
 /// stalls for seconds can't fail it.
 private let noHang: Duration = .seconds(30)
 
-/// The reloads a watcher made, and waits for them. A wait ends as the reload comes, or at its deadline, which a
-/// detached timer enforces off the main actor (FUD-153): a main actor that's held up can't hold a wait past it.
+/// The reloads a watcher made, and waits for them. A wait ends as the reload comes, or at its deadline, which
+/// Dispatch enforces (`OffThePool.after`, FUD-153): neither a held-up main actor nor a full pool can hold a wait past
+/// it.
 private final class Reloads: @unchecked Sendable {
     private let lock = NSLock()
     private var times: [ContinuousClock.Instant] = []
@@ -99,8 +100,7 @@ private final class Reloads: @unchecked Sendable {
                 continuation.resume(returning: already)
                 return
             }
-            Task.detached { [self] in
-                try? await Task.sleep(for: limit)
+            OffThePool.after(limit) { [self] in
                 lock.withLock { waiting.removeValue(forKey: id) }?.resume(returning: nil)
             }
         }
@@ -165,6 +165,7 @@ private func expectOnce(_ times: [Duration], sourceLocation: SourceLocation = #_
     #expect(times.count == 1, "reloads: \(times)", sourceLocation: sourceLocation)
 }
 
+@Suite(.timeLimit(.minutes(2)))
 @MainActor
 struct ExtensionsWatcherTests {
     @Test func creatingAFolderReloadsOnce() async throws {
@@ -290,15 +291,17 @@ struct ExtensionsWatcherTests {
     }
 }
 
-@Suite(.enabled(if: Fixtures.esbuild != nil, "needs esbuild: run `make test`, which installs it"))
+@Suite(
+    .enabled(if: Fixtures.esbuild != nil, "needs esbuild: run `make test`, which installs it"), .timeLimit(.minutes(2)))
 @MainActor
 struct ExtensionsWatcherBuildTests {
     let builder = ExtensionBuilder(esbuild: Fixtures.esbuild ?? URL(fileURLWithPath: "/missing"))
 
-    /// Builds the greeter off the main actor, so the build doesn't hold up other tests' callbacks.
+    /// Builds the greeter on a thread of its own, so its seconds of esbuild hold up neither the main actor nor the
+    /// shared pool (a `Task.detached` would take a pool thread).
     private func build(into extensions: URL) async throws {
         let builder = builder
-        _ = try await Task.detached { try builder.build(source: Fixtures.greeter, into: extensions) }.value
+        _ = try await OffThePool.run { try builder.build(source: Fixtures.greeter, into: extensions) }
     }
 
     @Test func installingWithTheBuilderReloadsOnce() async throws {

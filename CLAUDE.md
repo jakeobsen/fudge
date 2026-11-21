@@ -990,9 +990,11 @@ Extensions run in a separate Node.js process, the extension host.
 - **Fudge runs only its own Node.js** (SPEC-115, D-74), never one the user has installed, so no setting, variable, Homebrew or `PATH` changes it.
   The app and the `fudge` tool find it beside themselves (`Runtime.locateNode`: `Contents/Helpers/node`, the tool's folder with links resolved), and a missing or broken one says to reinstall Fudge (`Runtime.nodeMissing`).
   The tests get it from `FUDGE_TEST_NODE`, which `make test` sets and only the test target reads; the tool's tests run a copy of `fudge` with a Node.js beside it, as in the bundle.
-- **A test never holds up the main actor or Swift's shared threads waiting for another program** (FUD-153).
-  CI's runners have three cores, so the shared pool has three threads, and a test that runs esbuild or asks `fseventsd` on the main actor holds up every main-actor test while it waits.
-  Run such work off the main actor (`Task.detached` for a build), and wait for an event with a deadline that a detached timer enforces (`Reloads` in `ExtensionsWatcherTests`), not by polling on the main actor.
+- **A test never holds up the main actor or Swift's shared pool waiting for another program, a pipe or a semaphore** (FUD-153).
+  CI's runners have three cores, so the pool has about three threads, and Swift Testing itself needs the pool to start and report tests: with it full, nothing runs, fails or prints until a thread frees.
+  A child process, a pipe read, a build or a long semaphore wait runs on a thread of its own (`OffThePool.run`, in the tests), never in `Task.detached`, which takes a pool thread.
+  A deadline fires from Dispatch (`OffThePool.after`, or `run(within:)`), not from a `Task.sleep`, and a wait for an event ends as it comes (`Reloads` in `ExtensionsWatcherTests`).
+  A pool that's full for good can still stop the run, so CI's 20-minute step timeout is the last net.
 - **SwiftUI's `TextField` writes its unchanged text back** now and then, three times on ↵ before `onSubmit` and again when it loses the keyboard.
   Setters bound to a field must ignore writes that change nothing, or they'll redo work such as resetting the selection.
 - **`.onAppear` runs once for the panel's lifetime**, not each time it's shown.

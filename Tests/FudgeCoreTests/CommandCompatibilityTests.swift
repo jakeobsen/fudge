@@ -206,7 +206,7 @@ struct BuildRecordsCommandCompatibility {
 @Suite(.enabled(if: Fixtures.esbuild != nil && Tool.node != nil, "needs esbuild and node: run `make test`"))
 struct BuildScansEndToEnd {
     /// `fudge build` through the real tool and the real scanner: only the command that reaches AI is listed.
-    @Test func fudgeBuildListsTheCommandThatUsesRaycastAI() throws {
+    @Test func fudgeBuildListsTheCommandThatUsesRaycastAI() async throws {
         let folder = try Fixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: folder) }
         let source = folder.appendingPathComponent("made-up")
@@ -239,7 +239,13 @@ struct BuildScansEndToEnd {
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         try process.run()
-        process.waitUntilExit()
+        // Waited for on a thread of its own, with a deadline Dispatch enforces (FUD-153).
+        let exited = try await OffThePool.run(within: Tool.noHang) {
+            process.waitUntilExit()
+            return true
+        }
+        if exited != true { process.terminate() }
+        try #require(exited == true, "fudge build exited")
         #expect(process.terminationStatus == 0)
         let installed = try InstalledExtension.load(from: extensions.appendingPathComponent("made-up"))
         #expect(installed.compatibility.commands == ["ask": [.ai]])
