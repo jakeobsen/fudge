@@ -58,6 +58,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model.systemActions = InertSystemActions(trashCount: snapshot.trashCount)
             // Nor the windows: Save Layout… gets `--layout-windows`' made-up ones, and nothing is moved.
             model.windowLayoutActions = .inert(windows: snapshot.layoutWindows)
+            // Nor other apps' menus: Search Menu Items gets `--menu-items`' made-up app and menus.
+            model.menuItemsAccess = FixedMenuItemsAccess(file: snapshot.menuItems)
             // Nor the clipboard or the Keychain: Clipboard History gets `--clipboard-entries`' made-up entries.
             if let file = snapshot.clipboardEntries {
                 model.clipboardHistory = ClipboardHistoryService(
@@ -180,6 +182,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel: panel, restoreKeyboard: { [weak self] in self?.model.restoreKeyboard() })
         // Switch Windows reads the system's windows; it notes which apps become active from now on.
         model.windowSwitching = SystemWindowSwitching(accessibility: { SystemCalls.mayReadWindows() })
+        model.menuItemsAccess = SystemMenuItemsAccess(mayReadMenus: { SystemCalls.mayReadMenus() })
 
         let quickLook = QuickLookPreview()
         quickLook.launcherLevel = panel.level
@@ -681,7 +684,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// `--snapshot <file.png> --onboarding [<step>]` renders the onboarding window, with the same fakes, on its pending
 /// steps from `onboarding.json`; with a step id, on every step from the start, at that one.
 /// `--update-available <version>` shows that version as found by an update check, wherever Fudge shows one (the
-/// General page). No snapshot run asks GitHub.
+/// General page). No snapshot run asks GitHub. `--menu-items <file>` gives Search Menu Items a made-up app and menus.
 /// For checking the layout without looking at the screen.
 @MainActor
 struct Snapshot {
@@ -734,6 +737,9 @@ struct Snapshot {
     /// `--edit-position [<name>]`: the Window Management page shows its position sheet in place, editing that
     /// position, or a new one.
     let editPosition: String?
+    /// `--menu-items <file>`: Search Menu Items' made-up app and menus (`FixedMenuFile`). Snapshots never read
+    /// another app's menus, so without it Search Menu Items has no app to search.
+    let menuItems: URL?
 
     init?(arguments: [String]) {
         guard let index = arguments.firstIndex(of: "--snapshot"), index + 1 < arguments.count else { return nil }
@@ -772,6 +778,7 @@ struct Snapshot {
         clipboardConsent = arguments.contains("--clipboard-consent")
         foundFiles = value("--found-files").map { URL(fileURLWithPath: $0) }
         clipboardEntries = value("--clipboard-entries").map { URL(fileURLWithPath: $0) }
+        menuItems = value("--menu-items").map { URL(fileURLWithPath: $0) }
         updateAvailable = value("--update-available").flatMap { Release(tag: $0.hasPrefix("v") ? $0 : "v" + $0) }
         trashCount = value("--trash-count").map { Int($0) } ?? InertSystemActions.trashCount
         windows = value("--windows").map { URL(fileURLWithPath: $0) }

@@ -122,7 +122,9 @@ private struct AccessoryView: View {
 
     var body: some View {
         Group {
-            if accessory.isTag {
+            if !accessory.keycaps.isEmpty {
+                KeycapLabels(keys: accessory.keycaps).foregroundStyle(.secondary)
+            } else if accessory.isTag {
                 TagView(text: accessory.text, icon: accessory.icon, color: accessory.color, assets: assets)
             } else {
                 HStack(spacing: 4) {
