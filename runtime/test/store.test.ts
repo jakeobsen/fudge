@@ -771,7 +771,29 @@ test("without the Command Line Tools, git itself is never run", async () => {
         missing.calls.map((call) => call.program),
         ["/usr/bin/xcode-select"],
     );
-    const present = fakeRun();
+    // A developer folder `xcode-select -p` still names, whose tools are gone: `/usr/bin/git` would offer the
+    // installer, so it isn't run either.
+    const developer = await temporary();
+    const naming = (folder: string) => (program: string) => (program.endsWith("xcode-select") ? { stdout: `${folder}\n` } : {});
+    for (const [why, folder] of [
+        ["a folder without git", developer],
+        ["a folder that isn't there", path.join(developer, "gone")],
+        ["no folder", ""],
+        ["a relative path", "Developer"],
+    ] as const) {
+        const emptied = fakeRun(naming(folder));
+        assert.equal(await gitAvailable(emptied.run), false, why);
+        assert.deepEqual(emptied.calls.map((call) => call.program), ["/usr/bin/xcode-select"], `${why}: git isn't run`);
+    }
+    await mkdir(path.join(developer, "usr/bin/git"), { recursive: true });
+    const aFolder = fakeRun(naming(developer));
+    assert.equal(await gitAvailable(aFolder.run), false, "usr/bin/git must be a file");
+    assert.deepEqual(aFolder.calls.map((call) => call.program), ["/usr/bin/xcode-select"]);
+
+    const tools = await temporary();
+    await mkdir(path.join(tools, "usr/bin"), { recursive: true });
+    await writeFile(path.join(tools, "usr/bin/git"), "");
+    const present = fakeRun(naming(tools));
     assert.equal(await gitAvailable(present.run), true);
     assert.deepEqual(
         present.calls.map((call) => [call.program, ...call.args]),
@@ -780,8 +802,11 @@ test("without the Command Line Tools, git itself is never run", async () => {
             ["/usr/bin/git", "--version"],
         ],
     );
-    const broken = fakeRun((program) => (program.endsWith("git") ? { code: 1, stderr: "xcrun: error: invalid active developer path" } : {}));
+    const broken = fakeRun((program) =>
+        program.endsWith("git") ? { code: 1, stderr: "xcrun: error: invalid active developer path" } : naming(tools)(program),
+    );
     assert.equal(await gitAvailable(broken.run), false);
+    assert.equal(broken.calls.length, 2, "git ran, and said it can't");
 });
 
 // MARK: - Install, update and uninstall

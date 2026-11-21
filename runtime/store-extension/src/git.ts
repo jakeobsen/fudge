@@ -149,13 +149,24 @@ export function isValidBranch(name: string): boolean {
 
 /**
  * Whether git can run, checked without ever triggering macOS's offer to install the Command Line Tools: `/usr/bin/git`
- * shows that offer when the tools are missing, so `xcode-select -p` is asked first.
+ * shows that offer when the tools are missing, so `xcode-select -p` is asked first, and the developer folder it names
+ * must hold `usr/bin/git`. That folder can outlive its tools (deleted by hand), and `xcode-select -p` still names it.
  */
 export async function gitAvailable(run: Run = spawnProgram, git = "/usr/bin/git"): Promise<boolean> {
     const tools = await run("/usr/bin/xcode-select", ["-p"], { timeout: shortTimeout });
     if (tools.code !== 0) return false;
+    const developer = tools.stdout.trim();
+    if (!path.isAbsolute(developer) || !(await isFile(path.join(developer, "usr/bin/git")))) return false;
     const version = await run(git, ["--version"], { timeout: shortTimeout });
     return version.code === 0 && !/developer tools/i.test(version.stderr);
+}
+
+/** Whether `file` is a file, followed through links, found without running or reading it. */
+async function isFile(file: string): Promise<boolean> {
+    return stat(file).then(
+        (info) => info.isFile(),
+        () => false,
+    );
 }
 
 /**
