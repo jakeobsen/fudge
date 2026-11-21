@@ -48,6 +48,7 @@ Extensions run in a separate Node.js process, the extension host.
       Root search ranks `ApplicationIndex`, installed commands and Fudge's own items (`RootSearch.builtInItems`: "Fudge Settings", "Create Quicklink", "Search Snippets", "Create Snippet", "Reload Extensions" and "Quit Fudge", so nothing needs the menu bar) with `RootSearch` (fuzzy match, then `LaunchHistory`).
       "Reload Extensions" runs the menu bar item's own reload (`reloadAll`, set by `AppDelegate`).
       "Quit Fudge" asks through `confirm` first, and it's never recorded in `LaunchHistory` (`RootItem.recordsLaunch`), so an empty search never offers it first.
+      With no launch history yet (or after Clear Search History), an empty search lists Search Snippets, Clipboard History, Search Emoji & Symbols and Fudge Settings first (`RootSearch.firstRunItemIDs`), each when it's there, then the rest by title; one launch of anything puts it back to most-used first.
       Commands run through `ExtensionHost`, and its messages update the screen.
     - **Aliases and Enabled** come from `settings.json` too (`CommandSettings.alias`/`enabled`, `ExtensionSettings.enabled`).
       `LauncherModel.applySettings()` rebuilds root search from the cached installed extensions with `RootSearch.applying`, which drops disabled commands and sets aliases; it runs on every reload and whenever the Settings window changes something.
