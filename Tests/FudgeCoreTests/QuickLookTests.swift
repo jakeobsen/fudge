@@ -211,9 +211,32 @@ func escClosesQuickLookAfterThePopoversAndDoesNothingElse(behavior: EscapeBehavi
     }
 }
 
+/// What holds the keyboard a turn after the launcher resigned.
+private func settled(
+    sheet: Bool = false, launcherKey: Bool = false, previewOpen: Bool = false, previewKey: Bool = false
+) -> LauncherResign.Settled {
+    LauncherResign.Settled(
+        sheetAttached: sheet, launcherIsKey: launcherKey, previewOpen: previewOpen, previewIsKey: previewKey)
+}
+
 @Test func theLauncherStaysWhenTheQuickLookPreviewTakesTheKeyboard() {
-    #expect(LauncherResign.decide(sheetAttached: false, quickLookTookKey: false) == .hide)
-    #expect(LauncherResign.decide(sheetAttached: true, quickLookTookKey: false) == .stay)
-    #expect(LauncherResign.decide(sheetAttached: false, quickLookTookKey: true) == .takeKeyBack)
-    #expect(LauncherResign.decide(sheetAttached: true, quickLookTookKey: true) == .stay)
+    // Another app took it: the user left.
+    #expect(LauncherResign.decide(settled()) == .hide)
+    #expect(LauncherResign.decide(settled(previewOpen: true)) == .hide, "the preview open, but not key")
+    // A sheet on the launcher took it.
+    #expect(LauncherResign.decide(settled(sheet: true)) == .stay)
+    #expect(LauncherResign.decide(settled(sheet: true, previewOpen: true, previewKey: true)) == .stay)
+    // The user clicked the preview.
+    #expect(LauncherResign.decide(settled(previewOpen: true, previewKey: true)) == .takeKeyBack)
+    // A preview window that shows nothing of Fudge's isn't the launcher's.
+    #expect(LauncherResign.decide(settled(previewKey: true)) == .hide)
+}
+
+/// FUD-104: ⌘Y opened the preview, and Quick Look took the keyboard as it opened. While the launcher resigned, the
+/// preview wasn't key yet and the current event was ⌘Y in the launcher, so the old rule hid the launcher and the
+/// preview with it. Decided on what holds the keyboard once that has settled, the launcher stays.
+@Test func aPreviewThatTakesTheKeyboardAsItOpensKeepsTheLauncher() {
+    #expect(LauncherResign.decide(settled(previewOpen: true, previewKey: true)) == .takeKeyBack)
+    // Its keyboard back already by then: nothing to do.
+    #expect(LauncherResign.decide(settled(launcherKey: true, previewOpen: true)) == .stay)
 }

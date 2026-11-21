@@ -17,9 +17,6 @@ final class QuickLookPreview: NSObject, @preconcurrency QLPreviewPanelDataSource
     var forwardKey: (NSEvent) -> Bool = { _ in false }
     /// The launcher's level; the panel shows above it.
     var launcherLevel: NSWindow.Level = .floating
-    /// The launcher's Spaces and full-screen behaviour, which the panel takes, so ⌘Y over a full-screen app shows
-    /// the preview on that Space.
-    var launcherCollectionBehavior: NSWindow.CollectionBehavior = []
     /// Set while Fudge closes the panel itself, so that isn't taken for the user's close.
     private var closing = false
 
@@ -30,8 +27,10 @@ final class QuickLookPreview: NSObject, @preconcurrency QLPreviewPanelDataSource
         guard let panel = QLPreviewPanel.shared() else { return }
         panel.updateController()
         panel.hidesOnDeactivate = false
-        // Set each time: Quick Look may reset it as it closes.
-        panel.collectionBehavior = launcherCollectionBehavior
+        // Quick Look's own Spaces behaviour, allowed over a full-screen app, so ⌘Y there shows the preview on that
+        // Space. Not the launcher's whole set (`.canJoinAllSpaces`, `.transient`, `.ignoresCycle`), which came in
+        // with ⌘Y closing the launcher (FUD-104). Set each time: Quick Look may reset it as it closes.
+        panel.collectionBehavior = Self.overFullScreen(panel.collectionBehavior)
         if panel.isVisible {
             panel.reloadData()
         } else {
@@ -56,13 +55,22 @@ final class QuickLookPreview: NSObject, @preconcurrency QLPreviewPanelDataSource
         QLPreviewPanel.sharedPreviewPanelExists() && QLPreviewPanel.shared()?.isVisible == true
     }
 
-    /// Whether the panel just took the keyboard from the launcher: the user clicked it. Read while the launcher
-    /// resigns key, when the click is still the current event.
-    var tookKey: Bool {
-        guard item != nil, QLPreviewPanel.sharedPreviewPanelExists(), let panel = QLPreviewPanel.shared(),
-            panel.isVisible
-        else { return false }
-        return panel.isKeyWindow || NSApp.currentEvent?.window === panel
+    /// `behavior`, allowed on a full-screen app's Space. A window is either a full-screen app's auxiliary or its own
+    /// full-screen window, never both, so the latter goes.
+    static func overFullScreen(_ behavior: NSWindow.CollectionBehavior) -> NSWindow.CollectionBehavior {
+        var allowed = behavior
+        allowed.remove([.fullScreenPrimary, .fullScreenNone])
+        allowed.insert(.fullScreenAuxiliary)
+        return allowed
+    }
+
+    /// Whether the panel has the keyboard: the user clicked it, or Quick Look took it as the preview opened. Read
+    /// once the launcher's resign has settled (`LauncherResign`).
+    var isKey: Bool {
+        guard item != nil, QLPreviewPanel.sharedPreviewPanelExists(), let panel = QLPreviewPanel.shared() else {
+            return false
+        }
+        return panel.isVisible && panel.isKeyWindow
     }
 
     // MARK: - Control, from the app delegate

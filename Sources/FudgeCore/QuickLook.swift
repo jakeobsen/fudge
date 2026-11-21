@@ -126,17 +126,38 @@ public enum PreviewArrow: Sendable, Equatable {
 
 /// What the launcher does when it stops being the key window (`LauncherPanel.resignKey`). It hides, as when the
 /// user clicks elsewhere, unless the keyboard went somewhere that's still part of it.
+///
+/// It's decided once the key change has settled, a main-queue turn after the resign, on what holds the keyboard
+/// then (`Settled`). While the launcher resigns, AppKit hasn't made the new key window key yet, and the current event
+/// says nothing about where the keyboard went: ⌘Y opening the preview is a key press in the launcher (FUD-104).
 public enum LauncherResign: Sendable, Equatable {
-    /// A sheet on the launcher (a `confirm`, a FilePicker's open panel) took the keyboard.
+    /// A sheet on the launcher (a `confirm`, a FilePicker's open panel) took the keyboard, or the launcher has it
+    /// again.
     case stay
-    /// Fudge's own Quick Look preview took it, because the user clicked it: the launcher stays, and takes the
-    /// keyboard back, so ↑↓, Esc and ⌘Y keep working.
+    /// Fudge's own Quick Look preview took it: the user clicked it, or Quick Look took it as the preview opened. The
+    /// launcher stays, and takes the keyboard back, so ↑↓, Esc and ⌘Y keep working.
     case takeKeyBack
     case hide
 
-    public static func decide(sheetAttached: Bool, quickLookTookKey: Bool) -> LauncherResign {
-        if sheetAttached { return .stay }
-        if quickLookTookKey { return .takeKeyBack }
+    /// What holds the keyboard once the key change has settled.
+    public struct Settled: Sendable, Equatable {
+        public var sheetAttached: Bool
+        public var launcherIsKey: Bool
+        /// Whether Fudge's preview shows something, and whether it's the key window.
+        public var previewOpen: Bool
+        public var previewIsKey: Bool
+
+        public init(sheetAttached: Bool, launcherIsKey: Bool, previewOpen: Bool, previewIsKey: Bool) {
+            self.sheetAttached = sheetAttached
+            self.launcherIsKey = launcherIsKey
+            self.previewOpen = previewOpen
+            self.previewIsKey = previewIsKey
+        }
+    }
+
+    public static func decide(_ settled: Settled) -> LauncherResign {
+        if settled.sheetAttached || settled.launcherIsKey { return .stay }
+        if settled.previewOpen, settled.previewIsKey { return .takeKeyBack }
         return .hide
     }
 }

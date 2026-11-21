@@ -93,19 +93,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.numberFormatChanged = { [weak self] in self?.model.applySettings() }
         panel.onEscape = { [weak self] in self?.model.escape() }
         panel.onResign = { [weak self] in
-            guard let self else { return }
-            // An alert sheet takes the keyboard, and so does the Quick Look preview the user clicks; neither is the
-            // user leaving.
-            switch LauncherResign.decide(
-                sheetAttached: self.panel.attachedSheet != nil, quickLookTookKey: self.quickLook?.tookKey == true)
-            {
-            case .stay:
-                break
-            case .takeKeyBack:
-                self.takeKeyBackFromQuickLook()
-            case .hide:
-                self.hidePanel()
-            }
+            // Decided a turn later, once AppKit has made the new key window key (`LauncherResign`).
+            DispatchQueue.main.async { [weak self] in self?.settleResign() }
         }
 
         // A snapshot renders off-screen and quits. It installs no status item or hotkey, and nothing in it takes
@@ -127,7 +116,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let quickLook = QuickLookPreview()
         quickLook.launcherLevel = panel.level
-        quickLook.launcherCollectionBehavior = panel.collectionBehavior
         quickLook.closedByUser = { [weak self] in self?.model.quickLookClosedByUser() }
         quickLook.forwardKey = { [weak self] event in self?.previewKey(event) ?? false }
         model.quickLookChanged = { [weak self] item in
@@ -357,6 +345,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// The launcher stopped being the key window a turn ago. An alert sheet takes the keyboard, and so does the Quick
+    /// Look preview, when the user clicks it or Quick Look takes it as the preview opens; none of them is the user
+    /// leaving.
+    private func settleResign() {
+        guard panel.isVisible else { return }
+        let settled = LauncherResign.Settled(
+            sheetAttached: panel.attachedSheet != nil, launcherIsKey: panel.isKeyWindow,
+            previewOpen: quickLook?.item != nil, previewIsKey: quickLook?.isKey == true)
+        switch LauncherResign.decide(settled) {
+        case .stay:
+            break
+        case .takeKeyBack:
+            takeKeyBackFromQuickLook()
+        case .hide:
+            hidePanel()
+        }
+    }
+
     /// The app the user was in when the Quick Look preview opened. Forgotten when the panel hides, so a later
     /// session never restores it.
     private var appBeforeQuickLook: NSRunningApplication?
@@ -369,7 +375,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return app
     }
 
-    /// The user clicked the Quick Look preview, which took the keyboard (and may have made Fudge the active app):
+    /// The Quick Look preview took the keyboard (and may have made Fudge the active app), usually because the user
+    /// clicked it:
     /// the launcher takes it back, so ↑↓, Esc and ⌘Y keep working, and `hidePanel` later gives the keyboard back to
     /// the app the user was in, as after a FilePicker's open panel. That app is set whether or not
     /// `frontmostApplication` names Fudge yet, since it can lag behind the click; `hidePanel` only activates it if
