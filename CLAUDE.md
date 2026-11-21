@@ -948,6 +948,8 @@ Extensions run in a separate Node.js process, the extension host.
   - **The running app picks it up.**
     `ExtensionsWatcher` (core) watches the extensions folder through FSEvents, with file-level events.
     Its stream is made, started, stopped and released on a serial queue of its own, which it delivers on, never on the main thread, since each of those calls asks `fseventsd`, which can take seconds or not answer (FUD-153); `start` and `stop` return at once, and a batch goes on to the main queue.
+    FSEvents reports nothing from before the stream exists, so the folder's `FolderStamp` (its modification time and inode) is read at `start` and again once the stream has started, and a difference counts as a batch for the folder (FUD-156).
+    A test that counts reloads waits for the stream's queue first (`streamStarted`, with a deadline), then for the watcher to go quiet.
     A path counts unless its first component under the folder starts with `.` (`.staging-*`, `.old-*`, `.DS_Store`), and a trailing 0.3 s debounce makes each install, rebuild or removal one reload: `LauncherModel.reloadExtensions()` (the installed extensions only, keeping the scanned applications, the query and the selection), the command hotkeys, and the Settings window if it's open.
     The menu's Reload Extensions also scans applications again.
     Snapshot runs don't watch.
