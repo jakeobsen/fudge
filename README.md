@@ -8,22 +8,63 @@ It is not affiliated with or endorsed by Raycast.
 
 ## Installing
 
+Fudge needs macOS 14 or later and a Mac with Apple silicon.
+On an Intel Mac, [build it from source](#building-from-source).
+
 Each release on GitHub has a disk image, `Fudge-<version>.dmg`: open it and drag Fudge to Applications.
 Fudge includes the Node.js that runs extensions, so there's nothing else to install.
 If you open Fudge straight from the disk image or from Downloads, it offers to move itself to Applications, since it can't open at login from there.
 On an account that can't add apps to `/Applications`, it moves to the Applications folder in your home folder instead.
 Releases are signed with a Developer ID and notarized by Apple, so the first time you open Fudge, macOS asks once whether to open an app downloaded from the internet.
 Click **Open**, and Fudge starts.
+It lives in the menu bar, with no Dock icon.
+
+### The `fudge` command-line tool
+
+Fudge includes `fudge`, a command-line tool for building and checking extensions, at `/Applications/Fudge.app/Contents/Helpers/fudge`.
+To run it as `fudge`, link it into a folder on your `PATH`; it finds Fudge's own Node.js and esbuild through the link:
+
+```bash
+sudo ln -s /Applications/Fudge.app/Contents/Helpers/fudge /usr/local/bin/fudge
+```
+
+- `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for Fudge, which picks it up within a second, with nothing to reload.
+  Run it again after changing the extension.
+  `--into <folder>` installs it in that extensions folder instead.
+- `fudge scan <folder>` says what the extension uses that Fudge doesn't have yet or doesn't support, without building or running it (`--json` for a script).
+- `fudge version` prints Fudge's version.
 
 ## First run
 
-The first time Fudge starts, it walks you through a few choices: the launcher hotkey, Accessibility, Open at Login, currency conversion and how often to check for updates.
-Each takes effect at once, and **Settings…** has them all.
+The first time Fudge starts, it walks you through a few choices.
+It asks about the features that are off until you turn them on, and each answer takes effect at once.
+**Settings…** has them all, to change later.
 Until you click **Start Using Fudge** at the end, Fudge shows these steps again at its next start, from where you left off.
 
-**Settings… → Permissions** shows whether Fudge may use Accessibility, which extensions need to read the text you've selected, to paste, or to move windows.
+macOS asks you to allow some things the first time Fudge needs them:
+
+- **Accessibility**, to paste (snippets, emoji, clipboard history and extensions), move and switch windows, search an app's menus, use Caps Lock as Hyper, lock the screen, and read the text you've selected.
+  The first-run steps ask for it.
+- **Input Monitoring**, only if you turn on expanding snippets as you type, so Fudge can spot a snippet's keyword.
+- **Automation**, to let Fudge use Finder (the items selected in Finder, Empty Trash), System Events (Toggle Dark Mode) or the login window (Restart, Shut Down, Log Out).
+- **Calendars**, the first time you open My Schedule.
+
+**Settings… → Permissions** shows whether Fudge may use Accessibility and your calendars.
 **Open Accessibility Settings** lets macOS ask you first; if it doesn't ask, click it again to open **System Settings → Privacy & Security → Accessibility** and turn Fudge on there.
 **Show Onboarding Again** goes through the first-run choices again.
+
+## What works
+
+Fudge runs extensions written for Raycast through its own `@raycast/api`, without changing them.
+Before you install one, the Extension Store says whether Fudge has everything it uses, and `fudge scan` does the same for an extension's folder.
+Both read the `@raycast/api` features the extension's code uses, without running it.
+
+- **Raycast AI and the Raycast Browser Extension aren't supported.**
+  Fudge checks each command on its own, following the files it imports, and installs a command that uses either turned off.
+  The store marks an extension with some such commands **Partly compatible**, and one with only such commands **Not compatible**.
+- **A feature Fudge doesn't have yet** makes the command that uses it stop with a message naming it.
+- **Signing in:** extensions that sign in to a service with OAuth go through a sign-in server, which you pick under **Settings… → Sign-in** (see [Signing in](#signing-in)).
+  An extension that takes a token in its settings works without one.
 
 ## Using it
 
@@ -118,6 +159,7 @@ In the **Extension Store** command, search the extensions, or pick a category in
   If the list couldn't be downloaded, ⌘R tries again.
 - If an install or update fails, the store shows the whole error and its likely cause, such as npm not found or the npm registry not reachable. ↵ tries again, and ⌘C copies the error, to send with an issue.
   It uses the proxy set in **System Settings → Network** for npm and Git, unless you've set one yourself (`HTTPS_PROXY`); a proxy configuration file (PAC) can't be passed on.
+  After you change the proxy settings, quit and reopen Fudge for the store to use them.
 - The store needs Git.
   If it's missing, install Apple's Command Line Tools: run `xcode-select --install` in Terminal.
 - It never touches extensions you installed with `fudge build` yourself.
@@ -376,9 +418,10 @@ Fudge never downloads or installs anything by itself.
   It keeps the last 3.
   You can import one of those with **Import…**; it needs no password.
 
-## Building
+## Building from source
 
 You need macOS 14 or later and Xcode 26 or later.
+A build is for the kind of Mac you build on, Apple silicon or Intel.
 The first build downloads the Node.js that Fudge includes from nodejs.org, checks it against the checksum pinned in the `Makefile`, and keeps it in `.cache/node`; every build step and test uses it.
 The app runs on macOS 14 and later.
 
@@ -431,10 +474,7 @@ The Node.js inside Fudge has two of its own, in `App/Helpers/node.entitlements`:
 
 - `Sources/FudgeApp`: the macOS app.
   It runs in the menu bar, without a Dock icon.
-- `Sources/FudgeCLI`: the `fudge` command-line tool.
-  `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for Fudge; `--into <folder>` installs it in that extensions folder instead.
-  `fudge scan <folder>` says what the extension uses that Fudge doesn't have yet or doesn't support, without building it (`--json` for a script).
-  A running Fudge picks up an extension you install, rebuild or remove within a second, with nothing to reload.
+- `Sources/FudgeCLI`: the [`fudge` command-line tool](#the-fudge-command-line-tool).
 - `Sources/FudgeCore`: code shared by the app and the tool.
 - `runtime/`: the extension host.
   This is the Node.js program that runs extensions.
@@ -450,6 +490,8 @@ Copyright (C) 2026 Morten Jakobsen.
 
 Licensed under the GNU Affero General Public License, version 3 or (at your option) any later version (`AGPL-3.0-or-later`).
 See [LICENSE](LICENSE).
+
+The app icon was made with ChatGPT for this project.
 
 The app also ships third-party code and data, each under its own license: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) lists them, and Fudge.app carries the same as `Third-Party Notices.txt`, linked from **About Fudge**.
 
