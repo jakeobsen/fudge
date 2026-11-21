@@ -54,6 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model.templateClipboard = { nil }
             // Nor do the System commands do anything: no lock, sleep, restart, Apple Event, eject, hide or quit.
             model.systemActions = InertSystemActions()
+            // Nor does Pick Color show the loupe: it picks nothing, as Esc would.
+            model.colorSampler = InertColorSampler()
             // Nor the clipboard or the Keychain: Clipboard History gets `--clipboard-entries`' made-up entries.
             if let file = snapshot.clipboardEntries {
                 model.clipboardHistory = ClipboardHistoryService(
@@ -116,6 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.extensionStoreChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.quicklinksChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.snippetsChanged = { [weak self] in self?.model.reloadSnippetList() }
+        settingsModel.colorFormatChanged = { [weak self] in self?.model.reloadRecentColors() }
         settingsModel.clipboardHistoryChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.deleteClipboardHistory = { [weak self] in self?.model.clipboardHistory.deleteAll() }
         settingsModel.stopExtensionStore = { [weak self] in

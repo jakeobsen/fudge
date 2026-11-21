@@ -85,6 +85,11 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("snippets.json")
     }
 
+    /// Recent Colors (`RecentColorStore`).
+    public var colorsFile: URL {
+        supportDirectory.appendingPathComponent("colors.json")
+    }
+
     /// The preference values set for each extension.
     public var preferencesDirectory: URL {
         supportDirectory.appendingPathComponent("preferences", isDirectory: true)
