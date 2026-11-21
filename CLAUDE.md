@@ -61,7 +61,7 @@ Extensions run in a separate Node.js process, the extension host.
       A disabled command's hotkey isn't registered (`FudgeSettings.availableHotkeys`), and `CommandLocator` refuses `launchCommand` for it (`LaunchCommandError.disabled`).
       **A command that uses Raycast AI or the Browser Extension is off by default** (SPEC-109): `fudge build` records which commands do in the install's `compatibility.json` (`CommandCompatibility`), and `FudgeSettings.offByDefault` (`InstalledExtension.offByDefault`) holds their ids.
       `offByDefault` is never saved: the launcher and the Settings window work it out from the installed extensions each time they read `settings.json`, so Fudge's default never looks like the user's choice.
-      A command's own Enabled (`FudgeSettings.isEnabledOwn`) is `enabled` when it's set, which only the user's toggle does, true or false, and otherwise whether it's off by default.
+      A command's own Enabled (`FudgeSettings.isEnabledOwn`) is `enabled` when it's set, which only the user's toggle does, true or false (`FudgeSettings.setEnabled(_:commandID:)`), and otherwise whether it's off by default.
       So an update that drops the use turns the command on again, and a command the user turned on stays on.
       An install without `compatibility.json` (built before, or its scan failed) has every command on.
     - **Built-in command groups** (`BuiltInCommandGroup`, core) are Fudge's own commands, each with a title, keywords and an SF Symbol.
@@ -927,8 +927,9 @@ Extensions run in a separate Node.js process, the extension host.
     The JSON report (`report`) names the extension, says `supported` (no gaps and every file read), and lists each gap with its kind and, for one counted apart, its category (`byDesign`).
     It also has `commands`: each command of the manifest with the categories Fudge doesn't support that it reaches (`unsupported`), and whether every import it makes could be followed (`traced`).
     A command is traced from its entry (`src/<name>.{tsx,ts,jsx,js}`, as the build finds it) through every import esbuild leaves, re-exports, `import()` and `require` included (`imports`), resolved among the files the scan read, ignoring case as APFS does (`resolveImport`): relative paths, `@/…` and `~/…` as `src/…`, and TypeScript's `./x.js` for `x.ts`.
-    A package's import is the package's, and a data file (`.json`, `.css`, an image) can't reach the API.
-    A command with an import that can't be followed (outside `src/`, an alias it doesn't know, an unreadable file) counts as reaching the whole extension.
+    A bare import is a package's only when the manifest lists that package in any of its dependency sections, it's one of Node's built-ins, or the host provides it (`packages`), and a data file (`.json`, `.css`, an image) can't reach the API.
+    A command with an import that can't be followed (outside `src/`, an unreadable file, any other bare import, such as a tsconfig `paths` alias or a `baseUrl` import, or an `import()` or `require()` of a computed path, `hasComputedImport`) counts as reaching the whole extension.
+    So does every command when a file that uses Raycast AI or the Browser Extension is reached by no entry, a command's or a tool's (`src/tools/<name>`), since something the scan can't see reaches it.
     A barrel's re-exports are followed whole, so a command can be counted for a module of the barrel it doesn't use; in the store that decides 3 of 224 commands.
     The text output (`describe`) lists what Fudge doesn't have yet, then each category apart, saying why (`byDesign`'s `says`: Raycast AI and the Raycast Browser Extension, "which Fudge doesn't support", from the runtime's `unsupported`; OAuth, "which needs a sign-in server").
     Under Raycast AI and the Browser Extension it says which commands use them ("in 2 of 9 commands: …", or "in every command").

@@ -111,6 +111,42 @@ private func installed(_ commands: [String], using: [String: [CommandCompatibili
     #expect(!settings.isEnabled(commandID: search))
 }
 
+@Test func theTogglesOnIsWrittenAndKeepsAnOffByDefaultCommandOn() throws {
+    let folder = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let file = folder.appendingPathComponent("settings.json")
+    var settings = FudgeSettings()
+    settings.offByDefault = [emojis]
+    settings.setEnabled(true, commandID: emojis)
+    #expect(settings.commands[emojis]?.enabled == true, "on is the user's choice, written down")
+    #expect(settings.isEnabled(commandID: emojis))
+    try settings.save(to: file)
+
+    // Read back with Fudge's default still off: the user's on wins.
+    var reloaded = FudgeSettings.load(from: file)
+    reloaded.offByDefault = [emojis]
+    #expect(reloaded.isEnabled(commandID: emojis))
+}
+
+@Test func theTogglesOffIsWrittenAndKeepsACommandOffWhenItsDefaultIsOn() throws {
+    let folder = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let file = folder.appendingPathComponent("settings.json")
+    var settings = FudgeSettings()
+    settings.offByDefault = [emojis]
+    settings.setEnabled(false, commandID: search)
+    #expect(settings.commands[search]?.enabled == false)
+    #expect(!settings.isEnabled(commandID: search))
+    // Turned off while it's off by default, it stays off once an update drops the AI use.
+    settings.setEnabled(false, commandID: emojis)
+    try settings.save(to: file)
+
+    var reloaded = FudgeSettings.load(from: file)
+    reloaded.offByDefault = []
+    #expect(!reloaded.isEnabled(commandID: search))
+    #expect(!reloaded.isEnabled(commandID: emojis))
+}
+
 @Test func aUserEnabledCommandStaysEnabledAcrossSavesReloadsAndReinstalls() throws {
     let folder = try Fixtures.temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: folder) }

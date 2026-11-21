@@ -163,6 +163,13 @@ public struct FudgeSettings: Sendable, Equatable {
         return name == ExtensionStore.extensionName ? isExtensionStoreOn : true
     }
 
+    /// The user's Enabled toggle for a command (the Commands page's checkbox): written either way, true or false, so
+    /// Fudge's default (`offByDefault`) never overrides it: a command the user turned on stays on, and one they turned
+    /// off stays off, whatever an update finds it uses.
+    public mutating func setEnabled(_ enabled: Bool, commandID id: String) {
+        commands[id, default: .init()].enabled = enabled
+    }
+
     /// Enables or disables an extension. The store's state is always written, since its default isn't on.
     public mutating func setEnabled(_ enabled: Bool, extension name: String) {
         extensions[name, default: .init()].enabled = enabled && name != ExtensionStore.extensionName ? nil : enabled

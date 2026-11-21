@@ -106,6 +106,14 @@ export function imports(code: string): string[] {
     return [...found];
 }
 
+/**
+ * Whether `code` has an `import()` or `require()` whose target isn't a plain string (a template with a value in it, a
+ * variable, a sum), which no scan can follow: `import(\`./commands/${name}\`)`.
+ */
+export function hasComputedImport(code: string): boolean {
+    return /\b(?:import|require)\s*\(\s*(?!["'][^"']*["']\s*\))/.test(code);
+}
+
 /** Why an extension can't use an API in fudge. */
 export type GapKind = "missing" | "render-but-fail" | "not-drawn" | "via @raycast/utils";
 

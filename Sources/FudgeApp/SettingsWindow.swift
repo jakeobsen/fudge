@@ -1006,8 +1006,7 @@ final class SettingsModel {
 
     /// Enables or disables a command: a disabled one leaves root search, and its hotkey stops working.
     func setEnabled(_ enabled: Bool, command commandID: String) {
-        // Written either way: the user's choice, which Fudge's default never overrides.
-        change { $0.commands[commandID, default: .init()].enabled = enabled }
+        change { $0.setEnabled(enabled, commandID: commandID) }
         _ = applyHotkeys()
     }
 

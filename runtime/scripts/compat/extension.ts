@@ -3,11 +3,22 @@
 
 import { spawnSync } from "node:child_process";
 import { lstatSync, readdirSync, statSync, type Dirent } from "node:fs";
+import { builtinModules } from "node:module";
 import { basename, join, posix, relative, sep } from "node:path";
 import { maxManifestBytes, maxSourceBytes, readRegularFile } from "./files.ts";
 import { RAYCAST_UTILS_PATHS } from "./raycast-utils.generated.ts";
 import { unsupported } from "../../src/api/stubs.ts";
-import { gaps, imports, isExtensionSource, toJavaScript, uses, type Gap, type Transform, type Uses } from "./scan.ts";
+import {
+    gaps,
+    hasComputedImport,
+    imports,
+    isExtensionSource,
+    toJavaScript,
+    uses,
+    type Gap,
+    type Transform,
+    type Uses,
+} from "./scan.ts";
 
 /**
  * APIs counted apart from gaps, by category, each with what a person is told about it. Fudge doesn't support AI or
@@ -41,8 +52,10 @@ export function category(gap: Gap): string | undefined {
 /**
  * What one command of the manifest reaches that Fudge doesn't support at all: `unsupported`'s categories ("AI",
  * "Browser Extension"), from the files its entry imports, and theirs, and so on. `traced` is false when an import
- * couldn't be followed (its entry missing or unreadable, a file outside `src/`, an alias the scan doesn't know), and
- * the command then counts as reaching all of the extension's source.
+ * couldn't be followed (its entry missing or unreadable, a file outside `src/`, an alias the scan doesn't know, an
+ * `import()` of a computed path), or when a file that uses one of those categories is reached by no entry, a command's
+ * or a tool's, so something the scan can't see reaches it; the command then counts as reaching all of the extension's
+ * source.
  */
 export interface CommandResult {
     name: string;
@@ -134,22 +147,41 @@ function isFolder(path: string): boolean {
 export async function scanExtension(folder: string, options: ScanOptions): Promise<Result> {
     const { files, unwalked } = sources(folder);
     const unreadable = [...unwalked];
-    const scanned = new Map<string, { uses: Uses; imports: string[] }>();
+    const scanned = new Map<string, Module>();
     for (const file of files) {
         try {
             const code = await toJavaScript(readRegularFile(file, maxSourceBytes), file, options.transform);
-            scanned.set(relative(folder, file).split(sep).join("/"), { uses: uses(code), imports: imports(code) });
+            scanned.set(relative(folder, file).split(sep).join("/"), {
+                uses: uses(code),
+                imports: imports(code),
+                computed: hasComputedImport(code),
+            });
         } catch {
             unreadable.push(relative(folder, file));
         }
     }
     const found = union([...scanned.values()].map((file) => file.uses));
     const known = knownFiles([...scanned.keys(), ...unreadable.map((file) => file.split(sep).join("/"))]);
-    const commands = commandNames(folder).map((name): CommandResult => {
-        const { files: reached, traced } = reach(name, scanned, known);
-        const used = traced ? union(reached.map((file) => scanned.get(file)!.uses)) : found;
+    const manifest = entries(folder);
+    const isPackage = packages(manifest.dependencies);
+    const unsupportedIn = (used: Uses) => {
         const categories = new Set(gaps(used, options.api, options.declared, RAYCAST_UTILS_PATHS).gaps.map(category));
-        return { name, unsupported: unsupportedCategories.filter((name) => categories.has(name)), traced };
+        return unsupportedCategories.filter((name) => categories.has(name));
+    };
+    const byCommand = manifest.commands.map((name) => ({ name, ...reach(`src/${name}`, scanned, known, isPackage) }));
+    // The backstop: a file that uses what Fudge doesn't support, which no command or tool reaches, is reached some
+    // way the scan can't see, so no command can be said not to reach it.
+    const reached = new Set([
+        ...byCommand.flatMap((command) => command.files),
+        ...manifest.tools.flatMap((name) => reach(`src/tools/${name}`, scanned, known, isPackage).files),
+    ]);
+    const unreached = [...scanned].some(
+        ([file, module]) => !reached.has(file) && unsupportedIn(module.uses).length > 0,
+    );
+    const commands = byCommand.map(({ name, files, traced: followed }): CommandResult => {
+        const traced = followed && !unreached;
+        const used = traced ? union(files.map((file) => scanned.get(file)!.uses)) : found;
+        return { name, unsupported: unsupportedIn(used), traced };
     });
     return {
         ...gaps(found, options.api, options.declared, RAYCAST_UTILS_PATHS),
@@ -171,20 +203,60 @@ function union(all: Uses[]): Uses {
     return found;
 }
 
-/** The manifest's command names, read as the package.json the report reads; none when it can't be read. */
-function commandNames(folder: string): string[] {
+/** What one source file holds for tracing: what it uses, what it imports, and whether it imports a computed path. */
+interface Module {
+    uses: Uses;
+    imports: string[];
+    computed: boolean;
+}
+
+/**
+ * The manifest's command and tool names, and its dependencies' names, read as the package.json the report reads;
+ * none of them when it can't be read.
+ */
+function entries(folder: string): { commands: string[]; tools: string[]; dependencies: string[] } {
+    let manifest: Record<string, unknown>;
     try {
-        const manifest = JSON.parse(readRegularFile(join(folder, "package.json"), maxManifestBytes)) as {
-            commands?: unknown;
-        };
-        if (!Array.isArray(manifest.commands)) return [];
-        return manifest.commands.flatMap((command: unknown) => {
-            const name = (command as { name?: unknown } | null)?.name;
-            return typeof name === "string" && /^[a-z0-9][a-z0-9_-]*$/.test(name) ? [name] : [];
-        });
+        const parsed: unknown = JSON.parse(readRegularFile(join(folder, "package.json"), maxManifestBytes));
+        if (typeof parsed !== "object" || parsed === null) return { commands: [], tools: [], dependencies: [] };
+        manifest = parsed as Record<string, unknown>;
     } catch {
-        return [];
+        return { commands: [], tools: [], dependencies: [] };
     }
+    const names = (list: unknown) =>
+        Array.isArray(list)
+            ? list.flatMap((entry: unknown) => {
+                  const name = (entry as { name?: unknown } | null)?.name;
+                  return typeof name === "string" && /^[a-z0-9][a-z0-9_-]*$/.test(name) ? [name] : [];
+              })
+            : [];
+    const sections = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
+    const dependencies = sections.flatMap((section) => {
+        const listed = manifest[section];
+        return typeof listed === "object" && listed !== null && !Array.isArray(listed) ? Object.keys(listed) : [];
+    });
+    return { commands: names(manifest.commands), tools: names(manifest.tools), dependencies };
+}
+
+/** The modules the extension host gives every extension (`ExtensionBuilder.providedModules`), listed or not. */
+const providedModules = ["@raycast/api", "react", "react/jsx-runtime", "react/jsx-dev-runtime", "fudge:app"];
+
+/** Whether a bare import (not relative, not `@/`, `~/` or `src/`) is of a package. */
+export type Packages = (specifier: string) => boolean;
+
+/**
+ * A bare import is a package's only when the manifest lists that package (in any of its dependency sections), it's
+ * one of Node's built-ins, or the host provides it. Anything else, such as a tsconfig `paths` alias (`@lib/ai`) or an
+ * import from its `baseUrl` (`lib/ai`), names a file of the extension's own the scan can't find.
+ */
+export function packages(dependencies: string[]): Packages {
+    const listed = new Set(dependencies);
+    return (specifier) => {
+        if (specifier.startsWith("node:") || providedModules.includes(specifier)) return true;
+        const segments = specifier.split("/");
+        const name = specifier.startsWith("@") ? segments.slice(0, 2).join("/") : segments[0]!;
+        return listed.has(name) || builtinModules.includes(specifier) || builtinModules.includes(name);
+    };
 }
 
 /** Looks a relative path up among the extension's files ignoring case, as APFS (and so the build) does. */
@@ -202,16 +274,18 @@ const entryExtensions = ["tsx", "ts", "jsx", "js"];
 const dataFile = /\.(?:json|css|scss|sass|less|svg|png|jpe?g|gif|webp|ico|txt|md|html?|ya?ml|toml|csv|xml|wasm)$/i;
 
 /**
- * The source files a command reaches from its entry, as relative paths, and whether every import could be followed.
- * Only imports of the extension's own files are followed, against the files the scan found under `src/`: relative
- * ones, and `@/…` or `~/…` as `src/…`, the alias extensions use; a package's import is the package's.
+ * The source files an entry reaches (`src/<command>` or `src/tools/<tool>`, with any of the build's extensions), as
+ * relative paths, and whether every import could be followed. Only imports of the extension's own files are
+ * followed, against the files the scan found under `src/`: relative ones, and `@/…` or `~/…` as `src/…`, the alias
+ * extensions use; a package's import is the package's. A computed `import()` or `require()` can't be followed.
  */
 export function reach(
-    command: string,
-    scanned: Map<string, { imports: string[] }>,
+    stem: string,
+    scanned: Map<string, { imports: string[]; computed?: boolean }>,
     known: KnownFiles,
+    isPackage: Packages,
 ): { files: string[]; traced: boolean } {
-    const entry = entryExtensions.map((extension) => known(`src/${command}.${extension}`)).find((file) => file);
+    const entry = entryExtensions.map((extension) => known(`${stem}.${extension}`)).find((file) => file);
     if (!entry) return { files: [], traced: false };
     const seen = new Set<string>([entry]);
     const pending = [entry];
@@ -223,8 +297,9 @@ export function reach(
             traced = false;
             continue;
         }
+        if (module.computed) traced = false;
         for (const specifier of module.imports) {
-            const target = resolveImport(file, specifier, known);
+            const target = resolveImport(file, specifier, known, isPackage);
             if (target === "package" || target === "data") continue;
             if (target === undefined) traced = false;
             else if (!seen.has(target)) {
@@ -237,11 +312,16 @@ export function reach(
 }
 
 /**
- * The file `specifier`, imported from `from`, names among `known`; "package" for a package, "data" for a file that
- * isn't code, undefined for one of the extension's own that can't be found. TypeScript's ESM style names the output
- * (`./x.js` for `x.ts`), so that's tried too.
+ * The file `specifier`, imported from `from`, names among `known`; "package" for a package (`isPackage`), "data" for a
+ * file that isn't code, undefined for one of the extension's own that can't be found. TypeScript's ESM style names the
+ * output (`./x.js` for `x.ts`), so that's tried too.
  */
-export function resolveImport(from: string, specifier: string, known: KnownFiles): string | "package" | "data" | undefined {
+export function resolveImport(
+    from: string,
+    specifier: string,
+    known: KnownFiles,
+    isPackage: Packages,
+): string | "package" | "data" | undefined {
     let base: string;
     if (specifier === "." || specifier === ".." || specifier.startsWith("./") || specifier.startsWith("../")) {
         base = posix.normalize(posix.join(posix.dirname(from), specifier));
@@ -252,7 +332,7 @@ export function resolveImport(from: string, specifier: string, known: KnownFiles
     } else if (specifier.startsWith("/") || specifier.startsWith("#")) {
         return undefined;
     } else {
-        return "package";
+        return isPackage(specifier) ? "package" : undefined;
     }
     if (dataFile.test(base)) return "data";
     if (!base.startsWith("src/")) return undefined;
