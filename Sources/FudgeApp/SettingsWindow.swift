@@ -317,6 +317,8 @@ final class SettingsModel {
     /// Turns expansion on, the switch's way and onboarding's: saved, then macOS is asked for Input Monitoring when
     /// it isn't allowed (its prompt the first time, the pane after that).
     func turnOnSnippetExpansion() {
+        // Fresh, since onboarding shows no Snippets page to keep it current.
+        inputMonitoring.refresh()
         setExpandSnippets(true)
         if expandSnippets, !inputMonitoring.isAllowed { InputMonitoring.request() }
     }

@@ -180,6 +180,47 @@ private struct Rig {
     #expect(!none.log.events.contains { $0.hasPrefix("⌫") }, "with no app to paste into, nothing is deleted")
 }
 
+// MARK: - Expanding a snippet's keyword: only into the app it was typed in (#114's review)
+
+private let spotlight: Int32 = 300
+
+@MainActor
+private func expand(_ rig: Rig, target: Int32?, secureInput: Bool = false) async throws {
+    try await rig.paste.expand(
+        PasteboardContents.forPaste(text: "Best, me", html: nil, file: nil), target: target, backspaces: 5,
+        leftArrows: 2, secureInput: { secureInput })
+}
+
+@Test @MainActor func anExpansionPostsOnlyToTheAppTheKeywordWasTypedIn() async throws {
+    // ";addr" typed in Spotlight's field while a TextEdit document is the frontmost app: every key goes to
+    // Spotlight, and TextEdit loses nothing at its caret.
+    let rig = Rig()
+    try await expand(rig, target: spotlight)
+    #expect(rig.log.events == ["snapshot", "write Best, me", "trust", "⌫ ×5 to 300", "post", "← ×2 to 300"])
+    #expect(rig.keys.posted == [spotlight])
+    #expect(!rig.log.events.contains { $0.contains("to \(textEdit.pid)") }, "nothing to the frontmost app")
+    await rig.afterRestore()
+    #expect(rig.pasteboard.plainText() == "user's clipboard")
+}
+
+@Test @MainActor func anExpansionWithNoKnownTargetOrIntoFudgePostsNothing() async throws {
+    for target in [nil, me] as [Int32?] {
+        let rig = Rig()
+        await #expect(throws: PasteError.noTarget) { try await expand(rig, target: target) }
+        #expect(rig.keys.posted.isEmpty, "\(String(describing: target))")
+        #expect(!rig.log.events.contains { $0.hasPrefix("⌫") || $0.hasPrefix("←") })
+        #expect(rig.pasteboard.plainText() == "user's clipboard", "the clipboard is put back")
+    }
+}
+
+@Test @MainActor func anExpansionStopsWhenAPasswordFieldHasTheKeyboardByItsTurn() async throws {
+    let rig = Rig()
+    await #expect(throws: PasteError.secureInput) { try await expand(rig, target: spotlight, secureInput: true) }
+    #expect(rig.keys.posted.isEmpty)
+    #expect(!rig.log.events.contains { $0.hasPrefix("⌫") || $0.hasPrefix("←") })
+    #expect(rig.pasteboard.plainText() == "user's clipboard", "the clipboard is put back")
+}
+
 @Test @MainActor func keepsThePanelWhenAskedTo() async throws {
     let rig = Rig()
     try await rig.run("pasted", closeMainWindow: false)

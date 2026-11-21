@@ -248,5 +248,5 @@ import Testing
     #expect(existing.hasSomethingNew)
     // The step and the Snippets page's sheet say the same thing, from one string.
     #expect(SnippetExpander.inputMonitoringExplanation.contains("Input Monitoring"))
-    #expect(SnippetExpander.inputMonitoringExplanation.contains("password fields"))
+    #expect(SnippetExpander.inputMonitoringExplanation.contains("while macOS protects a password field"))
 }

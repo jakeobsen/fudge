@@ -31,7 +31,8 @@ public struct SnippetKeyEvent: Sendable, Equatable {
 /// What's typed stays in here (the reviewer's MUST 2): the buffer is private, nothing reads it out, it isn't
 /// printed, dumped or mirrored, and the only output is `Output.expand`, which names a snippet's id. It's cleared on
 /// every reset: a click, an app switch, a key that moves the caret or leaves the field, a ⌘ or ⌃ combination, secure
-/// input, Fudge's own windows, switching expansion off, and Input Monitoring being revoked.
+/// input (with a key, and when the app's poll sees it, since macOS delivers no keys under it), Fudge's own windows,
+/// switching expansion off, and Input Monitoring being revoked.
 public struct SnippetExpander: Sendable {
     /// `eventSourceUserData` on every event Fudge posts (⌫, ⌘V, ←), so the tap never reads its own keys as typing.
     public static let marker: Int64 = 0x6675_6467_6501  // "fudge" and a version
@@ -39,7 +40,7 @@ public struct SnippetExpander: Sendable {
     /// Why turning expansion on needs Input Monitoring: the Snippets page's sheet and onboarding's step both say it.
     public static let inputMonitoringExplanation =
         "To notice a keyword as you type it, Fudge needs macOS's Input Monitoring permission. What you type isn't "
-        + "saved or sent anywhere, and nothing is read in password fields."
+        + "saved or sent anywhere, and nothing is read while macOS protects a password field."
 
     /// How many characters are kept: the longest keyword.
     public static let bufferLimit = Snippet.keywordLimit
@@ -63,6 +64,9 @@ public struct SnippetExpander: Sendable {
         case switchedOff
         case permissionRevoked
         case snippetsChanged
+        /// Secure input was on (`IsSecureEventInputEnabled()`), seen by the app's poll: what was typed
+        /// before it isn't joined to what's typed after.
+        case secureInput
     }
 
     /// The keywords that can expand, each with its snippet's id. One that contains another, or is contained in one,

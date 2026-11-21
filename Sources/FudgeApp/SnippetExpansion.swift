@@ -56,6 +56,9 @@ final class SnippetExpansion {
     private var tap: CFMachPort?
     private var tapSource: CFRunLoopSource?
     private var permissionCheck: Timer?
+    /// Secure input, checked twice a second while the tap runs: macOS delivers no keys to it under secure input, so
+    /// waiting for a key would join what was typed before a password field to what's typed after it.
+    private var secureInputCheck: Timer?
     private var appSwitch: NSObjectProtocol?
     private var accessibilityNoticeShown = false
 
@@ -99,6 +102,7 @@ final class SnippetExpansion {
     /// Starts the tap when it can run, and removes it when it can't: switched off, no keywords, or Input Monitoring
     /// not allowed (revoked included).
     private func followPermission() {
+        followSecureInput()
         let allowed = InputMonitoring.isAllowed
         if tap != nil, !allowed || !expander.hasKeywords {
             removeTap()
@@ -106,6 +110,10 @@ final class SnippetExpansion {
         } else if tap == nil, isOn, allowed, expander.hasKeywords {
             installTap()
         }
+    }
+
+    private func followSecureInput() {
+        if IsSecureEventInputEnabled() { expander.reset(.secureInput) }
     }
 
     private func stop(_ reason: SnippetExpander.Reset) {
@@ -122,7 +130,9 @@ final class SnippetExpansion {
         let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
         guard
             let tap = CGEvent.tapCreate(
-                tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly, eventsOfInterest: mask,
+                // Annotated, so each key names the app it goes to: an expansion posts there and nowhere else.
+                tap: .cgAnnotatedSessionEventTap, place: .headInsertEventTap, options: .listenOnly,
+                eventsOfInterest: mask,
                 callback: { _, type, event, refcon in
                     guard let refcon else { return Unmanaged.passUnretained(event) }
                     let received = SnippetExpansion.Received(type: type, event: event)
@@ -135,9 +145,14 @@ final class SnippetExpansion {
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         self.tap = tap
         tapSource = source
+        secureInputCheck = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.followSecureInput() }
+        }
     }
 
     private func removeTap() {
+        secureInputCheck?.invalidate()
+        secureInputCheck = nil
         if let tap { CGEvent.tapEnable(tap: tap, enable: false) }
         if let tapSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), tapSource, .commonModes) }
         if let tap { CFMachPortInvalidate(tap) }
@@ -145,9 +160,10 @@ final class SnippetExpansion {
         tapSource = nil
     }
 
-    /// What the tap passes on, read from the event where it arrives: nothing but key facts, and no text is kept.
+    /// What the tap passes on, read from the event where it arrives: nothing but key facts, and no text is kept. A
+    /// key's `target` is the app it goes to (`eventTargetUnixProcessID`), a process id, not anything typed.
     private enum Received: Sendable {
-        case key(SnippetKeyEvent)
+        case key(SnippetKeyEvent, target: Int32?)
         case click
         case tapDisabled
         case other
@@ -166,7 +182,10 @@ final class SnippetExpansion {
                         characters: String(utf16CodeUnits: characters, count: length),
                         command: flags.contains(.maskCommand), control: flags.contains(.maskControl),
                         option: flags.contains(.maskAlternate),
-                        sourceUserData: event.getIntegerValueField(.eventSourceUserData)))
+                        sourceUserData: event.getIntegerValueField(.eventSourceUserData)),
+                    target: Int32(exactly: event.getIntegerValueField(.eventTargetUnixProcessID)).flatMap {
+                        $0 > 0 ? $0 : nil
+                    })
             case .leftMouseDown, .rightMouseDown, .otherMouseDown:
                 self = .click
             case .tapDisabledByTimeout, .tapDisabledByUserInput:
@@ -179,13 +198,14 @@ final class SnippetExpansion {
 
     private func handle(_ received: Received) {
         switch received {
-        case .key(let event):
+        case .key(let event, let target):
             let output = expander.handle(
                 event, secureInput: IsSecureEventInputEnabled(), fudgeInFront: fudgeHasKeyboard())
             if case .expand(let id) = output {
-                // The one thing that leaves the expander, and the only line about it in the launcher's log.
-                LauncherLog.note(output?.description ?? "")
-                expand(id)
+                // The one thing that leaves the expander, and the only line about it in the launcher's log, with
+                // the snippet's id private, so the log doesn't time every use of a keyword.
+                LauncherLog.note("expand snippet", private: id)
+                expand(id, target: target)
             }
         case .click:
             expander.reset(.click)
@@ -201,7 +221,7 @@ final class SnippetExpansion {
     /// Deletes the keyword just typed and pastes the snippet in its place, through `Paste`'s turn, which puts the
     /// clipboard back, then places `{cursor}`. Secure input is checked again first, and nothing is touched without
     /// Accessibility, which posting keys needs.
-    private func expand(_ id: String) {
+    private func expand(_ id: String, target: Int32?) {
         guard !IsSecureEventInputEnabled(), !fudgeHasKeyboard(), let snippet = snippets[id],
             let keyword = snippet.keyword
         else { return }
@@ -214,7 +234,7 @@ final class SnippetExpansion {
         Task {
             do {
                 try await SystemCalls.expandSnippet(
-                    filled.text, keywordLength: keyword.count,
+                    filled.text, into: target, keywordLength: keyword.count,
                     leftArrows: SnippetTemplate.leftArrows(afterCursor: filled.afterCursor))
             } catch PasteError.accessibilityNeeded {
                 if !accessibilityNoticeShown {
@@ -222,7 +242,8 @@ final class SnippetExpansion {
                     showHUD("Allow Fudge in Accessibility to expand snippets")
                 }
             } catch {
-                // No app to paste into: nothing was typed anywhere, so there's nothing to say.
+                // No app the keyword was typed in, or secure input came on meanwhile: nothing was
+                // posted anywhere, so there's nothing to say.
             }
         }
     }

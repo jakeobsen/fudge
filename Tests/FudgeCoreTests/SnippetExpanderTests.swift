@@ -107,6 +107,17 @@ private func type(
     #expect(type("dr", into: &expander).isEmpty)
 }
 
+@Test func secureInputSeenByThePollClearsWhatCameBefore() {
+    // macOS delivers no keys to the tap under secure input, so the app's poll resets the buffer when it sees it:
+    // ";ad" typed before a password field isn't joined to "dr" typed after it (#114's review).
+    var expander = SnippetExpander(snippets: snippets)
+    _ = type(";ad", into: &expander)
+    expander.reset(.secureInput)
+    #expect(type("dr", into: &expander).isEmpty)
+    #expect(
+        SnippetExpander.inputMonitoringExplanation.hasSuffix("nothing is read while macOS protects a password field."))
+}
+
 @Test func fudgesOwnKeysAreIgnored() {
     var expander = SnippetExpander(snippets: snippets)
     _ = type(";add", into: &expander)
