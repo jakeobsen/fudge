@@ -247,6 +247,50 @@ private func picker(_ options: DatePickerOptions = DatePickerOptions(), fromList
     #expect(FormDates.isFullDay(pick.value(calendar: copenhagen), calendar: copenhagen))
 }
 
+@Test func aRenderRetitlesThePickerOrClosesItWhenItsActionIsGone() throws {
+    func entry(_ props: String) throws -> ActionEntry? {
+        let panel = try node(
+            #"{"id":20,"type":"ActionPanel","props":{},"children":[{"id":21,"type":"Action","props":"# + props
+                + #","children":[]}]}"#)
+        return ActionPanelReader.entry(id: 21, in: ActionPanelReader.sections(of: panel))
+    }
+    var pick = DatePick(
+        node: 21, title: "Set Due Date", options: DatePickerOptions(), openedFromList: true,
+        now: date("2026-11-20T09:15:30.000Z"), calendar: copenhagen)
+    _ = pick.handle(key("arrowRight"), calendar: copenhagen)
+
+    let retitled = try #require(
+        pick.following(
+            try entry(#"{"title":"Change Due Date","pickDate":{},"onChange":{"$fn":["onChange"]}}"#),
+            calendar: copenhagen))
+    #expect(retitled.title == "Change Due Date", "the heading follows the action's title")
+    #expect(retitled.month.day == pick.month.day, "the highlighted day stays")
+    #expect(retitled.time == pick.time && retitled.node == 21 && retitled.openedFromList)
+
+    let limited = try #require(
+        pick.following(
+            try entry(
+                #"{"title":"Set Due Date","pickDate":{"type":"date","max":{"$date":"2026-11-20T12:00:00.000Z"}},"#
+                    + #""onChange":{"$fn":["onChange"]}}"#), calendar: copenhagen))
+    #expect(limited.title == "Set Due Date")
+    #expect(limited.options.type == .date, "a new type: the picker follows it, and stays open")
+    #expect(limited.month.day == date("2026-11-19T23:00:00.000Z"), "and keeps within the new limits")
+    var timed = limited
+    timed.focus(.time)
+    #expect(timed.focus == .calendar, "a Date picker has no time")
+    let back = try #require(
+        limited.following(
+            try entry(#"{"title":"Set Due Date","pickDate":{"type":"date_time"},"onChange":{"$fn":["onChange"]}}"#),
+            calendar: copenhagen))
+    #expect(back.options.type == .dateTime, "and back to DateTime")
+    #expect(back.month.day == limited.month.day && back.time == pick.time, "the day and the time stay")
+
+    #expect(pick.following(nil, calendar: copenhagen) == nil, "the action is gone")
+    #expect(
+        pick.following(try entry(#"{"title":"Set Due Date","onAction":{"$fn":["onAction"]}}"#), calendar: copenhagen)
+            == nil, "no longer an Action.PickDate")
+}
+
 @Test func aRenderKeepsTheHighlightedDayWithinNewLimits() {
     var pick = picker()
     _ = pick.handle(key("pageDown"), calendar: copenhagen)

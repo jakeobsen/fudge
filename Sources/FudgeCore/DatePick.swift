@@ -27,8 +27,8 @@ public struct DatePick: Sendable, Equatable {
 
     /// The action's node: `onChange` goes there.
     public let node: Int
-    /// The picker's heading: the action's title.
-    public let title: String
+    /// The picker's heading: the action's title, which a render may change (`following`).
+    public private(set) var title: String
     /// Opened from the action list, where Esc goes back to; or straight from ↵, ⌘↵ or a shortcut, when Esc closes
     /// the overlay.
     public let openedFromList: Bool
@@ -73,6 +73,17 @@ public struct DatePick: Sendable, Equatable {
         guard options != self.options else { return }
         month = DateCalendar(value: month.day, options: options, now: month.day, calendar: calendar)
         if options.type == .date { focus = .calendar }
+    }
+
+    /// After a render, with `entry` the action now at the picker's node (`ActionPanelReader.entry(id:in:)`): the
+    /// picker it becomes, with the action's title as its heading and its new limits (`update(options:)`). Nil when
+    /// the action is gone or is no longer an `Action.PickDate`: the picker closes without calling anything.
+    public func following(_ entry: ActionEntry?, calendar: Calendar = .current) -> DatePick? {
+        guard let entry, let options = entry.pickDate else { return nil }
+        var next = self
+        next.title = entry.title
+        next.update(options: options, calendar: calendar)
+        return next
     }
 
     /// The month arrows and ⇞⇟.
