@@ -1137,6 +1137,10 @@ final class LauncherModel {
             state.query = ""
             state.selected = ActionPanelReader.flat(submenu).first?.id
             actionPanel = state
+            // `Action.Submenu`'s `onOpen`: e.g. Open With lists the applications only now.
+            if entry.hasOnOpen, case .node(let node) = entry.target, case .command(let command) = screen {
+                send(.event(session: command.session, node: node, path: ["onOpen"], args: []))
+            }
             return
         }
         actionPanel = nil

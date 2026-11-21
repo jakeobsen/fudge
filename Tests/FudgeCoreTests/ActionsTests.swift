@@ -76,6 +76,17 @@ private let panel = #"""
     #expect(ActionPanelReader.secondary(sections)?.title == "Copy Path")
     #expect(ActionPanelReader.sections(of: nil).isEmpty)
     #expect(ActionPanelReader.flat(sections).map(\.target) == [.node(1), .node(2), .node(3), .node(11)])
+    #expect(!sections[2].entries[0].hasOnOpen)
+}
+
+@Test func readsASubmenusOnOpen() throws {
+    let submenu = try node(
+        #"{"id":11,"type":"ActionPanel.Submenu","props":{"title":"Open With","isLoading":true,"onOpen":{"$fn":["onOpen"]}},"children":[]}"#
+    )
+    let entry = try #require(ActionPanelReader.entry(submenu))
+    #expect(entry.hasOnOpen)
+    #expect(entry.isLoading)
+    #expect(entry.submenu == [], "a submenu still loading opens empty")
 }
 
 private func rootEntries(_ item: RootItem?, isActiveInMenuBar: Bool = false) -> [String] {

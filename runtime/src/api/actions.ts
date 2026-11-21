@@ -75,10 +75,15 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
         });
     }
 
-    /** A submenu listing the applications that can open `path`. */
+    /**
+     * A submenu listing the applications that can open `path`, looked up when it's opened: a list with Open With on
+     * every row asked the app once per row, and re-rendered as each answer came.
+     */
     function OpenWith({ path, onOpen, title, icon, shortcut }: Props) {
+        const [opened, setOpened] = useState(false);
         const [applications, setApplications] = useState<{ name: string; path: string }[] | null>(null);
         useEffect(() => {
+            if (!opened) return;
             let current = true;
             getApplications(path as string).then(
                 (found) => current && setApplications(found),
@@ -87,10 +92,16 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
             return () => {
                 current = false;
             };
-        }, [path]);
+        }, [path, opened]);
         return createElement(
             Submenu,
-            { title: title ?? "Open With", icon: icon ?? Icon.Upload, shortcut, isLoading: applications === null },
+            {
+                title: title ?? "Open With",
+                icon: icon ?? Icon.Upload,
+                shortcut,
+                isLoading: applications === null,
+                onOpen: () => setOpened(true),
+            },
             (applications ?? []).map((application) =>
                 createElement(ActionHost, {
                     key: application.path,
