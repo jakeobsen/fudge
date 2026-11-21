@@ -111,4 +111,42 @@ struct BuildNeverReplacesItsSourceTests {
         try Data().write(to: installed.appendingPathComponent(".DS_Store"))
         try ExtensionBuilder.checkDestination(installed, source: Fixtures.greeter)
     }
+
+    /// SPEC-123: a build's commands sit beside its `package.json`, which names them.
+    @Test func aBuildsCommandsBesideItsManifestMayBeReplaced() throws {
+        let installed = try Fixtures.temporaryDirectory().appendingPathComponent("greeter")
+        try FileManager.default.createDirectory(at: installed, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: Fixtures.greeter.appendingPathComponent("assets"), to: installed.appendingPathComponent("assets"))
+        try FileManager.default.copyItem(
+            at: Fixtures.greeter.appendingPathComponent("package.json"),
+            to: installed.appendingPathComponent("package.json"))
+        for file in ["greet.cjs", "quiet.cjs", "compatibility.json"] {
+            try Data().write(to: installed.appendingPathComponent(file))
+        }
+        try ExtensionBuilder.checkDestination(installed, source: Fixtures.greeter)
+    }
+
+    @Test(arguments: ["stray.cjs", "greet.js", "dist.cjs"])
+    func aFileItsManifestDoesntNameIsntABuild(_ stray: String) throws {
+        let installed = try Fixtures.temporaryDirectory().appendingPathComponent("greeter")
+        try FileManager.default.createDirectory(at: installed, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(
+            at: Fixtures.greeter.appendingPathComponent("package.json"),
+            to: installed.appendingPathComponent("package.json"))
+        try Data().write(to: installed.appendingPathComponent("greet.cjs"))
+        try Data().write(to: installed.appendingPathComponent(stray))
+        #expect(throws: BuildError.notAnInstall(installed.path)) {
+            try ExtensionBuilder.checkDestination(installed, source: Fixtures.greeter)
+        }
+    }
+
+    @Test func commandFilesWithoutAManifestArentABuild() throws {
+        let installed = try Fixtures.temporaryDirectory().appendingPathComponent("greeter")
+        try FileManager.default.createDirectory(at: installed, withIntermediateDirectories: true)
+        try Data().write(to: installed.appendingPathComponent("greet.cjs"))
+        #expect(throws: BuildError.notAnInstall(installed.path)) {
+            try ExtensionBuilder.checkDestination(installed, source: Fixtures.greeter)
+        }
+    }
 }

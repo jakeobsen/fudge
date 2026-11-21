@@ -88,6 +88,9 @@ public struct LaunchEnvironment: Sendable, Equatable, Encodable {
     public var commandName: String
     public var commandMode: String
     public var assetsPath: String
+    /// The installed extension's `package.json`, for Raycast's deprecated `preferences` (SPEC-123): never worked out
+    /// from where the command's file is, which an install from before may still keep in `dist/`.
+    public var manifestPath: String
     public var supportPath: String
     public var cachePath: String
     public var localStoragePath: String
@@ -111,6 +114,7 @@ public struct LaunchEnvironment: Sendable, Equatable, Encodable {
             commandName: command.name,
             commandMode: command.mode,
             assetsPath: installed.assetsDirectory.path,
+            manifestPath: installed.directory.appendingPathComponent("package.json").path,
             supportPath: support.path,
             cachePath: paths.cacheDirectory(forExtension: name).path,
             localStoragePath: paths.localStorageFile(forExtension: name).path,

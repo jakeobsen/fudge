@@ -9,6 +9,8 @@ export type LaunchEnvironment = {
     commandName: string;
     commandMode: "view" | "no-view" | "menu-bar";
     assetsPath: string;
+    /** The installed extension's `package.json`, for the deprecated `preferences`; not part of `environment`. */
+    manifestPath: string;
     supportPath: string;
     /** Folder for `Cache`. */
     cachePath: string;
@@ -22,7 +24,7 @@ export type LaunchEnvironment = {
 export type LaunchContext = {
     /** Resolved preference values: extension-wide ones merged with the command's own. */
     preferences: Record<string, unknown>;
-    /** The installed extension's `package.json`, beside its `dist/` folder; for the deprecated `preferences`. */
+    /** The installed extension's `package.json` (`LaunchEnvironment.manifestPath`); for the deprecated `preferences`. */
     manifestFile?: string;
     environment: LaunchEnvironment;
     launchProps: LaunchProps;
@@ -33,6 +35,7 @@ export const placeholderEnvironment: LaunchEnvironment = {
     commandName: "",
     commandMode: "view",
     assetsPath: "",
+    manifestPath: "",
     supportPath: "",
     cachePath: "",
     localStoragePath: "",

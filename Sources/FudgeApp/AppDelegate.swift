@@ -2,6 +2,7 @@ import AppKit
 import EventKit
 import FudgeCore
 import Quartz
+import os
 
 /// fudge runs as an accessory app: no Dock icon, one menu bar item, and a launcher panel
 /// that a global hotkey shows and hides.
@@ -60,6 +61,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = Self.mainMenu()
+        // Before the extensions first load (in the model's `init`) and before the watcher starts, so it never sees
+        // the move. Snapshot runs change nothing.
+        if !Snapshot.isRequested(CommandLine.arguments) { Self.moveInstallsUp(in: paths.extensionsDirectory) }
         model = LauncherModel(paths: paths)
         // Snapshots never ask Spotlight: Search Files gets `--found-files`' results, or none.
         if let snapshot = Snapshot(arguments: CommandLine.arguments) {
@@ -396,6 +400,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func registerCommandHotkeys() -> Set<String> {
         registry.apply(model.settings.availableHotkeys(installed: Set(model.installedCommandIDs)))
         return registry.refused
+    }
+
+    /// Installs from before SPEC-123 keep their commands in `dist/`. Each moves to Raycast's layout once, at launch
+    /// (`ExtensionLayout.moveUp`); one stopped halfway finishes at the next launch, and `entry(for:)`'s fallback covers
+    /// it until then. One that can't move is left on the fallback, with a log line. The bundled extensions, built with
+    /// the app, are never touched.
+    private static func moveInstallsUp(in extensionsDirectory: URL) {
+        let log = Logger(subsystem: "io.github.jakeobsen.fudge", category: "extensions")
+        for (name, outcome) in ExtensionLayout.moveUp(in: extensionsDirectory) {
+            guard case .leftAlone(let refusal) = outcome else { continue }
+            log.notice("install left in dist/: \(refusal.description, privacy: .public) \(name, privacy: .private)")
+        }
     }
 
     /// The extensions folder changed: an extension was installed, rebuilt or removed. Root search, the command
