@@ -2849,12 +2849,15 @@ final class LauncherModel {
                         send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
                     }
                 }
-            case "clipboard.read" where Self.clipboardOffset(params) > 0:
-                // Raycast's `offset`: the nth previous copy, from clipboard history, for any extension.
-                send(
-                    .rpcResult(
-                        session: session, id: id, result: clipboardHistory.read(offset: Self.clipboardOffset(params)),
-                        error: nil))
+            case "clipboard.read" where ClipboardOffset(params: params) != .current:
+                // Raycast's `offset`, 1 to 5: a previous copy from clipboard history, for any extension.
+                let result: JSONValue =
+                    if case .previous(let offset) = ClipboardOffset(params: params) {
+                        clipboardHistory.read(offset: offset)
+                    } else {
+                        .null
+                    }
+                send(.rpcResult(session: session, id: id, result: result, error: nil))
             case "form.storeValues":
                 storeFormValues(params, session: session)
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
@@ -2994,14 +2997,6 @@ final class LauncherModel {
 
     /// `Clipboard.paste` hides the panel first, as `closeMainWindow()` does, and waits until it's really gone: key
     /// status goes back to the app the user was in asynchronously, so ⌘V waits a run-loop turn plus about 50 ms.
-    /// `Clipboard.read`'s and `readText`'s `offset`, 0 when it's missing or not a whole number.
-    private static func clipboardOffset(_ params: JSONValue) -> Int {
-        guard case .object(let object) = params, case .number(let offset) = object["offset"], offset.isFinite else {
-            return 0
-        }
-        return max(Int(offset), 0)
-    }
-
     private func hideForPaste() async {
         closeWindow(clearRootSearch: false, popToRootType: nil)
         await withCheckedContinuation { continuation in DispatchQueue.main.async { continuation.resume() } }

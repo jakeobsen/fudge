@@ -345,3 +345,34 @@ extension ClipboardHistory {
         self.entries = entries
     }
 }
+
+/// Raycast's `Clipboard.read({ offset })` and `readText({ offset })`: "Minimum value is 0, maximum value is 5." Any
+/// extension can ask, so only those six are read, and an offset can never crash Fudge or page through the history.
+public enum ClipboardOffset: Equatable, Sendable {
+    /// Raycast's documented maximum.
+    public static let maximum = 5
+
+    /// The clipboard as it is now: no offset, 0, or a negative one (the runtime sends 0 for those).
+    case current
+    /// The nth copy before it, 1 to `maximum`.
+    case previous(Int)
+    /// Above `maximum`, or not a whole number: no such copy.
+    case none
+
+    public init(params: JSONValue) {
+        guard case .object(let object) = params, case .number(let offset) = object["offset"], offset > 0 else {
+            self = .current
+            return
+        }
+        guard offset <= Double(Self.maximum), let whole = Int(exactly: offset) else {
+            self = .none
+            return
+        }
+        self = .previous(whole)
+    }
+}
+
+extension ClipboardHistory {
+    /// Whether a session of `caller` may make `clipboardHistory.*` calls: Clipboard History's own only.
+    public static func mayCall(_ caller: String?) -> Bool { caller == extensionName }
+}

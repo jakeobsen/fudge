@@ -359,3 +359,36 @@ extension JSONValue {
         FudgeSettings().isEnabled(extension: ClipboardHistory.extensionName), "the command is there; the switch decides"
     )
 }
+
+@Test func anOffsetReadsOnlyRaycastsSixAndNeverTraps() {
+    func offset(_ value: JSONValue?) -> ClipboardOffset {
+        var object: [String: JSONValue] = [:]
+        if let value { object["offset"] = value }
+        return ClipboardOffset(params: .object(object))
+    }
+    #expect(offset(nil) == .current)
+    #expect(offset(.number(0)) == .current)
+    #expect(offset(.number(-3)) == .current)
+    #expect(offset(.number(-1e300)) == .current)
+    #expect(offset(.number(1)) == .previous(1))
+    #expect(offset(.number(5)) == .previous(5))
+    #expect(offset(.number(6)) == .none, "Raycast's maximum is 5, so nothing pages through the history")
+    #expect(offset(.number(999)) == .none)
+    #expect(offset(.number(1e300)) == .none, "no Int(1e300), which traps")
+    #expect(offset(.number(2.5)) == .none)
+    #expect(offset(.number(.nan)) == .current)
+    #expect(offset(.number(.infinity)) == .none)
+    #expect(offset(.string("2")) == .current)
+    #expect(ClipboardOffset(params: .null) == .current)
+}
+
+@Test func onlyClipboardHistoryMayCallItsCalls() {
+    #expect(ClipboardHistory.mayCall("fudge-clipboard-history"))
+    for caller in [
+        "fudge-file-search", "fudge-extension-store", "clipboard-history", "fudge-clipboard-history2", "", nil,
+    ]
+        as [String?]
+    {
+        #expect(!ClipboardHistory.mayCall(caller), "\(caller ?? "nil")")
+    }
+}

@@ -173,7 +173,7 @@ final class ClipboardHistoryService {
     func handle(
         _ method: String, _ params: JSONValue, caller: String?, origin: CallOrigin, hideWindow: () async -> Void
     ) async throws -> JSONValue {
-        guard caller == ClipboardHistory.extensionName else {
+        guard ClipboardHistory.mayCall(caller) else {
             throw ClipboardHistoryError(ClipboardHistory.notClipboardHistory)
         }
         if method == "clipboardHistory.list" {
