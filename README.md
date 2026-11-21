@@ -22,9 +22,11 @@ It lives in the menu bar, with no Dock icon.
 ### The `fudge` command-line tool
 
 Fudge includes `fudge`, a command-line tool for building and checking extensions, at `/Applications/Fudge.app/Contents/Helpers/fudge`.
-To run it as `fudge`, link it into a folder on your `PATH`; it finds Fudge's own Node.js and esbuild through the link:
+To run it as `fudge`, link it into a folder on your `PATH`; it finds Fudge's own Node.js and esbuild through the link.
+A new Mac may not have `/usr/local/bin` yet, so the first line creates it:
 
 ```bash
+sudo mkdir -p /usr/local/bin
 sudo ln -s /Applications/Fudge.app/Contents/Helpers/fudge /usr/local/bin/fudge
 ```
 
