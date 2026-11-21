@@ -182,6 +182,22 @@ test("a no-view command runs to completion and its console output arrives as log
     await host.close();
 });
 
+test("a no-view command's last console output arrives before its exit, every time", async () => {
+    const host = start();
+    for (let run = 0; run < 5; run++) {
+        const session = `burst${run}`;
+        host.send({ type: "launch", session, entry: fixture("log-then-return.cjs"), mode: "no-view" });
+        assert.equal((await host.next(of(session, "exit"))).reason, "finished");
+        const logs = host.arrived.filter(of(session, "log"));
+        assert.equal(logs.length, 202, `run ${run}: every line before the exit`);
+        // Each stream keeps its order; the two streams are separate.
+        const stdout = logs.filter((m) => m.level === "info").map((m) => m.message);
+        assert.deepEqual(stdout, [...Array.from({ length: 200 }, (_, i) => `line ${i + 1}`), "last on stdout"]);
+        assert.deepEqual(logs.filter((m) => m.level === "error").map((m) => m.message), ["last on stderr"]);
+    }
+    await host.close();
+});
+
 test("getPreferenceValues returns the preferences sent with the launch", async () => {
     const host = start();
     const preferences = { openInEditor: true, staleDays: "7", editorApp: { name: "Code", path: "/Applications/Code.app" } };
