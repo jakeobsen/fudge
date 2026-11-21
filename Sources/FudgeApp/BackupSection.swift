@@ -197,7 +197,7 @@ struct BackupSheet: View {
                 if skipped > 0 {
                     Text(
                         "\(skipped) \(skipped == 1 ? "item that isn't a regular file" : "items that aren't regular files") "
-                            + "in fudge's folder (links, or files outside it) \(skipped == 1 ? "was" : "were") skipped."
+                            + "in Fudge's folder (links, or files outside it) \(skipped == 1 ? "was" : "were") skipped."
                     )
                     .foregroundStyle(.secondary)
                 }
@@ -241,7 +241,7 @@ private struct ExportPasswordStep: View {
         Text("Export a backup").font(.headline)
         Text(
             "The backup holds your extensions' passwords and tokens, so it's protected with a password. You need it "
-                + "to import the backup, and fudge can't recover it.")
+                + "to import the backup, and Fudge can't recover it.")
         SecureField("Password (at least \(BackupArchive.minimumPasswordLength) characters)", text: $password)
         SecureField("Repeat the password", text: $repeated)
         if mismatch {
@@ -296,7 +296,7 @@ struct ImportSummaryStep: View {
     var body: some View {
         Text("Import this backup?").font(.headline)
         Text(
-            "Made on \(contents.manifest.created.formatted(date: .long, time: .shortened)) by fudge "
+            "Made on \(contents.manifest.created.formatted(date: .long, time: .shortened)) by Fudge "
                 + "\(contents.manifest.fudgeVersion).")
         Text("\(contents.summary.text).")
         if contents.hadExtensionStore {

@@ -76,7 +76,7 @@ final class LauncherPanel: NSPanel {
         onResign()
     }
 
-    /// Shows the panel on `screen` ("Show fudge on", `PanelScreen`), a little above the middle.
+    /// Shows the panel on `screen` ("Show Fudge on", `PanelScreen`), a little above the middle.
     func present(on screen: NSScreen?) {
         if let visible = (screen ?? NSScreen.main)?.visibleFrame {
             let origin = NSPoint(

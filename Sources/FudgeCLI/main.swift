@@ -12,7 +12,7 @@ let usage = """
                       Say what the extension in <folder> uses that Fudge doesn't have
                       yet. Nothing is built or run.
       help            Show this help.
-      version         Print the fudge version.
+      version         Print the Fudge version.
     """
 
 func fail(_ message: String, status: Int32 = 1) -> Never {
@@ -22,7 +22,7 @@ func fail(_ message: String, status: Int32 = 1) -> Never {
 
 func build(_ arguments: BuildArguments) {
     guard let esbuild = ExtensionBuilder.locateEsbuild() else {
-        fail("can't find esbuild: set FUDGE_ESBUILD to its path, or use the fudge inside Fudge.app")
+        fail("can't find esbuild: set FUDGE_ESBUILD to its path, or use the fudge tool inside Fudge.app")
     }
     let builder = ExtensionBuilder(esbuild: esbuild, log: { print("  \($0)") })
     do {

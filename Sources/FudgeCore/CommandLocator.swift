@@ -292,7 +292,7 @@ public struct LaunchPermissions: Sendable, Equatable, Codable {
     public struct Unreadable: Error, Equatable, CustomStringConvertible {
         public init() {}
         public var description: String {
-            "fudge can't read launch-permissions.json, so it leaves the file as it is and can't change these answers. "
+            "Fudge can't read launch-permissions.json, so it leaves the file as it is and can't change these answers. "
                 + "Fix or remove it, then try again."
         }
     }

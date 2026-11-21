@@ -3,7 +3,7 @@
 export class NotAvailableError extends Error {
     readonly api: string;
     constructor(api: string) {
-        super(`${api} isn't available in fudge yet`);
+        super(`${api} isn't available in Fudge yet`);
         this.name = "NotAvailableError";
         this.api = api;
     }
