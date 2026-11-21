@@ -310,3 +310,43 @@ test("a file using AI that no command or tool reaches counts the whole extension
     const harmless = extension(["a"], { "src/a.tsx": view(), "src/stray/format.ts": "export const f = 1;\n" });
     assert.deepEqual(await unsupportedByCommand(harmless), { a: [] });
 });
+
+// SPEC-121 §1: asking `canAccess` whether AI or the Browser Extension is there isn't using it.
+
+test("passing AI or BrowserExtension whole to canAccess isn't a use; any other reference is", async () => {
+    const api = (body: string) => view(`import { AI, BrowserExtension, environment } from "@raycast/api";\n${body}`);
+    const commands = ["checks", "destructured", "namespace", "browser", "asks", "hook", "kept", "member", "part", "tabs"];
+    const folder = extension(commands, {
+        "src/checks.tsx": api(`if (environment.canAccess(AI)) console.log("ai");`),
+        "src/destructured.tsx": api(`const { canAccess } = environment;\nconsole.log(canAccess( AI ));`),
+        "src/namespace.tsx": view(`import * as R from "@raycast/api";\nconsole.log(R.environment.canAccess(R.AI));`),
+        "src/browser.tsx": api(`console.log(environment.canAccess(BrowserExtension));`),
+        "src/asks.tsx": api(`if (environment.canAccess(AI)) AI.ask("x");`),
+        "src/hook.tsx": view(`import { useAI } from "@raycast/utils";\nexport const x = () => useAI("hi");`),
+        "src/kept.tsx": api(`const model = AI;\nconsole.log(model);`),
+        "src/member.tsx": api(`console.log(environment.canAccess(AI.Model));`),
+        "src/part.tsx": api(`console.log(environment.canAccess(AI || BrowserExtension));`),
+        "src/tabs.tsx": api(`if (environment.canAccess(BrowserExtension)) BrowserExtension.getTabs();`),
+    });
+    assert.deepEqual(await unsupportedByCommand(folder), {
+        checks: [],
+        destructured: [],
+        namespace: [],
+        browser: [],
+        asks: ["AI"],
+        hook: ["AI"],
+        kept: ["AI"],
+        member: ["AI"],
+        part: ["AI", "Browser Extension"],
+        tabs: ["Browser Extension"],
+    });
+
+    // An extension that only asks has no gap at all: Fudge has `canAccess`, and it answers no.
+    const asking = extension(["checks", "browser"], {
+        "src/checks.tsx": api(`if (environment.canAccess(AI)) console.log("ai");`),
+        "src/browser.tsx": api(`console.log(environment.canAccess(BrowserExtension));`),
+    });
+    const result = await scanExtension(asking, options);
+    assert.deepEqual(result.gaps, []);
+    assert.equal(compatibilityTag(fromReport(report(asking, result))), undefined, "Compatible");
+});

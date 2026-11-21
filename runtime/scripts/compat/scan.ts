@@ -73,7 +73,10 @@ function withoutImports(code: string): string {
         .replace(/(?:const|let|var)\s+[^;=]*=\s*require\(\s*["'][^"']+["']\s*\);?/g, "");
 }
 
-/** What a JavaScript module uses from @raycast/api and @raycast/utils. */
+/**
+ * What a JavaScript module uses from @raycast/api and @raycast/utils. An export passed whole to `canAccess`
+ * (`isAccessCheck`) isn't a use of it.
+ */
 export function uses(code: string): Uses {
     const api = new Set<string>();
     const body = withoutImports(code);
@@ -81,12 +84,31 @@ export function uses(code: string): Uses {
         const pattern = new RegExp(String.raw`(?<![\w$.])${local.replace("$", "\\$")}((?:\.${identifier})*)`, "g");
         for (const match of body.matchAll(pattern)) {
             const path = imported === "*" ? match[1].slice(1) : imported + match[1];
-            if (path) api.add(path);
+            if (path && !isAccessCheck(body, match.index, match[0].length, path)) api.add(path);
         }
     }
     const utils = new Set<string>();
     for (const [, imported] of bindings(code, "@raycast/utils")) if (imported !== "*") utils.add(imported);
     return { api, utils };
+}
+
+/** Right after `canAccess(`, as `environment.canAccess(` or a destructured `canAccess(`. */
+const afterCanAccess = /(?<=(?:^|[^\w$])canAccess\s*\(\s*)/y;
+/** Right before the call's closing parenthesis. */
+const beforeClose = /\s*\)/y;
+
+/**
+ * Whether the reference to `path` at `start` (`length` characters long) is the whole argument of a `canAccess(…)`
+ * call: `environment.canAccess(AI)`, a destructured `canAccess(BrowserExtension)`, or `canAccess(R.AI)` through a
+ * namespace. That's how an extension asks whether an API is there (in Fudge it says no for those it doesn't support),
+ * so it isn't a use of the API. Only an export passed whole counts: `canAccess(AI.Model)`, `const x = AI` and `AI.ask`
+ * are uses.
+ */
+function isAccessCheck(code: string, start: number, length: number, path: string): boolean {
+    if (path.includes(".")) return false;
+    afterCanAccess.lastIndex = start;
+    beforeClose.lastIndex = start + length;
+    return afterCanAccess.test(code) && beforeClose.test(code);
 }
 
 /**

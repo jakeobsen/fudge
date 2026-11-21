@@ -935,6 +935,7 @@ Extensions run in a separate Node.js process, the extension host.
     Sources are read as regular files of at most 5 MB (`scripts/compat/files.ts`, as the store's `files.ts` does); a link, FIFO, device, folder or bigger file with a source's name is listed as unreadable, and nothing is followed.
     Tests and mocks are skipped (`*.test.*`, `*.spec.*`, and `__mocks__/`, `__tests__/`, `test/` and `tests/` folders).
     It collects the API paths used through `@raycast/api` imports (`Clipboard.copy`, `Action.CopyToClipboard`) and the names imported from `@raycast/utils`.
+    An export passed whole to `canAccess` (`environment.canAccess(AI)`, or `canAccess(BrowserExtension)` destructured) isn't a use, since that's how an extension asks whether it's there, and Fudge answers no (`isAccessCheck`, SPEC-121 §1); any other reference is, `AI.ask` and `const x = AI` included.
   - Each path is checked against `createApiModule()`.
     A stub anywhere on the path makes it `missing`, a lowercase member's included.
     So do the markers in `src/api/stubs.ts`: `UNAVAILABLE` is on the actions that render but fail when picked (`render-but-fail`), `NOT_DRAWN` is on the components the app can't draw yet, listed at the end of `components.ts` (`not-drawn`), and `LEFT_OUT` is on `OAuth`, which is there but counted apart,
