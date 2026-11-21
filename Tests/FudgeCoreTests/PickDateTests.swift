@@ -103,6 +103,9 @@ private let pickDatePanel = #"""
     #expect(entries[3].pickDate == nil, "no onChange to call: an ordinary action")
     #expect(entries[4].pickDate == DatePickerOptions(), "DateTime by default, with no limits")
     #expect(ActionPanelReader.entry(titled: "Pick Day…", in: sections)?.id == 23)
+    #expect(
+        ActionPanelReader.entry(titled: "Copy", in: sections, where: { $0.pickDate != nil }) == nil,
+        "only a PickDate, for --pick-date")
     #expect(ActionPanelReader.entry(titled: "More", in: sections) == nil, "a submenu isn't an action")
     #expect(ActionPanelReader.entry(id: 99, in: sections) == nil)
 }

@@ -263,11 +263,15 @@ public enum ActionPanelReader {
         return nil
     }
 
-    /// The first action titled `title`, searching submenus too.
-    public static func entry(titled title: String, in sections: [ActionSection]) -> ActionEntry? {
+    /// The first action titled `title` that `matches`, searching submenus too.
+    public static func entry(
+        titled title: String, in sections: [ActionSection], where matches: (ActionEntry) -> Bool = { _ in true }
+    ) -> ActionEntry? {
         for entry in flat(sections) {
-            if entry.title == title, !entry.isSubmenu { return entry }
-            if let submenu = entry.submenu, let found = Self.entry(titled: title, in: submenu) { return found }
+            if entry.title == title, !entry.isSubmenu, matches(entry) { return entry }
+            if let submenu = entry.submenu, let found = Self.entry(titled: title, in: submenu, where: matches) {
+                return found
+            }
         }
         return nil
     }

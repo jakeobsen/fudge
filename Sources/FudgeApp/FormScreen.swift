@@ -44,6 +44,12 @@ struct FormScreen: View {
         .onChange(of: model.actionPanel == nil) { _, closed in
             if closed { focused = lastFocused }
         }
+        // An Action.PickDate picker has no field of its own to take the keyboard (its keys come through the
+        // launcher's key monitor), so the field lets go of it here, or ⌘V and ⌥⌫ would still edit it. It comes back
+        // when the overlay closes, above.
+        .onChange(of: model.actionPanel?.pick != nil) { _, open in
+            if open { focused = nil }
+        }
         // So does a Dropdown's or TagPicker's panel. The launcher view moves its own focus as the panel closes, so
         // this goes after it, through nil.
         .onChange(of: model.dropdownPanel == nil) { _, closed in

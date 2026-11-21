@@ -531,7 +531,7 @@ struct Snapshot {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { model.toggleActionPanel() }
         }
         if let pickDate {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.8) { model.runAction(titled: pickDate) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.8) { model.openDatePick(titled: pickDate) }
         }
         if openDropdown {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {

@@ -1278,9 +1278,11 @@ final class LauncherModel {
         actionPanel?.pick?.update(options: options)
     }
 
-    /// For snapshots: runs the action titled `title`, as ↵ on it would.
-    func runAction(titled title: String) {
-        if let entry = ActionPanelReader.entry(titled: title, in: currentActions) { run(entry) }
+    /// For snapshots: opens the picker of the `Action.PickDate` titled `title`, as ↵ on it would.
+    func openDatePick(titled title: String) {
+        if let entry = ActionPanelReader.entry(titled: title, in: currentActions, where: { $0.pickDate != nil }) {
+            run(entry)
+        }
     }
 
     // MARK: - Form.LinkAccessory
