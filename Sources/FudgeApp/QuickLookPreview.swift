@@ -19,6 +19,25 @@ final class QuickLookPreview: NSObject, @preconcurrency QLPreviewPanelDataSource
     var launcherLevel: NSWindow.Level = .floating
     /// Set while Fudge closes the panel itself, so that isn't taken for the user's close.
     private var closing = false
+    /// The panel's key state from its own notifications, read when the launcher's resign settles (`PreviewKey`).
+    private(set) var previewKey = PreviewKey()
+
+    override init() {
+        super.init()
+        let center = NotificationCenter.default
+        center.addObserver(
+            self, selector: #selector(panelBecameKey(_:)), name: NSWindow.didBecomeKeyNotification, object: nil)
+        center.addObserver(
+            self, selector: #selector(panelResignedKey(_:)), name: NSWindow.didResignKeyNotification, object: nil)
+    }
+
+    @objc private func panelBecameKey(_ notification: Notification) {
+        if notification.object is QLPreviewPanel { previewKey.record(.becameKey) }
+    }
+
+    @objc private func panelResignedKey(_ notification: Notification) {
+        if notification.object is QLPreviewPanel { previewKey.record(.resignedKey) }
+    }
 
     /// Shows `item`, or closes the panel for nil.
     func show(_ item: QuickLookItem?) {
@@ -53,6 +72,7 @@ final class QuickLookPreview: NSObject, @preconcurrency QLPreviewPanelDataSource
         guard QLPreviewPanel.sharedPreviewPanelExists(), let panel = QLPreviewPanel.shared(), panel.isVisible
         else { return }
         closing = true
+        previewKey.record(.closed)
         LauncherLog.note("preview orderOut by Fudge: \(LauncherLog.keyboard)")
         panel.orderOut(nil)
         closing = false
@@ -115,6 +135,7 @@ final class QuickLookPreview: NSObject, @preconcurrency QLPreviewPanelDataSource
 
     func windowWillClose(_ notification: Notification) {
         LauncherLog.note("preview willClose byFudge=\(closing) open=\(item != nil): \(LauncherLog.keyboard)")
+        previewKey.record(.closed)
         guard !closing, item != nil else { return }
         item = nil
         closedByUser()

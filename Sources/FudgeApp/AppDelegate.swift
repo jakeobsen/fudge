@@ -397,7 +397,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func settleResign() {
         let settled = LauncherResign.Settled(
             launcherShown: panel.isVisible, sheetAttached: panel.attachedSheet != nil, launcherIsKey: panel.isKeyWindow,
-            previewOpen: quickLook?.item != nil, previewIsKey: quickLook?.isKey == true)
+            previewOpen: quickLook?.item != nil, previewIsKey: quickLook?.isKey == true,
+            previewSaysKey: quickLook?.previewKey.saysKey == true)
         let decision = LauncherResign.decide(settled)
         LauncherLog.note("resign settled \(settled) → \(decision): \(LauncherLog.keyboard)")
         switch decision {
