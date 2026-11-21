@@ -162,6 +162,36 @@ func next(
     #expect(items[1] == ItemSlots(id: 7))
 }
 
+@Test func theFastPathReadsEveryNumberAsJSONDecoderDoes() throws {
+    // Compared bit for bit. NSDecimalNumber's doubleValue was a step off for the first two.
+    let numbers = [
+        "0.00034445413621142507", "123456789012345680000", "12345678901234567890", "9007199254740993",
+        "18446744073709551615", "18446744073709551616", "-9223372036854775808", "-9223372036854775809",
+        "100000000000000000000000000000000000000000", "0.1234567890123456789012345678901234567890123", "0", "1",
+        "-42", "1.5", "0.1", "0.30000000000000004", "123456789.12345678", "3.141592653589793", "1e-7", "-1.5e-10",
+        "1E2", "1e300", "2.2250738585072014e-308", "5e-324", "1.7976931348623157e308", "-0.0",
+    ]
+    for number in numbers {
+        let data = Data("[\(number)]".utf8)
+        guard case .array(let fast) = try JSONValue.parse(data), case .number(let read)? = fast.first,
+            case .array(let decoded) = try JSONDecoder().decode(JSONValue.self, from: data),
+            case .number(let expected)? = decoded.first
+        else {
+            Issue.record("\(number) isn't a number on both paths")
+            continue
+        }
+        #expect(read.bitPattern == expected.bitPattern, "\(number): \(read) against \(expected)")
+    }
+    // As a message, too.
+    let line = Data(#"{"type":"rpc","session":"s","id":1,"method":"m","params":[0.00034445413621142507]}"#.utf8)
+    guard case .rpc(_, _, _, .array(let params)) = try HostMessage(line: line), case .number(let value)? = params.first
+    else {
+        Issue.record("not an rpc with a number")
+        return
+    }
+    #expect(value.bitPattern == 0.00034445413621142507.bitPattern)
+}
+
 @Test func encodesAppMessagesInTheHostsShape() throws {
     let encode = { (message: AppMessage) in
         try JSONSerialization.jsonObject(with: JSONEncoder().encode(message)) as? NSDictionary
