@@ -56,6 +56,12 @@ export function notAvailable(name: string): unknown {
 
 const stubs = new WeakSet<object>();
 
+/**
+ * Exports that are records of the extension's own data, keyed by its names (the deprecated `preferences`), not
+ * namespaces: `createApiModule` leaves their members alone.
+ */
+export const plainRecords = new WeakSet<object>();
+
 /** True for the stand-ins made by `notAvailable`. */
 export function isNotAvailable(value: unknown): boolean {
     return (typeof value === "function" || typeof value === "object") && value !== null && stubs.has(value);

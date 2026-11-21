@@ -5,6 +5,7 @@ export { Action, ActionPanel, Detail, Form, Grid, List, MenuBarExtra } from "./c
 export { Color, Icon, Image, ImageMask, LaunchType, PopToRootType } from "./constants.ts";
 export { useNavigation } from "./navigation.ts";
 export { getPreferenceValues, openCommandPreferences, openExtensionPreferences } from "./preferences.ts";
+export { preferences, randomId } from "./deprecated.ts";
 export { OAuth } from "./oauth.ts";
 export { environment } from "./environment.ts";
 export { launchCommand } from "./launch-command.ts";

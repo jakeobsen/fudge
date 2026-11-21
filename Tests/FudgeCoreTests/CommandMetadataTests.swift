@@ -128,3 +128,28 @@ private let inbox = """
     #expect(found == ["Search Mail", "Status", "Unread Count"])
     #expect(RootSearch.rank(items, query: "unread", history: LaunchHistory()).first?.title == "Unread Count")
 }
+
+@Test func commandMetadataNeverOverwritesAFileItCantRead() throws {
+    let file = try Fixtures.temporaryDirectory().appendingPathComponent("command-metadata.json")
+    var metadata = CommandMetadata()
+    metadata.setSubtitle("3 unread", extension: "inbox", command: "unread")
+    for unreadable in ["not json", "[1, 2]", "\"text\"", "{\"a/b\": "] {
+        try Data(unreadable.utf8).write(to: file)
+        #expect(!CommandMetadata.isWritable(file), "\(unreadable)")
+        #expect(throws: CommandMetadata.Unreadable()) { try metadata.save(to: file) }
+        #expect(try String(contentsOf: file, encoding: .utf8) == unreadable, "left as it is")
+    }
+    #expect(
+        CommandMetadata.Unreadable().description
+            == "Fudge can't read command-metadata.json, so it leaves the file as it is. Fix or remove it, then try again."
+    )
+
+    // A blank file, a missing one and a JSON object are written.
+    try Data("  \n".utf8).write(to: file)
+    try metadata.save(to: file)
+    #expect(CommandMetadata.load(from: file).subtitles == ["inbox/unread": "3 unread"])
+    try FileManager.default.removeItem(at: file)
+    #expect(CommandMetadata.isWritable(file))
+    try metadata.save(to: file)
+    #expect(CommandMetadata.isWritable(file))
+}
