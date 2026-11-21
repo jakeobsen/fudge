@@ -110,6 +110,15 @@ export const Grid = Object.assign(host("Grid"), {
 
 export const Detail = Object.assign(host("Detail"), { Metadata });
 
+// The menu bar: a menu-bar command renders one MenuBarExtra, which the app draws as a status item and its menu.
+
+export const MenuBarExtra = Object.assign(host("MenuBarExtra"), {
+    Item: host("MenuBarExtra.Item"),
+    Section: host("MenuBarExtra.Section"),
+    Submenu: host("MenuBarExtra.Submenu"),
+    Separator: host("MenuBarExtra.Separator"),
+});
+
 // Forms: the Form provides the registry SubmitForm reads, and each field
 // registers its value there (see form-state.ts).
 

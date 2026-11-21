@@ -107,7 +107,7 @@ public enum LaunchCommandError: Error, Equatable, CustomStringConvertible {
     case extensionNotInstalled(owner: String, name: String)
     case commandNotFound(command: String, extension: String)
     case notInBackground(command: String)
-    case menuBarNotSupported
+    case notActiveInMenuBar(command: String)
     case missingArgument(argument: String, command: String)
     case missingPreferences(extensionTitle: String, names: [String])
     case notAllowed(extensionTitle: String)
@@ -119,7 +119,7 @@ public enum LaunchCommandError: Error, Equatable, CustomStringConvertible {
         case .extensionNotInstalled(let owner, let name): "Extension \"\(owner)/\(name)\" isn't installed"
         case .commandNotFound(let command, let name): "No command \"\(command)\" in extension \"\(name)\""
         case .notInBackground(let command): "\"\(command)\" can't be launched in the background"
-        case .menuBarNotSupported: "Menu bar commands aren't supported in fudge yet"
+        case .notActiveInMenuBar(let command): "\"\(command)\" isn't active in the menu bar"
         case .missingArgument(let argument, let command):
             "Missing required argument \"\(argument)\" for \"\(command)\""
         case .missingPreferences(let title, let names):
@@ -195,10 +195,18 @@ public enum CommandLocator {
         )
     }
 
-    /// Whether the command's mode can be launched as `type`: a view command never in the background, and menu-bar
-    /// commands not at all yet. The one place menu-bar commands are turned away.
-    public static func checkMode(_ command: ExtensionManifest.Command, type: LaunchRequest.LaunchType) throws {
-        if command.mode == "menu-bar" { throw LaunchCommandError.menuBarNotSupported }
+    /// Whether the command's mode can be launched as `type`. A view command never runs in the background. A
+    /// menu-bar command runs either way (`MenuBarController`): in the background only while it's active in the
+    /// menu bar, where the launch refreshes it; a UserInitiated launch activates it first if needed.
+    public static func checkMode(
+        _ command: ExtensionManifest.Command, type: LaunchRequest.LaunchType, isActiveInMenuBar: Bool = false
+    ) throws {
+        if command.mode == "menu-bar" {
+            if type == .background, !isActiveInMenuBar {
+                throw LaunchCommandError.notActiveInMenuBar(command: command.name)
+            }
+            return
+        }
         if type == .background, command.mode != "no-view" {
             throw LaunchCommandError.notInBackground(command: command.name)
         }

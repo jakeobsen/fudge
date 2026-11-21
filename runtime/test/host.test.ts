@@ -16,12 +16,15 @@ type Message = HostMessage & Record<string, unknown>;
 class Host {
     readonly process: ChildProcessWithoutNullStreams;
     private readonly received: Message[] = [];
+    /** Every message, in the order it arrived. */
+    readonly arrived: Message[] = [];
     private readonly waiting: { match: (m: Message) => boolean; resolve: (m: Message) => void }[] = [];
 
     constructor() {
         this.process = spawn(process.execPath, [hostPath], { stdio: ["pipe", "pipe", "pipe"] });
         createInterface({ input: this.process.stdout }).on("line", (line) => {
             const message = JSON.parse(line) as Message;
+            this.arrived.push(message);
             const index = this.waiting.findIndex((w) => w.match(message));
             if (index === -1) this.received.push(message);
             else this.waiting.splice(index, 1)[0]!.resolve(message);
@@ -98,6 +101,54 @@ test("a view command renders, handles an event and renders again", async () => {
     host.send({ type: "unload", session: "s1" });
     assert.deepEqual(await host.next(of("s1", "exit")), { type: "exit", reason: "unloaded", session: "s1" });
     assert.equal(await host.close(), 0);
+});
+
+test("a menu-bar command renders its MenuBarExtra, and every event is answered once its handler settles", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "mb", entry: fixture("menu-bar.cjs"), mode: "menu-bar", launchProps: { launchType: "background" } });
+
+    const first = await host.next(of("mb", "render"));
+    const extra = first.view as UINode;
+    assert.equal(extra.type, "MenuBarExtra");
+    assert.deepEqual([extra.props.title, extra.props.tooltip, extra.props.isLoading], ["0", "background", false]);
+    assert.deepEqual(
+        extra.children.map((child) => child.type),
+        ["MenuBarExtra.Item", "MenuBarExtra.Section", "MenuBarExtra.Separator", "MenuBarExtra.Submenu"],
+    );
+    const [add, fail] = extra.children[1]!.children;
+    assert.deepEqual([add!.props.title, add!.props.subtitle, add!.props.shortcut], ["Add", "one", { modifiers: ["cmd"], key: "a" }]);
+    assert.deepEqual(add!.props.onAction, { $fn: ["onAction"] });
+    const alternate = add!.props.alternate as unknown as UINode;
+    assert.equal(alternate.type, "MenuBarExtra.Item");
+    assert.equal(alternate.props.title, "Add Later");
+    assert.equal(extra.children[3]!.children[0]!.props.title, "Deep");
+
+    // A plain handler: settled straight away.
+    host.send({ type: "event", session: "mb", node: add!.id, path: ["onAction"], args: [{ type: "left-click" }] });
+    const plainSettled = await host.next(of("mb", "eventSettled"));
+    const plainRender = await host.next(of("mb", "render"));
+    assert.equal((plainRender.view as UINode).props.title, "1");
+    assert.ok(host.arrived.indexOf(plainRender) < host.arrived.indexOf(plainSettled), "rendered first");
+
+    // A handler's promise that sets state and then resolves: settled after the render it caused has been sent, so
+    // the app never takes the command as idle with that render still to come.
+    host.send({ type: "event", session: "mb", node: alternate.id, path: ["onAction"], args: [{ type: "left-click" }] });
+    const settled = await host.next(of("mb", "eventSettled"));
+    const rendered = await host.next(of("mb", "render"));
+    assert.equal((rendered.view as UINode).props.title, "11");
+    assert.ok(host.arrived.indexOf(rendered) < host.arrived.indexOf(settled), "the render arrived before eventSettled");
+
+    // A rejected promise is reported, then settled; a stale node is logged, then settled.
+    host.send({ type: "event", session: "mb", node: fail!.id, path: ["onAction"], args: [] });
+    assert.equal((await host.next(of("mb", "error"))).message, "nope");
+    await host.next(of("mb", "eventSettled"));
+    host.send({ type: "event", session: "mb", node: 99999, path: ["onAction"], args: [] });
+    assert.match(String((await host.next(of("mb", "log"))).message), /ignored an event/);
+    await host.next(of("mb", "eventSettled"));
+
+    host.send({ type: "unload", session: "mb" });
+    assert.equal((await host.next(of("mb", "exit"))).reason, "unloaded");
+    await host.close();
 });
 
 test("a no-view command runs to completion and its console output arrives as logs", async () => {

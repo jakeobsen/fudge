@@ -56,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.openSettings = { [weak self] name in self?.settingsWindow.show(extension: name) }
         model.reloadAll = { [weak self] in self?.reloadExtensions() }
         settingsModel.clearSearchHistory = { [weak self] in self?.model.clearHistory() }
+        settingsModel.imported = { [weak self] in self?.afterImport() }
         model.showHUD = { [weak self] title in self?.hud.show(title) }
         model.isVisible = { [weak self] in self?.panel.isVisible ?? false }
         model.confirm = { [weak self] request in await self?.confirm(request) ?? false }
@@ -74,11 +75,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { await self.exchangeRates.updateIfNeeded(now: Date(), explicit: true) }
         }
         settingsModel.resetAfterChanged = { [weak self] setting in self?.model.panelReset.setting = setting }
-        settingsModel.extensionStoreChanged = { [weak self] in
-            guard let self else { return }
-            self.model.reload()
-            self.applyCommandHotkeys()
-        }
+        // The store stays installed either way; the launcher reads settings.json again.
+        settingsModel.extensionStoreChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.stopExtensionStore = { [weak self] in
             await self?.model.unloadSessions(ofExtension: ExtensionStore.extensionName)
         }
@@ -144,6 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         installStatusItem()
         launcherHotkeyChanged()
+        model.menuBar.start()
         applyCommandHotkeys()
         settingsModel.registerLauncherHotkey = { [weak self] spec in
             guard let self else { return false }
@@ -351,7 +350,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The key as it types with no modifier at all, so ⌘⇧, is "," with cmd and shift. `charactersIgnoringModifiers`
     /// still applies ⇧ and would give "<" (US) or ";" (Danish). Read through the keyboard layout, punctuation
     /// follows the user's layout rather than the key's position.
-    private nonisolated static func shortcut(for event: NSEvent) -> KeyShortcut? {
+    nonisolated static func shortcut(for event: NSEvent) -> KeyShortcut? {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         var modifiers: Set<String> = []
         if flags.contains(.command) { modifiers.insert("cmd") }
@@ -382,6 +381,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NSApp.activate()
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// An import replaced `settings.json`, the history and extensions' data: read everything again, and register
+    /// the imported hotkeys.
+    private func afterImport() {
+        model.reloadAfterImport()
+        let settings = FudgeSettings.load(from: paths.settingsFile)
+        _ = registry.setLauncher(settings.launcherHotkey)
+        launcherHotkeyChanged()
+        applyCommandHotkeys()
+        Task { await exchangeRates.setEnabled(settings.currencyRates, now: Date()) }
     }
 
     @objc private func reloadExtensions() {

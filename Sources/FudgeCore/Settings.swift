@@ -47,7 +47,7 @@ public struct FudgeSettings: Sendable, Equatable {
     }
 
     public struct ExtensionSettings: Sendable, Equatable {
-        /// nil means enabled.
+        /// nil means the default: enabled, except for the Extension Store (`isEnabled(extension:)`).
         public var enabled: Bool?
 
         public init(enabled: Bool? = nil) {
@@ -73,8 +73,36 @@ public struct FudgeSettings: Sendable, Equatable {
 
     /// Whether a command is enabled: neither it nor its extension is disabled.
     public func isEnabled(extension extensionName: String, command: String) -> Bool {
-        extensions[extensionName]?.enabled != false
+        isEnabled(extension: extensionName)
             && commands[Self.commandID(extension: extensionName, command: command)]?.enabled != false
+    }
+
+    /// `isEnabled` for a command id ("<extension name>/<command name>"), split at its first "/".
+    public func isEnabled(commandID id: String) -> Bool {
+        guard let slash = id.firstIndex(of: "/") else { return true }
+        return isEnabled(extension: String(id[..<slash]), command: String(id[id.index(after: slash)...]))
+    }
+
+    /// Whether an extension is enabled on the Commands page. Every extension is until it's disabled, except the
+    /// bundled Extension Store, which is off until it's enabled. An install from before that, with the store
+    /// switched on, counts as enabled until either is changed.
+    public func isEnabled(extension name: String) -> Bool {
+        if let enabled = extensions[name]?.enabled { return enabled }
+        return name == ExtensionStore.extensionName ? isExtensionStoreOn : true
+    }
+
+    /// Enables or disables an extension. The store's state is always written, since its default isn't on.
+    public mutating func setEnabled(_ enabled: Bool, extension name: String) {
+        extensions[name, default: .init()].enabled = enabled && name != ExtensionStore.extensionName ? nil : enabled
+    }
+
+    /// The Extension Store's switch: on records the consent date, off removes both keys. The store's Enabled is
+    /// written down first, so the switch never changes it, even for an install from before, which takes it from
+    /// the switch.
+    public mutating func setExtensionStore(_ on: Bool, now: Date) {
+        setEnabled(isEnabled(extension: ExtensionStore.extensionName), extension: ExtensionStore.extensionName)
+        extensionStore = on
+        extensionStoreConsentAt = on ? ISO8601DateFormatter().string(from: now) : nil
     }
 
     /// The hotkeys to register: those of the commands in `installed` (command ids) that are enabled. Entries for
@@ -166,7 +194,8 @@ public struct FudgeSettings: Sendable, Equatable {
         var extensionObjects = object["extensions"] as? [String: Any] ?? [:]
         for name in Set(extensionObjects.keys).union(extensions.keys) {
             var entry = extensionObjects[name] as? [String: Any] ?? [:]
-            entry["enabled"] = extensions[name]?.enabled == false ? false : nil
+            let enabled = extensions[name]?.enabled
+            entry["enabled"] = name == ExtensionStore.extensionName ? enabled : (enabled == false ? false : nil)
             extensionObjects[name] = entry.isEmpty ? nil : entry
         }
         object["extensions"] = extensionObjects.isEmpty ? nil : extensionObjects

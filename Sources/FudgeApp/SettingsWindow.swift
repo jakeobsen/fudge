@@ -53,11 +53,8 @@ final class SettingsModel {
     }
 
     func reload() {
-        let installed = InstalledExtension.all(
-            paths: paths, settings: FudgeSettings.load(from: paths.settingsFile), resources: Bundle.main.resourceURL)
-        extensions = installed.filter { installed in
-            !installed.manifest.preferences.isEmpty || installed.manifest.commands.contains { !$0.preferences.isEmpty }
-        }
+        let installed = InstalledExtension.all(paths: paths, resources: Bundle.main.resourceURL)
+        extensions = InstalledExtension.settingsPages(of: installed)
         stored = Dictionary(uniqueKeysWithValues: extensions.map { ($0.manifest.name, store.load($0.manifest.name)) })
         allExtensions = installed.sorted {
             $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending
@@ -107,6 +104,15 @@ final class SettingsModel {
     private(set) var loginItemError: String?
     /// Clears root search's launch history; set by the app delegate.
     @ObservationIgnored var clearSearchHistory: () -> Void = {}
+
+    /// Import / Export on the General page.
+    @ObservationIgnored private(set) lazy var backup = BackupController(paths: paths, settings: self)
+    /// Onboarding's Restore from a Backup…: the same flow, with its own sheets, so they show on the onboarding
+    /// window and not on General as well.
+    @ObservationIgnored private(set) lazy var onboardingBackup = BackupController(paths: paths, settings: self)
+    /// After an import: the launcher reloads, and the hotkeys and the currency setting are applied again. Set by
+    /// the app delegate.
+    @ObservationIgnored var imported: () -> Void = {}
 
     /// Reads the login item's status again: a change made in System Settings shows too.
     func refreshLoginItem() {
@@ -199,27 +205,25 @@ final class SettingsModel {
 
     // MARK: - Extension Store
 
-    /// Whether the Extension Store is on: switched on through its consent sheet.
+    /// Whether the Extension Store is on: switched on through its consent sheet. Whether it's in fudge at all is
+    /// its Enabled on the Commands page, which the switch leaves alone.
     var extensionStore: Bool { fudgeSettings.isExtensionStoreOn }
     /// Asks the user with a sheet on the Settings window; set by the window controller.
     @ObservationIgnored var confirm: (LauncherModel.AlertRequest) async -> Bool = { _ in false }
-    /// Tells the launcher to list or drop the store's commands; set by the app delegate.
+    /// Tells the launcher the store was turned on or off; set by the app delegate.
     @ObservationIgnored var extensionStoreChanged: () -> Void = {}
     /// Unloads a running store, so its git stops before its copy is deleted; set by the app delegate.
     @ObservationIgnored var stopExtensionStore: () async -> Void = {}
 
-    /// The switch: on only after the consent sheet's Turn On, which records the date; off after its own sheet,
-    /// which deletes the store's downloaded repository but keeps its record of what it installed.
+    /// The switch on the store's Settings page: on only after the consent sheet's Turn On, which records the date;
+    /// off after its own sheet, which deletes the store's downloaded repository but keeps its record of what it
+    /// installed.
     func setExtensionStore(_ on: Bool) {
         guard on != extensionStore else { return }
         Task {
             let sheet = on ? ExtensionStore.consentRequest : ExtensionStore.turnOffRequest
             guard await confirm(sheet) else { return }
-            let saved = change { settings in
-                settings.extensionStore = on
-                settings.extensionStoreConsentAt = on ? ISO8601DateFormatter().string(from: Date()) : nil
-            }
-            guard saved else { return }
+            guard change({ $0.setExtensionStore(on, now: Date()) }) else { return }
             if !on {
                 await stopExtensionStore()
                 do {
@@ -368,8 +372,9 @@ final class SettingsModel {
         fudgeSettings.commands[commandID]?.enabled != false
     }
 
+    /// The Extension Store is off unless enabled (`FudgeSettings.isEnabled(extension:)`).
     func isEnabled(extension name: String) -> Bool {
-        fudgeSettings.extensions[name]?.enabled != false
+        fudgeSettings.isEnabled(extension: name)
     }
 
     /// Enables or disables a command: a disabled one leaves root search, and its hotkey stops working.
@@ -380,7 +385,7 @@ final class SettingsModel {
 
     /// Enables or disables every command of an extension.
     func setEnabled(_ enabled: Bool, extension name: String) {
-        change { $0.extensions[name, default: .init()].enabled = enabled ? nil : false }
+        change { $0.setEnabled(enabled, extension: name) }
         _ = applyHotkeys()
     }
 
@@ -442,9 +447,23 @@ final class SettingsModel {
 /// The Settings window, which can refuse the keyboard: snapshots render it without taking anyone's typing.
 final class SettingsNSWindow: NSWindow {
     var refusesKey = false
+    /// Whether a hotkey is being recorded, when ⌘Q and ⌘W belong to the recorder.
+    var isRecording: () -> Bool = { false }
 
     override var canBecomeKey: Bool { !refusesKey && super.canBecomeKey }
     override var canBecomeMain: Bool { !refusesKey && super.canBecomeMain }
+
+    /// ⌘Q closes the window as ⌘W and its close button do, and fudge keeps running (`WindowShortcut`). The key is
+    /// the one that types "q" in the current layout, as for the panel's shortcuts.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.type == .keyDown, let pressed = AppDelegate.shortcut(for: event),
+            WindowShortcut.closesWindow(pressed, recording: isRecording())
+        {
+            performClose(nil)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
 }
 
 @MainActor
@@ -506,6 +525,7 @@ final class SettingsWindowController {
             )
             window.title = "fudge Settings"
             window.isReleasedWhenClosed = false
+            window.isRecording = { [model] in model.recording != nil }
             window.contentView = NSHostingView(rootView: SettingsView(model: model))
             window.center()
             self.window = window
@@ -514,6 +534,7 @@ final class SettingsWindowController {
                 let alert = NSAlert()
                 alert.messageText = request.title
                 alert.informativeText = request.message ?? ""
+                if let footnote = request.footnote { alert.accessoryView = Self.footnoteView(footnote) }
                 alert.addButton(withTitle: request.primary).hasDestructiveAction = request.destructive
                 alert.addButton(withTitle: request.dismiss)
                 return await withCheckedContinuation { continuation in
@@ -541,6 +562,27 @@ final class SettingsWindowController {
     }
 
     var contentView: NSView? { window?.contentView }
+
+    /// A sheet's last paragraph, as selectable text with a working link: an alert's own text can't hold one.
+    /// Clicking the link opens the browser and leaves the sheet open.
+    private static func footnoteView(_ footnote: LauncherModel.AlertRequest.Footnote) -> NSView {
+        let font = NSFont.systemFont(ofSize: NSFont.systemFontSize)
+        let text = NSMutableAttributedString(
+            string: footnote.text, attributes: [.font: font, .foregroundColor: NSColor.labelColor])
+        let range = (footnote.text as NSString).range(of: footnote.linkText)
+        if range.location != NSNotFound { text.addAttribute(.link, value: footnote.url, range: range) }
+        let view = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 0))
+        view.isEditable = false
+        view.isSelectable = true
+        view.drawsBackground = false
+        view.textContainerInset = .zero
+        view.textContainer?.lineFragmentPadding = 0
+        view.textStorage?.setAttributedString(text)
+        view.layoutManager?.ensureLayout(for: view.textContainer!)
+        let height = view.layoutManager?.usedRect(for: view.textContainer!).height ?? 0
+        view.frame.size.height = ceil(height)
+        return view
+    }
 }
 
 struct SettingsView: View {
@@ -607,6 +649,9 @@ private struct ExtensionPreferencesForm: View {
     var body: some View {
         let manifest = installed.manifest
         Form {
+            if manifest.name == ExtensionStore.extensionName {
+                ExtensionStoreSwitch(model: model)
+            }
             if !manifest.preferences.isEmpty {
                 Section(manifest.title) {
                     ForEach(manifest.preferences, id: \.name) { preference in
@@ -629,6 +674,26 @@ private struct ExtensionPreferencesForm: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// The first row of the Extension Store's page: its switch, which asks with the consent sheet before turning on.
+private struct ExtensionStoreSwitch: View {
+    let model: SettingsModel
+
+    var body: some View {
+        if let problem = model.settingsProblem {
+            Label(problem, systemImage: "exclamationmark.triangle.fill")
+                .font(.system(size: 12))
+                .foregroundStyle(.red)
+        }
+        Section {
+            Toggle(isOn: Binding(get: { model.extensionStore }, set: { model.setExtensionStore($0) })) {
+                Text(ExtensionStore.Switch.title)
+                Text(ExtensionStore.Switch.help)
+            }
+            .toggleStyle(.switch)
+        }
     }
 }
 
@@ -667,15 +732,17 @@ private struct PreferenceField: View {
     @ViewBuilder private var control: some View {
         switch preference.type {
         case "checkbox":
-            LabeledContent(preference.title ?? "") {
-                Toggle(
-                    preference.label ?? preference.name,
-                    isOn: Binding(
-                        get: { if case .bool(let value) = current { value } else { false } },
-                        set: { set(.bool($0)) }
-                    )
+            // A switch on the right, as everywhere in Settings: the title, with the manifest's `label` under it.
+            Toggle(
+                isOn: Binding(
+                    get: { if case .bool(let value) = current { value } else { false } },
+                    set: { set(.bool($0)) }
                 )
+            ) {
+                Text(title)
+                if preference.title != nil, let label = preference.label { Text(label) }
             }
+            .toggleStyle(.switch)
         case "dropdown":
             Picker(title, selection: text) {
                 ForEach(preference.data ?? [], id: \.value) { option in

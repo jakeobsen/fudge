@@ -8,7 +8,7 @@ export type CommandMetadataUpdate = { subtitle?: string | null };
 
 /** Sets the running command's subtitle in root search; `null` (or none) goes back to the manifest's. */
 export async function updateCommandMetadata(metadata: CommandMetadataUpdate): Promise<void> {
-    if (typeof metadata !== "object" || metadata === null) {
+    if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
         throw new TypeError("updateCommandMetadata: metadata must be an object");
     }
     const subtitle = metadata.subtitle ?? null;
