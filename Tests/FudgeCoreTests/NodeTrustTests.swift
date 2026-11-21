@@ -32,7 +32,15 @@ private func cert(_ byte: UInt8, _ settings: [NodeTrust.Domain: [NodeTrust.Setti
         cert(12, [.user: [NodeTrust.Setting(result: .trustRoot, policy: .ssl, restricted: true)], .system: []]),
         cert(2, [.user: [ssl]]),  // the same certificate again
     ]
-    #expect(NodeTrust.exportable(certificates) == [1, 2, 3, 8, 9].map { Data([0x30, $0]) })
+    // Only the user's and admin's trust counts (SPEC-084): 1, 8, 9 and 12's deciding trust is the system's.
+    #expect(NodeTrust.exportable(certificates) == [2, 3].map { Data([0x30, $0]) })
+}
+
+@Test func aSystemDenyStillRemovesAUserTrustedCertificate() {
+    let ssl = NodeTrust.Setting(result: .trustRoot, policy: .ssl)
+    let denied = cert(1, [.user: [ssl], .system: [NodeTrust.Setting(result: .deny, policy: .ssl)]])
+    let trusted = cert(2, [.user: [ssl], .system: []])
+    #expect(NodeTrust.exportable([denied, trusted]) == [Data([0x30, 2])])
 }
 
 @Test func certificatesAreWrittenAsPEM() throws {
@@ -54,7 +62,7 @@ private func cert(_ byte: UInt8, _ settings: [NodeTrust.Domain: [NodeTrust.Setti
     var asked = 0
     let mac = {
         asked += 1
-        return [cert(1, [.system: []]), cert(5, [.user: [NodeTrust.Setting(result: .deny)], .system: []])]
+        return [cert(1, [.user: []]), cert(5, [.user: [NodeTrust.Setting(result: .deny)], .system: []])]
     }
 
     // A Node with the flag: no file, and the Mac isn't even read.

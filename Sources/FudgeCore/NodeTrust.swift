@@ -67,9 +67,11 @@ public enum NodeTrust {
         }
     }
 
-    /// The certificates Node can be told to trust for every server.
+    /// The certificates Node can be told to trust for every server, beyond its own bundle.
     ///
-    /// - A deny for SSL in any domain leaves a certificate out, whatever another domain says.
+    /// - Only a trust from the user's or the admin's domain counts: the system's roots are Apple's, and Node ships its
+    ///   own (SPEC-084).
+    /// - A deny for SSL in any domain, the system's included, leaves a certificate out, whatever another domain says.
     /// - Otherwise the most specific domain that says anything about SSL decides: the certificate goes in only if
     ///   that domain trusts it as a root, for SSL or every policy, with nothing that narrows it. A trust for one host
     ///   would become a trust for every host in Node, so a restricted one leaves the certificate out.
@@ -87,6 +89,8 @@ public enum NodeTrust {
         if all.contains(where: { $0.contains { $0.appliesToSSL && $0.result == .deny } }) { return false }
         for domain in Domain.allCases {
             guard let settings = certificate.settings[domain] else { continue }
+            // Only the user's and admin's trust goes in: the system's roots are Apple's, and Node has its own bundle.
+            guard domain != .system else { return false }
             if settings.isEmpty { return true }
             let ssl = settings.filter { $0.appliesToSSL && $0.result != .unspecified }
             guard !ssl.isEmpty else { continue }
