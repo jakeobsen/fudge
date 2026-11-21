@@ -758,6 +758,7 @@ Extensions run in a separate Node.js process, the extension host.
     `CommandMetadata` (core) keeps it in `command-metadata.json`, by `<extension>/<command>`, keeps keys it doesn't know, and drops the entries of commands that aren't installed when the file is loaded (never from an empty listing); the manifest is never touched.
     It never overwrites a file it can't read (`Unreadable`): the update fails instead, and the extension's promise rejects saying why.
     A command's root item shows that subtitle, else the manifest's `subtitle`, else its extension's title, and search matches the extension's title either way.
+    The extension's title is left out when it only repeats the command's title, ignoring case and spaces around them (`RootItem.subtitle(_:unlessItRepeats:)`, SPEC-120), so a one-command extension named like its command shows its name once; a subtitle the author set is shown as set, and a built-in group's title falls back the same way.
   - **`launchCommand`** (`src/api/launch-command.ts`) checks its options in the worker, makes the arguments strings, and encodes `context` with `encode` (`src/protocol.ts`): Dates as `{ "$date": iso }`, Buffers as `{ "$buffer": base64 }`.
     It then sends `command.launch`.
     In the app, `LaunchRequest` reads the call and `CommandLocator` (core) finds the command: in the caller's extension, or in the one with that name and owner (else author).
