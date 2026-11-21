@@ -92,9 +92,12 @@ final class SnippetExpansion {
         }
         if permissionCheck == nil {
             // Input Monitoring can be turned off in System Settings at any time; the tap goes with it.
-            permissionCheck = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            // In the common modes, so it runs during a modal session (`runModal`) or a menu's tracking too.
+            let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.followPermission() }
             }
+            RunLoop.main.add(timer, forMode: .common)
+            permissionCheck = timer
         }
         followPermission()
     }
@@ -145,9 +148,11 @@ final class SnippetExpansion {
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         self.tap = tap
         tapSource = source
-        secureInputCheck = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        let check = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.followSecureInput() }
         }
+        RunLoop.main.add(check, forMode: .common)
+        secureInputCheck = check
     }
 
     private func removeTap() {
@@ -171,6 +176,9 @@ final class SnippetExpansion {
         init(type: CGEventType, event: CGEvent) {
             switch type {
             case .keyDown:
+                let target = Int32(exactly: event.getIntegerValueField(.eventTargetUnixProcessID)).flatMap {
+                    $0 > 0 ? $0 : nil
+                }
                 var length = 0
                 var characters = [UniChar](repeating: 0, count: 8)
                 event.keyboardGetUnicodeString(
@@ -182,10 +190,8 @@ final class SnippetExpansion {
                         characters: String(utf16CodeUnits: characters, count: length),
                         command: flags.contains(.maskCommand), control: flags.contains(.maskControl),
                         option: flags.contains(.maskAlternate),
-                        sourceUserData: event.getIntegerValueField(.eventSourceUserData)),
-                    target: Int32(exactly: event.getIntegerValueField(.eventTargetUnixProcessID)).flatMap {
-                        $0 > 0 ? $0 : nil
-                    })
+                        sourceUserData: event.getIntegerValueField(.eventSourceUserData), target: target),
+                    target: target)
             case .leftMouseDown, .rightMouseDown, .otherMouseDown:
                 self = .click
             case .tapDisabledByTimeout, .tapDisabledByUserInput:

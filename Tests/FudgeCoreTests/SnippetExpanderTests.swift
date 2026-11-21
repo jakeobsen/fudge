@@ -196,3 +196,20 @@ private func type(
     #expect(
         !(try String(contentsOf: file, encoding: .utf8)).contains("expandSnippets"), "off is the default, not written")
 }
+
+@Test func aKeyForAnotherAppStartsOver() {
+    // ";ad" typed in TextEdit, then the Globe key's emoji picker takes the keyboard mid-keyword: "dr" there doesn't
+    // finish it, so no ⌫ goes to the picker (#114's review).
+    var expander = SnippetExpander(snippets: snippets)
+    func typed(_ text: String, to app: Int32?) -> [SnippetExpander.Output] {
+        text.compactMap { character in
+            var event = key(character)
+            event.target = app
+            return expander.handle(event, secureInput: false, fudgeInFront: false)
+        }
+    }
+    #expect(typed(";ad", to: 200).isEmpty)
+    #expect(typed("dr", to: 300).isEmpty)
+    // All in one app, it expands as before.
+    #expect(typed(";addr", to: 300) == [.expand(snippetID: "addr")])
+}

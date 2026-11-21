@@ -11,10 +11,12 @@ public struct SnippetKeyEvent: Sendable, Equatable {
     public var option: Bool
     /// The event's `eventSourceUserData`. Fudge's own posted events carry `SnippetExpander.marker`.
     public var sourceUserData: Int64
+    /// The app the key goes to (`eventTargetUnixProcessID`), a process id, nil when unknown.
+    public var target: Int32?
 
     public init(
         keyCode: UInt16, characters: String, command: Bool = false, control: Bool = false, option: Bool = false,
-        sourceUserData: Int64 = 0
+        sourceUserData: Int64 = 0, target: Int32? = nil
     ) {
         self.keyCode = keyCode
         self.characters = characters
@@ -22,6 +24,7 @@ public struct SnippetKeyEvent: Sendable, Equatable {
         self.control = control
         self.option = option
         self.sourceUserData = sourceUserData
+        self.target = target
     }
 }
 
@@ -75,6 +78,9 @@ public struct SnippetExpander: Sendable {
     private var keywords: [(keyword: [Character], id: String)] = []
     /// The last characters typed, at most `bufferLimit`. Never read out.
     private var typed: [Character] = []
+    /// The app the last key went to: a key for another app starts the buffer over, so a keyword is only ever what
+    /// one app was typed, and its ⌫s go there (a panel that took the keyboard mid-keyword gets none).
+    private var lastTarget: Int32?
 
     public init(snippets: [Snippet] = []) {
         setSnippets(snippets)
@@ -106,6 +112,10 @@ public struct SnippetExpander: Sendable {
     /// windows in front, nothing is kept or expanded, and the buffer is cleared. Fudge's own posted keys are ignored.
     public mutating func handle(_ event: SnippetKeyEvent, secureInput: Bool, fudgeInFront: Bool) -> Output? {
         if event.sourceUserData == Self.marker { return nil }
+        if event.target != lastTarget {
+            typed = []
+            lastTarget = event.target
+        }
         guard !secureInput, !fudgeInFront else {
             typed = []
             return nil
