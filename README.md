@@ -120,6 +120,8 @@ A link can have fields, filled in after its name like a command's arguments: `ht
 
 ⌘K on a quicklink offers **Copy Link** (⇧⌘C), **Edit Quicklink…** (⌘E) and **Delete Quicklink…** (⌃X).
 
+Quicklinks are listed on **Settings → Commands** too, under **Quicklinks**, so each one can have an alias, a hotkey and **Enabled** like a command. Its hotkey opens it straight away, or shows root search with its fields when one has no default. Typing its alias and a space moves to its first field.
+
 ### Snippets
 
 A snippet is text you use often, such as an address or a reply, saved to paste anywhere. Open **Search Snippets** from root search, pick one and press ↵: Fudge pastes it into the app you were in. ⌘↵ copies it instead, ⌘E edits it and ⌃X deletes it.
