@@ -175,12 +175,8 @@ export const Form = Object.assign(FormView, {
 
 // Components the extension host renders but the app can't draw yet. The compat scan counts every use of one, or
 // of a member of one, as missing ("not-drawn"). Whoever teaches the app to draw one removes it from this list in
-// the same PR. Where the app would draw them:
-// - Form.LinkAccessory: `FormContent` (Sources/FudgeCore/FormContent.swift) skips it, and nothing reads a Form's
-//   `searchBarAccessory`.
-const notDrawn: Record<string, object> = {
-    "Form.LinkAccessory": Form.LinkAccessory,
-};
+// the same PR, and whoever adds one says here where the app would draw it. The app draws every component today.
+const notDrawn: Record<string, object> = {};
 for (const [name, component] of Object.entries(notDrawn)) markNotDrawn(component, name);
 
 /** Marks a component and its sub-components, which old names also reach directly (`FormDropdownItem`). */

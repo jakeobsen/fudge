@@ -410,8 +410,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// `--snapshot <file.png> [--query <text>] [--activate]`: renders the panel, saves a picture of it and quits.
 /// `--activate` presses ↵ after typing the query, then waits for the result. In the command that opened,
 /// `--search <text>` types into its search field, `--dropdown <value>` picks a value in its search bar dropdown,
-/// `--actions` presses ⌘K, and `--open-dropdown` presses ⌘P, or in a Form opens its first Dropdown (`--open-tags`: its
-/// first TagPicker; `--open-date`: its first DatePicker's calendar).
+/// `--actions` presses ⌘K, `--pick-date <title>` runs the Action.PickDate titled so (after ⌘K with `--actions`, else
+/// straight), and `--open-dropdown` presses ⌘P, or in a Form opens its first Dropdown (`--open-tags`: its first
+/// TagPicker; `--open-date`: its first DatePicker's calendar).
 /// `--snapshot <file.png> --settings [<extension>]` renders the Settings window instead, with a fake login item
 /// whose status `--login-item <status>` sets (`enabled`, `requiresApproval`, `notRegistered`, `notFound`), and a fake
 /// Accessibility answer that `--accessibility allowed|missing` sets (`missing` by default). `--settings :permissions`
@@ -427,6 +428,8 @@ struct Snapshot {
     let search: String?
     let dropdown: String?
     let actions: Bool
+    /// `--pick-date <title>`: the Action.PickDate to open the picker of.
+    let pickDate: String?
     let openDropdown: Bool
     let openTags: Bool
     let openDate: Bool
@@ -452,6 +455,7 @@ struct Snapshot {
         dropdown = value("--dropdown")
         activate = arguments.contains("--activate")
         actions = arguments.contains("--actions")
+        pickDate = value("--pick-date")
         openDropdown = arguments.contains("--open-dropdown")
         openTags = arguments.contains("--open-tags")
         openDate = arguments.contains("--open-date")
@@ -526,6 +530,9 @@ struct Snapshot {
         if actions {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { model.toggleActionPanel() }
         }
+        if let pickDate {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.8) { model.runAction(titled: pickDate) }
+        }
         if openDropdown {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                 if !model.openFirstFormPicker(.dropdown) { model.toggleDropdownPanel() }
@@ -537,7 +544,7 @@ struct Snapshot {
         if openDate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { _ = model.openFirstFormPicker(.datePicker) }
         }
-        let waits = actions || openDropdown || openTags || openDate || inCommand
+        let waits = actions || pickDate != nil || openDropdown || openTags || openDate || inCommand
         DispatchQueue.main.asyncAfter(deadline: .now() + (waits ? 3.5 : activate ? 3 : 1)) {
             guard let view = panel.contentView else { exit(1) }
             save(view)

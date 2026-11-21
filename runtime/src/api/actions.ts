@@ -13,6 +13,7 @@ import { isFullDay } from "./dates.ts";
 import { useFormValues, useStoredFormValues } from "./form-state.ts";
 
 const Icon = RAYCAST_ENUMS.Icon;
+const PickDateType = Object.freeze({ ...RAYCAST_ENUMS.DatePickerType_2 });
 type Props = Record<string, unknown>;
 type HostAction = FunctionComponent<Props>;
 
@@ -143,6 +144,21 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
         });
     }
 
+    /**
+     * Lets the user pick a date. The app draws the picker in the action panel, with `type`, `min` and `max` (Dates go
+     * as `$date`), and calls `onChange` with the Date picked, or null when it's cleared. The view stays as it is.
+     */
+    function PickDate({ onChange, type, min, max, ...props }: Props) {
+        return createElement(ActionHost, {
+            title: "Pick Date",
+            icon: Icon.Calendar,
+            ...withoutOwn(props),
+            pickDate: { type: type ?? PickDateType.DateTime, min, max },
+            onChange: (date: unknown) =>
+                (onChange as ((date: Date | null) => unknown) | undefined)?.(date instanceof Date ? date : null),
+        });
+    }
+
     /** An action fudge can't perform yet: it shows, and says so when picked. */
     const unavailable = (name: string, title: string) => {
         function Unavailable(props: Props) {
@@ -167,7 +183,7 @@ export function builtInActions(ActionHost: HostAction, Submenu: HostAction) {
         CreateQuicklink: unavailable("Action.CreateQuicklink", "Create Quicklink"),
         CreateSnippet: unavailable("Action.CreateSnippet", "Create Snippet"),
         ToggleQuickLook: unavailable("Action.ToggleQuickLook", "Quick Look"),
-        PickDate: Object.assign(unavailable("Action.PickDate", "Pick Date"), { isFullDay }),
+        PickDate: Object.assign(PickDate, { Type: PickDateType, isFullDay }),
         InstallMCPServer: unavailable("Action.InstallMCPServer", "Install MCP Server"),
     };
 }

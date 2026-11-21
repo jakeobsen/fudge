@@ -386,52 +386,68 @@ struct DatePanelView: View {
 
     var body: some View {
         if let panel = model.datePanel {
-            let calendar = Calendar.current
-            VStack(spacing: 6) {
-                HStack(spacing: 10) {
-                    Text(panel.calendar.day.formatted(.dateTime.month(.wide).year()))
-                        .font(.system(size: 13, weight: .semibold))
-                    Spacer()
-                    Button {
-                        model.moveDatePanel(months: -1)
-                    } label: {
-                        Image(systemName: "chevron.left")
-                    }
-                    .help("Previous month (⇞)")
-                    Button {
-                        model.moveDatePanel(months: 1)
-                    } label: {
-                        Image(systemName: "chevron.right")
-                    }
-                    .help("Next month (⇟)")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 4)
-                Grid(horizontalSpacing: 2, verticalSpacing: 2) {
-                    GridRow {
-                        ForEach(Array(DateCalendar.weekdaySymbols().enumerated()), id: \.offset) { _, symbol in
-                            Text(symbol).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
-                                .frame(width: 30, height: 18)
-                        }
-                    }
-                    ForEach(Array(panel.calendar.weeks().enumerated()), id: \.offset) { _, week in
-                        GridRow {
-                            ForEach(week) { day in
-                                // By the day, not the instant: where DST starts at midnight, a day starts at 1:00.
-                                cell(
-                                    day, highlighted: calendar.isDate(day.date, inSameDayAs: panel.calendar.day),
-                                    today: calendar.isDateInToday(day.date))
-                            }
-                        }
-                    }
-                }
-            }
+            MonthView(
+                month: panel.calendar, move: { model.moveDatePanel(months: $0) },
+                pick: { model.pickDatePanelDay($0) }
+            )
             .padding(10)
             .fixedSize()
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
             .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.12)))
             .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+        }
+    }
+}
+
+/// A `DateCalendar`'s month: its name with arrows to the previous and next month (⇞⇟), the weekdays, and six weeks
+/// with the highlighted day and today marked. Days outside `min` and `max` are dimmed. Form.DatePicker's calendar and
+/// Action.PickDate's picker both draw it.
+struct MonthView: View {
+    let month: DateCalendar
+    let move: (Int) -> Void
+    let pick: (Date) -> Void
+
+    var body: some View {
+        let calendar = Calendar.current
+        VStack(spacing: 6) {
+            HStack(spacing: 10) {
+                Text(month.day.formatted(.dateTime.month(.wide).year()))
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Button {
+                    move(-1)
+                } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .help("Previous month (⇞)")
+                Button {
+                    move(1)
+                } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .help("Next month (⇟)")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 4)
+            Grid(horizontalSpacing: 2, verticalSpacing: 2) {
+                GridRow {
+                    ForEach(Array(DateCalendar.weekdaySymbols().enumerated()), id: \.offset) { _, symbol in
+                        Text(symbol).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                            .frame(width: 30, height: 18)
+                    }
+                }
+                ForEach(Array(month.weeks().enumerated()), id: \.offset) { _, week in
+                    GridRow {
+                        ForEach(week) { day in
+                            // By the day, not the instant: where DST starts at midnight, a day starts at 1:00.
+                            cell(
+                                day, highlighted: calendar.isDate(day.date, inSameDayAs: month.day),
+                                today: calendar.isDateInToday(day.date))
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -453,7 +469,7 @@ struct DatePanelView: View {
                 }
             }
             .contentShape(Rectangle())
-            .onTapGesture { model.pickDatePanelDay(day.date) }
+            .onTapGesture { pick(day.date) }
     }
 }
 

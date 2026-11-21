@@ -64,16 +64,18 @@ test("a stub is missing wherever the path reaches it, lowercase members included
 });
 
 test("an action that renders but fails when used is render-but-fail", () => {
-    for (const path of ["Action.CreateQuicklink", "Action.CreateSnippet", "Action.ToggleQuickLook", "Action.PickDate"]) {
+    for (const path of ["Action.CreateQuicklink", "Action.CreateSnippet", "Action.ToggleQuickLook"]) {
         assert.equal(support(api, path, declared), "render-but-fail", path);
     }
     assert.equal(support(api, "Action.CopyToClipboard", declared), "implemented");
     assert.equal(support(api, "Action.Paste", declared), "implemented", "Paste works now");
+    for (const path of ["Action.PickDate", "Action.PickDate.Type.DateTime", "Action.PickDate.isFullDay"]) {
+        assert.equal(support(api, path, declared), "implemented", `${path} works now`);
+    }
 });
 
 test("a component the app doesn't draw, and any member of one, is not-drawn", () => {
-    assert.equal(support(api, "Form.LinkAccessory", declared), "not-drawn");
-    // LinkAccessory has no members, so a small marked component stands in for one that does.
+    // The app draws every component now, so a small marked component stands in for one it doesn't.
     const Thing = Object.assign(() => null, { Item: Object.assign(() => null, { Kind: { Big: "big" } }) });
     mark(Thing, NOT_DRAWN, "Thing");
     for (const path of ["Thing", "Thing.Item", "Thing.Item.Kind.Big"]) {
@@ -84,7 +86,7 @@ test("a component the app doesn't draw, and any member of one, is not-drawn", ()
         ...["Form", "Form.TextField", "Form.Checkbox", "List.Item", "Detail.Metadata.Label"],
         ...["Grid", "Grid.Item", "Grid.Dropdown.Item", "Grid.Inset.Small"],
         ...["Form.Dropdown", "Form.Dropdown.Item", "Form.DropdownItem", "FormDropdownItem", "Form.TagPicker.Item"],
-        ...["Form.DatePicker", "Form.DatePicker.Type.Date", "Form.FilePicker"],
+        ...["Form.DatePicker", "Form.DatePicker.Type.Date", "Form.FilePicker", "Form.LinkAccessory"],
     ];
     for (const path of drawn) {
         assert.equal(support(api, path, declared), "implemented", path);
