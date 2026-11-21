@@ -210,6 +210,8 @@ private struct HotkeyCell: View {
             }
             if let message = model.hotkeyMessages[commandID] {
                 Text(message).font(.system(size: 10)).foregroundStyle(.red).lineLimit(2)
+            } else if let note = model.hotkeyNotes[commandID] {
+                Text(note).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2)
             }
         }
         .onHover { hovering = $0 }
