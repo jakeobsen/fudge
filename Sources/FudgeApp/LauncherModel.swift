@@ -1962,6 +1962,15 @@ final class LauncherModel {
         send(.unload(session: covered))
     }
 
+    /// The proxy set in System Settings → Network, for the Extension Store's npm and git (SPEC-116 §3). Snapshot runs
+    /// never read it.
+    static func systemProxy() -> SystemProxy {
+        guard !Snapshot.isRequested(CommandLine.arguments),
+            let settings = CFNetworkCopySystemProxySettings()?.takeRetainedValue() as? [String: Any]
+        else { return SystemProxy() }
+        return SystemProxy(settings: settings)
+    }
+
     // MARK: - My Schedule
 
     /// What My Schedule was last drawn from, which its actions' nodes are read in (`ScheduleList.target`). It's in
@@ -3914,7 +3923,8 @@ final class LauncherModel {
         let host = try ExtensionHost(
             node: node, script: script, nodeArguments: trust.arguments,
             environment: ExtensionStore.hostEnvironment(
-                cli: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil, paths: paths
+                cli: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil, paths: paths,
+                proxy: Self.systemProxy()
             ).merging([OAuthProviders.environmentKey: OAuthProviders.environmentValue]) { _, new in new }
                 .merging(trust.environment) { _, new in new })
         self.host = host

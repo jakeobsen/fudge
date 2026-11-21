@@ -10,6 +10,7 @@ import {
     showToast,
     Toast,
     trash,
+    useNavigation,
 } from "@raycast/api";
 import path from "node:path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -41,7 +42,8 @@ import {
 import { gitAvailable, stopRunningGit, StoreRepository } from "./git.ts";
 import { maxReadmeBytes, readRegularFile } from "./files.ts";
 import { detailMarkdown } from "./readme.ts";
-import { install, oneAtATime, readInstalled, uninstall, type StoreContext } from "./store.ts";
+import { FailureView } from "./failure-view.tsx";
+import { failureDetails, install, oneAtATime, readInstalled, uninstall, type StoreContext } from "./store.ts";
 
 type Loaded = { entries: StoreEntry[]; installed: Installed; trees: Map<string, string>; commit: string };
 /** The cached scans this Fudge's scanner wrote, by tree id, and the trees whose check failed in this run. */
@@ -70,6 +72,7 @@ export default function Command() {
 }
 
 function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
+    const { push } = useNavigation();
     const repo = useMemo(() => new StoreRepository(path.join(environment.supportPath, "repo")), []);
     const [loaded, setLoaded] = useState<Loaded>();
     // Whether anything has loaded yet, for `refresh`, which mustn't change with every load.
@@ -84,6 +87,9 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     // The latest, for the checks' callbacks, which outlive a render.
     const checkedNow = useRef(checked);
     checkedNow.current = checked;
+    // The latest list, for a failure's link, which is made after the install's await.
+    const loadedNow = useRef(loaded);
+    loadedNow.current = loaded;
 
     const load = useCallback(async () => {
         const scanner = await scannerIdentity(cli);
@@ -232,9 +238,21 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                 await toast.hide();
                 await showHUD(`${updating ? "Updated" : "Installed"} ${entry.title}`);
             } catch (error) {
+                // The whole error, its likely cause, Copy Error and Try Again, in a view of its own (SPEC-116); the
+                // toast only says where to look.
+                const title = `Couldn't ${updating ? "update" : "install"} ${entry.title}`;
                 toast.style = Toast.Style.Failure;
-                toast.title = `Couldn't ${updating ? "update" : "install"} ${entry.title}`;
-                toast.message = message(error);
+                toast.title = title;
+                toast.message = "See the details.";
+                push(
+                    <FailureView
+                        title={title}
+                        details={failureDetails(error)}
+                        pageURL={loadedNow.current ? folderURL(entry.dir, loadedNow.current.commit) : undefined}
+                        cli={cli}
+                        retry={() => void runInstall(entry, updating)}
+                    />,
+                );
             }
         });
 

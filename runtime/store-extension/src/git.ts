@@ -2,6 +2,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { proxyVariables } from "./proxy.ts";
 import { longTimeout, shortTimeout } from "./timeouts.ts";
 
 export const repositoryURL = "https://github.com/raycast/extensions.git";
@@ -35,7 +36,14 @@ export function stopRunningGit(): void {
  * ignores the user's own git configuration, so it clones the repository's address exactly as given.
  */
 export function storeEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-    return { ...base, GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" };
+    return {
+        ...base,
+        // The Mac's proxy, where none is set (SPEC-116 §3); `fudge build` passes it on to npm.
+        ...proxyVariables(base),
+        GIT_TERMINAL_PROMPT: "0",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+    };
 }
 
 /**
@@ -79,8 +87,14 @@ export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable, inpu
         });
     });
 
-/** A git command that failed; its message is git's stderr. */
-export class GitError extends Error {}
+/** A git command that failed; its message is git's stderr, and `command` what ran, for a failure's report. */
+export class GitError extends Error {
+    readonly command: string | undefined;
+    constructor(message: string, command?: string) {
+        super(message);
+        this.command = command;
+    }
+}
 
 /**
  * Whether `name` is a plain branch name, by `git check-ref-format --branch`'s rules and stricter: letters, digits and
@@ -128,7 +142,9 @@ export class StoreRepository {
 
     async #exec(args: string[], timeout = shortTimeout, cwd = this.path, input?: string): Promise<string> {
         const result = await this.#run(this.#git, args, { cwd, timeout, stoppable: true, input });
-        if (result.code !== 0) throw new GitError(result.stderr.trim() || `git ${args[0]} failed`);
+        if (result.code !== 0) {
+            throw new GitError(result.stderr.trim() || `git ${args[0]} failed`, ["git", ...args].join(" "));
+        }
         return result.stdout;
     }
 
