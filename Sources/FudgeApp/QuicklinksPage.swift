@@ -3,7 +3,8 @@ import FudgeCore
 import SwiftUI
 
 /// The Settings window's Quicklinks page (SPEC-052 B4): every quicklink's name, link and app, sorted by name, with
-/// + to add one, Edit… (or a double-click) to change one, and − to delete one.
+/// + to add one, Edit… (or a double-click) to change one, and − to delete one. Each one's alias and hotkey show
+/// too, read only: they're set on the Commands page (SPEC-097).
 struct QuicklinksPage: View {
     @Bindable var model: SettingsModel
     @State private var selection: Quicklink.ID?
@@ -28,15 +29,35 @@ struct QuicklinksPage: View {
             } else {
                 Table(model.quicklinks, selection: $selection) {
                     TableColumn("Name", value: \.name)
-                        .width(min: 100, ideal: 150, max: 240)
+                        .width(min: 90, ideal: 130, max: 240)
                     TableColumn("Link") { quicklink in
                         Text(quicklink.link).truncationMode(.middle).help(quicklink.link)
                     }
-                    .width(min: 160, ideal: 380)
+                    .width(min: 120, ideal: 190)
                     TableColumn("Open With") { quicklink in
                         Text(model.applicationName(of: quicklink))
                     }
-                    .width(min: 80, ideal: 110, max: 200)
+                    .width(min: 70, ideal: 90, max: 200)
+                    // Read only here: they're set on the Commands page, with every command's.
+                    TableColumn("Alias") { quicklink in
+                        Text(QuicklinkCommands.commandID(ofQuicklink: quicklink.id).flatMap(model.alias(for:)) ?? "")
+                            .font(.system(size: 12, design: .monospaced))
+                            .help(Self.editHelp)
+                    }
+                    .width(min: 50, ideal: 60, max: 120)
+                    TableColumn("Hotkey") { quicklink in
+                        Group {
+                            if let spec = QuicklinkCommands.commandID(ofQuicklink: quicklink.id).flatMap(
+                                model.hotkey(for:))
+                            {
+                                Keycaps(spec: spec)
+                            } else {
+                                Text("")
+                            }
+                        }
+                        .help(Self.editHelp)
+                    }
+                    .width(min: 80, ideal: 90, max: 140)
                 }
                 .contextMenu(forSelectionType: Quicklink.ID.self) { ids in
                     if let id = ids.first {
@@ -81,6 +102,9 @@ struct QuicklinksPage: View {
             QuicklinkSheet(model: model, draft: editing.draft) { sheet = nil }
         }
     }
+
+    /// The Alias and Hotkey columns' help.
+    private static let editHelp = "Edit on the Commands page"
 
     private func edit(_ id: Quicklink.ID) {
         guard let quicklink = model.quicklinks.first(where: { $0.id == id }) else { return }
