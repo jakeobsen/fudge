@@ -85,7 +85,8 @@ struct SystemWindows: WindowSystem, Sendable {
                 sizeSettable: Self.isSettable(window, kAXSizeAttribute),
                 fullScreen: (Self.value(window, Self.fullScreen) as? Bool) ?? false,
                 fullScreenSettable: Self.isSettable(window, Self.fullScreen),
-                focused: focused.map { CFEqual($0, window) } ?? false)
+                focused: focused.map { CFEqual($0, window) } ?? false,
+                minimized: (Self.value(window, kAXMinimizedAttribute) as? Bool) ?? false)
         }
     }
 

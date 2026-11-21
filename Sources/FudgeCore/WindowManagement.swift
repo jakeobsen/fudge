@@ -45,10 +45,13 @@ public struct AXWindow<Handle> {
     public var fullScreenSettable: Bool
     /// Whether it's the app's `kAXFocusedWindowAttribute`.
     public var focused: Bool
+    /// `kAXMinimizedAttribute`. A minimized window isn't in the window list, so it's never matched to one.
+    public var minimized: Bool
 
     public init(
         handle: Handle, frame: CGRect?, title: String? = nil, positionSettable: Bool = true,
-        sizeSettable: Bool = true, fullScreen: Bool = false, fullScreenSettable: Bool = true, focused: Bool = false
+        sizeSettable: Bool = true, fullScreen: Bool = false, fullScreenSettable: Bool = true, focused: Bool = false,
+        minimized: Bool = false
     ) {
         self.handle = handle
         self.frame = frame
@@ -58,6 +61,7 @@ public struct AXWindow<Handle> {
         self.fullScreen = fullScreen
         self.fullScreenSettable = fullScreenSettable
         self.focused = focused
+        self.minimized = minimized
     }
 }
 
@@ -93,7 +97,7 @@ public protocol WindowSystem {
     func frontmostPid() -> Int32?
     /// Raycast's `Application` for the app `pid`, or nil when it isn't a regular app (one with a Dock icon).
     func application(pid: Int32) -> JSONValue?
-    /// The app's windows, as the Accessibility API lists them.
+    /// The app's windows, as the Accessibility API lists them: front to back, as `kAXWindowsAttribute` has them.
     func axWindows(pid: Int32) -> [AXWindow<Handle>]
     /// Makes `change` to the window. Throws `WindowManagementError.failed` when the app refuses it.
     func apply(_ change: WindowChange, to window: Handle) throws
@@ -255,6 +259,8 @@ public struct WindowManager<System: WindowSystem> {
         private(set) var windows: [ListedWindow] = []
         private var applications: [Int32: JSONValue?] = [:]
         private var axWindows: [Int32: [AXWindow<System.Handle>]] = [:]
+        /// For each app, its listed windows' numbers and the index of the AX window each is (`WindowMatch.pairs`).
+        private var pairings: [Int32: [Int: Int]] = [:]
 
         init(_ manager: WindowManager) {
             self.manager = manager
@@ -278,12 +284,23 @@ public struct WindowManager<System: WindowSystem> {
             return found
         }
 
-        /// The Accessibility API's window for `listed` (`WindowMatch`).
+        /// The Accessibility API's window for `listed`, from its app's pairing.
         func ax(for listed: ListedWindow) -> AXWindow<System.Handle>? {
-            let candidates = axWindows(listed.pid)
-            return WindowMatch.index(of: listed, among: candidates.map { ($0.frame, $0.title) }).map {
-                candidates[$0]
+            pairing(listed.pid)[listed.number].map { axWindows(listed.pid)[$0] }
+        }
+
+        /// The app's listed windows paired one to one with its AX windows (`WindowMatch.pairs`), both front to back.
+        /// Minimized AX windows take no part: the window list never has them.
+        func pairing(_ pid: Int32) -> [Int: Int] {
+            if let known = pairings[pid] { return known }
+            let listed = windows.filter { $0.pid == pid }
+            let candidates = axWindows(pid).map { (frame: $0.minimized ? nil : $0.frame, title: $0.title) }
+            var found: [Int: Int] = [:]
+            for (window, index) in zip(listed, WindowMatch.pairs(listed, among: candidates)) {
+                if let index { found[window.number] = index }
             }
+            pairings[pid] = found
+            return found
         }
 
         /// The screen holding most of the window; the primary one when it's on none.
@@ -291,18 +308,13 @@ public struct WindowManager<System: WindowSystem> {
             PanelScreen.mostOf(window.bounds, on: screens.map(\.bounds)).map { screens[$0] } ?? screens.first
         }
 
-        /// The frontmost app's focused window, as the window list has it.
+        /// The frontmost app's focused window: the listed window paired with its focused AX window.
         func activeWindow() -> ListedWindow? {
             guard let pid = manager.system.frontmostPid(), pid != manager.ownPid,
-                let focused = axWindows(pid).first(where: \.focused)
+                let focused = axWindows(pid).firstIndex(where: \.focused)
             else { return nil }
-            let matching = windows.filter {
-                $0.pid == pid && WindowMatch.matches($0, frame: focused.frame, title: focused.title)
-            }
-            if let title = focused.title, !title.isEmpty, let named = matching.first(where: { $0.title == title }) {
-                return named
-            }
-            return matching.first
+            let pairing = pairing(pid)
+            return windows.first { $0.pid == pid && pairing[$0.number] == focused }
         }
 
         /// The screen holding the active window, or the frontmost app's topmost window, else the mouse's, else the
@@ -351,21 +363,43 @@ public struct WindowManager<System: WindowSystem> {
 
 extension WindowManager: Sendable where System: Sendable {}
 
-/// Which of an app's Accessibility windows is a window from the window list. The two APIs share no id, so it's the
-/// one in the same place at the same size, to within a point, with the same title when both have one.
+/// Which of an app's Accessibility windows is a window from the window list. The two APIs share no id, so it's one
+/// in the same place at the same size, to within a point, with the same title when both have one. Without Screen
+/// Recording the window list has no titles, and an app's windows of one size in one place (two browser windows
+/// filling the screen) all match each other, so an app's windows are paired one to one, front to back in both lists.
 public enum WindowMatch {
-    /// Which of `candidates` (each an AX window's frame and title) is `listed`, or nil. When several are in its place,
-    /// as tabs can be, the one with its title, else the first.
+    /// For each of an app's `listed` windows (front to back), the index of its AX window among `candidates` (each an
+    /// AX window's frame and title, front to back), or nil. No candidate is used twice. First each listed window with
+    /// a title takes the first free candidate in its place with that title; then the others, front to back, take the
+    /// first free candidate in their place. So the front window gets the front one, the next the next, and a window
+    /// with tabs in its place gets the tab with its title, else the first.
+    public static func pairs(_ listed: [ListedWindow], among candidates: [(frame: CGRect?, title: String?)]) -> [Int?] {
+        var paired = [Int?](repeating: nil, count: listed.count)
+        var taken = Set<Int>()
+        func take(_ window: Int, where fits: (Int) -> Bool) {
+            guard
+                let index = candidates.indices.first(where: {
+                    !taken.contains($0)
+                        && matches(listed[window], frame: candidates[$0].frame, title: candidates[$0].title)
+                        && fits($0)
+                })
+            else { return }
+            paired[window] = index
+            taken.insert(index)
+        }
+        for window in listed.indices {
+            guard let title = listed[window].title, !title.isEmpty else { continue }
+            take(window) { candidates[$0].title == title }
+        }
+        for window in listed.indices where paired[window] == nil {
+            take(window) { _ in true }
+        }
+        return paired
+    }
+
+    /// Which of `candidates` is `listed`, when it's the app's only listed window.
     public static func index(of listed: ListedWindow, among candidates: [(frame: CGRect?, title: String?)]) -> Int? {
-        let matching = candidates.indices.filter {
-            matches(listed, frame: candidates[$0].frame, title: candidates[$0].title)
-        }
-        if let title = listed.title, !title.isEmpty,
-            let named = matching.first(where: { candidates[$0].title == title })
-        {
-            return named
-        }
-        return matching.first
+        pairs([listed], among: candidates)[0]
     }
 
     static func matches(_ listed: ListedWindow, frame: CGRect?, title: String?) -> Bool {

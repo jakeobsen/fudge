@@ -206,6 +206,68 @@ private func field(_ value: JSONValue, _ key: String) -> JSONValue? {
     #expect(WindowMatch.index(of: listed, among: []) == nil)
 }
 
+@Test func anAppsWindowsInOnePlacePairOneToOneFrontToBack() {
+    // Without Screen Recording the window list has no titles, so an app's windows of one size in one place (two
+    // browser windows filling the screen) all match each other: each takes the next free AX window, front to back.
+    func untitled(_ number: Int) -> ListedWindow { ListedWindow(number: number, pid: safari, bounds: browser) }
+    let two = [untitled(1), untitled(2)]
+    #expect(WindowMatch.pairs(two, among: [(browser, "Front"), (browser, "Back")]) == [0, 1])
+    let three = [untitled(1), untitled(2), untitled(3)]
+    #expect(WindowMatch.pairs(three, among: [(browser, "A"), (browser, "B"), (browser, "C")]) == [0, 1, 2])
+    #expect(WindowMatch.pairs(three, among: [(browser, nil), (browser, nil)]) == [0, 1, nil], "one AX window short")
+    #expect(
+        WindowMatch.pairs(three, among: [(docs, "Docs"), (browser, "A"), (browser, "B"), (browser, "C")]) == [1, 2, 3],
+        "a window elsewhere is never taken")
+
+    // A matching title still wins, and its AX window is no one else's.
+    let titled = [
+        ListedWindow(number: 1, pid: safari, bounds: browser, title: "B"),
+        ListedWindow(number: 2, pid: safari, bounds: browser, title: "A"),
+    ]
+    #expect(WindowMatch.pairs(titled, among: [(browser, "A"), (browser, "B")]) == [1, 0])
+    let mixed = [untitled(1), ListedWindow(number: 2, pid: safari, bounds: browser, title: "A")]
+    #expect(
+        WindowMatch.pairs(mixed, among: [(browser, "A"), (browser, "B")]) == [1, 0],
+        "the titled window takes its own first, the untitled one the next free")
+    #expect(WindowMatch.pairs([], among: [(browser, nil)]) == [])
+}
+
+@Test func sameSizeWindowsOfOneAppAreEachTheirOwn() throws {
+    // Three Safari windows filling the same place, no titles in the window list: each listed window is its own AX
+    // window, so moving the back one moves the back one, and the focused one is the active one.
+    let system = desk()
+    system.frontmost = safari
+    system.listed = [
+        ListedWindow(number: 21, pid: safari, bounds: browser),
+        ListedWindow(number: 22, pid: safari, bounds: browser),
+        ListedWindow(number: 23, pid: safari, bounds: browser),
+    ]
+    system.ax[safari] = [
+        AXWindow(handle: 31, frame: browser, title: "Front"),
+        AXWindow(handle: 32, frame: browser, title: "Middle"),
+        AXWindow(handle: 33, frame: browser, title: "Back", sizeSettable: false),
+    ]
+    try manager(system).setBounds(json(#"{"id":"23","bounds":{"position":{"x":1500}}}"#))
+    try manager(system).setBounds(json(#"{"id":"22","bounds":{"position":{"x":1550}}}"#))
+    try manager(system).setBounds(json(#"{"id":"21","bounds":{"position":{"x":1600}}}"#))
+    #expect(system.applied == ["33 at 1500,50", "32 at 1550,50", "31 at 1600,50"])
+    #expect(
+        manager(system).windowsOnActiveDesktop().map { field($0, "resizable") }
+            == [.bool(true), .bool(true), .bool(false)], "each reports its own AX window")
+
+    system.ax[safari]?[2].focused = true
+    #expect(field(try manager(system).activeWindow(), "id") == .string("23"), "the focused one, at the back")
+    #expect(
+        manager(system).windowsOnActiveDesktop().map { field($0, "active") }
+            == [.bool(false), .bool(false), .bool(true)])
+
+    // A minimized window isn't in the window list, so it takes no part, wherever the Accessibility API lists it.
+    system.ax[safari]?.insert(AXWindow(handle: 30, frame: browser, title: "Minimized", minimized: true), at: 0)
+    try manager(system).setBounds(json(#"{"id":"21","bounds":{"position":{"x":1600}}}"#))
+    #expect(system.applied.last == "31 at 1600,50")
+    #expect(field(try manager(system).activeWindow(), "id") == .string("23"))
+}
+
 // MARK: - Desktops
 
 @Test func eachScreenIsOneDesktopTheActiveOneHoldingTheFrontmostWindow() throws {
