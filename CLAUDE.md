@@ -341,7 +341,8 @@ Extensions run in a separate Node.js process, the extension host.
       It holds public facts only: window classes and levels, bundle ids and decisions, never paths, titles or typing.
       Read it with `/usr/bin/log show --last 2m --predicate 'subsystem == "io.github.jakeobsen.fudge"' --info` (in zsh, a bare `log` is a builtin).
     - **The General page** (`GeneralPage.swift`) is the Settings window's first page, and the one ⌘, Settings… and "Fudge Settings" open on:
-      Open at Login, the launcher's hotkey, Show Fudge on, Pop to Root Search, Escape Key Behavior (all three `SettingsPopupRow`s), Updates (Check for Updates, another `SettingsPopupRow` with Daily, Weekly, Monthly and Never, which it shows while unset, then `UpdateStatusRow`:
+      Open at Login, the launcher's hotkey, Show Fudge on, Pop to Root Search, Escape Key Behavior (all three `SettingsPopupRow`s), Updates (Check for Updates, another `SettingsPopupRow` with Daily, Weekly, Monthly and Never, then `UpdateStatusRow`:
+      While the update check is unset, that popup shows Not Chosen first (`UpdateCheckSetting.popupOptions`): it checks nothing, as Never does, and can't be picked again once something is chosen.
       the last check's result and time, Check Now, and Download… while a newer release is known; saved through `change {}`), the currency switch, the calculator's Number format (Same as macOS, "1,234.5" or "1.234,5", saved through `change {}`; changing it re-evaluates the open query), Clear Search History…, and Import / Export.
       The launcher's hotkey is recorded like a command's, through the same `HotkeyRecordingPrompt`, but it can't be cleared: ⌫ and the Reset button set ⌥Space (`HotKeyRecording.launcherEdit`).
       A command's hotkey wins, so a launcher hotkey that equals one is refused, naming the command.
@@ -469,6 +470,7 @@ Extensions run in a separate Node.js process, the extension host.
       The wait lasts at most 5 minutes, and a request never used closes after 5 minutes too.
       On the code, the launcher comes back to the command.
       **A sign-in stopped on purpose** (SPEC-095) names why in its refusal (`SignInRefusal.notice`: off, cancelled, timed out, or refused by the provider or the relay), and the error the command reports with that `notice` (`HostMessage.error`) shows as `SignInNotice` (core) in the command's place, drawn like the store's "off" notice, with no trace and nothing red:
+      Like any failure that stands in for a command, the notice keeps the command's title in the bottom bar (`LauncherFooter`); one that belongs to no command, like the store's, says "Fudge".
       "Sign-in is off" with Open Extension Settings (↵, ⌘⇧,) and Open Sign-in Settings (⌘⌥,), or the others with Try Again (`RootAction.retryCommand`, as root search runs it).
       A background or menu-bar command shows its `hud` instead.
       Any other error keeps the failure view with its details.
@@ -555,6 +557,7 @@ Extensions run in a separate Node.js process, the extension host.
     The app reads lines with `LineSplitter`, which looks at each byte once, and decodes them through `JSONSerialization` (`HostMessage(line:)`), falling back to `JSONDecoder`: a 1,000-row list is a line of several hundred kilobytes.
     Messages about a running command carry the `session` id the app chose when launching it: `s-` and 32 hex digits from 128 random bits (`SessionID.make()`).
     The app handles a host message only when it names no session, or one the app started in the running host and hasn't seen exit (`HostSessions`, checked in `LauncherModel.receive`).
+    Nor does the app send anything for a session that isn't running (`HostSessions.mayReceive`, checked in `send`), so a pick or an action left open in a command that has ended goes nowhere, and the command's exit closes its ⌘K panel and date picker.
     Anything else is dropped and logged once per id, the sessions of Fudge's own views included (`LauncherModel.builtInSessions`):
     - Define Word
     - its forms
@@ -875,6 +878,7 @@ Extensions run in a separate Node.js process, the extension host.
     - `--run-action <title>`, given once or more, runs those actions in order, half a second apart (e.g. an extension's Create Quicklink, then Save Quicklink).
     - `--search text` types into its search field.
   - `--accessibility allowed|missing` and `--login-item <status>` fix what Accessibility and Open at Login show, so nothing asks the system.
+  - `--clipboard-consent` saves Clipboard History's consent sheet, laid out off-screen like the sign-in one; it implies `--settings` and that page, as `--sign-in-consent` does.
   - `--clipboard-entries <file>` gives Clipboard History made-up entries (a JSON array of `clipboardHistory.list` entries); snapshots never read the clipboard or watch it.
   - `--definitions <file>` gives Define Word made-up definitions; snapshots never read the selection or the Mac's dictionaries.
   - `--found-files <file>` gives Search Files fixed results (a JSON array of `files.search` entries, `~/` paths in the home folder), and without it there are none; snapshots never ask Spotlight.
@@ -887,7 +891,6 @@ Extensions run in a separate Node.js process, the extension host.
     - `:quicklinks`
     - `:snippets`
     - `:window-management`
-  - `--settings --clipboard-consent` saves Clipboard History's consent sheet, laid out off-screen like the sign-in one.
   - `--update-available <version>` shows that version as found by an update check (General's line and Download…); no snapshot run asks GitHub.
   - `--windows <file>` gives Switch Windows made-up windows (`FixedWindowSystem`: a JSON array of `{ app, path?, title?, screen?, minimized?, answers? }`, front to back), and without it Switch Windows shows that it needs Accessibility; snapshots never read the window list or the Accessibility API.
     Made-up pids never take the run's own, and the windows step ten times down their screen, then start again at its corner.

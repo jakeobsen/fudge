@@ -374,10 +374,15 @@ struct LauncherView: View {
     }
 
     private var screenTitle: String {
-        if case .command(let command) = model.screen {
+        switch model.screen {
+        case .command(let command):
             return command.view?.string("navigationTitle") ?? command.title
+        case .failure(let failure):
+            // A failure or notice in a command's place keeps that command's title, as its own screen did.
+            return LauncherFooter.title(standingInFor: failure.commandTitle)
+        case .root:
+            return LauncherFooter.fudge
         }
-        return "Fudge"
     }
 
     private var primaryLabel: String? {

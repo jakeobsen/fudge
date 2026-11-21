@@ -721,7 +721,8 @@ struct Snapshot {
     let onboardingStep: OnboardingStep?
     /// `--sign-ins <extension>/<providerId>=<Provider>,…`: sign-ins the Sign-in page lists, kept in memory.
     let signIns: MemorySecretStore
-    /// `--sign-in-consent`: picks Fudge's sign-in server on the Sign-in page and saves its consent sheet instead.
+    /// `--sign-in-consent`: picks Fudge's sign-in server on the Sign-in page and saves its consent sheet instead. It
+    /// implies `--settings`, as `--clipboard-consent` does.
     let signInConsent: Bool
     /// `--clipboard-consent`: turns on Clipboard History's switch and saves its consent sheet instead.
     let clipboardConsent: Bool
@@ -807,7 +808,8 @@ struct Snapshot {
             let next = settingsIndex + 1
             settingsExtension = next < arguments.count && !arguments[next].hasPrefix("--") ? arguments[next] : nil
         } else {
-            settings = false
+            // A consent sheet belongs to its Settings page, so its flag implies `--settings` (FUD-135 §4).
+            settings = signInConsent || clipboardConsent
             settingsExtension = nil
         }
     }
