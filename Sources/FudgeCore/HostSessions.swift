@@ -71,3 +71,25 @@ public struct HostSessions: Sendable {
         return .handle
     }
 }
+
+/// When the panels over a command (⌘K's action panel, a dropdown's panel, a form's calendar) close because the command
+/// ended (SPEC-107 §4), so nothing in them can be picked for a command that's gone. `send` already holds back anything
+/// for an ended session (`HostSessions.mayReceive`); this is what the user sees.
+public enum EndedCommand {
+    public enum Event: Sendable, Equatable {
+        /// A session exited, for `reason` ("unloaded" when Fudge unloaded it on purpose, to show something else).
+        case exited(session: String, reason: String)
+        /// The extension host stopped, ending every session in it.
+        case hostStopped
+    }
+
+    /// Whether the panels close: the command on screen (`screenSession`, nil for root search) exited, unless Fudge
+    /// unloaded it, or the host stopped under a command of the host's. Fudge's own views (`isBuiltIn`) need no host.
+    public static func closesPanels(screenSession: String?, isBuiltIn: Bool, event: Event) -> Bool {
+        guard let screenSession, !isBuiltIn else { return false }
+        switch event {
+        case .exited(let session, let reason): return session == screenSession && reason != "unloaded"
+        case .hostStopped: return true
+        }
+    }
+}

@@ -563,6 +563,7 @@ Extensions run in a separate Node.js process, the extension host.
     Messages about a running command carry the `session` id the app chose when launching it: `s-` and 32 hex digits from 128 random bits (`SessionID.make()`).
     The app handles a host message only when it names no session, or one the app started in the running host and hasn't seen exit (`HostSessions`, checked in `LauncherModel.receive`).
     Nor does the app send anything for a session that isn't running (`HostSessions.mayReceive`, checked in `send`), so a pick or an action left open in a command that has ended goes nowhere, and the command's exit closes its ⌘K panel and date picker.
+    Its exit, unless Fudge unloaded it, and the host stopping under it, close every panel over it: ⌘K, a dropdown's panel and a form's calendar (`EndedCommand.closesPanels`); Fudge's own views need no host and keep theirs.
     Anything else is dropped and logged once per id, the sessions of Fudge's own views included (`LauncherModel.builtInSessions`):
     - Define Word
     - its forms

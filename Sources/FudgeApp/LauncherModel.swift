@@ -3819,6 +3819,13 @@ final class LauncherModel {
         }
     }
 
+    /// Closes every panel over the command on screen, without telling the command anything: it has ended.
+    private func closePanelsOfEndedCommand() {
+        actionPanel = nil
+        dropdownPanel = nil
+        datePanel = nil
+    }
+
     private func hostStopped(_ stopped: ExtensionHost) {
         guard host === stopped else { return }
         host = nil
@@ -3826,6 +3833,13 @@ final class LauncherModel {
         background.removeAll()
         quietSessions.removeAll()
         menuBar.hostStopped()
+        if case .command(let command) = screen,
+            EndedCommand.closesPanels(
+                screenSession: command.session, isBuiltIn: Self.builtInSessions.contains(command.session),
+                event: .hostStopped)
+        {
+            closePanelsOfEndedCommand()
+        }
         if case .command(var command) = screen, command.failure == nil,
             !Self.builtInSessions.contains(command.session)
         {
@@ -3992,8 +4006,14 @@ final class LauncherModel {
                     )
                 }
             } else if case .command(var command) = screen, command.session == session, reason != "unloaded" {
-                // Its ⌘K panel or date picker goes with it, so nothing in them can be picked for a command that ended.
-                actionPanel = nil
+                // Its panels go with it (⌘K, a dropdown's, a form's calendar), so nothing in them can be picked for a
+                // command that ended (`EndedCommand`).
+                if EndedCommand.closesPanels(
+                    screenSession: command.session, isBuiltIn: Self.builtInSessions.contains(command.session),
+                    event: .exited(session: session, reason: reason))
+                {
+                    closePanelsOfEndedCommand()
+                }
                 if command.failure == nil {
                     command.failure = Failure(
                         title: "\(command.title) stopped", message: "The command exited (\(reason)).")
