@@ -211,7 +211,7 @@ final class LauncherModel {
         menuBar.host = MenuBarController.Host(
             launch: { [weak self] installed, command, userInitiated in
                 self?.launchMenuBarCommand(installed, command: command, userInitiated: userInitiated)
-                    ?? .failure(MenuBarController.LaunchFailed(message: "fudge is quitting"))
+                    ?? .failure(MenuBarController.LaunchFailed(message: "Fudge is quitting"))
             },
             send: { [weak self] message in self?.send(message) },
             showHUD: { [weak self] title in self?.showHUD(title) },
@@ -1618,9 +1618,9 @@ final class LauncherModel {
         if item.recordsLaunch { recordLaunch(item.id) }
     }
 
-    /// "Quit fudge" asks first: its hotkeys stop working until fudge is opened again.
+    /// "Quit Fudge" asks first: its hotkeys stop working until Fudge is opened again.
     private static let quitRequest = AlertRequest(
-        title: "Quit fudge?",
+        title: "Quit Fudge?",
         message: "Its hotkeys stop working until you open it again.",
         primary: "Quit",
         dismiss: "Cancel",
@@ -1896,7 +1896,7 @@ final class LauncherModel {
         guard let node = Runtime.locateNode() else {
             throw HostUnavailable(
                 description:
-                    "fudge needs Node.js 22.18 or later. Install it with `brew install node`, or set FUDGE_NODE."
+                    "Fudge needs Node.js 22.18 or later. Install it with `brew install node`, or set FUDGE_NODE."
             )
         }
         guard let script = Runtime.locateHostScript() else {

@@ -18,12 +18,12 @@ public enum SelectionError: Error, Equatable, Sendable, CustomStringConvertible 
         case .noSelectedText:
             "Unable to get selected text from frontmost application"
         case .accessibilityNeeded:
-            "fudge needs Accessibility permission to read the selected text. "
-                + "Allow fudge in System Settings → Privacy & Security → Accessibility."
+            "Fudge needs Accessibility permission to read the selected text. "
+                + "Allow Fudge in System Settings → Privacy & Security → Accessibility."
         case .finderNotFrontmost:
             "Finder isn't the frontmost application"
         case .finderAutomationDenied:
-            "fudge needs permission to control Finder. Allow it in System Settings → Privacy & Security → Automation."
+            "Fudge needs permission to control Finder. Allow it in System Settings → Privacy & Security → Automation."
         case .finderTimedOut:
             "Finder didn't answer in time"
         case .finderFailed(let status):
@@ -110,11 +110,11 @@ public final class AccessibilityGate {
 /// fudge's own alert for when macOS's Accessibility prompt didn't help (FUD-47). The app shows it; the words and the
 /// pane's address live here so a test pins them.
 public enum AccessibilitySettingsAlert {
-    public static let title = "Allow fudge to use Accessibility"
+    public static let title = "Allow Fudge to use Accessibility"
     public static let text =
-        "fudge needs Accessibility permission to read the selected text and to paste. Turn fudge on in System "
-        + "Settings → Privacy & Security → Accessibility. If fudge is already in the list, select it, remove it with "
-        + "−, and add it again with +. An older build of fudge can leave an entry that no longer matches."
+        "Fudge needs Accessibility permission to read the selected text and to paste. Turn Fudge on in System "
+        + "Settings → Privacy & Security → Accessibility. If Fudge is already in the list, select it, remove it with "
+        + "−, and add it again with +. An older build of Fudge can leave an entry that no longer matches."
     /// The default button (↵), which opens `paneURL`.
     public static let openButton = "Open Accessibility Settings"
     /// The other button (Esc).

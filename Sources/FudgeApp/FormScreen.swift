@@ -188,7 +188,7 @@ struct FormScreen: View {
                 }
                 .onTapGesture { focused = field.id }
         case .unsupported(let type):
-            Text("fudge can't show a \(type) yet.").foregroundStyle(.tertiary)
+            Text("Fudge can't show a \(type) yet.").foregroundStyle(.tertiary)
         case .description, .separator:
             EmptyView()
         }

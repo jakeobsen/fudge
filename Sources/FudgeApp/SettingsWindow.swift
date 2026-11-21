@@ -391,7 +391,7 @@ final class SettingsModel {
 
     private var unreadableMessage: String {
         let path = (paths.settingsFile.path as NSString).abbreviatingWithTildeInPath
-        return "\(path) isn't valid JSON, so fudge won't change it. Fix or remove it, then try again."
+        return "\(path) isn't valid JSON, so Fudge won't change it. Fix or remove it, then try again."
     }
 
     // MARK: - Aliases and enabled
@@ -566,7 +566,7 @@ final class SettingsWindowController {
     private func prepare(extension name: String?) {
         model.reload()
         model.refreshLoginItem()
-        // "fudge Settings" and Settings… open on the General page; Configure Extension on the extension's own.
+        // "Fudge Settings" and Settings… open on the General page; Configure Extension on the extension's own.
         model.select(name ?? SettingsModel.generalPage)
         if let window, window.contentView == nil {
             window.contentView = NSHostingView(rootView: SettingsView(model: model))
@@ -578,7 +578,7 @@ final class SettingsWindowController {
                 backing: .buffered,
                 defer: false
             )
-            window.title = "fudge Settings"
+            window.title = "Fudge Settings"
             window.isReleasedWhenClosed = false
             window.isRecording = { [model] in model.recording != nil }
             window.contentView = NSHostingView(rootView: SettingsView(model: model))

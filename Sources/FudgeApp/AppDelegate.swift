@@ -16,7 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsModel: SettingsModel!
     private var settingsWindow: SettingsWindowController!
     private var onboardingWindow: OnboardingWindowController!
-    /// The menu bar item's "Open fudge (⌥Space)".
+    /// The menu bar item's "Open Fudge (⌥Space)".
     private var openItem: NSMenuItem?
     private let hud = HUDWindow()
     private var keyMonitor: Any?
@@ -199,13 +199,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsWindow.reloadIfShown()
     }
 
-    /// Shows the launcher's hotkey as it's registered: on the General page, and in the menu bar item's "Open fudge"
+    /// Shows the launcher's hotkey as it's registered: on the General page, and in the menu bar item's "Open Fudge"
     /// title, which leaves it out while another app has it.
     private func launcherHotkeyChanged() {
         let spec = registry.launcher ?? .default
         settingsModel.launcherHotkey = spec
         settingsModel.launcherHotkeyInUse = registry.launcherRefused
-        openItem?.title = registry.launcherRefused ? "Open fudge" : "Open fudge (\(spec))"
+        openItem?.title = registry.launcherRefused ? "Open Fudge" : "Open Fudge (\(spec))"
     }
 
     private func installStatusItem() {
@@ -219,7 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.image = MenuBarIcon.image
 
         let menu = NSMenu()
-        let open = menu.addItem(withTitle: "Open fudge", action: #selector(openFromMenu), keyEquivalent: "")
+        let open = menu.addItem(withTitle: "Open Fudge", action: #selector(openFromMenu), keyEquivalent: "")
         open.target = self
         openItem = open
         let reload = menu.addItem(
@@ -228,8 +228,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let settings = menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
         settings.target = self
         menu.addItem(.separator())
-        menu.addItem(withTitle: "fudge \(FudgeVersion.current)", action: nil, keyEquivalent: "")
-        menu.addItem(withTitle: "Quit fudge", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: "Fudge \(FudgeVersion.current)", action: nil, keyEquivalent: "")
+        menu.addItem(withTitle: "Quit Fudge", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.menu = menu
         statusItem = item
     }
@@ -249,7 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
         // The first item is the application menu, by convention.
-        menu.addItem(withTitle: "fudge", action: nil, keyEquivalent: "").submenu = NSMenu(title: "fudge")
+        menu.addItem(withTitle: "Fudge", action: nil, keyEquivalent: "").submenu = NSMenu(title: "Fudge")
         menu.addItem(withTitle: "Edit", action: nil, keyEquivalent: "").submenu = edit
         return menu
     }
@@ -267,7 +267,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// The menu bar item's "Open fudge", which shows the panel as the launcher's hotkey does.
+    /// The menu bar item's "Open Fudge", which shows the panel as the launcher's hotkey does.
     @objc private func openFromMenu() {
         if !panel.isVisible { model.resetIfDue() }
         showPanel()
@@ -280,7 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.presented()
     }
 
-    /// The screen "Show fudge on" picks (`PanelScreen`).
+    /// The screen "Show Fudge on" picks (`PanelScreen`).
     private func chosenScreen() -> NSScreen? {
         let screens = NSScreen.screens
         let setting = model.settings.showOnScreen
