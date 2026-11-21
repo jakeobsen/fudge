@@ -66,6 +66,8 @@ public final class PanelReset {
     public var setting: PanelResetSetting
     public private(set) var hiddenAt: ContinuousClock.Instant?
     private let now: () -> ContinuousClock.Instant
+    /// What's holding the reset off: sign-ins in progress, by session.
+    private var holds: Set<String> = []
 
     public init(
         setting: PanelResetSetting = .default, now: @escaping () -> ContinuousClock.Instant = { .now }
@@ -90,10 +92,24 @@ public final class PanelReset {
         hiddenAt = nil
     }
 
+    /// A sign-in in progress (`key`, its session) holds the reset off: the user is in the browser, and a reset would
+    /// unload the command that's signing in. While any hold is on, no hide is due, however long it lasts.
+    public func hold(_ key: String) {
+        holds.insert(key)
+    }
+
+    /// The sign-in `key` is over. When it was the last hold and the panel is still hidden, the hide counts from now.
+    public func release(_ key: String) {
+        guard holds.remove(key) != nil, holds.isEmpty, hiddenAt != nil else { return }
+        hiddenAt = now()
+    }
+
     /// Whether the panel, hidden now, has been hidden long enough to reset before a path shows it. A yes forgets
     /// the hide, so asking twice resets once. A no keeps it: a no-view command run while hidden doesn't use it up.
     public func takeDue() -> Bool {
-        guard let hiddenAt, Self.isDue(hiddenFor: now() - hiddenAt, setting: setting) else { return false }
+        guard holds.isEmpty, let hiddenAt, Self.isDue(hiddenFor: now() - hiddenAt, setting: setting) else {
+            return false
+        }
         self.hiddenAt = nil
         return true
     }

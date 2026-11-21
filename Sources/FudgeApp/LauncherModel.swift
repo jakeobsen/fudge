@@ -3053,6 +3053,8 @@ final class LauncherModel {
         actionPanel = nil
         // Nothing reaches the command while the prompt is up, a key held for the selected item's actions included.
         hold(nil)
+        // Nor does Pop to Root Search: the user is in the browser, and a reset would unload the command signing in.
+        panelReset.hold(session)
         if !isVisible() { show() }
         let proceed = await withCheckedContinuation { signInAnswer = $0 }
         guard proceed, signIn?.session == session else {
@@ -3108,7 +3110,11 @@ final class LauncherModel {
     /// The sign-in on `loopback` is over, with a code or without: its listener closes, and the prompt goes when it was
     /// the prompt's.
     private func finishSignIn(_ loopback: OAuthLoopback, signedIn: Bool) {
-        if signInRequests.finish(loopback, signedIn: signedIn) { signIn = nil }
+        let session = signInRequests.shown?.session
+        if signInRequests.finish(loopback, signedIn: signedIn) {
+            signIn = nil
+            if let session { panelReset.release(session) }
+        }
         loopback.close()
     }
 
