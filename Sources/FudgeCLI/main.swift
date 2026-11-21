@@ -9,7 +9,7 @@ let usage = """
                       Compile the Raycast extension in <folder> and install it, in the
                       default extensions folder or, with --into, in that one.
       help            Show this help.
-      version         Print the fudge version.
+      version         Print the Fudge version.
     """
 
 func fail(_ message: String, status: Int32 = 1) -> Never {
