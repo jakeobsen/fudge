@@ -212,6 +212,8 @@ final class SettingsModel {
     @ObservationIgnored var confirm: (LauncherModel.AlertRequest) async -> Bool = { _ in false }
     /// Tells the launcher the store was turned on or off; set by the app delegate.
     @ObservationIgnored var extensionStoreChanged: () -> Void = {}
+    /// Unloads a running store, so its git stops before its copy is deleted; set by the app delegate.
+    @ObservationIgnored var stopExtensionStore: () async -> Void = {}
 
     /// The switch on the store's Settings page: on only after the consent sheet's Turn On, which records the date;
     /// off after its own sheet, which deletes the store's downloaded repository but keeps its record of what it
@@ -223,6 +225,7 @@ final class SettingsModel {
             guard await confirm(sheet) else { return }
             guard change({ $0.setExtensionStore(on, now: Date()) }) else { return }
             if !on {
+                await stopExtensionStore()
                 do {
                     try ExtensionStore.deleteRepository(paths)
                 } catch {

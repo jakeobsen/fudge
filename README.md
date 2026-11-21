@@ -10,6 +10,7 @@ fudge is an independent project. It is not affiliated with or endorsed by Raycas
 - `Sources/FudgeCLI`: the `fudge` command-line tool. `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for fudge; `--into <folder>` installs it in that extensions folder instead. A running fudge picks up an extension you install, rebuild or remove within a second, with nothing to reload.
 - `Sources/FudgeCore`: code shared by the app and the tool.
 - `runtime/`: the extension host. This is the Node.js program that runs extensions. The app talks to it over stdin/stdout.
+- `runtime/store-extension/`: the Extension Store, an extension bundled with fudge that lists and installs the extensions published in github.com/raycast/extensions.
 
 ## Building
 
@@ -113,6 +114,13 @@ The Extension Store browses the extensions in Raycast's open-source repository a
 2. Turn it on with the switch at the top of **Settings… → Extension Store**.
 
 Turning it off removes the store's downloaded list; the extensions you installed stay installed.
+
+In the **Extension Store** command, search the extensions, or pick a category in the dropdown; **Installed** shows the ones you installed from it.
+
+- ↵ installs one. ⌘U updates one marked **Update available**, and ⌃X uninstalls it, to the Trash.
+- ⌘D shows an extension's details and README. ⌘R updates the list, which otherwise happens when you open the store and the list is a day old.
+- The store needs Git. If it's missing, install Apple's Command Line Tools: run `xcode-select --install` in Terminal.
+- It never touches extensions you installed with `fudge build` yourself.
 
 ### Menu bar commands
 
