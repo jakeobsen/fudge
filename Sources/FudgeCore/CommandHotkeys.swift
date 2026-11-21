@@ -54,6 +54,36 @@ public final class HotKeyRegistry {
         return false
     }
 
+    /// What changing the launcher's hotkey came to.
+    public enum LauncherChange: Sendable, Equatable {
+        case changed
+        /// The system refused it; the old hotkey stays (`setLauncher`).
+        case inUse
+        /// It couldn't be saved; everything is as it was before.
+        case notSaved
+    }
+
+    /// Changes the launcher's hotkey: registered first, then `save`d. A refusal keeps the old one. A save that
+    /// fails puts back exactly what was there before, so the registration and the file agree: the old hotkey
+    /// registered, or, if it was refused at launch, still wanted and still marked refused.
+    public func changeLauncher(to spec: HotKeySpec, save: () -> Bool) -> LauncherChange {
+        let before = (spec: launcher, refused: launcherRefused)
+        guard setLauncher(spec) else { return .inUse }
+        guard save() else {
+            restoreLauncher(before.spec, refused: before.refused)
+            return .notSaved
+        }
+        return .changed
+    }
+
+    private func restoreLauncher(_ spec: HotKeySpec?, refused: Bool) {
+        if !isSuspended, launcher != nil, !launcherRefused { registrar.unregister(id: Self.launcherID) }
+        launcher = spec
+        launcherRefused = refused
+        guard !isSuspended, let spec, !refused else { return }
+        launcherRefused = !registrar.register(spec, id: Self.launcherID)
+    }
+
     /// Makes the registered command hotkeys `wanted`, touching only those that changed.
     public func apply(_ wanted: [String: HotKeySpec]) {
         let old = commands
@@ -111,23 +141,84 @@ public enum HotKeyConflict: Sendable, Equatable {
     /// Another command has it.
     case command(String)
 
-    /// Checks `spec` for `commandID` against the launcher's hotkey and the other commands'.
+    /// Checks `spec` for `commandID` against the launcher's hotkey and the other commands'. With `installed`, only
+    /// installed commands' hotkeys count: an uninstalled one's saved hotkey gives way (`displaced`).
     public static func check(
-        _ spec: HotKeySpec, for commandID: String, launcher: HotKeySpec, commands: [String: HotKeySpec]
+        _ spec: HotKeySpec, for commandID: String, launcher: HotKeySpec, commands: [String: HotKeySpec],
+        installed: Set<String>? = nil
     ) -> HotKeyConflict? {
         guard spec.isAllowed else { return .needsModifier }
         if spec.sameKeys(as: launcher) { return .launcher }
-        if let other = commands.first(where: { $0.key != commandID && $0.value.sameKeys(as: spec) }) {
-            return .command(other.key)
-        }
+        let holders = commands.filter { $0.key != commandID && $0.value.sameKeys(as: spec) }
+        if let other = holders.keys.filter({ installed?.contains($0) ?? true }).min() { return .command(other) }
         return nil
     }
 
-    /// Checks `spec` as the launcher's hotkey against the commands'.
-    public static func check(launcher spec: HotKeySpec, commands: [String: HotKeySpec]) -> HotKeyConflict? {
+    /// Checks `spec` as the launcher's hotkey against the commands'. With `installed`, only installed commands'
+    /// hotkeys count.
+    public static func check(
+        launcher spec: HotKeySpec, commands: [String: HotKeySpec], installed: Set<String>? = nil
+    ) -> HotKeyConflict? {
         guard spec.isAllowed else { return .needsModifier }
-        if let other = commands.filter({ $0.value.sameKeys(as: spec) }).keys.min() { return .command(other) }
+        let holders = commands.filter { $0.value.sameKeys(as: spec) && (installed?.contains($0.key) ?? true) }
+        if let other = holders.keys.min() { return .command(other) }
         return nil
+    }
+
+    /// The commands that aren't installed whose saved hotkey is `spec`'s keys: taking those keys clears theirs.
+    public static func displaced(
+        by spec: HotKeySpec, except commandID: String? = nil, commands: [String: HotKeySpec], installed: Set<String>
+    ) -> [String] {
+        commands.filter { $0.key != commandID && !installed.contains($0.key) && $0.value.sameKeys(as: spec) }
+            .keys.sorted()
+    }
+}
+
+/// How messages name a command: its title, with its extension's title when another installed command has the same
+/// title ("Search Projects (VS Code Project Manager)").
+public enum CommandNames {
+    /// Nil when `commandID` isn't installed.
+    public static func name(of commandID: String, in installed: [InstalledExtension]) -> String? {
+        var titles: [(id: String, title: String, extensionTitle: String)] = []
+        for item in installed {
+            for command in item.manifest.commands {
+                titles.append(
+                    (
+                        FudgeSettings.commandID(extension: item.manifest.name, command: command.name), command.title,
+                        item.manifest.title
+                    ))
+            }
+        }
+        guard let found = titles.first(where: { $0.id == commandID }) else { return nil }
+        let shared = titles.contains { $0.id != commandID && $0.title == found.title }
+        return shared ? "\(found.title) (\(found.extensionTitle))" : found.title
+    }
+}
+
+/// Which hotkey is being recorded, if any, and when that means suspending or resuming Fudge's hotkeys. A recording
+/// ends with no change on Esc, when the window closes, and when the page or onboarding step changes, so hotkeys are
+/// never left suspended behind a recording that's no longer on screen.
+public struct HotKeyRecorder: Sendable, Equatable {
+    public private(set) var recording: String?
+
+    public init() {}
+
+    /// Starts recording `id`. True when hotkeys must be suspended: nothing was recording yet.
+    public mutating func start(_ id: String) -> Bool {
+        defer { recording = id }
+        return recording == nil
+    }
+
+    /// Ends the recording without a change. True when hotkeys must resume.
+    public mutating func end() -> Bool {
+        guard recording != nil else { return false }
+        recording = nil
+        return true
+    }
+
+    /// The page (or onboarding step) changed from `old` to `new`: a recording ends. True when hotkeys must resume.
+    public mutating func pageChanged(from old: String?, to new: String?) -> Bool {
+        old == new ? false : end()
     }
 }
 
@@ -153,14 +244,16 @@ public enum HotKeyRecording: Sendable, Equatable {
 
     /// What it does to the launcher's hotkey, which can't be empty: clearing sets the default ⌥Space instead. A
     /// command's hotkey wins over a new launcher hotkey, so that one is refused.
-    public func launcherEdit(commands: [String: HotKeySpec]) -> LauncherHotkeyEdit {
+    public func launcherEdit(commands: [String: HotKeySpec], installed: Set<String>? = nil) -> LauncherHotkeyEdit {
         let spec: HotKeySpec
         switch self {
         case .cancel: return .keep
         case .clear: spec = .default
         case .record(let recorded): spec = recorded
         }
-        if let conflict = HotKeyConflict.check(launcher: spec, commands: commands) { return .refused(conflict) }
+        if let conflict = HotKeyConflict.check(launcher: spec, commands: commands, installed: installed) {
+            return .refused(conflict)
+        }
         return .set(spec)
     }
 }
