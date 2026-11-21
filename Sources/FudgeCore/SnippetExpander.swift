@@ -36,6 +36,11 @@ public struct SnippetExpander: Sendable {
     /// `eventSourceUserData` on every event Fudge posts (⌫, ⌘V, ←), so the tap never reads its own keys as typing.
     public static let marker: Int64 = 0x6675_6467_6501  // "fudge" and a version
 
+    /// Why turning expansion on needs Input Monitoring: the Snippets page's sheet and onboarding's step both say it.
+    public static let inputMonitoringExplanation =
+        "To notice a keyword as you type it, Fudge needs macOS's Input Monitoring permission. What you type isn't "
+        + "saved or sent anywhere, and nothing is read in password fields."
+
     /// How many characters are kept: the longest keyword.
     public static let bufferLimit = Snippet.keywordLimit
 

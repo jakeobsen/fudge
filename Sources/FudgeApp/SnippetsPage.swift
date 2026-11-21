@@ -109,14 +109,13 @@ struct SnippetsPage: View {
 
 /// **Expand Snippets as You Type** (SPEC-078 §5): the switch, and Input Monitoring's status while it's on. Turning it
 /// on without Input Monitoring says why it's needed, then asks macOS (its prompt the first time, its pane after that).
-private struct ExpandSnippetsRow: View {
+struct ExpandSnippetsRow: View {
     @Bindable var model: SettingsModel
 
     static let explanation = "Type a snippet's keyword in any app to replace it with the snippet."
     static let permissionRequest = LauncherModel.AlertRequest(
         title: "Allow Input Monitoring?",
-        message: "To notice a keyword as you type it, Fudge needs macOS's Input Monitoring permission. What you type "
-            + "isn't saved or sent anywhere, and nothing is read in password fields.",
+        message: SnippetExpander.inputMonitoringExplanation,
         primary: "Open System Settings", dismiss: "Cancel", destructive: false)
 
     var body: some View {
@@ -168,8 +167,7 @@ private struct ExpandSnippetsRow: View {
         }
         Task {
             guard await model.confirm(Self.permissionRequest) else { return }
-            model.setExpandSnippets(true)
-            InputMonitoring.request()
+            model.turnOnSnippetExpansion()
         }
     }
 }
