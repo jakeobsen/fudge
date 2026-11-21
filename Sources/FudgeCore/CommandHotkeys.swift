@@ -174,12 +174,18 @@ public enum HotKeyConflict: Sendable, Equatable {
     }
 }
 
-/// How messages name a command: its title, with its extension's title when another installed command has the same
-/// title ("Search Projects (VS Code Project Manager)").
+/// How messages name a command: its title, with its extension's (or built-in group's) title when another command has
+/// the same title ("Search Projects (VS Code Project Manager)").
 public enum CommandNames {
-    /// Nil when `commandID` isn't installed.
-    public static func name(of commandID: String, in installed: [InstalledExtension]) -> String? {
+    /// Nil when `commandID` is neither an installed command nor one of Fudge's own in `groups`.
+    public static func name(
+        of commandID: String, in installed: [InstalledExtension],
+        groups: [BuiltInCommandGroup] = BuiltInCommandGroup.all
+    ) -> String? {
         var titles: [(id: String, title: String, extensionTitle: String)] = []
+        for group in groups {
+            for command in group.commands { titles.append((group.commandID(command), command.title, group.title)) }
+        }
         for item in installed {
             for command in item.manifest.commands {
                 titles.append(

@@ -461,7 +461,7 @@ private struct RootResults: View {
     private func kind(of item: RootItem) -> String {
         switch item.kind {
         case .application: "Application"
-        case .command: "Command"
+        case .command, .builtInCommand: "Command"
         case .settings, .reloadExtensions, .quit, .createQuicklink: "Fudge"
         case .quicklink: "Quicklink"
         }

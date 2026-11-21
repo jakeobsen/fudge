@@ -316,7 +316,8 @@ final class LauncherModel {
         panelReset.setting = settings.resetAfter
         let commands = installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
         items =
-            RootSearch.applying(settings, to: commands) + RootSearch.builtInItems + loadQuicklinks() + applications
+            RootSearch.applying(settings, to: commands + BuiltInCommandGroup.all.flatMap(RootItem.builtInCommands))
+            + RootSearch.builtInItems + loadQuicklinks() + applications
         menuBar.update(installed: installedExtensions, settings: settings)
         refreshResults(keepingSelection: keepingSelection)
         refreshCommandHotkeys()
@@ -2065,21 +2066,23 @@ final class LauncherModel {
 
     // MARK: - Command hotkeys
 
-    /// The `FudgeSettings` ids ("<extension>/<command>") of the installed commands, enabled or not.
+    /// The `FudgeSettings` ids ("<extension>/<command>") of the installed commands and Fudge's own
+    /// (`BuiltInCommandGroup`), enabled or not.
     var installedCommandIDs: [String] {
-        installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }.compactMap { item in
-            guard case .command(let extensionName, let commandName, _, _) = item.kind else { return nil }
-            return FudgeSettings.commandID(extension: extensionName, command: commandName)
-        }
+        installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
+            .compactMap(\.commandSettingsID) + BuiltInCommandGroup.commandIDs()
     }
 
     /// A command's hotkey was pressed anywhere (`HotKeyLaunch`): open it as root search would, hide the panel if
     /// it's the view command already on screen, or show root search with its fields when a required argument is
     /// needed.
     func openFromHotkey(_ commandID: String) {
-        guard let item = items.first(where: { $0.id == "command:\(commandID)" }),
-            case .command(let extensionName, let commandName, let mode, _) = item.kind
-        else { return }
+        guard let item = items.first(where: { $0.id == "command:\(commandID)" }) else { return }
+        if case .builtInCommand(let group, let command) = item.kind {
+            runBuiltIn(item, group: group, command: command)
+            return
+        }
+        guard case .command(let extensionName, let commandName, let mode, _) = item.kind else { return }
         // The reset comes first, so the hotkey's target is built on top of it. A no-view command's hotkey resets
         // too while the panel is hidden: the panel's next show would reset it anyway, so this changes nothing.
         resettingFirst {
@@ -2197,6 +2200,8 @@ final class LauncherModel {
         case .createQuicklink:
             recordLaunch(item)
             showQuicklinkForm(QuicklinkDraft())
+        case .builtInCommand(let group, let command):
+            runBuiltIn(item, group: group, command: command)
         case .command(let extensionName, let commandName, _, _):
             guard let installed = extensions[extensionName],
                 let command = installed.manifest.commands.first(where: { $0.name == commandName })
@@ -2234,6 +2239,12 @@ final class LauncherModel {
     }
 
     /// Records a root item's launch, unless it's one that never counts (`RootItem.recordsLaunch`: Quit).
+    /// Runs one of Fudge's own commands (`BuiltInCommandGroup`), from root search or its hotkey, which goes no other
+    /// way: each group's commands decide whether the panel shows.
+    private func runBuiltIn(_ item: RootItem, group: String, command: String) {
+        recordLaunch(item)
+    }
+
     private func recordLaunch(_ item: RootItem) {
         if item.recordsLaunch { recordLaunch(item.id) }
     }
@@ -3156,6 +3167,11 @@ final class LauncherModel {
             image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)!
         case .createQuicklink:
             image = NSImage(systemSymbolName: "link.badge.plus", accessibilityDescription: nil)!
+        case .builtInCommand(let group, let command):
+            let symbol = BuiltInCommandGroup.command(group: group, command: command)?.command.symbol
+            image =
+                symbol.flatMap { NSImage(systemSymbolName: $0, accessibilityDescription: nil) }
+                ?? NSImage(systemSymbolName: "command", accessibilityDescription: nil)!
         case .quicklink(let quicklink):
             image = Self.quicklinkIcon(quicklink)
         case .command:
