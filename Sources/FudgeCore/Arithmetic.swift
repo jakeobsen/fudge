@@ -49,7 +49,7 @@ public enum Arithmetic {
         return isoDate.firstMatch(in: text, range: range) != nil
     }
 
-    nonisolated(unsafe) private static let isoDate = try! NSRegularExpression(
+    private static let isoDate = try! NSRegularExpression(
         pattern: #"^\s*[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])\s*$"#)
 
     /// A number as typed in `format` (`NumberFormat.number`), with an optional exponent (`2.5E3`, `1e-7`).

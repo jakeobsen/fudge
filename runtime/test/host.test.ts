@@ -255,6 +255,139 @@ test("a command file that can't be loaded is reported", async () => {
     await host.close();
 });
 
+test("an old module that only calls render() renders that element, which handles events", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "old", entry: fixture("render-only.cjs"), mode: "view" });
+    const first = await host.next(of("old", "render"));
+    const list = first.view as UINode;
+    assert.equal(list.type, "List");
+    assert.equal(list.props.navigationTitle, "rendered");
+    const item = list.children[0]!;
+    assert.equal(item.props.title, "count 0");
+    const log = await host.next(of("old", "log"));
+    assert.equal(log.level, "error");
+    assert.match(String(log.message), /render\(\) was called again/, "a second call is ignored, with a log line");
+
+    const action = (item.props.actions as unknown as UINode).children[0]!;
+    host.send({ type: "event", session: "old", node: action.id, path: ["onAction"], args: [] });
+    assert.equal(((await host.next(of("old", "render"))).view as UINode).children[0]!.props.title, "count 1");
+    await host.close();
+});
+
+test("a no-view command that only calls render() fails, saying why, rather than showing nothing", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "nv", entry: fixture("render-only.cjs"), mode: "no-view" });
+    const error = await host.next(of("nv", "error"));
+    assert.match(String(error.message), /render-only\.cjs shows a view with render\(\), but it's a no-view command$/);
+    assert.equal(error.fatal, true);
+    assert.equal((await host.next(of("nv", "exit"))).reason, "crashed");
+    assert.equal(host.arrived.some(of("nv", "render")), false, "nothing was rendered");
+    await host.close();
+});
+
+test("a menu-bar command that only calls render() renders it", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "mbr", entry: fixture("render-only.cjs"), mode: "menu-bar" });
+    assert.equal(((await host.next(of("mbr", "render"))).view as UINode).props.navigationTitle, "rendered");
+    await host.close();
+});
+
+test("a module with a default export uses it, even if it called render()", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "d", entry: fixture("render-and-default.cjs"), mode: "view" });
+    assert.equal(((await host.next(of("d", "render"))).view as UINode).props.markdown, "from the default export");
+    await host.close();
+});
+
+test("a module with neither a default export nor render() is reported", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "n", entry: fixture("nothing.cjs"), mode: "view" });
+    assert.match(String((await host.next(of("n", "error"))).message), /has no default export to run/);
+    assert.equal((await host.next(of("n", "exit"))).reason, "crashed");
+    await host.close();
+});
+
+test("an old no-view module's top-level code is its run, and it finishes when that's done", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "tl", entry: fixture("top-level-sync.cjs"), mode: "no-view" });
+    assert.equal((await host.next(of("tl", "exit"))).reason, "finished");
+    const logs = host.arrived.filter(of("tl", "log")).map((m) => m.message);
+    assert.deepEqual(logs, ["one", "two"], "its log lines, in order, before it ends");
+    assert.equal(host.arrived.some(of("tl", "error")), false);
+    await host.close();
+});
+
+test("an old no-view module's async work keeps it running until its calls and timers are done", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "ta", entry: fixture("top-level-async.cjs"), mode: "no-view" });
+    const copy = await host.next(of("ta", "rpc"));
+    assert.equal(copy.method, "clipboard.copy");
+    // The answer is late: the pending call keeps the worker alive meanwhile.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(host.arrived.some(of("ta", "exit")), false, "still running while the call waits");
+    host.send({ type: "rpcResult", session: "ta", id: copy.id, result: null });
+    const hud = await host.next(of("ta", "rpc"));
+    assert.equal(hud.method, "hud.show");
+    assert.equal(host.arrived.some(of("ta", "exit")), false);
+    host.send({ type: "rpcResult", session: "ta", id: hud.id, result: null });
+    assert.equal((await host.next(of("ta", "exit"))).reason, "finished");
+    const logs = host.arrived.filter(of("ta", "log")).map((m) => m.message);
+    assert.deepEqual(logs, ["start", "after the timer", "done"]);
+    const order = host.arrived.filter((m) => m.session === "ta" && m.type !== "log").map((m) => m.type);
+    assert.deepEqual(order, ["rpc", "rpc", "exit"]);
+    await host.close();
+});
+
+test("an old no-view module that throws while loading is reported, and crashed", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "tt", entry: fixture("top-level-throws.cjs"), mode: "no-view" });
+    const error = await host.next(of("tt", "error"));
+    assert.equal(error.message, "top-level went wrong");
+    assert.equal(error.fatal, true);
+    assert.equal((await host.next(of("tt", "exit"))).reason, "crashed");
+    await host.close();
+});
+
+test("an old no-view module's later rejection is reported, then it finishes", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "tr", entry: fixture("top-level-rejects.cjs"), mode: "no-view" });
+    const error = await host.next(of("tr", "error"));
+    assert.equal(error.message, "later went wrong");
+    assert.equal(error.fatal, false, "as an unhandled rejection is reported for any command");
+    assert.equal((await host.next(of("tr", "exit"))).reason, "finished");
+    await host.close();
+});
+
+test("view, menu-bar and default-export no-view workers keep running while idle", async () => {
+    const host = start();
+    host.send({ type: "launch", session: "v", entry: fixture("counter.cjs"), mode: "view" });
+    host.send({ type: "launch", session: "m", entry: fixture("menu-bar.cjs"), mode: "menu-bar" });
+    const view = await host.next(of("v", "render"));
+    await host.next(of("m", "render"));
+    // A no-view command with a default export keeps running while its function hasn't returned, as before.
+    host.send({ type: "launch", session: "nv", entry: fixture("default-waits.cjs"), mode: "no-view" });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(host.arrived.some((m) => m.type === "exit"), false, "none of the three ended while idle");
+
+    // The idle view still answers an event.
+    const action = ((view.view as UINode).children[0]!.props.actions as unknown as UINode).children[0]!;
+    host.send({ type: "event", session: "v", node: action.id, path: ["onAction"], args: [] });
+    assert.equal(((await host.next(of("v", "render"))).view as UINode).children[0]!.props.title, "count 1");
+    for (const session of ["v", "m", "nv"]) host.send({ type: "unload", session });
+    for (const session of ["v", "m", "nv"]) assert.equal((await host.next(of(session, "exit"))).reason, "unloaded");
+    await host.close();
+});
+
+test("a view or menu-bar module with no export still has nothing to run", async () => {
+    const host = start();
+    for (const mode of ["view", "menu-bar"]) {
+        host.send({ type: "launch", session: mode, entry: fixture("top-level-sync.cjs"), mode });
+        assert.match(String((await host.next(of(mode, "error"))).message), /has no default export to run/);
+        assert.equal((await host.next(of(mode, "exit"))).reason, "crashed");
+    }
+    await host.close();
+});
+
 test("two sessions run side by side", async () => {
     const host = start();
     host.send({ type: "launch", session: "a", entry: fixture("counter.cjs"), mode: "view" });

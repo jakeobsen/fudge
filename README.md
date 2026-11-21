@@ -104,9 +104,11 @@ An extension running in the background, such as a menu bar refresh, never interr
 
 A quicklink is a saved link that opens from root search: a web page, an app's link (`slack://…`) or a folder (`~/Downloads`), in the app you chose for it or the default one. Type its name and press ↵.
 
+To make one, open **Create Quicklink** from root search, fill in its name, link and the app it opens with, and press ⌘↵. Extensions can offer to make one too (**Create Quicklink** in their ⌘K), which opens the same form, filled in. **Settings → Quicklinks** lists them all, to add, change or delete one.
+
 A link can have fields, filled in after its name like a command's arguments: `https://jira.example.com/browse/{argument name="ticket"}`. `{argument name="q" default="news"}` has a default, and `{argument name="kind" options="bug, task"}` is a list to pick from. `{clipboard}`, `{uuid}`, `{date}`, `{time}` and `{datetime}` fill themselves in; something a password manager copied is never used. In a web link, what's filled in is encoded for the URL, unless the placeholder ends in `| raw`. `| uppercase`, `| lowercase` and `| trim` change it first.
 
-⌘K on a quicklink offers **Copy Link** (⇧⌘C) and **Delete Quicklink…** (⌃X).
+⌘K on a quicklink offers **Copy Link** (⇧⌘C), **Edit Quicklink…** (⌘E) and **Delete Quicklink…** (⌃X).
 
 ### Calculator and currency
 

@@ -282,13 +282,18 @@ struct LauncherView: View {
     }
 
     /// A key press's modifiers, named as `KeyShortcut` names them. `fn`, `numpad` and `capslock` are passed on too,
-    /// for the rules to ignore: arrow keys always carry the first two.
-    private static func names(_ modifiers: EventModifiers) -> Set<String> {
+    /// for the rules to ignore: arrow keys always carry the first two. SwiftUI's `fn` flag is deprecated, so `fn` comes
+    /// from the key event AppKit is handling (`event`), which the press was made from.
+    private static func names(_ modifiers: EventModifiers, event: NSEvent? = NSApp.currentEvent) -> Set<String> {
         let all: [(EventModifiers, String)] = [
-            (.shift, "shift"), (.option, "opt"), (.command, "cmd"), (.control, "ctrl"), (.function, "fn"),
-            (.numericPad, "numpad"), (.capsLock, "capslock"),
+            (.shift, "shift"), (.option, "opt"), (.command, "cmd"), (.control, "ctrl"), (.numericPad, "numpad"),
+            (.capsLock, "capslock"),
         ]
-        return Set(all.filter { modifiers.contains($0.0) }.map(\.1))
+        var names = Set(all.filter { modifiers.contains($0.0) }.map(\.1))
+        if let event, [.keyDown, .keyUp].contains(event.type), event.modifierFlags.contains(.function) {
+            names.insert("fn")
+        }
+        return names
     }
 
     @ViewBuilder private var content: some View {
@@ -444,7 +449,7 @@ private struct RootResults: View {
         switch item.kind {
         case .application: "Application"
         case .command: "Command"
-        case .settings, .reloadExtensions, .quit: "Fudge"
+        case .settings, .reloadExtensions, .quit, .createQuicklink: "Fudge"
         case .quicklink: "Quicklink"
         }
     }

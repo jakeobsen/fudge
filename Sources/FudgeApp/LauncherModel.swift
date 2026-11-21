@@ -85,7 +85,10 @@ final class LauncherModel {
     }
 
     private(set) var screen: Screen = .root {
-        didSet { followQuickLook() }
+        didSet {
+            followQuickLook()
+            quicklinkFormLeft()
+        }
     }
     private(set) var results: [RootItem] = []
     var selectedItem: String? {
@@ -143,6 +146,9 @@ final class LauncherModel {
     @ObservationIgnored var fileExists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
     /// What the Quick Look preview shows.
     @ObservationIgnored private(set) var quickLook = QuickLookState()
+    /// Whether macOS's Quick Look panel is on screen (SPEC-057); set by the app delegate. Without one (snapshot runs),
+    /// the state is taken as it is.
+    @ObservationIgnored var quickLookOnScreen: () -> Bool = { true }
     /// Whether the launcher panel is on screen; set by the app delegate.
     @ObservationIgnored var isVisible: () -> Bool = { false }
     /// Asks the user to confirm (title, message, primary, dismiss, destructive); set by the app delegate.
@@ -197,6 +203,8 @@ final class LauncherModel {
         let sessions = sessionExtensions.filter { $0.value == extensionName }.map(\.key)
         guard !sessions.isEmpty else { return }
         for session in sessions {
+            // A view under the Create Quicklink form goes; the form then closes to root search.
+            if quicklinkForm?.returnTo?.session == session { quicklinkForm?.returnTo = nil }
             if case .command(let command) = screen, command.session == session {
                 leaveCommand()
                 refreshResults()
@@ -262,6 +270,7 @@ final class LauncherModel {
     func reload() {
         readInstalledExtensions()
         applications = ApplicationIndex.scan()
+        quicklinkApplicationList = nil
         applySettings()
     }
 
@@ -1274,6 +1283,11 @@ final class LauncherModel {
             case .root, .failure: perform(action)  // a failure's are its notice's
             case .command: return
             }
+        case .createQuicklink(let request):
+            guard case .command(let command) = screen, command.session != QuicklinkForm.session else { return }
+            showQuicklinkForm(
+                QuicklinkDraft(request: request, commandTitle: command.title, applications: quicklinkApplications()),
+                over: command)
         case .toggleQuickLook:
             toggleQuickLook()
         }
@@ -1377,6 +1391,11 @@ final class LauncherModel {
         }
     }
 
+    /// For snapshots: runs the first action titled `title` of the selected item or view, as picking it would.
+    func runAction(titled title: String) {
+        if let entry = ActionPanelReader.entry(titled: title, in: currentActions) { run(entry) }
+    }
+
     // MARK: - Form.LinkAccessory
 
     /// A click on the Form's link accessory opens its `target` as `Action.OpenInBrowser` does, then hides the panel
@@ -1426,6 +1445,9 @@ final class LauncherModel {
             }
             hide()
             showHUD("Copied Link")
+        case .editQuicklink(let id):
+            guard let quicklink = QuicklinkStore.load(from: paths.quicklinksFile).quicklink(id: id) else { return }
+            showQuicklinkForm(QuicklinkDraft(editing: quicklink))
         case .deleteQuicklink(let id):
             deleteQuicklink(id)
         }
@@ -1460,7 +1482,7 @@ final class LauncherModel {
                 // The user's own pick in root search.
                 _ = try await SystemCalls.handle("open", .object(params), origin: .userInitiated)
             } catch {
-                showFailureToast("Can't open \(quicklink.name)", message: String(describing: error))
+                showFailureToast("Can't open \(quicklink.name)", message: SystemCalls.message(of: error))
                 return
             }
             recordLaunch(item)
@@ -1468,6 +1490,150 @@ final class LauncherModel {
             if argumentsItem == item.id { resetArguments(for: item) }
             hide()
         }
+    }
+
+    // MARK: - The Create Quicklink form
+
+    /// Fudge's own Create Quicklink form, while it's on screen (SPEC-052 B1–B3). It's drawn as a Form view whose
+    /// session is `QuicklinkForm.session`: `send` answers its events here, and nothing of it reaches the host.
+    struct QuicklinkFormState {
+        /// What it opened on: an empty draft, a saved quicklink to edit, or an extension's `Action.CreateQuicklink`.
+        var draft: QuicklinkDraft
+        var applications: [QuicklinkApplication]
+        /// Shown on the fields after a save was refused, each until its field is edited.
+        var problems = QuicklinkDraft.Problems()
+        /// The extension's view it was opened over, which it goes back to.
+        var returnTo: CommandScreen?
+        /// That view's renders, errors and exit while the form covered it, handled once it's shown again.
+        var deferred: [HostMessage] = []
+    }
+
+    @ObservationIgnored private var quicklinkForm: QuicklinkFormState?
+    @ObservationIgnored private var quicklinkApplicationList: [QuicklinkApplication]?
+
+    /// Open With's choices: root search's applications, with their bundle ids.
+    private func quicklinkApplications() -> [QuicklinkApplication] {
+        if let quicklinkApplicationList { return quicklinkApplicationList }
+        let list = applications.compactMap { item -> QuicklinkApplication? in
+            guard case .application(let url) = item.kind, let bundleId = Bundle(url: url)?.bundleIdentifier else {
+                return nil
+            }
+            return QuicklinkApplication(name: item.title, bundleId: bundleId, path: url.path)
+        }
+        quicklinkApplicationList = list
+        return list
+    }
+
+    /// Shows the Create Quicklink form on `draft`: from root search, or over an extension's view (`over`), which
+    /// it goes back to when it closes.
+    private func showQuicklinkForm(_ draft: QuicklinkDraft, over returnTo: CommandScreen? = nil) {
+        let applications = quicklinkApplications()
+        actionPanel = nil
+        dropdownPanel = nil
+        datePanel = nil
+        quicklinkForm = QuicklinkFormState(draft: draft, applications: applications, returnTo: returnTo)
+        var form = CommandScreen(session: QuicklinkForm.session, title: QuicklinkForm.title(for: draft))
+        form.storedFormValues = [:]
+        form.view = QuicklinkForm.view(draft: draft, applications: applications)
+        refreshForm(&form)
+        screen = .command(form)
+    }
+
+    /// Draws the form again with its problems, keeping what was typed.
+    private func renderQuicklinkForm() {
+        guard let form = quicklinkForm, case .command(var command) = screen, command.session == QuicklinkForm.session
+        else { return }
+        command.view = QuicklinkForm.view(draft: form.draft, problems: form.problems, applications: form.applications)
+        refreshForm(&command)
+        screen = .command(command)
+    }
+
+    /// The form's events, as `send` hands them over: Save Quicklink's `onAction`, and each edit's `onChange`, which
+    /// clears that field's problem.
+    private func quicklinkFormEvent(node: Int, path: [String]) {
+        guard var form = quicklinkForm else { return }
+        switch path {
+        case ["onAction"] where node == QuicklinkForm.Node.save:
+            saveQuicklinkForm()
+        case ["onChange"]:
+            if node == QuicklinkForm.Node.name, form.problems.name != nil {
+                form.problems.name = nil
+            } else if node == QuicklinkForm.Node.link, form.problems.link != nil {
+                form.problems.link = nil
+            } else {
+                return
+            }
+            quicklinkForm = form
+            renderQuicklinkForm()
+        default:
+            break
+        }
+    }
+
+    /// ⌘↵ Save Quicklink: refused with each field's problem (`QuicklinkDraft.problems`), else saved in place of the
+    /// edited one or as a new one, with a HUD, and the form closes. A `quicklinks.json` Fudge can't read stays as
+    /// it is, and a toast says why.
+    private func saveQuicklinkForm() {
+        guard var form = quicklinkForm, let command, command.session == QuicklinkForm.session,
+            let content = command.form
+        else { return }
+        var values: [String: JSONValue] = [:]
+        for field in content.fields {
+            if let id = field.fieldId, let value = command.fieldValues[field.id]?.value { values[id] = value }
+        }
+        let draft = QuicklinkForm.draft(form.draft, with: values)
+        let file = paths.quicklinksFile
+        var store = QuicklinkStore.load(from: file)
+        form.problems = draft.problems(among: store.quicklinks)
+        guard form.problems.isEmpty else {
+            quicklinkForm = form
+            renderQuicklinkForm()
+            return
+        }
+        draft.save(into: &store)
+        do {
+            try store.save(to: file)
+        } catch {
+            showFailureToast("Can't save the quicklink", message: String(describing: error))
+            return
+        }
+        let fromRootSearch = form.returnTo == nil
+        closeQuicklinkForm()
+        applySettings()
+        if fromRootSearch { searchText = "" }
+        showHUD("Quicklink saved")
+    }
+
+    /// Closes the Create Quicklink form (Esc, or a save): back to the extension's view it was opened over, with
+    /// what that rendered meanwhile, or to root search. False when the form isn't on screen.
+    @discardableResult
+    private func closeQuicklinkForm() -> Bool {
+        guard let form = quicklinkForm, case .command(let command) = screen, command.session == QuicklinkForm.session
+        else { return false }
+        quicklinkForm = nil
+        actionPanel = nil
+        dropdownPanel = nil
+        datePanel = nil
+        if let returnTo = form.returnTo {
+            screen = .command(returnTo)
+            for message in form.deferred { handle(message) }
+        } else {
+            screen = .root
+        }
+        restoreKeyboard()
+        return true
+    }
+
+    /// The screen changed. When the Create Quicklink form went some other way than closing (a launch, Pop to Root
+    /// Search, the panel's reset), the extension's view under it is unloaded too, as the one on screen would be.
+    private func quicklinkFormLeft() {
+        guard let form = quicklinkForm else { return }
+        if case .command(let command) = screen, command.session == QuicklinkForm.session { return }
+        quicklinkForm = nil
+        guard let covered = form.returnTo?.session else { return }
+        for case .exit(let session, let reason) in form.deferred { handle(.exit(session: session, reason: reason)) }
+        if case .command(let command) = screen, command.session == covered { return }
+        send(.unload(session: covered))
     }
 
     /// Delete Quicklink…: asks, then removes it from `quicklinks.json`. A file Fudge can't read stays as it is,
@@ -1519,7 +1685,7 @@ final class LauncherModel {
             if case .command(let name, _, _, _) = selectedRootItem?.kind { return name }
             return nil
         case .command(let command):
-            return command.extensionName
+            return command.extensionName.isEmpty ? nil : command.extensionName
         case .failure(let failure):
             return failure.notice?.extensionName
         }
@@ -1631,6 +1797,7 @@ final class LauncherModel {
 
     /// `Action.ToggleQuickLook`: the preview of the selected item's file, or closing it.
     private func toggleQuickLook() {
+        reconcileQuickLook()
         switch quickLook.toggle(selected: selectedListItem?.quickLook, in: quickLookView, exists: fileExists) {
         case .opened, .closed:
             quickLookChanged(quickLook.shown)
@@ -1644,6 +1811,7 @@ final class LauncherModel {
     /// Every screen change: an open preview follows the selection, and closes for another view.
     private func followQuickLook() {
         guard quickLook.isOpen else { return }
+        reconcileQuickLook()
         let before = quickLook.shown
         quickLook.follow(selected: selectedListItem?.quickLook, in: quickLookView, exists: fileExists)
         if quickLook.shown != before { quickLookChanged(quickLook.shown) }
@@ -1659,6 +1827,36 @@ final class LauncherModel {
     /// The user closed the preview with its own button.
     func quickLookClosedByUser() {
         quickLook.close()
+    }
+
+    /// Before any Quick Look decision: a preview the user closed with its own button is closed here too, even if
+    /// `windowWillClose` hasn't arrived yet, so ↓ doesn't reopen it and one ⌘Y does.
+    private func reconcileQuickLook() {
+        if quickLook.reconcile(panelVisible: quickLookOnScreen()) { quickLookChanged(nil) }
+    }
+
+    /// An arrow key the Quick Look preview got because the user clicked it: it does what it does in the launcher,
+    /// in the action panel, the dropdown's panel, or the List or Grid. False leaves it to the preview. The caller
+    /// leaves keys alone while an input method is composing in the search field.
+    func previewArrow(
+        _ move: GridNavigation.Move, modifiers: Set<String>, textLength: Int, selection: (location: Int, length: Int)?
+    ) -> Bool {
+        let step = move == .up ? -1 : 1
+        switch PreviewArrow.target(move, actionPanelOpen: actionPanel != nil, dropdownOpen: dropdownPanel != nil) {
+        case .actionPanel:
+            moveActionSelection(by: step)
+        case .dropdown:
+            moveDropdownSelection(by: step)
+        case .selection:
+            guard move == .up || move == .down else {
+                return moveGridSelection(
+                    move, modifiers: modifiers, composing: false, textLength: textLength, selection: selection)
+            }
+            moveSelection(by: step)
+        case .none:
+            return false
+        }
+        return true
     }
 
     // MARK: - Keys
@@ -1743,6 +1941,7 @@ final class LauncherModel {
             closeDatePanel()
             return
         }
+        reconcileQuickLook()
         let state = EscapeAction.State(
             dropdownOpen: dropdownPanel != nil, actionPanelOpen: actionPanel != nil,
             quickLookOpen: quickLook.isOpen, screen: escapeScreen)
@@ -1770,6 +1969,7 @@ final class LauncherModel {
         case .clearSearch:
             searchText = ""
         case .leaveCommand:
+            if closeQuicklinkForm() { return }
             leaveCommand()
         case .dismissFailure:
             screen = .root
@@ -1927,6 +2127,9 @@ final class LauncherModel {
             }
         case .quicklink(let quicklink):
             openQuicklink(quicklink, item: item)
+        case .createQuicklink:
+            recordLaunch(item)
+            showQuicklinkForm(QuicklinkDraft())
         case .command(let extensionName, let commandName, _, _):
             guard let installed = extensions[extensionName],
                 let command = installed.manifest.commands.first(where: { $0.name == commandName })
@@ -2309,6 +2512,18 @@ final class LauncherModel {
     }
 
     private func send(_ message: AppMessage) {
+        // Fudge's own Create Quicklink form answers its events itself.
+        if case .event(QuicklinkForm.session, let node, let path, _) = message {
+            quicklinkFormEvent(node: node, path: path)
+            return
+        }
+        switch message {
+        case .pop(QuicklinkForm.session), .unload(QuicklinkForm.session), .rpcResult(QuicklinkForm.session, _, _, _),
+            .toastAction(QuicklinkForm.session, _, _):
+            return
+        default:
+            break
+        }
         do {
             try host?.send(message)
         } catch {
@@ -2322,13 +2537,29 @@ final class LauncherModel {
         background.removeAll()
         quietSessions.removeAll()
         menuBar.hostStopped()
-        if case .command(var command) = screen, command.failure == nil {
+        if case .command(var command) = screen, command.failure == nil, command.session != QuicklinkForm.session {
             command.failure = Failure(title: "\(command.title) stopped", message: "The extension host exited.")
             screen = .command(command)
+        }
+        // The Create Quicklink form needs no host; the view under it shows that it stopped once it's back.
+        if var covered = quicklinkForm?.returnTo, covered.failure == nil {
+            covered.failure = Failure(title: "\(covered.title) stopped", message: "The extension host exited.")
+            quicklinkForm?.returnTo = covered
         }
     }
 
     private func handle(_ message: HostMessage) {
+        // The extension's view under the Create Quicklink form gets its renders, errors and exit once it's shown
+        // again; its calls are answered meanwhile.
+        if let covered = quicklinkForm?.returnTo?.session, message.session == covered {
+            switch message {
+            case .render, .error, .exit:
+                quicklinkForm?.deferred.append(message)
+                return
+            default:
+                break
+            }
+        }
         // A menu-bar command's tree, errors and exit belong to the menu bar; its rpcs and logs are answered here.
         if let session = message.session, menuBar.owns(session) {
             switch message {
@@ -2653,6 +2884,8 @@ final class LauncherModel {
             image = NSImage(systemSymbolName: "arrow.clockwise", accessibilityDescription: nil)!
         case .quit:
             image = NSImage(systemSymbolName: "power", accessibilityDescription: nil)!
+        case .createQuicklink:
+            image = NSImage(systemSymbolName: "link.badge.plus", accessibilityDescription: nil)!
         case .quicklink(let quicklink):
             image = Self.quicklinkIcon(quicklink)
         case .command:

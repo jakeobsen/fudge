@@ -60,10 +60,10 @@ public enum TimeZoneConversion {
         return nil
     }
 
-    nonisolated(unsafe) private static let nowIn = try! NSRegularExpression(pattern: #"^(?:time|now)\s+in\s+(.+)$"#)
+    private static let nowIn = try! NSRegularExpression(pattern: #"^(?:time|now)\s+in\s+(.+)$"#)
     // Lookarounds, so neither match uses up the spaces around it.
-    nonisolated(unsafe) private static let separator = try! NSRegularExpression(pattern: #"(?<=\s)(?:to|in)(?=\s)"#)
-    nonisolated(unsafe) private static let clock = try! NSRegularExpression(
+    private static let separator = try! NSRegularExpression(pattern: #"(?<=\s)(?:to|in)(?=\s)"#)
+    private static let clock = try! NSRegularExpression(
         pattern: #"(?:^|\s)(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?(?=\s|$)"#)
 
     private static func withoutTimeWord(_ text: String) -> String {

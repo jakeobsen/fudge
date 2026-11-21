@@ -39,6 +39,7 @@ test("finds what a module uses from @raycast/api, however it's imported", async 
 
 test("decides whether fudge provides an API path", () => {
     assert.equal(support(api, "Clipboard.copy"), "implemented");
+    assert.equal(support(api, "render", declared), "implemented", "the deprecated top-level render()");
     assert.equal(support(api, "Action.CopyToClipboard"), "implemented");
     assert.equal(support(api, "Toast.Style.Failure"), "implemented");
     assert.equal(support(api, "environment.commandName.length"), "implemented", "past the API, it's the value");
@@ -93,10 +94,9 @@ test("OAuth stays left out by design, though its client can be built (D-50)", ()
 });
 
 test("an action that renders but fails when used is render-but-fail", () => {
-    for (const path of ["Action.CreateQuicklink", "Action.CreateSnippet"]) {
-        assert.equal(support(api, path, declared), "render-but-fail", path);
-    }
+    assert.equal(support(api, "Action.CreateSnippet", declared), "render-but-fail");
     assert.equal(support(api, "Action.CopyToClipboard", declared), "implemented");
+    assert.equal(support(api, "Action.CreateQuicklink", declared), "implemented", "the app opens its Create Quicklink form");
     assert.equal(support(api, "Action.ToggleQuickLook", declared), "implemented", "the app performs Quick Look");
     assert.equal(support(api, "Action.Paste", declared), "implemented", "Paste works now");
     for (const path of ["Action.PickDate", "Action.PickDate.Type.DateTime", "Action.PickDate.isFullDay"]) {
