@@ -44,7 +44,7 @@
 			<key>UTTypeIdentifier</key>
 			<string>io.github.jakeobsen.fudge.backup</string>
 			<key>UTTypeDescription</key>
-			<string>fudge Backup</string>
+			<string>Fudge Backup</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>

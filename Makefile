@@ -59,7 +59,7 @@ export PATH := $(NODE_HOME)/bin:$(PATH)
 .PHONY: help release-check app dmg run install-extension build runtime node test test-swift test-runtime lint fmt raycast-types compat-scan clean
 
 help:
-	@printf 'fudge — a keyboard launcher for macOS, built to run Raycast extensions\n\n'
+	@printf 'Fudge — a keyboard launcher for macOS, built to run Raycast extensions\n\n'
 	@printf 'Usage: make <target>\n\n'
 	@printf '  help           Show this help (default).\n'
 	@printf '  app            Build %s (CONFIG=debug|release, now: %s). Signs with SIGN_IDENTITY: by default\n' '$(APP)' '$(CONFIG)'
@@ -73,7 +73,7 @@ help:
 	@printf '  lint           Check Swift formatting and type-check the extension host.\n'
 	@printf '  fmt            Format all Swift code.\n'
 	@printf '  raycast-types  Copy the type definitions of @raycast/api %s into runtime/vendor and regenerate what is derived from them.\n' '$(RAYCAST_API_VERSION)'
-	@printf '  compat-scan DIR=<folder>  Report which @raycast/api uses of the extensions in <folder> fudge lacks.\n'
+	@printf '  compat-scan DIR=<folder>  Report which @raycast/api uses of the extensions in <folder> Fudge lacks.\n'
 	@printf '  clean          Remove build output.\n'
 
 # Downloads, checks and unpacks the pinned Node.js. The tarball is unpacked into a fresh folder of its own under
