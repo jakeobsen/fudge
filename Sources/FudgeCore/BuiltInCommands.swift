@@ -47,6 +47,12 @@ public struct BuiltInCommandGroup: Sendable, Equatable, Identifiable {
     /// Fudge's groups, by title, which the Commands page lists in this order above the extensions.
     public static let all: [BuiltInCommandGroup] = [.apps, .system, .tools, .windowManagement]
 
+    /// The Commands page's Type column for a group's row and for its commands' rows: "Built-in" and "Command" for
+    /// Fudge's own groups, "Quicklinks" and "Quicklink" for the quicklinks.
+    public static func typeLabels(ofGroup name: String) -> (group: String, command: String) {
+        name == QuicklinkCommands.groupName ? ("Quicklinks", "Quicklink") : ("Built-in", "Command")
+    }
+
     /// Whether `name` can name a group: `:` and a valid extension name, so it's never an extension's name.
     public static func isValidName(_ name: String) -> Bool {
         name.hasPrefix(":") && ExtensionManifest.isValidName(String(name.dropFirst()))

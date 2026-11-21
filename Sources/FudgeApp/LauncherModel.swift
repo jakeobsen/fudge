@@ -2311,7 +2311,7 @@ final class LauncherModel {
                 showFailureToast("Can't delete \(quicklink.name)", message: String(describing: error))
                 return
             }
-            pruneQuicklinkSettings(keeping: store.quicklinks)
+            pruneQuicklinkSettings(in: store)
             applySettings()
             commandHotkeysChanged()
         }
@@ -2319,9 +2319,9 @@ final class LauncherModel {
 
     /// Takes a deleted quicklink's alias, hotkey and Enabled out of `settings.json` (`QuicklinkCommands.prune`).
     /// A `settings.json` Fudge can't read stays as it is: the leftovers do no harm, since no quicklink has that id.
-    private func pruneQuicklinkSettings(keeping quicklinks: [Quicklink]) {
+    private func pruneQuicklinkSettings(in store: QuicklinkStore) {
         var pruned = FudgeSettings.load(from: paths.settingsFile)
-        guard QuicklinkCommands.prune(&pruned, keeping: quicklinks) else { return }
+        guard QuicklinkCommands.prune(&pruned, in: store) else { return }
         do {
             try pruned.save(to: paths.settingsFile)
         } catch {

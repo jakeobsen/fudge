@@ -315,8 +315,8 @@ final class SettingsModel {
             try store.save(to: file)
             // Its alias, hotkey and Enabled go with it (`QuicklinkCommands.prune`).
             var pruned = FudgeSettings.load(from: paths.settingsFile)
-            if QuicklinkCommands.prune(&pruned, keeping: store.quicklinks) {
-                change { QuicklinkCommands.prune(&$0, keeping: store.quicklinks) }
+            if QuicklinkCommands.prune(&pruned, in: store) {
+                change { QuicklinkCommands.prune(&$0, in: store) }
             }
         } catch {
             FileHandle.standardError.write(Data("fudge: couldn't delete the quicklink: \(error)\n".utf8))
@@ -826,6 +826,16 @@ final class SettingsModel {
         let alias = text.trimmingCharacters(in: .whitespaces)
         // Check against the file as it is now, as `change` edits it, so an alias added by hand meanwhile counts.
         fudgeSettings = FudgeSettings.load(from: paths.settingsFile)
+        // A quicklink removed from its file by hand can still hold the alias: its settings go first, so it's free.
+        if !alias.isEmpty,
+            case .duplicate(let other) = CommandAliases.problem(with: alias, for: commandID, in: fudgeSettings),
+            QuicklinkCommands.nameWhenGone(other) != nil
+        {
+            let store = QuicklinkStore.load(from: paths.quicklinksFile)
+            if QuicklinkStore.isWritable(paths.quicklinksFile), QuicklinkCommands.prune(&fudgeSettings, in: store) {
+                change { QuicklinkCommands.prune(&$0, in: store) }
+            }
+        }
         if !alias.isEmpty, let problem = CommandAliases.problem(with: alias, for: commandID, in: fudgeSettings) {
             aliasMessages[commandID] =
                 switch problem {
@@ -869,7 +879,7 @@ final class SettingsModel {
         case .needsModifier: "Use ⌘, ⌥ or ⌃, or an F-key"
         case .launcher: "That's Fudge's own shortcut"
         case .command(let other):
-            "Used by \(CommandNames.name(of: other, in: allExtensions, groups: commandGroups) ?? other)"
+            "Used by \(CommandNames.name(of: other, in: allExtensions, groups: commandGroups) ?? QuicklinkCommands.nameWhenGone(other) ?? other)"
         }
     }
 
@@ -884,7 +894,7 @@ final class SettingsModel {
                 return command.title
             }
         }
-        return commandID
+        return QuicklinkCommands.nameWhenGone(commandID) ?? commandID
     }
 
     /// The value shown for a preference: what's stored, else its default.

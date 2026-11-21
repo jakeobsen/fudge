@@ -83,11 +83,11 @@ struct CommandsPage: View {
     private var rows: [GroupRow] {
         // The quicklinks' group shows once there's a quicklink.
         let groups = model.commandGroups.filter { !$0.commands.isEmpty }.map { group in
-            let type = group.name == QuicklinkCommands.groupName ? "Quicklink" : "Command"
+            let types = BuiltInCommandGroup.typeLabels(ofGroup: group.name)
             return GroupRow(
-                name: group.name, title: group.title, type: "Built-in", icon: .app,
+                name: group.name, title: group.title, type: types.group, icon: .app,
                 commands: group.commands.map {
-                    CommandRow(name: $0.name, title: $0.title, icon: .symbol($0.symbol), type: type)
+                    CommandRow(name: $0.name, title: $0.title, icon: .symbol($0.symbol), type: types.command)
                 })
         }
         let extensions = model.allExtensions.map { installed in

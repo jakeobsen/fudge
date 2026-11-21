@@ -178,6 +178,8 @@ Extensions run in a separate Node.js process, the extension host.
       The quicklinks' keys count as installed commands' (`QuicklinkCommands.commandIDs`), so their hotkeys are registered, block a key and are named in conflicts by the quicklink's name (`QuicklinkCommands.group`, passed to `CommandNames`).
       A hotkey follows `QuicklinkCommands.hotkeyLaunch`, as a no-view command's does: with no required field it opens at once, filled in at the press (`QuicklinkOpening.target(for:arguments:context:)`), leaving root search as it is and showing a failure in the HUD; with one, it shows root search with the quicklink selected and its fields.
       Deleting a quicklink, in the launcher or in Settings, also takes its keys out of `settings.json` (`QuicklinkCommands.prune`) and registers the hotkeys again.
+      Only ids no entry in `quicklinks.json` has are pruned (`QuicklinkStore.entryIDs`), so an entry a hand edit broke keeps its settings until it's fixed or gone.
+      A message naming the key of a quicklink that's gone says "a deleted quicklink" (`QuicklinkCommands.nameWhenGone`), and an alias such a key still holds is freed when it's asked for.
     - **The Create Quicklink form** makes and edits quicklinks: the "Create Quicklink" root item, Edit Quicklink…, and an extension's `Action.CreateQuicklink`.
       It's a Form view built in core (`QuicklinkForm.view`: Name, Link with its info text, and Open With, a dropdown of "Default" then root search's applications by bundle id; an app it names that isn't listed is kept, by its bundle id), shown as a `CommandScreen` whose session is `QuicklinkForm.session`, so `FormScreen`, ⌘↵, ⌘K, Tab and Esc work as in any Form.
       Nothing of it reaches the host: `send` hands its events to `builtInFormEvent`, and drops its `pop`, `unload` and `slots`.
@@ -443,7 +445,8 @@ Extensions run in a separate Node.js process, the extension host.
       A background launch is refused with the same words.
       The extension host's environment carries `FUDGE_CLI` (the bundle's `fudge`) and `FUDGE_EXTENSIONS_DIR` to every worker, and the store installs with `fudge build <folder> --into "$FUDGE_EXTENSIONS_DIR"` (`BuildArguments`: an absolute path to a folder that exists).
     - **The Commands page** (`CommandsPage.swift`) is the Settings window's second page:
-      Fudge's own command groups, then the quicklinks as a group of their own (`SettingsModel.commandGroups`, shown once there is one, their Type "Quicklink"), then every installed extension, each expanded to its commands (menu-bar ones included), with each command's alias, hotkey and Enabled checkbox (an extension's row has its own checkbox).
+      Fudge's own command groups, then the quicklinks as a group of their own (`SettingsModel.commandGroups`, shown once there is one, its Type "Quicklinks" and theirs "Quicklink", `BuiltInCommandGroup.typeLabels`),
+      then every installed extension, each expanded to its commands (menu-bar ones included), with each command's alias, hotkey and Enabled checkbox (an extension's row has its own checkbox).
       The bundled Extension Store is listed too, unticked until it's enabled.
       An alias is saved on ↵, and Esc puts the old one back.
       Recording a hotkey suspends all of Fudge's hotkeys (`HotKeyRegistry.suspend`), so pressing one records it instead of firing.
