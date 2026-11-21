@@ -121,8 +121,9 @@ private func seeded() throws -> Folder {
     let contents = try Backup.open(file, password: password)
     #expect(contents.manifest.format == 1 && contents.manifest.fudgeVersion == "1.0")
     #expect(
-        contents.manifest.extensions == [Backup.Listed(name: "alpha", title: "Alpha", version: "1.2.0", source: .store)]
-    )
+        contents.manifest.extensions == [
+            Backup.Listed(name: "alpha", title: "Alpha", version: "1.2.0", source: .store, storeTree: "t")
+        ])
     #expect(contents.hadExtensionStore)
 
     let target = try Folder()
@@ -493,4 +494,142 @@ private func file(_ path: String, _ text: String = "x") -> BackupArchive.RawEntr
         contents, to: target.paths, installed: [], fudgeVersion: "1.0", now: now.addingTimeInterval(-86_400))
     let kept = try FileManager.default.contentsOfDirectory(atPath: target.paths.backupsDirectory.path)
     #expect(kept.count == 3 && kept.contains(earlier.beforeImport.lastPathComponent))
+}
+
+// MARK: - What changed since the backup
+
+/// A backup listing `extensions`, with nothing else in it.
+private func listing(_ extensions: [Backup.Listed]) -> Backup.Contents {
+    Backup.Contents(
+        manifest: Backup.Manifest(format: 1, fudgeVersion: "1.0", created: now, extensions: extensions), root: [:],
+        perExtension: [:], data: [:], hadExtensionStore: false)
+}
+
+/// A support folder whose Extension Store recorded `trees` as its installs.
+private func storeFolder(_ trees: [String: String]) throws -> Folder {
+    let folder = try Folder()
+    let records = trees.map {
+        #""\#($0.key)":{"tree":"\#($0.value)","commit":"c","installedAt":"2026-11-20T10:00:00Z"}"#
+    }
+    try folder.write(
+        "extension-data/fudge-extension-store/installed.json", "{\(records.sorted().joined(separator: ","))}")
+    return folder
+}
+
+@Test func aBackupRecordsTheStoreTreeOfTheStoresInstallsOnly() throws {
+    let folder = try storeFolder(["alpha": "tree-a"])
+    let export = Backup.collect(
+        from: folder.paths,
+        installed: [try installed("alpha", title: "Alpha"), try installed("beta", title: "Beta", version: "2.0")],
+        fudgeVersion: "1.0", now: now)
+    #expect(
+        export.manifest.extensions == [
+            Backup.Listed(name: "alpha", title: "Alpha", version: nil, source: .store, storeTree: "tree-a"),
+            Backup.Listed(name: "beta", title: "Beta", version: "2.0", source: .local, storeTree: nil),
+        ])
+    let manifest = try #require(export.entries.first { $0.path == "manifest.json" })
+    let extensions = try #require(
+        (try JSONSerialization.jsonObject(with: manifest.data) as? [String: Any])?["extensions"] as? [[String: Any]])
+    #expect(extensions[0]["storeTree"] as? String == "tree-a")
+    #expect(extensions[1].keys.contains("storeTree") == false, "a local build has no key at all")
+    #expect(export.manifest.format == 1, "the key is optional, so the format stays 1")
+}
+
+@Test func aStoreRecordWithoutATreeStillCountsAsTheStores() throws {
+    let folder = try Folder()
+    try folder.write(
+        "extension-data/fudge-extension-store/installed.json", #"{"alpha":{"commit":"c"},"../x":{"tree":"t"}}"#)
+    #expect(Backup.storeInstalls(folder.paths) == ["alpha": Backup.StoreInstall(tree: nil)])
+    #expect(
+        Backup.listed([try installed("alpha", title: "Alpha")], paths: folder.paths)
+            == [Backup.Listed(name: "alpha", title: "Alpha", version: nil, source: .store, storeTree: nil)])
+}
+
+@Test func anOldManifestWithoutStoreTreesStillReads() throws {
+    let json = #"""
+        {"format":1,"fudgeVersion":"0.9","created":"2026-11-20T10:00:00Z","extensions":[
+          {"name":"alpha","title":"Alpha","source":"store"},{"name":"beta","title":"Beta","version":"1.0","source":"local"}]}
+        """#
+    let manifest = try #require(Backup.decodeManifest(Data(json.utf8)))
+    #expect(manifest.extensions.map(\.storeTree) == [nil, nil])
+    let folder = try storeFolder(["alpha": "tree-now"])
+    let changed = Backup.changedExtensions(
+        listing(manifest.extensions),
+        installed: [try installed("alpha", title: "Alpha"), try installed("beta", title: "Beta", version: "1.0")],
+        paths: folder.paths)
+    #expect(changed.isEmpty, "no tree in the backup, the same version: it can't tell, so nothing is flagged")
+}
+
+@Test func eachRuleFlagsAChangedExtension() throws {
+    let folder = try storeFolder(["alpha": "tree-2", "beta": "tree-2", "gamma": "tree-1"])
+    let backup = listing([
+        // 1. Both have a version, and they differ.
+        Backup.Listed(name: "alpha", title: "Alpha", version: "1.2.0", source: .store, storeTree: "tree-1"),
+        // 2. The same version (or none), and both have a tree, and they differ.
+        Backup.Listed(name: "beta", title: "Beta", version: nil, source: .store, storeTree: "tree-1"),
+        // 3. Local then, the store's now.
+        Backup.Listed(name: "gamma", title: "Gamma", version: "1.0", source: .local, storeTree: nil),
+        // 3. The store's then, local now.
+        Backup.Listed(name: "delta", title: "Delta", version: nil, source: .store, storeTree: "tree-1"),
+        // Nothing to tell: unchanged.
+        Backup.Listed(name: "epsilon", title: "Epsilon", version: "3.0", source: .local, storeTree: nil),
+    ])
+    let changed = Backup.changedExtensions(
+        backup,
+        installed: [
+            try installed("alpha", title: "Alpha", version: "1.3.0"), try installed("beta", title: "Beta"),
+            try installed("gamma", title: "Gamma", version: "1.0"), try installed("delta", title: "Delta"),
+            try installed("epsilon", title: "Epsilon", version: "3.0"),
+        ],
+        paths: folder.paths)
+    #expect(
+        changed.map { "\($0.title) — \($0.text)" } == [
+            "Alpha — version 1.2.0 in the backup, 1.3.0 now",
+            "Beta — updated in the Extension Store since the backup",
+            "Delta — installed from a local folder now",
+            "Gamma — installed from the Extension Store now",
+        ], "one line each, sorted by title")
+}
+
+@Test func theFirstRuleThatAppliesGivesTheReason() {
+    func listed(_ version: String?, _ source: Backup.Listed.Source, _ tree: String?) -> Backup.Listed {
+        Backup.Listed(name: "alpha", title: "Alpha", version: version, source: source, storeTree: tree)
+    }
+    // A version change wins over a tree and a source change.
+    #expect(
+        Backup.changeReason(from: listed("1", .store, "t1"), to: listed("2", .store, "t2"))
+            == .version(backup: "1", now: "2"))
+    #expect(
+        Backup.changeReason(from: listed("1", .store, "t1"), to: listed("2", .local, nil))
+            == .version(backup: "1", now: "2"))
+    // The same version: the tree decides.
+    #expect(Backup.changeReason(from: listed("1", .store, "t1"), to: listed("1", .store, "t2")) == .storeUpdated)
+    // A version on one side only can't tell, so the tree does.
+    #expect(Backup.changeReason(from: listed(nil, .store, "t1"), to: listed("2", .store, "t2")) == .storeUpdated)
+    // A tree on one side only can't tell, so the source does.
+    #expect(
+        Backup.changeReason(from: listed(nil, .store, "t1"), to: listed(nil, .local, nil)) == .source(now: .local))
+    #expect(Backup.changeReason(from: listed(nil, .store, nil), to: listed(nil, .store, "t2")) == nil)
+    #expect(Backup.changeReason(from: listed("1", .local, nil), to: listed("1", .local, nil)) == nil)
+}
+
+@Test func onlyInstalledExtensionsMatchedByNameAreFlaggedWithTheirCurrentTitle() throws {
+    let folder = try storeFolder(["alpha": "tree-2"])
+    let backup = listing([
+        Backup.Listed(name: "alpha", title: "Old Title", version: nil, source: .store, storeTree: "tree-1"),
+        Backup.Listed(name: "alpha", title: "Repeated", version: "9", source: .local, storeTree: nil),
+        Backup.Listed(name: "gone", title: "Gone", version: "1.0", source: .local, storeTree: nil),
+        Backup.Listed(
+            name: ExtensionStore.extensionName, title: "Extension Store", version: "1", source: .local, storeTree: nil),
+    ])
+    let changed = Backup.changedExtensions(
+        backup,
+        installed: [
+            try installed("alpha", title: "Alpha Now"),
+            try installed(ExtensionStore.extensionName, title: "Extension Store", version: "2"),
+        ],
+        paths: folder.paths)
+    #expect(
+        changed == [Backup.Changed(name: "alpha", title: "Alpha Now", reason: .storeUpdated)],
+        "not-installed ones are the import's other list; the bundled store is never flagged; a name counts once")
 }

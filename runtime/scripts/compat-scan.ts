@@ -8,29 +8,13 @@
 // missing APIs by how many extensions use them. --json also writes what each
 // extension misses, and of what kind. Nothing is built or run.
 
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createApiModule } from "../src/api/module.ts";
+import { byDesign, category, scanExtension, type Result } from "./compat/extension.ts";
 import { RAYCAST_UTILS_PATHS, RAYCAST_UTILS_VERSION } from "./compat/raycast-utils.generated.ts";
-import { gaps, isExtensionSource, support, toJavaScript, uses, type Gap, type GapKind } from "./compat/scan.ts";
+import { support, type Gap, type GapKind } from "./compat/scan.ts";
 import { raycastDeclarations, vendoredTypes } from "./raycast-types.ts";
-
-/**
- * APIs left out of fudge on purpose, by category. AI and the Browser Extension depend on Raycast's servers. OAuth
- * (`OAuth.PKCEClient` and the @raycast/utils exports built on it) is left out by the architect's decision D-50.
- */
-const byDesign: Record<string, { api: RegExp; utils?: string[] }> = {
-    AI: { api: /^AI(\.|$)/ },
-    "Browser Extension": { api: /^BrowserExtension(\.|$)/ },
-    OAuth: { api: /^OAuth(\.|$)/, utils: ["OAuthService", "withAccessToken", "getAccessToken"] },
-};
-
-interface Result {
-    gaps: Gap[];
-    notRaycast: string[];
-    utils: string[];
-    unreadable: string[];
-}
 
 const args = process.argv.slice(2);
 const folder = args.find((arg, index) => !arg.startsWith("--") && args[index - 1] !== "--json");
@@ -52,24 +36,7 @@ function isDirectory(path: string): boolean {
     }
 }
 
-function sources(src: string): string[] {
-    return (readdirSync(src, { recursive: true }) as string[]).filter(isExtensionSource).map((file) => join(src, file));
-}
-
-async function scan(extension: string): Promise<Result> {
-    const found = { api: new Set<string>(), utils: new Set<string>() };
-    const unreadable: string[] = [];
-    for (const file of sources(join(extension, "src"))) {
-        try {
-            const used = uses(await toJavaScript(readFileSync(file, "utf8"), file));
-            for (const path of used.api) found.api.add(path);
-            for (const name of used.utils) found.utils.add(name);
-        } catch {
-            unreadable.push(relative(extension, file));
-        }
-    }
-    return { ...gaps(found, api, declared, RAYCAST_UTILS_PATHS), utils: [...found.utils].sort(), unreadable };
-}
+const scan = (extension: string) => scanExtension(extension, { api, declared });
 
 const names = readdirSync(folder)
     .filter((name) => isDirectory(join(folder, name, "src")) && existsSync(join(folder, name, "package.json")))
@@ -81,15 +48,6 @@ for (let start = 0; start < names.length; start += batch) {
     const slice = names.slice(start, start + batch);
     const scanned = await Promise.all(slice.map((name) => scan(join(folder, name))));
     slice.forEach((name, index) => results.set(name, scanned[index]!));
-}
-
-/** The by-design category a gap belongs to, if any. */
-function category(gap: Gap): string | undefined {
-    for (const [name, { api: pattern, utils }] of Object.entries(byDesign)) {
-        if (pattern.test(gap.api)) return name;
-        if (utils && gap.kind === "via @raycast/utils" && gap.via!.every((via) => utils.includes(via))) return name;
-    }
-    return undefined;
 }
 
 const total = results.size;

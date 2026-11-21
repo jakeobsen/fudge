@@ -6,7 +6,6 @@
 // what's left is what runs. JSX stays as written, so `<Action.CopyToClipboard>`
 // counts like `Action.CopyToClipboard`.
 
-import { transform } from "esbuild";
 import { isNotAvailable, NOT_DRAWN, NotAvailableError, UNAVAILABLE } from "../../src/api/stubs.ts";
 
 /** What one source file uses: API paths such as `Clipboard.copy`, and the names it imports from @raycast/utils. */
@@ -17,11 +16,21 @@ export interface Uses {
 
 const identifier = String.raw`[A-Za-z_$][\w$]*`;
 
-/** Turns TypeScript, TSX or JSX into JavaScript without types; JSX is kept. */
-export async function toJavaScript(source: string, file: string): Promise<string> {
-    const loader = file.endsWith(".tsx") ? "tsx" : file.endsWith(".ts") ? "ts" : "jsx";
+/** Turns one source file into JavaScript without types, keeping JSX, as esbuild does with these options. */
+export type Transform = (source: string, loader: "ts" | "tsx" | "jsx") => Promise<string>;
+
+/** esbuild's JS API, from runtime/node_modules. It's imported only when used: the scanner bundled into the app
+ * (`fudge scan`) has no esbuild package, and passes a transform that runs the app's esbuild binary instead. */
+const esbuildTransform: Transform = async (source, loader) => {
+    const { transform } = await import("esbuild");
     const result = await transform(source, { loader, jsx: "preserve", format: "esm", target: "esnext" });
     return result.code;
+};
+
+/** Turns TypeScript, TSX or JSX into JavaScript without types; JSX is kept. */
+export async function toJavaScript(source: string, file: string, transform: Transform = esbuildTransform): Promise<string> {
+    const loader = file.endsWith(".tsx") ? "tsx" : file.endsWith(".ts") ? "ts" : "jsx";
+    return transform(source, loader);
 }
 
 /** The bindings a module's imports and requires create: local name → imported name, `*` for the whole module. */

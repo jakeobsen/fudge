@@ -42,6 +42,7 @@ import {
 } from "../store-extension/src/sources.ts";
 import {
     buildArguments,
+    compatibilityLine,
     install,
     oneAtATime,
     readInstalled,
@@ -564,7 +565,11 @@ test("without the Command Line Tools, git itself is never run", async () => {
 
 // MARK: - Install, update and uninstall
 
-async function storeContext(options: { confirm?: boolean; cliCode?: number; tree?: string } = {}) {
+const supportedScan = { extension: "alpha", supported: true, gaps: [], unreadable: [] };
+
+async function storeContext(
+    options: { confirm?: boolean; cliCode?: number; tree?: string; scan?: { code?: number; stdout?: string } } = {},
+) {
     const root = await temporary();
     const supportPath = path.join(root, "support");
     const extensionsDir = path.join(root, "extensions");
@@ -576,7 +581,11 @@ async function storeContext(options: { confirm?: boolean; cliCode?: number; tree
         if (args[0] === "ls-tree") return { stdout: `040000 tree ${options.tree ?? "aaa1"}\textensions/alpha\n` };
         return {};
     });
-    const cli = fakeRun(() => ({ code: options.cliCode ?? 0, stderr: options.cliCode ? "error: esbuild failed" : "" }));
+    const cli = fakeRun((_program, args) =>
+        args[0] === "scan"
+            ? { code: 0, stdout: JSON.stringify(supportedScan), ...options.scan }
+            : { code: options.cliCode ?? 0, stderr: options.cliCode ? "error: esbuild failed" : "" },
+    );
     const asked: { title: string; message: string; primary: string }[] = [];
     const trashed: string[] = [];
     const context: StoreContext = {
@@ -605,11 +614,14 @@ test("install fetches the source, checks it, asks, builds into FUDGE_EXTENSIONS_
     assert.deepEqual(asked, [
         {
             title: "Install Alpha?",
-            message: "From github.com/raycast/extensions at c0ffee1. It runs its own code on your Mac, like any app you install.",
+            message:
+                "From github.com/raycast/extensions at c0ffee1. It runs its own code on your Mac, like any app you install.\n\n" +
+                "Fudge supports everything this extension uses.",
             primary: "Install",
         },
     ]);
     assert.deepEqual(cli.calls.map((call) => [call.program, ...call.args]), [
+        ["/Applications/Fudge.app/Contents/Helpers/fudge", "scan", path.join(repoPath, "extensions/alpha"), "--json"],
         ["/Applications/Fudge.app/Contents/Helpers/fudge", "build", path.join(repoPath, "extensions/alpha"), "--into", extensionsDir],
     ]);
     assert.deepEqual(buildArguments("/src", "/dest"), ["build", "/src", "--into", "/dest"]);
@@ -621,7 +633,7 @@ test("install fetches the source, checks it, asks, builds into FUDGE_EXTENSIONS_
 test("cancelling builds nothing and records nothing", async () => {
     const { context, cli, supportPath } = await storeContext({ confirm: false });
     assert.equal(await install(alphaEntry, context), false);
-    assert.equal(cli.calls.length, 0);
+    assert.deepEqual(cli.calls.map((call) => call.args[0]), ["scan"], "scanned, never built");
     assert.deepEqual(await readInstalled(supportPath), {});
 });
 
@@ -668,6 +680,37 @@ test("uninstall trashes only what the store installed, and forgets it", async ()
     assert.equal(await uninstall(alphaEntry, context), true);
     assert.deepEqual(trashed, [path.join(extensionsDir, "alpha")]);
     assert.deepEqual(await readInstalled(supportPath), {});
+});
+
+test("the confirmation says what the scan found: up to five APIs, and how many more", async () => {
+    const gaps = (...apis: string[]) => ({ supported: false, gaps: apis.map((api) => ({ api })), unreadable: [] });
+    assert.equal(compatibilityLine(supportedScan), "Fudge supports everything this extension uses.");
+    assert.equal(
+        compatibilityLine(gaps("MenuBarExtra", "MenuBarExtra.Item", "MenuBarExtra")),
+        "This extension uses things Fudge doesn't have yet: MenuBarExtra, MenuBarExtra.Item. Some of its commands may not work.",
+    );
+    assert.equal(
+        compatibilityLine(gaps("A", "B", "C", "D", "E", "F", "G")),
+        "This extension uses things Fudge doesn't have yet: A, B, C, D, E, and 2 more. Some of its commands may not work.",
+    );
+    assert.equal(
+        compatibilityLine({ supported: false, gaps: [], unreadable: ["src/a.ts"] }),
+        "Fudge couldn't read all of this extension's source, so some of it may not work.",
+    );
+    assert.equal(compatibilityLine(undefined), "Fudge couldn't check what this extension uses.");
+});
+
+test("install's confirmation carries the scan's gaps, and a failed scan doesn't stop the install", async () => {
+    const report = { extension: "alpha", supported: false, gaps: [{ api: "AI.ask", kind: "missing", byDesign: "AI" }], unreadable: [] };
+    const withGaps = await storeContext({ scan: { stdout: JSON.stringify(report) } });
+    assert.equal(await install(alphaEntry, withGaps.context), true);
+    assert.match(withGaps.asked[0]!.message, /\n\nThis extension uses things Fudge doesn't have yet: AI\.ask\. Some of its commands may not work\.$/);
+
+    for (const scan of [{ code: 1, stdout: "" }, { stdout: "not json" }, { stdout: "{}" }]) {
+        const failed = await storeContext({ scan });
+        assert.equal(await install(alphaEntry, failed.context), true, JSON.stringify(scan));
+        assert.match(failed.asked[0]!.message, /\n\nFudge couldn't check what this extension uses\.$/);
+    }
 });
 
 test("installed.json drops invalid names and records; a broken file reads as empty", async () => {
