@@ -245,7 +245,9 @@ public struct HyperTap: Sendable, Equatable {
         if event.keyCode == Hyperkey.f18KeyCode, event.kind != .flagsChanged {
             switch event.kind {
             case .keyDown:
-                if !event.isRepeat, pressedAt == nil {
+                // A new press starts over, even when the last one's key-up never came (macOS delivers no keys to
+                // the tap under secure input); a key repeat keeps the press.
+                if !event.isRepeat {
                     pressedAt = event.time
                     otherKeySincePress = false
                 }

@@ -255,6 +255,11 @@ private let t: UInt16 = 17
         HyperTapEvent(kind: .flagsChanged, keyCode: 56, time: 3_010_000_000), f18Down: true, secureInput: false)
     #expect(on.handle(up(f18, at: 3050), f18Down: false, secureInput: false) == .swallow)
 
+    // A press whose key-up never came (secure input hid it) doesn't spoil the next quick press.
+    #expect(on.handle(down(f18, at: 4000), f18Down: true, secureInput: false) == .swallow)
+    #expect(on.handle(down(f18, at: 9000), f18Down: true, secureInput: false) == .swallow)
+    #expect(on.handle(up(f18, at: 9050), f18Down: false, secureInput: false) == .swallowAndToggleCapsLock)
+
     // A key-up with no press seen doesn't toggle.
     var fresh = HyperTap(quickPressTogglesCapsLock: true)
     #expect(fresh.handle(up(f18, at: 10), f18Down: false, secureInput: false) == .swallow)
