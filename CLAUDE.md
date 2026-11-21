@@ -869,10 +869,13 @@ Extensions run in a separate Node.js process, the extension host.
     That needs Xcode 26 or later.
   - the bundled extensions (`BUNDLED_EXTENSIONS`, as `BundledExtensions.folders` lists them) are built with `fudge build` from `runtime/<folder>` into `Contents/Resources/<folder>`
   - the host and worker bundles go into `Contents/Resources/runtime/`, with `fudge scan`'s `compat-scan.js` and Raycast's types beside it (`raycast-api.d.ts`, with its MIT notice as `raycast-api.LICENSE`)
-  - the helpers and the bundle are signed with `SIGN_IDENTITY`.
-    From what `security find-identity -v -p codesigning` lists, the default is "fudge local signing", else the first `Apple Development:` identity, else ad hoc (see the README).
+  - `scripts/sign-app.sh` signs it inside-out, each executable in `Contents/Helpers` (the `fudge` tool and esbuild), then the app with `App/Fudge.entitlements`, all with the hardened runtime (FUD-44).
+    Any other executable added to the bundle (a helper, a dylib, a `.node` addon) must be signed there too, or notarization refuses the release.
+    The identity is `SIGN_IDENTITY`: from what `security find-identity -v -p codesigning` lists, the default is "fudge local signing", else the first `Apple Development:` identity, else ad hoc (see the README).
     It's picked by SHA-1, since two certificates can share a name.
-    The `→ built` line names the identity, and with one, codesign's errors show and fail the build.
+    The `→ built` line names the identity, and codesign's output shows only when it fails, which fails the build.
+    Only a Developer ID signature gets Apple's secure timestamp, which notarizing needs, so dev builds never sign over the network.
+    A Developer ID identity's name is never shown (`Developer ID Application: <redacted>`), since a release's log is public.
 - **`make compat-scan DIR=<folder>` measures store compatibility statically** (`runtime/scripts/compat-scan.ts`).
   Every folder in `DIR` with a `package.json` and a `src/` is an extension, as in a checkout of raycast/extensions.
   Nothing is built or run.
@@ -973,8 +976,12 @@ Extensions run in a separate Node.js process, the extension host.
   An ad hoc signature's is its cdhash, which changes with every build, so each ad hoc `make run` drops them; builds signed with an identity keep them.
   **The first signing with an identity shows a keychain prompt** that only a person can answer (Always Allow).
   Until someone has, `make app` waits on it, so build with `SIGN_IDENTITY=-` where nobody has.
-  CI and releases have no identity and stay ad hoc.
+  CI has no identity and stays ad hoc; a release is signed again with the Developer ID identity (see CI and releases).
   No certificate, key, name or team ID ever goes into the repo.
+- **The hardened runtime refuses a protected resource without its entitlement**, with no prompt, whatever the user allowed.
+  `App/Fudge.entitlements` has the two Fudge uses, each with a comment: Apple Events (Finder, System Events and the login window) and Calendars (My Schedule's EventKit).
+  A feature that starts using the camera, the microphone, location, contacts, photos, calendars or Apple Events adds its entitlement there in the same change.
+  Accessibility, Input Monitoring, Screen Recording and Full Disk Access are permissions the user grants, with no entitlement.
 - **The local-network check reads the URL, not DNS.**
   A public name that resolves to a private address isn't caught. https mostly covers it, since a LAN device rarely has a certificate for a public name.
 - **AppKit draws nothing inside an SVG `<a>` element**, so `RemoteImageDecoder.svgForDrawing` unwraps links before `NSImage(data:)` sees the SVG.
@@ -986,7 +993,7 @@ Extensions run in a separate Node.js process, the extension host.
 
 ## Commands
 
-`make app` · `make dmg` · `make run` · `make install-extension DIR=<folder>` · `make test` · `make lint` · `make fmt` · `make raycast-types` · `make compat-scan DIR=<folder>`
+`make app` · `make dmg` · `make dmg-image` · `make release` · `make run` · `make install-extension DIR=<folder>` · `make test` · `make lint` · `make fmt` · `make raycast-types` · `make compat-scan DIR=<folder>`
 
 ## Conventions
 
@@ -1022,11 +1029,24 @@ Extensions run in a separate Node.js process, the extension host.
 - **The release workflow** (`.github/workflows/release.yml`) is the only place a release is built, and it runs on a pushed `v*` tag.
   Tags are pushed only with the maintainer's explicit permission, never by an agent.
   Two jobs:
-  - **`build`**, with a read-only token: the tag must be `v` and a semantic version (checked through an env var, never `${{ }}` in a script), then `make test`, `make dmg CONFIG=release VERSION=<tag>` and a `.sha256`, uploaded as an artifact.
-  - **`publish`** runs only for a pushed tag, and has the only write token, and runs none of the repo's code: it checks the tag again, downloads the artifact and runs `gh release create` with GitHub's generated notes and one line on opening an app that isn't notarized.
+  - **`build`**, with a read-only token: the tag must be `v` and a semantic version (checked through an env var, never `${{ }}` in a script), then `make test`, `scripts/release.sh --version <tag> --ad-hoc-without-secrets` and a `.sha256`, uploaded as an artifact.
+  - **`publish`** runs only for a pushed tag, and has the only write token, and runs none of the repo's code: it checks the tag again, downloads the artifact and runs `gh release create` with GitHub's generated notes and one line on opening the app, which depends on how `build` signed it (its `signing` output).
     A tag with a pre-release suffix (`v1.2.0-rc.1`) is a pre-release.
-  - **Run by hand** (Actions → Release → Run workflow, `workflow_dispatch`), it only builds: no tag check, the version `git describe` gives the commit, and the disk image as an artifact.
+  - **Run by hand** (Actions → Release → Run workflow, `workflow_dispatch`), it's the dry run: no tag check, the version `git describe` gives the commit, signed, notarized and stapled, and the disk image as an artifact.
     Nothing is published.
-- **`make dmg`** builds the app, then `build/Fudge-<version>.dmg` (the version without its `v`): the app and a link to `/Applications`, UDZO, volume name Fudge, made with `hdiutil` from a staging folder that's removed afterwards.
-  Releases are signed ad hoc until FUD-44, so an update asks for Accessibility again.
+- **Release signing** (`scripts/release.sh`, FUD-44) reads five secrets, which the workflow gives to that one step only:
+  - `APPLE_CERTIFICATE_BASE64`: the Developer ID Application certificate with its private key, a `.p12` in base64
+  - `APPLE_CERTIFICATE_PASSWORD`: the `.p12`'s password
+  - `APPLE_ID` and `APPLE_APP_SPECIFIC_PASSWORD`: the Apple Account that notarizes, and an app-specific password of it
+  - `APPLE_TEAM_ID`: the identity's team
+
+  It builds the app ad hoc first (`make app`), with none of them in its environment, so no code the build runs can reach them.
+  Then it imports the certificate into a keychain of its own in a temporary folder, its key usable by codesign alone and not exportable, deleted however the script ends.
+  It signs again with the Developer ID identity (`scripts/sign-app.sh`), notarizes the app with `notarytool` and staples it, makes the disk image from it (`make dmg-image`), signs, notarizes and staples that, and checks both with `spctl`.
+  It never prints a secret or the identity's name: the tools' output shows only when one fails, with those values as `***`.
+  Without any of the five, a tag still makes a release, ad hoc, and its notes say so (a fork has none); the dry run fails instead, as does any run with only some of them.
+- **`make release`** does the same on the maintainer's Mac, for a release built without CI, after `secret env apple`, which sets the same five variables.
+  It refuses a tree with changes, never pushes or tags, and writes no secret to disk but the temporary keychain.
+- **Dev builds** still sign with the Apple Development identity (or "fudge local signing", or ad hoc; see `make app`), so only a release has the Developer ID, and switching between the two asks for permissions again.
+- **`make dmg`** builds the app, then `build/Fudge-<version>.dmg` (the version without its `v`) with `make dmg-image`, which packs the app as it is: the app and a link to `/Applications`, UDZO, volume name Fudge, made with `hdiutil` from a staging folder that's removed afterwards.
 - **Linting the workflows:** actionlint isn't in CI; run it by hand after changing one: `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml`.

@@ -26,7 +26,8 @@ It is not affiliated with or endorsed by Raycast.
 ## Installing
 
 Each release on GitHub has a disk image, `Fudge-<version>.dmg`: open it and drag Fudge to Applications.
-Fudge isn't notarized yet, so macOS blocks it the first time: open it, then go to System Settings → Privacy & Security and click Open Anyway (on macOS 14, Control-click Fudge and choose Open instead).
+Releases are signed with a Developer ID and notarized by Apple, so the first time you open Fudge, macOS asks once whether to open an app downloaded from the internet.
+Click **Open**, and Fudge starts.
 
 ## Building
 
@@ -36,6 +37,7 @@ The app runs on macOS 14 and later.
 ```bash
 make app     # build build/Fudge.app
 make dmg     # build it into a disk image, build/Fudge-<version>.dmg
+make release # the same, signed with the Developer ID and notarized (the maintainer's, after secret env apple)
 make run     # build it and open it
 make test    # run the Swift and extension host tests
 make lint    # check formatting and types
@@ -70,8 +72,11 @@ Without an Apple Development identity, you can create the self-signed one:
 3. Expand the certificate in **My Certificates**, open its private key, and under **Access Control** add `/usr/bin/codesign` to the allowed applications (⌘⇧G in the file dialog lets you type the path).
    Or answer the first build's prompt with **Always Allow**, as above.
 
-Release builds are signed ad hoc.
-Until Fudge has a Developer ID, you grant its permissions again after each update.
+Releases are signed with Fudge's Developer ID, so their permissions carry over from one release to the next.
+A release and a build you made yourself have different signatures, so switching between them asks for the permissions again.
+
+Every build has the hardened runtime, which notarizing needs.
+It refuses a protected resource unless the app has its entitlement, so `App/Fudge.entitlements` lists the ones Fudge uses: Apple Events and Calendars.
 
 ## Using it
 
