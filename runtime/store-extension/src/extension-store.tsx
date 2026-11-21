@@ -93,6 +93,8 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     const [readmes, setReadmes] = useState<Record<string, string>>({});
     const readmesNow = useRef(readmes);
     readmesNow.current = readmes;
+    // The trees whose README couldn't be fetched (git failed): shown as none, and fetched again by ⌘R, never kept.
+    const [readmeFailed, setReadmeFailed] = useState<ReadonlySet<string>>(new Set());
     const [checked, setChecked] = useState<Checked>({ scanner: "", results: new Map(), failed: new Set() });
     // The latest, for the checks' callbacks, which outlive a render.
     const checkedNow = useRef(checked);
@@ -187,8 +189,11 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                 done: (key) => readmesNow.current[key.split("\0")[1]!] !== undefined,
                 run: (key, cancelled) =>
                     oneAtATime(async () => (cancelled() ? undefined : fetchReadme(repo, key.split("\0")[0]!))),
-                changed: (key, readme) =>
-                    setReadmes((current) => ({ ...current, [key.split("\0")[1]!]: readme === "failed" ? "" : readme })),
+                changed: (key, readme) => {
+                    const tree = key.split("\0")[1]!;
+                    if (readme === "failed") setReadmeFailed((current) => new Set(current).add(tree));
+                    else setReadmes((current) => ({ ...current, [tree]: readme }));
+                },
             }),
         [repo],
     );
@@ -286,12 +291,13 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     const actionsFor = selected ?? (installedRows[0] ?? other[0])?.dir;
     const checking = showingDetail ? actionsFor : undefined;
     const checkingTree = checking ? loaded?.trees.get(checking) : undefined;
-    useEffect(() => checks.select(checking, checkingTree), [checks, checking, checkingTree]);
-    // A row's id is its folder in the repository (`StoreEntry.dir`), which `readCatalog` checked.
-    useEffect(
-        () => readmeFetches.select(checking && checkingTree ? `${checking}\0${checkingTree}` : undefined),
-        [readmeFetches, checking, checkingTree],
-    );
+    // A row's id is its folder in the repository (`StoreEntry.dir`), which `readCatalog` checked. The README is
+    // selected first: both wait the same half second and the git queue runs in order, so its quick fetch goes ahead of
+    // the check's download and scan.
+    useEffect(() => {
+        readmeFetches.select(checking && checkingTree ? `${checking}\0${checkingTree}` : undefined);
+        checks.select(checking, checkingTree);
+    }, [readmeFetches, checks, checking, checkingTree]);
 
     if (noGit) {
         return (
@@ -340,7 +346,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                             markdown={detailMarkdown(
                                 entry,
                                 loaded?.commit ?? "",
-                                tree === undefined ? undefined : readmes[tree],
+                                tree === undefined ? undefined : (readmes[tree] ?? (readmeFailed.has(tree) ? "" : undefined)),
                                 compatibilityFor(entry, tree),
                             )}
                         />
@@ -384,7 +390,11 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                                 title="Refresh"
                                 icon={Icon.ArrowClockwise}
                                 shortcut={{ modifiers: ["cmd"], key: "r" }}
-                                onAction={() => void refresh()}
+                                onAction={() => {
+                                    // A README that couldn't be fetched is tried again too.
+                                    readmeFetches.again();
+                                    void refresh();
+                                }}
                             />
                         </ActionPanel.Section>
                     </ActionPanel>

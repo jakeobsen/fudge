@@ -57,6 +57,17 @@ export class RestingWork<Result> {
         }, this.#delay);
     }
 
+    /**
+     * Runs the selected key's work again, as a new selection would, unless it's `done`: ⌘R's retry of one that failed,
+     * since selecting the same key again doesn't. Nothing when no key is selected.
+     */
+    again(): void {
+        if (this.#current.cancelled) return;
+        const key = this.#current.key;
+        this.stop();
+        this.select(key);
+    }
+
     /** Cancels the waiting or running work. */
     stop(): void {
         this.#current.cancelled = true;

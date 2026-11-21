@@ -6,12 +6,13 @@ import type { StoreRepository } from "./git.ts";
 
 /**
  * The README of the checked folder `dir`: its `README.md`, fetched into the copy, as a regular file of at most
- * `maxReadmeBytes`. With none, one that couldn't be fetched, or one that isn't such a file, it's "", and the detail
- * shows the manifest alone. It runs in the git queue (`oneAtATime`), and only for the row the selection rests on.
+ * `maxReadmeBytes`. With none, or one that isn't such a file, it's "", and the detail shows the manifest alone; a
+ * fetch that fails throws. It runs in the git queue (`oneAtATime`), and only for the row the selection rests on.
  */
 export async function fetchReadme(repo: StoreRepository, dir: string): Promise<string> {
+    // A git that fails (no network, say) throws, so the README isn't kept as missing and ⌘R fetches it again.
+    await repo.add(`/extensions/${dir}/README.md`);
     try {
-        await repo.add(`/extensions/${dir}/README.md`);
         return await readRegularFile(path.join(repo.path, "extensions", dir, "README.md"), maxReadmeBytes);
     } catch {
         return "";

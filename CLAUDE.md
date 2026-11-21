@@ -861,7 +861,9 @@ Extensions run in a separate Node.js process, the extension host.
     Only the download (`fetchSource`) is ever ended, since it writes nothing but new packs: it runs in a process group of its own, which the cancel's `signal` sends SIGTERM, then SIGKILL after `cancelGrace` (a second).
     Every other git step runs to its end, since one that writes the index holds `index.lock`, and ending it would leave that behind for every later checkout and install.
     The README waits the same way: both run through `RestingWork` (`resting.ts`), and only the resting row's README is fetched (`fetchReadme`), once per folder tree, since READMEs are kept by tree id.
-    A check (`checkFolder`) runs in the git queue, one at a time: it counts the files under the folder's `src/` from the trees (more than `maxScanFiles`, 300, isn't checked), then downloads them with each one's size capped (`fetchSource`).
+    It's selected before the check, so its quick fetch goes ahead of the check's download in the git queue.
+    A README git couldn't fetch isn't kept (it shows as none), and ⌘R fetches it again (`RestingWork.again`).
+    A check (`checkFolder`) runs in the git queue, one at a time: it counts the files under the folder's `src/` from the trees (more than `maxScanFiles`, 300, isn't checked), then downloads those that aren't here yet with each one's size capped (`fetchSource`); `missingSource` comes first, so a folder checked before in this version downloads nothing again.
     That's the `src/` tree fetched again (`--refetch`) with a `blob:limit` of `maxScanBytes`, which the server applies to what it finds under the tree; blobs asked for by their own ids would come whatever their size.
     A file left out for its size means the row isn't checked (`missingSource`, `rev-list --missing=print`, which downloads nothing on any git).
     It then checks out the source files with git's lazy fetch off (`addFetched`, `GIT_NO_LAZY_FETCH`), checks their total (more than `maxScanBytes`, 5 MiB, isn't checked), scans with `fudge scan`, caches the result, and always takes its patterns out again.

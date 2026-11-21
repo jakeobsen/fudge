@@ -353,13 +353,13 @@ async function sourceBytes(folder: string): Promise<number> {
     return total;
 }
 
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
 /**
  * Fetches `dir`'s source files, scans them with `fudge scan`, and takes the patterns out again. Resolves undefined
  * when `cancelled()` turns true before the fetch or before the scan; throws when git or the scan fails. Call it in
  * the store's git queue (`oneAtATime`). `dir` is a checked folder.
  */
-const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
-
 export async function checkFolder(
     dir: string,
     context: StoreContext,
@@ -372,7 +372,8 @@ export async function checkFolder(
     if (cancelled()) return undefined;
     const patterns = scanPatterns(dir);
     let bounded = files.length > 0;
-    if (bounded) {
+    // Only what isn't here yet is fetched: a folder checked before in this version downloads nothing again.
+    if (bounded && (await context.repo.missingSource(dir)) > 0) {
         try {
             // The one step a cancel ends (`signal`), since it writes nothing but new packs; every other step runs to
             // its end, and the check stops between steps.
