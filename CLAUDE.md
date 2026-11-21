@@ -716,6 +716,7 @@ Extensions run in a separate Node.js process, the extension host.
     The list never scans: a row whose cached result uses something Fudge doesn't support gets a red **Not compatible** tag.
     The detail pane's first fact is **Compatibility** (`compatibilityText`): Checking…, Compatible, Not compatible: Raycast AI, Missing: the APIs, Signs in with OAuth, Couldn't check, or Not checked.
     **Browsing never turns into downloading** (`CompatibilityChecks`): only the row the selection rests on, with the detail showing, is checked, after half a second, and moving on cancels its timer, or the check itself before its fetch or its scan; selecting the same row again changes nothing, and a cached row is never fetched.
+    The README waits the same way: both run through `RestingWork` (`resting.ts`), and only the resting row's README is fetched (`fetchReadme`), once per folder tree, since READMEs are kept by tree id.
     A check (`checkFolder`) runs in the git queue, one at a time: it counts the folder's source files from the trees (more than `maxScanFiles`, 300, isn't checked;
     no extension in the store has more than about 220), fetches only those, checks their size before scanning (more than `maxScanBytes`, 5 MiB, isn't checked), scans with `fudge scan`, caches the result, and always takes its patterns out again.
     A blobless clone has no sizes before a download, so the first cap is on the number of files.

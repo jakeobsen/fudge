@@ -52,11 +52,13 @@ import {
 } from "../store-extension/src/git.ts";
 import {
     detailMarkdown,
+    fetchReadme,
     filterImages,
     imageSource,
     isGitHubImage,
     rendererPass,
 } from "../store-extension/src/readme.ts";
+import { RestingWork } from "../store-extension/src/resting.ts";
 import {
     caseClash,
     lockfileProblem,
@@ -1305,6 +1307,72 @@ test("moving on cancels a check before its fetch, and a failed check says so", a
     clock.advance(500);
     await settle();
     assert.deepEqual(changes, [["alpha", "failed"]]);
+});
+
+test("moving through 20 rows fetches no README; the row the selection rests on is fetched once, by its tree", async () => {
+    const { context, git } = await storeContext();
+    await writeFile(path.join(context.repo.path, "extensions/alpha/README.md"), "# Alpha\n");
+    const clock = manualTimers();
+    const readmes = new Map<string, string>();
+    const fetches = new RestingWork<string>({
+        timers: clock.timers,
+        done: (key) => readmes.has(key.split("\0")[1]!),
+        run: (key, cancelled) =>
+            oneAtATime(async () => (cancelled() ? undefined : fetchReadme(context.repo, key.split("\0")[0]!))),
+        changed: (key, readme) => readmes.set(key.split("\0")[1]!, readme === "failed" ? "" : readme),
+    });
+    const adds = () => git.calls.filter((call) => call.args[0] === "sparse-checkout" && call.args[1] === "add");
+    for (let row = 0; row < 20; row++) {
+        fetches.select(`row${row}\0${treeOf(row)}`);
+        clock.advance(100);
+        await settle();
+    }
+    assert.equal(adds().length, 0, "no README fetched while moving");
+    fetches.select(`alpha\0${treeOf(7)}`);
+    clock.advance(499);
+    await settle();
+    assert.equal(adds().length, 0, "not before half a second of rest");
+    clock.advance(1);
+    await settle();
+    assert.deepEqual(adds().map((call) => call.args.slice(2)), [["/extensions/alpha/README.md"]]);
+    assert.equal(readmes.get(treeOf(7)), "# Alpha\n");
+
+    fetches.select(undefined);
+    fetches.select(`alpha\0${treeOf(7)}`);
+    clock.advance(5000);
+    await settle();
+    assert.equal(adds().length, 1, "a README already fetched for that tree never fetches again");
+    fetches.select(`alpha\0${treeOf(8)}`);
+    clock.advance(500);
+    await settle();
+    assert.equal(adds().length, 2, "a changed folder is a new tree, fetched again");
+});
+
+test("resting work: moving on cancels and aborts, and a result that comes in after it is still kept", async () => {
+    const clock = manualTimers();
+    const kept: [string, unknown][] = [];
+    const runs: { key: string; cancelled: () => boolean; signal: AbortSignal; finish: (value: string) => void }[] = [];
+    const work = new RestingWork<string>({
+        timers: clock.timers,
+        done: () => false,
+        run: (key, cancelled, signal) =>
+            new Promise((resolve) => runs.push({ key, cancelled, signal, finish: (value) => resolve(value) })),
+        changed: (key, result) => kept.push([key, result]),
+    });
+    work.select("a");
+    clock.advance(500);
+    assert.equal(runs.length, 1);
+    work.select("a");
+    assert.equal(runs[0]!.cancelled(), false, "the same key again changes nothing");
+    work.select("b");
+    assert.equal(runs[0]!.cancelled(), true);
+    assert.equal(runs[0]!.signal.aborted, true, "its fetch is ended");
+    runs[0]!.finish("A");
+    await settle();
+    assert.deepEqual(kept, [["a", "A"]]);
+    work.stop();
+    clock.advance(500);
+    assert.equal(runs.length, 1, "a stopped wait never runs");
 });
 
 test("install uses this version's cached result instead of scanning, and caches its own scan", async () => {

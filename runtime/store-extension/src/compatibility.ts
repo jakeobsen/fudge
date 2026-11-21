@@ -4,6 +4,7 @@
 import { lstat, mkdir, readdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { readRegularFile } from "./files.ts";
+import { RestingWork, type Timers } from "./resting.ts";
 import { spawnProgram } from "./git.ts";
 import type { StoreContext } from "./store.ts";
 import { scanTimeout } from "./timeouts.ts";
@@ -280,69 +281,44 @@ export async function checkFolder(
 
 // MARK: - Checking the selected row
 
-type Timers = { set: (run: () => void, ms: number) => unknown; clear: (handle: unknown) => void };
-const realTimers: Timers = {
-    set: (run, ms) => setTimeout(run, ms),
-    clear: (handle) => clearTimeout(handle as NodeJS.Timeout),
-};
-
 /**
- * Scans the row the selection rests on, one at a time. `select` starts a check only after the selection has stayed
- * on an uncached row for `delay` ms, and a new `select` cancels the last: its timer, or the check itself before its
- * fetch or scan. So moving through rows fetches nothing, and a cached row never fetches.
+ * Scans the row the selection rests on, one at a time (`RestingWork`): a check starts only after the selection has
+ * stayed on an uncached row for `delay` ms, and a new `select` cancels the last: its timer, or the check itself, which
+ * stops before its fetch or scan, and whose fetch is ended (`signal`). So moving through rows fetches nothing, and a
+ * cached row never fetches.
  */
 export class CompatibilityChecks {
-    readonly #delay: number;
-    readonly #timers: Timers;
-    readonly #cached: (tree: string) => Compatibility | undefined;
-    readonly #check: (dir: string, tree: string, cancelled: () => boolean) => Promise<Compatibility | undefined>;
-    readonly #changed: (dir: string, tree: string, result: Compatibility | "failed") => void;
-    #timer: unknown;
-    #current = { cancelled: true, key: "" };
+    readonly #work: RestingWork<Compatibility>;
 
     constructor(options: {
         delay?: number;
         timers?: Timers;
         cached: (tree: string) => Compatibility | undefined;
-        check: (dir: string, tree: string, cancelled: () => boolean) => Promise<Compatibility | undefined>;
+        check: (
+            dir: string,
+            tree: string,
+            cancelled: () => boolean,
+            signal: AbortSignal,
+        ) => Promise<Compatibility | undefined>;
         changed: (dir: string, tree: string, result: Compatibility | "failed") => void;
     }) {
-        this.#delay = options.delay ?? 500;
-        this.#timers = options.timers ?? realTimers;
-        this.#cached = options.cached;
-        this.#check = options.check;
-        this.#changed = options.changed;
+        const split = (key: string) => key.split("\0") as [string, string];
+        this.#work = new RestingWork({
+            delay: options.delay,
+            timers: options.timers,
+            done: (key) => options.cached(split(key)[1]) !== undefined,
+            run: (key, cancelled, signal) => options.check(...split(key), cancelled, signal),
+            changed: (key, result) => options.changed(...split(key), result),
+        });
     }
 
-    /**
-     * The row now selected with the detail showing, or nothing. Selecting the row already being checked again (a
-     * render that changed something else) changes nothing; a check that failed is tried again only after the
-     * selection has left the row.
-     */
+    /** The row now selected with the detail showing, or nothing. */
     select(dir: string | undefined, tree: string | undefined): void {
-        const key = dir && tree ? `${dir}\0${tree}` : "";
-        if (key && key === this.#current.key && !this.#current.cancelled) return;
-        this.stop();
-        if (!dir || !tree || this.#cached(tree)) return;
-        const token = { cancelled: false, key };
-        this.#current = token;
-        this.#timer = this.#timers.set(() => {
-            this.#timer = undefined;
-            void this.#check(dir, tree, () => token.cancelled).then(
-                (result) => {
-                    if (result) this.#changed(dir, tree, result);
-                },
-                () => {
-                    if (!token.cancelled) this.#changed(dir, tree, "failed");
-                },
-            );
-        }, this.#delay);
+        this.#work.select(dir && tree ? `${dir}\0${tree}` : undefined);
     }
 
     /** Cancels the waiting or running check. */
     stop(): void {
-        this.#current.cancelled = true;
-        if (this.#timer !== undefined) this.#timers.clear(this.#timer);
-        this.#timer = undefined;
+        this.#work.stop();
     }
 }

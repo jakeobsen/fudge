@@ -1,5 +1,22 @@
 // An extension's README and details, with images from GitHub's hosts only.
+import path from "node:path";
 import { folderURL, rawURL, type StoreEntry } from "./catalog.ts";
+import { maxReadmeBytes, readRegularFile } from "./files.ts";
+import type { StoreRepository } from "./git.ts";
+
+/**
+ * The README of the checked folder `dir`: its `README.md`, fetched into the copy, as a regular file of at most
+ * `maxReadmeBytes`. With none, one that couldn't be fetched, or one that isn't such a file, it's "", and the detail
+ * shows the manifest alone. It runs in the git queue (`oneAtATime`), and only for the row the selection rests on.
+ */
+export async function fetchReadme(repo: StoreRepository, dir: string): Promise<string> {
+    try {
+        await repo.add(`/extensions/${dir}/README.md`);
+        return await readRegularFile(path.join(repo.path, "extensions", dir, "README.md"), maxReadmeBytes);
+    } catch {
+        return "";
+    }
+}
 
 const githubHosts = new Set([
     "github.com",

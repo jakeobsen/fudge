@@ -39,8 +39,8 @@ import {
     type Compatibility,
 } from "./compatibility.ts";
 import { gitAvailable, stopRunningGit, StoreRepository } from "./git.ts";
-import { maxReadmeBytes, readRegularFile } from "./files.ts";
-import { detailMarkdown } from "./readme.ts";
+import { detailMarkdown, fetchReadme } from "./readme.ts";
+import { RestingWork } from "./resting.ts";
 import { install, oneAtATime, readInstalled, uninstall, type StoreContext } from "./store.ts";
 
 type Loaded = { entries: StoreEntry[]; installed: Installed; trees: Map<string, string>; commit: string };
@@ -79,7 +79,10 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     const [filter, setFilter] = useState(allFilter);
     const [showingDetail, setShowingDetail] = useState(false);
     const [selected, setSelected] = useState<string | null>(null);
+    // The READMEs fetched, by their folder's tree id, so a folder that hasn't changed is never fetched again.
     const [readmes, setReadmes] = useState<Record<string, string>>({});
+    const readmesNow = useRef(readmes);
+    readmesNow.current = readmes;
     const [checked, setChecked] = useState<Checked>({ scanner: "", results: new Map(), failed: new Set() });
     // The latest, for the checks' callbacks, which outlive a render.
     const checkedNow = useRef(checked);
@@ -117,7 +120,6 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                     if (first) await repo.clone();
                     else await repo.refresh();
                     await load();
-                    setReadmes({});
                     await toast.hide();
                 } catch (error) {
                     toast.style = Toast.Style.Failure;
@@ -162,23 +164,20 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
         return stopRunningGit;
     }, [open]);
 
-    // The README of the selected extension, fetched on demand while the detail pane is open.
-    useEffect(() => {
-        if (!showingDetail || !selected || !loaded || readmes[selected] !== undefined) return;
-        // A row's id is its folder in the repository (`StoreEntry.dir`), which `readCatalog` checked.
-        const dir = selected;
-        void oneAtATime(async () => {
-            let readme = "";
-            try {
-                await repo.add(`/extensions/${dir}/README.md`);
-                readme = await readRegularFile(path.join(repo.path, "extensions", dir, "README.md"), maxReadmeBytes);
-            } catch {
-                // No README, one that couldn't be fetched, or one that isn't a regular file of at most 1 MB: the
-                // detail shows the manifest alone.
-            }
-            setReadmes((current) => ({ ...current, [dir]: readme }));
-        });
-    }, [showingDetail, selected, loaded, readmes, repo]);
+    // The README of the row the selection rests on, with the detail pane open, as the compatibility check waits
+    // (`RestingWork`): moving through rows fetches nothing, and a folder's README is fetched once per tree.
+    const readmeFetches = useMemo(
+        () =>
+            new RestingWork<string>({
+                done: (key) => readmesNow.current[key.split("\0")[1]!] !== undefined,
+                run: (key, cancelled) =>
+                    oneAtATime(async () => (cancelled() ? undefined : fetchReadme(repo, key.split("\0")[0]!))),
+                changed: (key, readme) =>
+                    setReadmes((current) => ({ ...current, [key.split("\0")[1]!]: readme === "failed" ? "" : readme })),
+            }),
+        [repo],
+    );
+    useEffect(() => () => readmeFetches.stop(), [readmeFetches]);
 
     const context: StoreContext = useMemo(
         () => ({
@@ -261,6 +260,11 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     const checking = showingDetail ? actionsFor : undefined;
     const checkingTree = checking ? loaded?.trees.get(checking) : undefined;
     useEffect(() => checks.select(checking, checkingTree), [checks, checking, checkingTree]);
+    // A row's id is its folder in the repository (`StoreEntry.dir`), which `readCatalog` checked.
+    useEffect(
+        () => readmeFetches.select(checking && checkingTree ? `${checking}\0${checkingTree}` : undefined),
+        [readmeFetches, checking, checkingTree],
+    );
 
     if (noGit) {
         return (
@@ -309,7 +313,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                             markdown={detailMarkdown(
                                 entry,
                                 loaded?.commit ?? "",
-                                readmes[entry.dir],
+                                tree === undefined ? undefined : readmes[tree],
                                 compatibilityFor(tree),
                             )}
                         />
