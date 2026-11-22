@@ -18,7 +18,8 @@ export const cancelGrace = 1000;
  * group of its own and ends when it aborts, with everything it started (git's `git-remote-https`, say): SIGTERM to
  * the group, then SIGKILL if it's still running a second later. Only a step that writes nothing but new packs
  * is given one (`fetchSource`): a git that's writing the index holds `index.lock`, and ending it would leave that
- * behind, so every later checkout and install would fail.
+ * behind, so every later checkout and install would fail. `started` is called with the program's pid right after it
+ * starts, and never for a program that couldn't start; it must not throw (the store records `fudge build` with it).
  */
 export type Run = (
     program: string,
@@ -30,6 +31,7 @@ export type Run = (
         input?: string;
         env?: NodeJS.ProcessEnv;
         signal?: AbortSignal;
+        started?: (pid: number) => void;
     },
 ) => Promise<GitResult>;
 
@@ -63,7 +65,7 @@ export function storeEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.
  * `spawn` with no shell, a timeout that sends SIGTERM, and `storeEnvironment()`. When the timeout fired, stderr ends
  * with "<program> stopped after N s", whatever the exit: `fudge` catches SIGTERM and exits with 143.
  */
-export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable, input, env, signal }) =>
+export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable, input, env, signal, started }) =>
     new Promise((resolve) => {
         if (signal?.aborted) {
             resolve({ code: -1, stdout: "", stderr: `${path.basename(program)} cancelled` });
@@ -75,6 +77,14 @@ export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable, inpu
             env: { ...storeEnvironment(), ...env },
             detached: signal !== undefined,
         });
+        // A program that couldn't start has no pid (its `error` follows).
+        if (child.pid !== undefined && started) {
+            try {
+                started(child.pid);
+            } catch {
+                // `started` never throws; if it did, the run goes on as it would have.
+            }
+        }
         const group = (signal: NodeJS.Signals) => {
             try {
                 if (child.pid !== undefined) process.kill(-child.pid, signal);

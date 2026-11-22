@@ -163,8 +163,10 @@ struct ExtensionBuilderTests {
 
         #expect(second.directory == first.directory)
         #expect(!FileManager.default.fileExists(atPath: second.assetsDirectory.path))
-        let leftovers = try FileManager.default.contentsOfDirectory(atPath: extensions.path)
-        #expect(leftovers == ["greeter"], "no staging or old copies are left behind")
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: extensions.path).sorted()
+        #expect(
+            leftovers == [".build-greeter.lock", "greeter"],
+            "no staging or old copies are left behind, only the lock file")
     }
 
     @Test func listsInstalledExtensions() throws {
@@ -221,7 +223,10 @@ struct ExtensionBuilderTests {
         // A second build replaces the install (`holdsOnlyABuild` knows the files by the names).
         let again = try builder.build(source: Fixtures.commandNames, into: extensions)
         #expect(again.directory == installed.directory)
-        #expect(try FileManager.default.contentsOfDirectory(atPath: extensions.path) == ["command-names"])
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: extensions.path).sorted() == [
+                ".build-command-names.lock", "command-names",
+            ])
     }
 
     /// The entry file is found as the disk finds it, so on the Mac's usual disk `fooBar`'s may be `src/FooBar.ts`, as
@@ -244,7 +249,10 @@ struct ExtensionBuilderTests {
             try FileManager.default.contentsOfDirectory(atPath: again.directory.path).sorted() == [
                 "fooBar.cjs", "package.json",
             ])
-        #expect(try FileManager.default.contentsOfDirectory(atPath: extensions.path) == ["command-names"])
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: extensions.path).sorted() == [
+                ".build-command-names.lock", "command-names",
+            ])
     }
 
     /// Their built files would be one file on a disk that ignores case.
@@ -524,7 +532,8 @@ struct ExtensionBuilderTests {
     ] {
         #expect(throws: BuildError.noBundler) { try builder.build(source: source, into: extensions) }
     }
-    #expect(try FileManager.default.contentsOfDirectory(atPath: extensions.path) == [])
+    // The build's lock comes first, and its file stays (SPEC-153 A); nothing else is made.
+    #expect(try FileManager.default.contentsOfDirectory(atPath: extensions.path) == [".build-greeter.lock"])
     #expect(
         BuildError.noBundler.description
             == "compiling needs Fudge's own Node.js and its bundling script, which aren't beside this fudge tool; "

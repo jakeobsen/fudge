@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
@@ -16,11 +17,33 @@ import {
     isValidName,
     parseManifest,
     readCatalog,
+    rowActions,
     searchKeywords,
     sections,
     status,
     type StoreEntry,
 } from "../store-extension/src/catalog.ts";
+import {
+    installingFolder,
+    parseProcessLine,
+    readBuildRecords,
+    removeBuildRecord,
+    stillRunning,
+    systemProbe,
+    writeBuildRecord,
+    type BuildRecord,
+    type ProcessProbe,
+    type ProcessState,
+} from "../store-extension/src/build-records.ts";
+import {
+    heldRefresh,
+    heldRefreshMessage,
+    openCopy,
+    OtherBuilds,
+    pollInterval,
+    settledToast,
+    type Settled,
+} from "../store-extension/src/other-builds.ts";
 import {
     builtCompatibility,
     checkFolder,
@@ -81,16 +104,21 @@ import {
 } from "../store-extension/src/sources.ts";
 import { isCommandName } from "../scripts/compat/source-files.ts";
 import {
+    AlreadyBuilding,
+    alreadyBuildingStatus,
     buildArguments,
     bundledNames,
     doneToast,
     failureDetails,
     install,
+    installPressed,
+    InstallPresses,
     oneAtATime,
     readInstalled,
     StoreError,
     uninstall,
     writeInstalled,
+    type InstallView,
     type StoreContext,
 } from "../store-extension/src/store.ts";
 import {
@@ -2715,4 +2743,757 @@ test("the install's compatibility.json is read as the app reads it", async () =>
     await writeJSON(path.join(linked, "real.json"), { commands: { ask: ["AI"] } });
     await symlink(path.join(linked, "real.json"), path.join(linked, "compatibility.json"));
     assert.equal(await builtCompatibility(linked, ["ask"]), undefined, "never through a link");
+});
+
+// MARK: - One install of an extension at a time (SPEC-153)
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** `read` once it stops throwing, or its last error after `limit` ms. */
+async function waitFor<T>(read: () => Promise<T>, limit = 10_000): Promise<T> {
+    const end = Date.now() + limit;
+    for (;;) {
+        try {
+            return await read();
+        } catch (error) {
+            if (Date.now() > end) throw error;
+            await delay(10);
+        }
+    }
+}
+
+/** `promise`, or a failure saying `what` after `limit` ms: a deadlock fails the test instead of hanging it. */
+async function within<T>(promise: Promise<T>, what: string, limit = 10_000): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${what}: still waiting after ${limit} ms`)), limit);
+    });
+    try {
+        return await Promise.race([promise, late]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/** A view for `installPressed` that writes down what the user would see. */
+function pressView() {
+    const shown: string[] = [];
+    const failures: string[] = [];
+    const view: InstallView = {
+        toast: async (title) => {
+            shown.push(`toast: ${title}`);
+            return {
+                hide: async () => void shown.push("hidden"),
+                done: (title, message) => void shown.push(`done: ${title}${message ? ` (${message})` : ""}`),
+                failed: (title, message) => void shown.push(`failed: ${title} (${message})`),
+            };
+        },
+        load: async () => void shown.push("loaded"),
+        failed: (title) => void failures.push(title),
+    };
+    return { view, shown, failures };
+}
+
+/** Holds every `fudge build` of `context` until `release`, and lists them. */
+function gatedBuilds(context: StoreContext) {
+    const run = context.run!;
+    const builds: string[] = [];
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    context.run = async (program, args, options) => {
+        if (args[0] === "build") {
+            builds.push(path.basename(args[1]!));
+            await gate;
+        }
+        return run(program, args, options);
+    };
+    return { builds, release: () => release() };
+}
+
+/** The view's `runInstall` (extension-store.tsx): one press per name, each in the queue. */
+function pressing(context: StoreContext, view: InstallView, presses = new InstallPresses()) {
+    return (entry: StoreEntry, updating: boolean) =>
+        presses.press(entry.name, updating, () => oneAtATime(() => installPressed(entry, updating, context, view)));
+}
+
+test("a second press on a name that's installing does nothing; a press on another name waits its turn", async () => {
+    const { context, supportPath } = await storeContext({ folders: [{ dir: "beta", name: "beta", tree: "bbb1" }] });
+    const beta = parseManifest("beta", manifest("beta"))!;
+    const gated = gatedBuilds(context);
+    const { view, shown, failures } = pressView();
+    let changes = 0;
+    const presses = new InstallPresses(() => changes++);
+    const press = pressing(context, view, presses);
+
+    const first = press(alphaEntry, false);
+    let second: Promise<void> | undefined;
+    try {
+        assert.equal(presses.state("alpha"), "installing");
+        // Install again, ⌘U Update and Try Again all go through the same press: none of them shows a toast or queues.
+        await within(Promise.all([press(alphaEntry, false), press(alphaEntry, true), press(alphaEntry, false)]), "ignored presses");
+        second = press(beta, false);
+        assert.equal(presses.state("beta"), "installing", "its row says so while it waits");
+        await waitFor(async () => assert.deepEqual(gated.builds, ["alpha"]));
+        await settle();
+        assert.deepEqual(gated.builds, ["alpha"], "one build, and beta waits its turn");
+        assert.deepEqual(shown, ["toast: Installing Alpha…"], "one toast");
+    } finally {
+        // Released whatever happened, so a failure here can't leave the store's queue stuck for the tests after it.
+        gated.release();
+    }
+    await within(Promise.all([first, second]), "the presses");
+    assert.deepEqual(gated.builds, ["alpha", "beta"]);
+    assert.deepEqual(shown, [
+        "toast: Installing Alpha…",
+        "loaded",
+        "done: Installed Alpha",
+        "toast: Installing Beta…",
+        "loaded",
+        "done: Installed Beta",
+    ]);
+    assert.deepEqual(failures, []);
+    assert.equal(presses.state("alpha"), undefined, "the name is free once the press has ended, after the load");
+    assert.equal(presses.state("beta"), undefined);
+    assert.equal(changes, 4, "drawn again when each name starts and stops");
+    assert.deepEqual(Object.keys(await readInstalled(supportPath)).sort(), ["alpha", "beta"]);
+});
+
+test("two ⌘U presses run one update, and two Try Agains one install", async () => {
+    const updating = await storeContext({ tree: "bbb2" });
+    await writeInstalled(updating.supportPath, { alpha: { tree: "aaa1", commit: "old", installedAt: "x", dir: "alpha" } });
+    await mkdir(path.join(updating.extensionsDir, "alpha"));
+    const gated = gatedBuilds(updating.context);
+    const shown = pressView();
+    const press = pressing(updating.context, shown.view);
+    const first = press(alphaEntry, true);
+    try {
+        await within(press(alphaEntry, true), "the second ⌘U");
+    } finally {
+        gated.release();
+    }
+    await within(first, "the update");
+    assert.deepEqual(gated.builds, ["alpha"]);
+    assert.deepEqual(shown.shown, ["toast: Updating Alpha…", "loaded", "done: Updated Alpha"]);
+
+    // The first build fails; the failure view's Try Again, pressed twice, runs one more.
+    let builds = 0;
+    const failing = await storeContext({ build: () => ({ code: builds++ === 0 ? 1 : 0, stderr: "error: esbuild failed" }) });
+    const again = pressView();
+    const retry = pressing(failing.context, again.view);
+    await within(retry(alphaEntry, false), "the failed install");
+    assert.deepEqual(again.failures, ["Couldn't install Alpha"]);
+    const gatedRetry = gatedBuilds(failing.context);
+    const tried = retry(alphaEntry, false);
+    try {
+        await within(retry(alphaEntry, false), "the second Try Again");
+    } finally {
+        gatedRetry.release();
+    }
+    await within(tried, "Try Again");
+    assert.equal(builds, 2);
+    assert.deepEqual(again.shown, [
+        "toast: Installing Alpha…",
+        "failed: Couldn't install Alpha (See the details.)",
+        "toast: Installing Alpha…",
+        "loaded",
+        "done: Installed Alpha",
+    ]);
+});
+
+test("while a name installs, every row of that name says so and offers no Install, Update or Uninstall", async () => {
+    const tags = (busy?: "installing" | "updating", state: "available" | "installed" | "update" = "installed") =>
+        accessoryTexts(alphaEntry, state, "Partly compatible", busy).filter((accessory) => "tag" in accessory);
+    assert.deepEqual(tags(), [{ tag: "Partly compatible" }, { tag: "Installed" }]);
+    assert.deepEqual(tags("installing", "available"), [{ tag: "Partly compatible" }, { tag: "Installing…" }]);
+    assert.deepEqual(tags("updating"), [{ tag: "Partly compatible" }, { tag: "Updating…" }], "in place of Installed");
+    assert.deepEqual(tags("updating", "update"), [{ tag: "Partly compatible" }, { tag: "Updating…" }], "and of Update available");
+
+    assert.deepEqual(rowActions("available"), { install: true, update: false, uninstall: false });
+    assert.deepEqual(rowActions("installed"), { install: false, update: false, uninstall: true });
+    assert.deepEqual(rowActions("update"), { install: false, update: true, uninstall: true });
+    for (const state of ["available", "installed", "update"] as const) {
+        for (const busy of ["installing", "updating"] as const) {
+            assert.deepEqual(rowActions(state, busy), { install: false, update: false, uninstall: false }, `${state}, ${busy}`);
+        }
+    }
+
+    // The key is the manifest name, so a second folder with the same name is busy too.
+    const presses = new InstallPresses();
+    let finish = () => {};
+    const pressed = presses.press("alpha", false, () => new Promise<void>((resolve) => (finish = resolve)));
+    const twin = parseManifest("alpha-two", manifest("alpha"))!;
+    assert.equal(presses.state(twin.name), "installing");
+    finish();
+    await pressed;
+
+    // A name a build from another session is installing: a press does nothing.
+    const elsewhere = new InstallPresses(() => {}, (name) => name === "alpha");
+    let ran = false;
+    await elsewhere.press("alpha", false, async () => void (ran = true));
+    assert.equal(ran, false);
+    assert.equal(elsewhere.state("alpha"), undefined);
+});
+
+test("fudge build's status for another build running is the app's: one fixture pins both", async () => {
+    const statuses = JSON.parse(await readFile(new URL("./fixtures/build-statuses.json", import.meta.url), "utf8")) as {
+        alreadyBuilding: number;
+    };
+    assert.equal(statuses.alreadyBuilding, alreadyBuildingStatus);
+});
+
+test("a build that exits 75 says the extension is already being installed: no failure view, no log, nothing written", async () => {
+    const { context, supportPath } = await storeContext({ build: () => ({ code: 75, stderr: "fudge: another fudge build is installing alpha" }) });
+    const lines: string[] = [];
+    context.log = (line) => void lines.push(line);
+    await assert.rejects(install(alphaEntry, context), (error: unknown) => error instanceof AlreadyBuilding);
+    const { view, shown, failures } = pressView();
+    await installPressed(alphaEntry, false, context, view);
+    assert.deepEqual(shown, ["toast: Installing Alpha…", "done: Alpha is already being installed"]);
+    assert.deepEqual(failures, [], "no failure view, and nothing in Fudge.log");
+    assert.deepEqual(lines, []);
+    assert.deepEqual(await readInstalled(supportPath), {});
+
+    // The second run, after a swift: import the check missed, is read the same way.
+    let runs = 0;
+    const retried = await storeContext({
+        build: () =>
+            runs++ === 0
+                ? { code: 1, stderr: `✘ [ERROR] ${chooseSwiftPartsMessage} [plugin swift]\n\n    src/index.ts:1:20:` }
+                : { code: 75 },
+    });
+    retried.context.chooseSwiftParts = async () => "leave-out";
+    await assert.rejects(install(alphaEntry, retried.context), (error: unknown) => error instanceof AlreadyBuilding);
+    assert.equal(runs, 2);
+});
+
+test("each build is recorded in installing/<pid>.json while it runs, and the record goes however the run ends", async () => {
+    const endings: [string, Partial<GitResult>][] = [
+        ["success", { code: 0 }],
+        ["failure", { code: 1, stderr: "error: esbuild failed" }],
+        ["timeout", { code: 143, stderr: "\nfudge stopped after 600 s" }],
+        ["refusal", { code: 75, stderr: "fudge: another fudge build is installing alpha" }],
+    ];
+    for (const [ending, result] of endings) {
+        const { context, supportPath, extensionsDir, repoPath } = await storeContext();
+        const own = new Set<number>();
+        context.ownBuilds = own;
+        const run = context.run!;
+        let recorded: unknown;
+        context.run = async (program, args, options) => {
+            if (args[0] !== "build") return run(program, args, options);
+            options.started?.(4242);
+            recorded = await waitFor(async () => JSON.parse(await readFile(path.join(supportPath, "installing/4242.json"), "utf8")));
+            return { stdout: "", stderr: "", code: 0, ...result };
+        };
+        const outcome = await install(alphaEntry, context).then(
+            () => "installed",
+            (error: unknown) => (error instanceof AlreadyBuilding ? "already" : "failed"),
+        );
+        assert.equal(outcome, { success: "installed", failure: "failed", timeout: "failed", refusal: "already" }[ending]);
+        assert.deepEqual(
+            recorded,
+            {
+                pid: 4242,
+                name: "alpha",
+                dir: "alpha",
+                title: "Alpha",
+                tree: "aaa1",
+                commit: "c0ffee1234",
+                updating: false,
+                startedAt: "2026-11-20T12:00:00.000Z",
+                deadline: "2026-11-20T12:10:00.000Z",
+                command: [context.cli, "build", path.join(repoPath, "extensions/alpha"), "--into", extensionsDir],
+            },
+            ending,
+        );
+        assert.deepEqual(await readdir(installingFolder(supportPath)), [], `${ending}: the record is gone`);
+        assert.ok(own.has(4242), "it's this session's build");
+    }
+});
+
+test("a record is removed only once its write has settled, so a run that ends at once leaves none", async () => {
+    const { context, supportPath } = await storeContext({ build: () => ({ code: 75 }) });
+    let written = false;
+    context.buildRecords = {
+        write: async (support, record) => {
+            await delay(200);
+            await writeBuildRecord(support, record);
+            written = true;
+        },
+        remove: removeBuildRecord,
+    };
+    const run = context.run!;
+    context.run = async (program, args, options) => {
+        if (args[0] === "build") options.started?.(4343);
+        return run(program, args, options);
+    };
+    await assert.rejects(install(alphaEntry, context), (error: unknown) => error instanceof AlreadyBuilding);
+    assert.equal(written, true, "the install waited for the write");
+    await delay(300);
+    assert.deepEqual(await readdir(installingFolder(supportPath)), [], "and then removed it");
+});
+
+test("only a program that started calls started, with its pid", async () => {
+    let called = false;
+    const failed = await spawnProgram("/nonexistent/fudge", ["build"], { timeout: 5000, started: () => void (called = true) });
+    assert.equal(failed.code, -1);
+    assert.equal(called, false, "a spawn that fails never calls started");
+    let pid: number | undefined;
+    const ran = await spawnProgram("/usr/bin/true", [], { timeout: 5000, started: (started) => void (pid = started) });
+    assert.equal(ran.code, 0);
+    assert.ok(Number.isSafeInteger(pid) && pid! > 0);
+    // One that throws can't change the run.
+    const thrown = await spawnProgram("/usr/bin/true", [], {
+        timeout: 5000,
+        started: () => {
+            throw new Error("boom");
+        },
+    });
+    assert.equal(thrown.code, 0);
+});
+
+test("a record that can't be written or removed is logged, and the install ends as it would have", async () => {
+    const rejections: unknown[] = [];
+    const rejected = (reason: unknown) => void rejections.push(reason);
+    process.on("unhandledRejection", rejected);
+    try {
+        const failingWrite = async () => {
+            throw new Error("disk full");
+        };
+        const failingRemove = async () => {
+            throw new Error("read-only");
+        };
+        for (const [failing, files, cliCode] of [
+            ["write", { write: failingWrite, remove: removeBuildRecord }, 0],
+            ["remove", { write: writeBuildRecord, remove: failingRemove }, 0],
+            ["write, failed build", { write: failingWrite, remove: removeBuildRecord }, 1],
+            ["remove, failed build", { write: writeBuildRecord, remove: failingRemove }, 1],
+        ] as const) {
+            const { context, supportPath } = await storeContext({ cliCode });
+            const lines: string[] = [];
+            context.log = (line) => void lines.push(line);
+            context.buildRecords = files;
+            const run = context.run!;
+            context.run = async (program, args, options) => {
+                if (args[0] === "build") options.started?.(5151);
+                return run(program, args, options);
+            };
+            if (cliCode === 0) {
+                assert.deepEqual(await install(alphaEntry, context), {}, failing);
+                assert.equal((await readInstalled(supportPath)).alpha?.tree, "aaa1", failing);
+            } else {
+                await assert.rejects(install(alphaEntry, context), /esbuild failed/, failing);
+                assert.deepEqual(await readInstalled(supportPath), {}, failing);
+            }
+            assert.deepEqual(
+                lines,
+                [failing.startsWith("write") ? "Couldn't record the build of Alpha: disk full" : "Couldn't remove the record of Alpha's build: read-only"],
+                failing,
+            );
+        }
+        await settle();
+        assert.deepEqual(rejections, []);
+    } finally {
+        process.off("unhandledRejection", rejected);
+    }
+});
+
+/** A record of another session's build of alpha, started a minute ago, with nine minutes left. */
+function otherRecord(overrides: Partial<BuildRecord> = {}): BuildRecord {
+    const start = Date.now() - 60_000;
+    return {
+        pid: 7001,
+        name: "alpha",
+        dir: "alpha",
+        title: "Alpha",
+        tree: "t-new",
+        commit: "c-new",
+        updating: false,
+        startedAt: new Date(start).toISOString(),
+        deadline: new Date(start + 600_000).toISOString(),
+        command: ["/Applications/Fudge.app/Contents/Helpers/fudge", "build", "/repo/extensions/alpha", "--into", "/Users/someone/Library/Application Support/Fudge/extensions"],
+        ...overrides,
+    };
+}
+
+/** Processes as the checks see them: each live pid with its `ps` line, and the signals sent. */
+function fakeProbe() {
+    const processes = new Map<number, ProcessState>();
+    const signalled: number[] = [];
+    const probe: ProcessProbe = {
+        alive: (pid) => processes.has(pid),
+        state: async (pid) => processes.get(pid),
+        terminate: (pid) => void signalled.push(pid),
+    };
+    const running = (record: BuildRecord, stat = "S") => processes.set(record.pid, { stat, args: record.command.join(" ") });
+    return { probe, processes, signalled, running };
+}
+
+/** A store that opens with `records` from another session in `installing/`. */
+async function otherSession(records: BuildRecord[], options: { own?: number[]; probe?: ProcessProbe } = {}) {
+    const supportPath = await temporary();
+    const extensionsDir = await temporary();
+    for (const record of records) await writeBuildRecord(supportPath, record);
+    const fake = fakeProbe();
+    const settled: Settled[] = [];
+    const order: string[] = [];
+    let clock = () => new Date();
+    const builds = new OtherBuilds({
+        supportPath,
+        extensionsDir,
+        probe: options.probe ?? fake.probe,
+        own: new Set(options.own ?? []),
+        now: () => clock(),
+        settled: (outcome) => {
+            settled.push(outcome);
+            order.push("settled");
+        },
+    });
+    return {
+        supportPath,
+        extensionsDir,
+        builds,
+        fake,
+        settled,
+        order,
+        setClock: (next: () => Date) => (clock = next),
+        /** Resolves once every record from another session has settled. */
+        allSettled: () => within(builds.hold("test", async () => {}), "settling"),
+        records: async () => (await readdir(installingFolder(supportPath)).catch(() => [])).filter((name) => !name.startsWith(".")),
+    };
+}
+
+test("installing/: a write's dot file is skipped, and deleted only once it's an hour old; anything else invalid is deleted", async () => {
+    const support = await temporary();
+    const folder = installingFolder(support);
+    const good = otherRecord({ pid: 101 });
+    await writeBuildRecord(support, good);
+    await writeFile(path.join(folder, ".202.abcd.tmp"), "{");
+    await writeFile(path.join(folder, ".303.abcd.tmp"), "{");
+    const hourAgo = new Date(Date.now() - 61 * 60 * 1000);
+    await utimes(path.join(folder, ".303.abcd.tmp"), hourAgo, hourAgo);
+    const invalid: Record<string, unknown> = {
+        "404.json": { ...otherRecord({ pid: 404 }), name: "../etc" },
+        "405.json": { ...otherRecord({ pid: 405 }), dir: "a/b" },
+        "406.json": otherRecord({ pid: 999 }),
+        "407.json": { ...otherRecord({ pid: 407 }), startedAt: "yesterday" },
+        "408.json": { ...otherRecord({ pid: 408 }), command: [] },
+        "409.json": { ...otherRecord({ pid: 409 }), updating: "no" },
+        "0410.json": otherRecord({ pid: 410 }),
+        "notes.txt": otherRecord({ pid: 411 }),
+    };
+    for (const [name, value] of Object.entries(invalid)) await writeFile(path.join(folder, name), JSON.stringify(value));
+    await writeFile(path.join(folder, "412.json"), "not json");
+    await mkdir(path.join(folder, "413.json"));
+    await symlink(path.join(folder, "101.json"), path.join(folder, "414.json"));
+
+    assert.deepEqual(await readBuildRecords(support), [good]);
+    assert.deepEqual((await readdir(folder)).sort(), [".202.abcd.tmp", "101.json"]);
+    // `load()` and the poll read them the same way: the fresh dot file stays.
+    const session = new OtherBuilds({ supportPath: support, extensionsDir: await temporary(), probe: fakeProbe().probe, own: new Set([101]), settled: () => {} });
+    await session.check();
+    await session.check();
+    assert.deepEqual((await readdir(folder)).sort(), [".202.abcd.tmp", "101.json"]);
+    assert.equal(parseProcessLine("ZN   <defunct>\n")?.stat, "ZN");
+    assert.deepEqual(parseProcessLine("S    /a/fudge build /b --into /c d\n"), { stat: "S", args: "/a/fudge build /b --into /c d" });
+});
+
+test("a record whose build still runs: its rows say so, and nothing is written", async () => {
+    const record = otherRecord();
+    const session = await otherSession([record]);
+    session.fake.running(record);
+    await session.builds.check();
+    assert.equal(session.builds.busy("alpha"), "installing");
+    assert.equal(session.builds.busy("beta"), undefined);
+    assert.ok(session.builds.pending);
+    await settle();
+    assert.deepEqual(session.settled, []);
+    assert.deepEqual(await session.records(), ["7001.json"]);
+    assert.deepEqual(await readInstalled(session.supportPath), {});
+    const updating = await otherSession([otherRecord({ updating: true })]);
+    updating.fake.running(otherRecord());
+    await updating.builds.check();
+    assert.equal(updating.builds.busy("alpha"), "updating");
+});
+
+test("an ended build is a zombie of the host: a state starting with Z, or <defunct>, has ended, and gets no signal", async () => {
+    const past = new Date(Date.now() - 1000).toISOString();
+    for (const state of [{ stat: "Z", args: "<defunct>" }, { stat: "ZN" }, { stat: "S", args: "<defunct>" }]) {
+        const record = otherRecord({ deadline: past });
+        const session = await otherSession([record]);
+        session.fake.processes.set(record.pid, { stat: state.stat, args: state.args ?? record.command.join(" ") });
+        await session.builds.check();
+        await session.allSettled();
+        assert.deepEqual(session.settled.map(({ adopted, seen }) => ({ adopted, seen })), [{ adopted: false, seen: false }], state.stat);
+        assert.deepEqual(session.fake.signalled, [], `${state.stat}: never signalled, even past its deadline`);
+        assert.deepEqual(await session.records(), []);
+    }
+});
+
+test("an ended build is adopted only when its folder was made between its start and the end bound", async () => {
+    // Found ended at open: the end bound is the deadline.
+    const record = otherRecord();
+    const adopted = await otherSession([record]);
+    await mkdir(path.join(adopted.extensionsDir, "alpha"));
+    adopted.setClock(() => new Date("2026-11-22T16:00:00.000Z"));
+    await adopted.builds.check();
+    await adopted.allSettled();
+    assert.deepEqual(adopted.settled, [{ record, adopted: true, seen: false }], "settled without a toast");
+    assert.deepEqual(await readInstalled(adopted.supportPath), {
+        alpha: { tree: "t-new", commit: "c-new", installedAt: "2026-11-22T16:00:00.000Z", dir: "alpha" },
+    });
+    assert.deepEqual(await adopted.records(), []);
+
+    // Found ended at open, its folder made after the deadline (a build from Terminal, say).
+    const start = Date.now() - 2 * 60 * 60 * 1000;
+    const late = await otherSession([otherRecord({ startedAt: new Date(start).toISOString(), deadline: new Date(start + 600_000).toISOString() })]);
+    await mkdir(path.join(late.extensionsDir, "alpha"));
+    await late.builds.check();
+    await late.allSettled();
+    assert.deepEqual(late.settled.map((outcome) => outcome.adopted), [false]);
+    assert.deepEqual(await readInstalled(late.supportPath), {});
+
+    // No folder.
+    const none = await otherSession([otherRecord()]);
+    await none.builds.check();
+    await none.allSettled();
+    assert.deepEqual(none.settled.map((outcome) => outcome.adopted), [false]);
+    assert.deepEqual(await readInstalled(none.supportPath), {});
+
+    // A failed update leaves the older folder, made before the start; the older entry stays.
+    const failed = await otherSession([]);
+    await mkdir(path.join(failed.extensionsDir, "alpha"));
+    const older = { alpha: { tree: "t-old", commit: "c-old", installedAt: "x", dir: "alpha" } };
+    await writeInstalled(failed.supportPath, older);
+    await delay(20);
+    const started = Date.now();
+    await writeBuildRecord(failed.supportPath, otherRecord({ updating: true, startedAt: new Date(started).toISOString(), deadline: new Date(started + 600_000).toISOString() }));
+    await failed.builds.check();
+    await failed.allSettled();
+    assert.deepEqual(failed.settled.map((outcome) => outcome.adopted), [false]);
+    assert.deepEqual(await readInstalled(failed.supportPath), older);
+
+    // No tree: the store couldn't have recorded it.
+    const treeless = await otherSession([otherRecord({ tree: undefined })]);
+    await mkdir(path.join(treeless.extensionsDir, "alpha"));
+    await treeless.builds.check();
+    await treeless.allSettled();
+    assert.deepEqual(treeless.settled.map((outcome) => outcome.adopted), [false]);
+});
+
+test("a build seen ending while the store is open: the end bound is that moment", async () => {
+    // Its folder made before the poll saw it end: adopted, with a toast.
+    const record = otherRecord();
+    const seen = await otherSession([record]);
+    seen.fake.running(record);
+    await seen.builds.check();
+    await mkdir(path.join(seen.extensionsDir, "alpha"));
+    seen.fake.processes.delete(record.pid);
+    await seen.builds.check();
+    await seen.allSettled();
+    assert.deepEqual(seen.settled.map(({ adopted, seen }) => ({ adopted, seen })), [{ adopted: true, seen: true }]);
+
+    // Its folder made after the moment the poll saw it end (a clock 30 s behind, so the folder is there when the record
+    // settles, and still after that moment): dropped, `installed.json` unchanged, though it's before the deadline.
+    const after = await otherSession([record]);
+    after.fake.running(record);
+    await after.builds.check();
+    await mkdir(path.join(after.extensionsDir, "alpha"));
+    after.fake.processes.delete(record.pid);
+    after.setClock(() => new Date(Date.now() - 30_000));
+    await after.builds.check();
+    await after.allSettled();
+    assert.deepEqual(after.settled.map(({ adopted, seen }) => ({ adopted, seen })), [{ adopted: false, seen: true }]);
+    assert.deepEqual(await readInstalled(after.supportPath), {});
+
+    assert.deepEqual(settledToast({ record, adopted: true, seen: true }), { failed: false, title: "Installed Alpha" });
+    assert.deepEqual(settledToast({ record: { ...record, updating: true }, adopted: true, seen: true }), { failed: false, title: "Updated Alpha" });
+    assert.deepEqual(settledToast({ record, adopted: false, seen: true }), {
+        failed: true,
+        title: "Couldn't install Alpha",
+        message: "Its build stopped before it finished. Try again to see the error.",
+    });
+});
+
+test("a pid kill(pid, 0) can't find has ended, whatever ps says; EPERM and ESRCH both mean it isn't the store's", async () => {
+    const record = otherRecord();
+    const fake = fakeProbe();
+    fake.running(record);
+    assert.equal(await stillRunning(record, fake.probe), true);
+    assert.equal(await stillRunning(record, { ...fake.probe, alive: () => false }), false);
+    const real = systemProbe();
+    assert.equal(real.alive(process.pid), true);
+    assert.equal(real.alive(1), false, "launchd, another user's process: EPERM");
+    const gone = spawn("/usr/bin/true", [], { stdio: "ignore" });
+    await once(gone, "exit");
+    assert.equal(real.alive(gone.pid!), false, "an ended, reaped child: ESRCH");
+    assert.equal(await real.state(gone.pid!), undefined, "and ps lists nothing for it");
+});
+
+test("a reused pid isn't the build: it has ended, and its process is never signalled", async () => {
+    const record = otherRecord({ deadline: new Date(Date.now() - 1000).toISOString() });
+    const session = await otherSession([record]);
+    session.fake.processes.set(record.pid, { stat: "S", args: "/usr/bin/vim notes.txt" });
+    await mkdir(path.join(session.extensionsDir, "alpha"));
+    await session.builds.check();
+    await session.allSettled();
+    assert.equal(session.settled.length, 1);
+    assert.deepEqual(session.fake.signalled, []);
+});
+
+test("a build still running past its deadline gets SIGTERM, once, and no other process does", async () => {
+    const late = otherRecord({ deadline: new Date(Date.now() - 1000).toISOString() });
+    const onTime = otherRecord({ pid: 7002, name: "beta", dir: "beta", title: "Beta" });
+    const reused = otherRecord({ pid: 7003, name: "gamma", dir: "gamma", title: "Gamma", deadline: late.deadline });
+    const session = await otherSession([late, onTime, reused]);
+    session.fake.running(late);
+    session.fake.running(onTime);
+    session.fake.processes.set(reused.pid, { stat: "S", args: "/bin/sleep 100" });
+    await session.builds.check();
+    await session.builds.check();
+    assert.deepEqual(session.fake.signalled, [late.pid]);
+    session.fake.processes.delete(late.pid);
+    await session.builds.check();
+    assert.deepEqual(session.fake.signalled, [late.pid]);
+});
+
+test("this session's own records are never settled by its poll", async () => {
+    const record = otherRecord();
+    const session = await otherSession([record], { own: [record.pid] });
+    await session.builds.check();
+    await settle();
+    assert.deepEqual(session.settled, []);
+    assert.equal(session.builds.busy("alpha"), undefined);
+    assert.deepEqual(await session.records(), ["7001.json"]);
+});
+
+test("the poll checks every 2 seconds while a build from another session is pending, and stops when the store goes", async () => {
+    let tick: (() => void) | undefined;
+    const cleared: unknown[] = [];
+    const timers = {
+        setInterval: ((run: () => void, ms: number) => {
+            assert.equal(ms, pollInterval);
+            tick = run;
+            return 1;
+        }) as unknown as typeof setInterval,
+        clearInterval: ((handle: unknown) => void cleared.push(handle)) as unknown as typeof clearInterval,
+    };
+    const record = otherRecord();
+    const supportPath = await temporary();
+    await writeBuildRecord(supportPath, record);
+    const fake = fakeProbe();
+    fake.running(record);
+    const builds = new OtherBuilds({ supportPath, extensionsDir: await temporary(), probe: fake.probe, own: new Set(), timers, settled: () => {} });
+    builds.start();
+    assert.equal(pollInterval, 2000);
+    await builds.check();
+    fake.processes.delete(record.pid);
+    tick!();
+    await waitFor(async () => assert.equal(builds.pending, false));
+    builds.stop();
+    assert.deepEqual(cleared, [1]);
+});
+
+test("the real checks: a running child of the test's own, then an ended one nobody reaps", async () => {
+    const probe = systemProbe();
+    const command = [process.execPath, "-e", "setTimeout(() => {}, 60000)"];
+    const child = spawn(command[0]!, command.slice(1), { stdio: "ignore" });
+    const exited = once(child, "exit");
+    const running = otherRecord({ pid: child.pid!, command });
+    try {
+        await waitFor(async () => assert.equal(await stillRunning(running, probe), true));
+    } finally {
+        process.kill(child.pid!, "SIGTERM");
+    }
+    await exited;
+    assert.equal(await stillRunning(running, probe), false);
+
+    // A perl that forks a child which exits at once, and never waits for it: the child is a zombie, as an orphaned build
+    // is of the host. `kill(pid, 0)` still finds it, and the checks say it has ended.
+    const perl = spawn("/usr/bin/perl", ["-e", 'my $p = fork(); if ($p == 0) { exit 0 } $| = 1; print "$p\\n"; sleep 600'], {
+        stdio: ["ignore", "pipe", "ignore"],
+    });
+    try {
+        const [data] = (await once(perl.stdout!, "data")) as [Buffer];
+        const zombie = Number(data.toString().trim());
+        await waitFor(async () => assert.match((await probe.state(zombie))?.stat ?? "", /^Z/));
+        assert.equal(probe.alive(zombie), true);
+        const record = otherRecord({ pid: zombie, command: ["/usr/bin/perl", "-e", "fork"], deadline: new Date(Date.now() - 1000).toISOString() });
+        assert.equal(await stillRunning(record, probe), false);
+        const signalled: number[] = [];
+        const session = await otherSession([record], { probe: { ...probe, terminate: (pid) => void signalled.push(pid) } });
+        await session.builds.check();
+        await session.allSettled();
+        assert.equal(session.settled.length, 1);
+        assert.deepEqual(signalled, [], "no signal to the zombie, even past its deadline");
+    } finally {
+        process.kill(perl.pid!, "SIGTERM");
+    }
+});
+
+test("a refresh waits outside the queue while another session's build runs, then runs once after it settles", async () => {
+    const record = otherRecord();
+    const session = await otherSession([record]);
+    session.fake.running(record);
+    await session.builds.check();
+    const order = session.order;
+    // ⌘R twice, and the day-old refresh on open.
+    const refresh = () => heldRefresh(session.builds, async () => void order.push("refresh"));
+    const held = [refresh(), refresh(), refresh()];
+    // A README fetch, a compatibility check, an install and an uninstall go on meanwhile.
+    await within(oneAtATime(async () => void order.push("readme")), "a README fetch");
+    await within(oneAtATime(async () => void order.push("check")), "a compatibility check");
+    assert.deepEqual(order, ["readme", "check"], "the refresh didn't touch repo/ or enter the queue");
+    assert.equal(heldRefreshMessage(session.builds.records()), "The list updates when Alpha has installed");
+    assert.equal(heldRefreshMessage([record, { ...record, pid: 2 }]), "The list updates when the installs have finished");
+    assert.equal(heldRefreshMessage([{ ...record, updating: true }]), "The list updates when Alpha has updated");
+
+    session.fake.processes.delete(record.pid);
+    await session.builds.check();
+    await within(Promise.all(held), "the held refresh, with no deadlock");
+    assert.deepEqual(order, ["readme", "check", "settled", "refresh"], "the record settles first, then the refresh runs once");
+    // Nothing pending: a refresh runs at once.
+    await within(refresh(), "a refresh with nothing pending");
+    assert.deepEqual(order.at(-1), "refresh");
+});
+
+test("a copy that can't be read: the records come first, so its removal waits for a running build", async () => {
+    const record = otherRecord();
+    const session = await otherSession([record]);
+    session.fake.running(record);
+    const order = session.order;
+    const opening = openCopy(false, {
+        others: session.builds,
+        exists: async () => true,
+        load: async () => {
+            order.push("load failed");
+            throw new Error("the copy can't be read");
+        },
+        remove: async () => void order.push("remove"),
+        refresh: () => heldRefresh(session.builds, async () => void order.push("refresh")),
+        needsRefresh: async () => false,
+    });
+    await waitFor(async () => assert.deepEqual(order, ["load failed"]));
+    await settle();
+    assert.deepEqual(order, ["load failed"], "the removal waits");
+    assert.equal(session.builds.busy("alpha"), "installing", "the record was read before the copy");
+    session.fake.processes.delete(record.pid);
+    await session.builds.check();
+    await within(opening, "the removal and the clone after it");
+    assert.deepEqual(order, ["load failed", "settled", "remove", "refresh"]);
+
+    // The day-old refresh waits too, and an open with nothing pending goes on at once.
+    const quiet = await otherSession([]);
+    await within(
+        openCopy(false, {
+            others: quiet.builds,
+            exists: async () => true,
+            load: async () => void quiet.order.push("loaded"),
+            remove: async () => void quiet.order.push("remove"),
+            refresh: () => heldRefresh(quiet.builds, async () => void quiet.order.push("refresh")),
+            needsRefresh: async () => true,
+        }),
+        "an open with nothing pending",
+    );
+    assert.deepEqual(quiet.order, ["loaded", "refresh"]);
 });

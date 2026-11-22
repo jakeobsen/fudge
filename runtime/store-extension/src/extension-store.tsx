@@ -22,10 +22,13 @@ import {
     folderURL,
     iconURL,
     installedFilter,
+    installingTag,
     readCatalog,
+    rowActions,
     searchKeywords,
     sections,
     status,
+    updatingTag,
     type Installed,
     type StoreEntry,
 } from "./catalog.ts";
@@ -45,21 +48,26 @@ import { RestingWork } from "./resting.ts";
 import type { FailureDetails } from "./failure.ts";
 import { FailureView, LoadFailure, NeedsGit } from "./failure-view.tsx";
 import {
-    doneToast,
     failureDetails,
     failureLog,
-    install,
+    installPressed,
+    InstallPresses,
     oneAtATime,
     readInstalled,
     uninstall,
+    type InstallView,
     type StoreContext,
 } from "./store.ts";
+import { systemProbe } from "./build-records.ts";
+import { heldRefresh, heldRefreshMessage, openCopy, OtherBuilds, settledToast } from "./other-builds.ts";
 import { commandLineToolsReady, logToFudge } from "fudge:app";
 import { installedWithoutSwift, type SwiftPartsChoice } from "./swift-parts.ts";
 import { SwiftPartsView } from "./swift-parts-view.tsx";
 
 /** A failure the store had goes into `Fudge.log` too, with its output (SPEC-124); writing it never fails a step. */
 const logFailure = (title: string, error: unknown) => void logToFudge("error", failureLog(title, failureDetails(error))).catch(() => {});
+/** A line of the store's own in `Fudge.log`, such as a build's record it couldn't write; never fails a step. */
+const logLine = (line: string) => void logToFudge("error", line).catch(() => {});
 
 /** `withoutSwift`: the installed extensions built without their part written in Swift (SPEC-145 §3). */
 type Loaded = {
@@ -77,7 +85,9 @@ const tagColor = (tag: string) =>
         ? Color.Red
         : tag === "Update available" || tag === "Partly compatible"
           ? Color.Orange
-          : Color.Green;
+          : tag === installingTag || tag === updatingTag
+            ? Color.Blue
+            : Color.Green;
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -124,8 +134,50 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     // The latest list, for a failure's link, which is made after the install's await.
     const loadedNow = useRef(loaded);
     loadedNow.current = loaded;
+    // Drawn again when a name starts or stops installing (SPEC-153 B, C).
+    const [, setBusyChanges] = useState(0);
+    const busyChanged = useCallback(() => setBusyChanges((count) => count + 1), []);
+    // `load`, for a settled record, which is made before it.
+    const loadNow = useRef<() => Promise<void>>(async () => {});
+
+    // The builds an earlier store left running (SPEC-153 C): their rows say Installing…, one that ended is settled in
+    // the queue, and nothing rewrites `repo/` under them.
+    const others = useMemo(
+        () =>
+            new OtherBuilds({
+                supportPath: environment.supportPath,
+                extensionsDir,
+                probe: systemProbe(),
+                changed: busyChanged,
+                log: logLine,
+                settled: async (outcome) => {
+                    await loadNow.current().catch(() => undefined);
+                    // One found already ended when the store opened is settled without a toast.
+                    if (!outcome.seen) return;
+                    const shown = settledToast(outcome);
+                    await showToast({
+                        style: shown.failed ? Toast.Style.Failure : Toast.Style.Success,
+                        title: shown.title,
+                        ...(shown.message ? { message: shown.message } : {}),
+                    });
+                },
+            }),
+        [extensionsDir, busyChanged],
+    );
+    useEffect(() => {
+        others.start();
+        return () => others.stop();
+    }, [others]);
+    // The names this store is installing: a second press does nothing (SPEC-153 B).
+    const presses = useMemo(
+        () => new InstallPresses(busyChanged, (name) => others.busy(name) !== undefined),
+        [busyChanged, others],
+    );
+    const busyOf = (name: string) => presses.state(name) ?? others.busy(name);
 
     const load = useCallback(async () => {
+        // The records of builds from another session, read with each load, apart from the copy.
+        await others.check();
         const scanner = await scannerIdentity(cli);
         const [entries, installed, trees, commit, results] = await Promise.all([
             readCatalog(repo.path),
@@ -142,17 +194,19 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
         setChecked((current) => ({ scanner, results, failed: current.scanner === scanner ? current.failed : new Set() }));
         hasLoaded.current = true;
         setLoadError(undefined);
-    }, [repo, cli, extensionsDir]);
+    }, [repo, cli, extensionsDir, others]);
+    loadNow.current = load;
 
     /**
      * Clones the first time, refreshes after that; the list stays usable meanwhile. Like every git operation of the
-     * store's, it waits its turn (`oneAtATime`), so it never runs during an install or a README fetch. A failure
-     * before anything has loaded shows in the load-error view (`LoadFailure`: its cause and Copy Error), whose Refresh
-     * tries again; one after that is a toast over the list, which stays usable.
+     * store's, it waits its turn (`oneAtATime`), so it never runs during an install or a README fetch. While a build from
+     * another session runs, it waits before it enters the queue, and runs once that build has settled (SPEC-153 C.7). A
+     * failure before anything has loaded shows in the load-error view (`LoadFailure`: its cause and Copy Error), whose
+     * Refresh tries again; one after that is a toast over the list, which stays usable.
      */
     const refresh = useCallback(
         () =>
-            oneAtATime(async () => {
+            heldRefresh(others, async () => {
                 const first = !(await repo.exists());
                 const toast = await showToast({
                     style: Toast.Style.Animated,
@@ -172,7 +226,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                     if (!hasLoaded.current) setLoadError({ title, details: failureDetails(error) });
                 }
             }),
-        [repo, load],
+        [repo, load, others],
     );
 
     /**
@@ -188,20 +242,16 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
             }
             // Refresh after installing the Command Line Tools finds git now.
             setNoGit(false);
-            if (!(await repo.exists())) {
-                await refresh();
-                return;
-            }
-            try {
-                await load();
-            } catch {
-                await repo.remove();
-                await refresh();
-                return;
-            }
-            if (retry || (await repo.needsRefresh(new Date()))) await refresh();
+            await openCopy(retry, {
+                others,
+                exists: () => repo.exists(),
+                load,
+                remove: () => repo.remove(),
+                refresh,
+                needsRefresh: () => repo.needsRefresh(new Date()),
+            });
         },
-        [repo, load, refresh],
+        [repo, load, refresh, others],
     );
 
     useEffect(() => {
@@ -238,6 +288,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
             extensionsDir,
             confirm: (title, text, primary) => confirmAlert({ title, message: text, primaryAction: { title: primary } }),
             trash: (target) => trash(target),
+            log: logLine,
             // Asked each time an install needs it, never cached, so tools set up meanwhile count (SPEC-145 §3).
             commandLineToolsReady: () => commandLineToolsReady().catch(() => false),
             chooseSwiftParts: (title) =>
@@ -271,34 +322,30 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     );
     useEffect(() => () => checks.stop(), [checks]);
 
-    const runInstall = (entry: StoreEntry, updating: boolean) =>
-        oneAtATime(async () => {
-            const toast = await showToast({
-                style: Toast.Style.Animated,
-                title: `${updating ? "Updating" : "Installing"} ${entry.title}…`,
-            });
-            try {
-                const done = await install(entry, context);
-                if (!done) {
-                    await toast.hide();
-                    return;
-                }
-                await load();
-                // A toast, so the launcher stays open on the list (SPEC-130), with the note when what's on and off
-                // isn't what the confirmation said (SPEC-121 §2). Each setter shows the toast again, and with the
-                // window hidden a toast that isn't animated shows as a HUD, so the style changes last.
-                const shown = doneToast(entry.title, updating, done);
-                toast.title = shown.title;
-                if (shown.message) toast.message = shown.message;
-                toast.style = Toast.Style.Success;
-            } catch (error) {
-                // The whole error, its likely cause, Copy Error and Try Again, in a view of its own (SPEC-116); the
-                // toast only says where to look.
-                const title = `Couldn't ${updating ? "update" : "install"} ${entry.title}`;
+    // ↵ Install, ⌘U Update and Try Again: one press per name at a time (SPEC-153 B), each in the queue.
+    const runInstall = (entry: StoreEntry, updating: boolean): Promise<void> => {
+        const view: InstallView = {
+            toast: async (title) => {
+                const toast = await showToast({ style: Toast.Style.Animated, title });
+                return {
+                    hide: () => toast.hide(),
+                    // A toast, so the launcher stays open on the list (SPEC-130). Each setter shows the toast again, and
+                    // with the window hidden a toast that isn't animated shows as a HUD, so the style changes last.
+                    done: (title, message) => {
+                        toast.title = title;
+                        if (message) toast.message = message;
+                        toast.style = Toast.Style.Success;
+                    },
+                    failed: (title, message) => {
+                        toast.style = Toast.Style.Failure;
+                        toast.title = title;
+                        toast.message = message;
+                    },
+                };
+            },
+            load,
+            failed: (title, error) => {
                 logFailure(title, error);
-                toast.style = Toast.Style.Failure;
-                toast.title = title;
-                toast.message = "See the details.";
                 push(
                     <FailureView
                         title={title}
@@ -308,8 +355,10 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                         retry={() => void runInstall(entry, updating)}
                     />,
                 );
-            }
-        });
+            },
+        };
+        return presses.press(entry.name, updating, () => oneAtATime(() => installPressed(entry, updating, context, view)));
+    };
 
     const runUninstall = (entry: StoreEntry) =>
         oneAtATime(async () => {
@@ -358,6 +407,9 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     };
     const item = (entry: StoreEntry) => {
         const state = loaded ? status(entry, loaded.installed, loaded.trees) : "available";
+        // Every row with a name that's being installed or updated, here or by an earlier store's build (SPEC-153 B, C).
+        const busy = busyOf(entry.name);
+        const offered = rowActions(state, busy);
         const icon = loaded ? iconURL(entry, loaded.commit) : undefined;
         const tree = loaded?.trees.get(entry.dir);
         const compatibility = tree === undefined ? undefined : compatibilityTag(checked.results.get(tree));
@@ -372,7 +424,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                 accessories={
                     showingDetail
                         ? undefined
-                        : accessoryTexts(entry, state, compatibility).map((accessory) =>
+                        : accessoryTexts(entry, state, compatibility, busy).map((accessory) =>
                               "tag" in accessory
                                   ? { tag: { value: accessory.tag, color: tagColor(accessory.tag) } }
                                   : { text: accessory.text },
@@ -396,10 +448,10 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                     entry.dir !== actionsFor ? undefined : (
                     <ActionPanel>
                         <ActionPanel.Section>
-                            {state === "available" && (
+                            {offered.install && (
                                 <Action title="Install" icon={Icon.Download} onAction={() => runInstall(entry, false)} />
                             )}
-                            {state === "update" && (
+                            {offered.update && (
                                 <Action
                                     title="Update"
                                     icon={Icon.ArrowClockwise}
@@ -413,7 +465,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                                 shortcut={{ modifiers: ["cmd"], key: "d" }}
                                 onAction={() => setShowingDetail((value) => !value)}
                             />
-                            {state !== "available" && (
+                            {offered.uninstall && (
                                 <Action
                                     title="Uninstall"
                                     icon={Icon.Trash}
@@ -433,6 +485,11 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                                 onAction={() => {
                                     // A README that couldn't be fetched is tried again too.
                                     readmeFetches.again();
+                                    // Held while a build from another session runs, which the toast says (SPEC-153 C.7).
+                                    const waiting = others.records();
+                                    if (waiting.length > 0) {
+                                        void showToast({ style: Toast.Style.Success, title: heldRefreshMessage(waiting) });
+                                    }
                                     void refresh();
                                 }}
                             />

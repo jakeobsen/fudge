@@ -33,6 +33,7 @@ sudo ln -s /Applications/Fudge.app/Contents/Helpers/fudge /usr/local/bin/fudge
 - `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for Fudge, which picks it up within a second, with nothing to reload.
   Run it again after changing the extension.
   `--into <folder>` installs it in that extensions folder instead.
+  It stops at once, with exit status 75, while another build of the same extension into the same folder is running.
 - `fudge scan <folder>` says what the extension uses that Fudge doesn't have yet or doesn't support, without building or running it (`--json` for a script).
 - `fudge version` prints Fudge's version.
 
@@ -169,6 +170,7 @@ In the **Extension Store** command, search the extensions, or pick a category in
   After you change the proxy settings, quit and reopen Fudge for the store to use them.
 - The store needs Git, which comes with Apple's Command Line Tools.
   Without them, the store offers **Install Command Line Tools** (↵), macOS's own installer, and ⌘R checks again once they're in.
+- While an extension installs, its row says so, and closing the store doesn't stop the install: a store you open again shows it installing and records it when it's done.
 - It never touches extensions you installed with `fudge build` yourself.
   An extension installs under its own name, so it can't be installed while another extension of that name is: uninstall that one first.
 
