@@ -5,10 +5,11 @@ import Testing
 
 // SPEC-149 part B: the line under the sign-in server choice names the services the server on screen offers. Fudge
 // reads only ids and writes its own names. The requests here go to `LocalHTTPStub` on 127.0.0.1 or to fakes; no test
-// reaches a real sign-in server.
+// reaches a real sign-in server. SPEC-155: up to five names, else their number and Show All.
 
 private let plain = "Extensions sign in to services through this server."
-private let atlassian = "Atlassian (Jira, Confluence)"
+private let atlassian = OAuthProviders.atlassianName
+private let offers = "This server offers sign in through "
 
 private func answer(_ json: String) -> Data { Data(json.utf8) }
 
@@ -68,7 +69,7 @@ private func answer(_ json: String) -> Data { Data(json.utf8) }
 @Test func aServersTitleNeverReachesTheLine() {
     let json = #"{"services":[{"id":"github","title":"Sign in here: evil.example"},{"id":"x","title":"Phish"}]}"#
     let line = SignInServices.line(names: SignInServices.names(ids: SignInServices.ids(from: answer(json)) ?? []))
-    #expect(line == "Extensions sign in to GitHub through this server.")
+    #expect(line == "This server offers sign in through GitHub")
 }
 
 // MARK: - The line
@@ -76,35 +77,111 @@ private func answer(_ json: String) -> Data { Data(json.utf8) }
 @Test func theLineNamesTheServicesOrSaysThePlainLine() {
     #expect(SignInServices.line(names: []) == plain)
     #expect(SignInServer.explanation == plain)
-    #expect(SignInServices.line(names: ["GitHub"]) == "Extensions sign in to GitHub through this server.")
+    #expect(SignInServices.line(names: ["GitHub"]) == "This server offers sign in through GitHub")
     #expect(
         SignInServices.line(names: ["GitHub", atlassian])
-            == "Extensions sign in to GitHub and Atlassian (Jira, Confluence) through this server.")
+            == "This server offers sign in through GitHub and Atlassian (Jira, Confluence)")
     #expect(
         SignInServices.line(names: ["GitHub", "Linear", "Slack"])
-            == "Extensions sign in to GitHub, Linear, and Slack through this server.")
+            == "This server offers sign in through GitHub, Linear and Slack")
 }
 
-@Test func pastFiveNamesTheRestAreAndNMore() {
+@Test func noNamesIsThePlainLine() {
+    #expect(SignInServices.line(names: []) == "Extensions sign in to services through this server.")
+    #expect(SignInServices.line(names: []) == SignInServer.explanation)
+}
+
+@Test func oneNameIsNamed() {
+    #expect(SignInServices.line(names: ["GitHub"]) == "This server offers sign in through GitHub")
+}
+
+@Test func twoNamesAreJoinedWithAnd() {
+    #expect(
+        SignInServices.line(names: ["GitHub", atlassian])
+            == "This server offers sign in through GitHub and Atlassian (Jira, Confluence)")
+}
+
+@Test func threeNamesHaveNoCommaBeforeAnd() {
+    #expect(
+        SignInServices.line(names: ["GitHub", "Linear", "Slack"])
+            == "This server offers sign in through GitHub, Linear and Slack")
+}
+
+@Test func fiveNamesAreAllNamed() {
+    #expect(
+        SignInServices.line(names: ["GitHub", atlassian, "Slack", "Zoom", "Linear"])
+            == "This server offers sign in through GitHub, Atlassian (Jira, Confluence), Slack, Zoom and Linear")
+}
+
+@Test func sixNamesAreCounted() {
+    #expect(
+        SignInServices.line(names: ["A", "B", "C", "D", "E", "F"]) == "This server offers sign in through 6 services")
+}
+
+@Test func thirtyNamesAreCounted() {
+    let names = (1...30).map { "Service \($0)" }
+    #expect(SignInServices.line(names: names) == "This server offers sign in through 30 services")
+}
+
+@Test func everyIdFudgeKnowsIsCountedByItsNamesNotItsTableEntries() {
+    let names = SignInServices.names(ids: OAuthProviders.all.map(\.id))
+    #expect(names.count > SignInServices.maxNames)
+    #expect(SignInServices.line(names: names) == "This server offers sign in through \(names.count) services")
+    // Some ids have several table entries, and each id gives one name: the number counts ids, not table entries.
+    #expect(Set(OAuthProviders.all.map(\.id)).count == names.count)
+}
+
+@Test func noNewLineEndsWithAFullStopSaysMoreOrHasACommaBeforeAnd() {
+    for count in 1...7 {
+        let line = SignInServices.line(names: (1...count).map { "Service \($0)" })
+        #expect(line.hasPrefix(offers), "\(count)")
+        #expect(!line.hasSuffix("."), "\(count)")
+        #expect(!line.contains("more"), "\(count)")
+        #expect(!line.contains(", and"), "\(count)")
+    }
+}
+
+@Test func pastFiveNamesTheLineGivesTheirNumber() {
     let names = ["A", "B", "C", "D", "E", "F", "G", "H"]
     #expect(SignInServices.maxNames == 5)
-    #expect(SignInServices.list(Array(names.prefix(5))) == "A, B, C, D, and E")
-    #expect(SignInServices.list(Array(names.prefix(6))) == "A, B, C, D, and 2 more")
-    #expect(SignInServices.list(names) == "A, B, C, D, and 4 more")
-    let all = SignInServices.names(ids: OAuthProviders.all.map(\.id))
-    #expect(
-        SignInServices.line(names: all)
-            == "Extensions sign in to GitHub, Linear, Slack, Asana, and \(all.count - 4) more through this server.")
+    #expect(SignInServices.line(names: Array(names.prefix(5))) == "This server offers sign in through A, B, C, D and E")
+    #expect(SignInServices.line(names: Array(names.prefix(6))) == "This server offers sign in through 6 services")
+    #expect(SignInServices.line(names: names) == "This server offers sign in through 8 services")
 }
 
-@Test func theListIsJoinedAsListFormatterJoinsEnglish() {
-    let formatter = ListFormatter()
-    formatter.locale = Locale(identifier: "en_US")
-    let names = ["GitHub", atlassian, "Linear", "Slack", "Asana"]
-    for count in 1...SignInServices.maxNames {
-        let some = Array(names.prefix(count))
-        #expect(SignInServices.list(some) == formatter.string(from: some), "\(count)")
+@Test func theListHasNoCommaBeforeItsLastName() {
+    #expect(SignInServices.list(["A"]) == "A")
+    #expect(SignInServices.list(["A", "B"]) == "A and B")
+    #expect(SignInServices.list(["A", "B", "C"]) == "A, B and C")
+    #expect(SignInServices.list(["A", "B", "C", "D", "E"]) == "A, B, C, D and E")
+}
+
+@Test func showAllIsOnlyPastFiveNames() {
+    for count in 0...5 {
+        #expect(!SignInServices.showsAll(names: (0..<count).map { "Service \($0)" }), "\(count)")
     }
+    for count in [6, 30] {
+        #expect(SignInServices.showsAll(names: (0..<count).map { "Service \($0)" }), "\(count)")
+    }
+}
+
+@Test func dedupeAndMappingDecideTheCount() {
+    let two = SignInServices.names(ids: ["github", "github", "atlassian", "nope", "atlassian"])
+    #expect(two == ["GitHub", atlassian])
+    #expect(
+        SignInServices.line(names: two) == "This server offers sign in through GitHub and Atlassian (Jira, Confluence)")
+    // Six ids, one of them twice: five names, listed.
+    let five = SignInServices.names(ids: ["github", "linear", "slack", "asana", "google", "github"])
+    #expect(five == ["GitHub", "Linear", "Slack", "Asana", "Google"])
+    #expect(
+        SignInServices.line(names: five) == "This server offers sign in through GitHub, Linear, Slack, Asana and Google"
+    )
+    #expect(!SignInServices.showsAll(names: five))
+    // Seven ids, one Fudge doesn't know: six names, counted.
+    let six = SignInServices.names(ids: ["github", "linear", "slack", "asana", "google", "zoom", "nope"])
+    #expect(six.count == 6)
+    #expect(SignInServices.line(names: six) == "This server offers sign in through 6 services")
+    #expect(SignInServices.showsAll(names: six))
 }
 
 // MARK: - The address
@@ -218,7 +295,7 @@ private final class Locked<Value: Sendable>: @unchecked Sendable {
     #expect(line.text == plain)
     try await fetcher.answer(second.servicesURL!, ids: ["atlassian"])
     await loadingSecond.value
-    #expect(line.text == "Extensions sign in to Atlassian (Jira, Confluence) through this server.")
+    #expect(line.text == "This server offers sign in through Atlassian (Jira, Confluence)")
     #expect(await fetcher.asked == [first.servicesURL!, second.servicesURL!])
 }
 
@@ -236,7 +313,7 @@ private final class Locked<Value: Sendable>: @unchecked Sendable {
 @MainActor @Test func aChangeStartsOverWithThePlainLine() async throws {
     let line = SignInServicesLine()
     await line.load(.fudge, using: FixedSignInServices(ids: ["github"]))
-    #expect(line.text == "Extensions sign in to GitHub through this server.")
+    #expect(line.text == "This server offers sign in through GitHub")
     let fetcher = GatedFetcher()
     let loading = Task { await line.load(.custom(URL(string: "https://other.example")!), using: fetcher) }
     try await fetcher.waitUntilAsked(1)
@@ -259,6 +336,35 @@ private final class Locked<Value: Sendable>: @unchecked Sendable {
     #expect(fetcher.asked.current == [])
 }
 
+@MainActor @Test func theListKeepsTheServersOrder() async {
+    let line = SignInServicesLine()
+    await line.load(.fudge, using: FixedSignInServices(snapshotValue: "zoom|github|linear|slack|asana|google"))
+    #expect(line.names == ["Zoom", "GitHub", "Linear", "Slack", "Asana", "Google"])
+    #expect(line.text == "This server offers sign in through 6 services")
+    #expect(line.showsAll)
+}
+
+@MainActor @Test func showAllIsOffWhileLoadingAndAfterAChangeOfServer() async throws {
+    let six = ["github", "linear", "slack", "asana", "google", "zoom"]
+    let line = SignInServicesLine()
+    #expect(!line.showsAll)
+    await line.load(.fudge, using: FixedSignInServices(ids: six))
+    #expect(line.showsAll)
+    let fetcher = GatedFetcher()
+    let other = SignInServer.custom(URL(string: "https://other.example")!)
+    let loading = Task { await line.load(other, using: fetcher) }
+    try await fetcher.waitUntilAsked(1)
+    // The server on screen changed and hasn't answered yet.
+    #expect(!line.showsAll)
+    #expect(line.text == plain)
+    try await fetcher.answer(other.servicesURL!, ids: six)
+    await loading.value
+    #expect(line.showsAll)
+    // No server on screen.
+    await line.load(nil, using: fetcher)
+    #expect(!line.showsAll)
+}
+
 // MARK: - Snapshot runs
 
 @MainActor @Test func aSnapshotRunNeverUsesTheNetworkEvenWithAServerChosen() async {
@@ -272,7 +378,7 @@ private final class Locked<Value: Sendable>: @unchecked Sendable {
     }
     let line = SignInServicesLine()
     await line.load(.fudge, using: pick(true, "github|atlassian"))
-    #expect(line.text == "Extensions sign in to GitHub and Atlassian (Jira, Confluence) through this server.")
+    #expect(line.text == "This server offers sign in through GitHub and Atlassian (Jira, Confluence)")
     await line.load(.custom(URL(string: "https://own.example")!), using: pick(true, nil))
     #expect(line.text == plain)
     #expect(!made.current)
@@ -287,7 +393,8 @@ private final class Locked<Value: Sendable>: @unchecked Sendable {
     await line.load(.fudge, using: FixedSignInServices(snapshotValue: " atlassian | nope|github|atlassian||"))
     #expect(line.names == [atlassian, "GitHub"])
     await line.load(.fudge, using: FixedSignInServices(snapshotValue: "github|linear|slack|asana|google|zoom"))
-    #expect(line.text == "Extensions sign in to GitHub, Linear, Slack, Asana, and 2 more through this server.")
+    #expect(line.text == "This server offers sign in through 6 services")
+    #expect(line.showsAll)
     await line.load(.fudge, using: FixedSignInServices(snapshotValue: ""))
     #expect(line.text == plain)
     await line.load(.fudge, using: FixedSignInServices(snapshotValue: "nope"))

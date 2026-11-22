@@ -841,6 +841,9 @@ final class SettingsModel {
     /// Where the line under the server choice asks for the server's services (SPEC-149): the server, set once by the
     /// app delegate at launch; a snapshot run's fixed answer, which never uses the network, as this default doesn't.
     @ObservationIgnored var signInServicesFetcher: any SignInServicesFetching = FixedSignInServices(ids: nil)
+    /// In a snapshot run with `--sign-in-services-list`, the names the server choice loaded, which the Sign-in page
+    /// lists in place, as Show All's popover would; nil in every other run, so the choice writes nothing here.
+    var snapshotServicesList: [String]?
 
     private var tokenStore: OAuthTokenStore { OAuthTokenStore(secrets: tokenSecrets) }
 
