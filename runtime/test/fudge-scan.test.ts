@@ -32,12 +32,15 @@ function scan(script: string, folder: string): unknown {
     return JSON.parse(output);
 }
 
+/** An extension whose own code doesn't sign in. */
+const noSignIn = { methods: [], authorizeURLs: [], unresolved: false };
 const supported = {
     extension: "scan-supported",
     supported: true,
     gaps: [],
     unreadable: [],
     commands: [{ name: "index", unsupported: [], traced: true }],
+    signIn: noSignIn,
 };
 const withGaps = {
     extension: "scan-gaps",
@@ -48,6 +51,7 @@ const withGaps = {
     ],
     unreadable: [],
     commands: [{ name: "index", unsupported: ["AI"], traced: true }],
+    signIn: noSignIn,
 };
 
 test("fudge scan reports a supported extension and one with gaps", () => {
@@ -85,6 +89,7 @@ test("without --json, fudge scan lists the gaps for a person, saying Fudge", () 
         ],
         unreadable: ["src/broken.ts"],
         commands: [],
+        signIn: noSignIn,
     };
     assert.equal(
         describe(other),
@@ -110,6 +115,7 @@ test("without --json, fudge scan lists the gaps for a person, saying Fudge", () 
             { name: "history", unsupported: [], traced: true },
             { name: "models", unsupported: [], traced: true },
         ],
+        signIn: noSignIn,
     };
     assert.equal(
         describe(onlyByDesign),
@@ -127,6 +133,7 @@ test("without --json, fudge scan lists the gaps for a person, saying Fudge", () 
         gaps: [{ api: "BrowserExtension.getTabs", kind: "missing", byDesign: "Browser Extension" }],
         unreadable: [],
         commands: [],
+        signIn: noSignIn,
     };
     assert.equal(
         describe(browser),
@@ -177,6 +184,7 @@ test("a source esbuild can't read is unreadable, and the extension isn't called 
         gaps: [],
         unreadable: ["src/index.ts"],
         commands: [{ name: "index", unsupported: [], traced: false }],
+        signIn: noSignIn,
     });
 });
 
