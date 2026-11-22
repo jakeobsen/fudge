@@ -1,0 +1,9 @@
+{
+  "name": "command-names",
+  "title": "Command Names",
+  "description": "A fixture extension for fudge's builder tests: command names as Raycast accepts them.",
+  "commands": [
+    { "name": "stayAwake", "title": "Stay Awake", "mode": "no-view" },
+    { "name": "show-recent.command", "title": "Show Recent", "mode": "view" }
+  ]
+}

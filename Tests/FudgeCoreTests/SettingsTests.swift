@@ -105,6 +105,27 @@ func everyRecordableKeyRoundTrips(text: String, keyCode: UInt32) throws {
     #expect(object.keys.sorted() == ["hotkey"])
 }
 
+/// SPEC-143: a command named as Raycast accepts it keeps its hotkey, alias and Enabled under its own case.
+@Test func aCamelCaseCommandsSettingsRoundTrip() throws {
+    let folder = try Fixtures.temporaryDirectory()
+    let file = folder.appendingPathComponent("settings.json")
+    var settings = FudgeSettings()
+    let awake = FudgeSettings.commandID(extension: "made-up", command: "caffeinateWhile")
+    let schedule = FudgeSettings.commandID(extension: "made-up", command: "addSchedule")
+    #expect(awake == "made-up/caffeinateWhile")
+    settings.commands[awake] = .init(hotkey: "option+w", alias: "cw")
+    settings.setEnabled(false, commandID: schedule)
+    try settings.save(to: file)
+
+    let loaded = FudgeSettings.load(from: file)
+    #expect(loaded == settings)
+    #expect(loaded.alias(ofCommand: awake) == "cw")
+    #expect(loaded.availableHotkeys(installed: [awake, schedule]) == [awake: HotKeySpec.parse("option+w")!])
+    #expect(loaded.isEnabled(commandID: awake) && !loaded.isEnabled(commandID: schedule))
+    #expect(loaded.isEnabled(extension: "made-up", command: "caffeinateWhile"))
+    #expect(loaded.commands["made-up/caffeinatewhile"] == nil, "the name keeps its case")
+}
+
 @Test func oldSettingsFilesStillReadAndUnknownKeysSurviveAWrite() throws {
     let folder = try Fixtures.temporaryDirectory()
     let file = folder.appendingPathComponent("settings.json")

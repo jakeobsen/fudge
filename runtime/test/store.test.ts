@@ -79,6 +79,7 @@ import {
     sourceProblem,
     specProblem,
 } from "../store-extension/src/sources.ts";
+import { isCommandName } from "../scripts/compat/source-files.ts";
 import {
     buildArguments,
     bundledNames,
@@ -131,6 +132,17 @@ test("the name rule is the app's: one fixture pins both", async () => {
     assert.ok(names.valid.length > 0 && names.invalid.length > 0);
     for (const name of names.valid) assert.ok(isValidName(name), name);
     for (const name of names.invalid) assert.ok(!isValidName(name), name);
+});
+
+test("the command name rule is the app's: one fixture pins both, for the scan and the store alike", async () => {
+    const names = JSON.parse(await readFile(new URL("./fixtures/command-names.json", import.meta.url), "utf8")) as {
+        valid: string[];
+        invalid: string[];
+    };
+    assert.ok(names.valid.length > 0 && names.invalid.length > 0);
+    for (const name of names.valid) assert.ok(isCommandName(name), name);
+    for (const name of names.invalid) assert.ok(!isCommandName(name), JSON.stringify(name));
+    assert.ok(!isCommandName(1) && !isCommandName(null));
 });
 
 test("a manifest's name and its folder each pass their own rule, and may differ", () => {
@@ -1246,6 +1258,21 @@ test("the detail and the confirmation name the commands, and the confirmation sa
         "Not compatible with Fudge: every command uses Raycast AI or the Raycast Browser Extension, which Fudge " +
             "doesn't support, so none of them will be enabled. You can turn them on in Settings → Commands.",
     );
+});
+
+test("per-command results keep command names as Raycast accepts them (caffeinateWhile, dots)", async () => {
+    const byCommand = (report: ScanReport) => {
+        const result = fromReport(report);
+        return "byCommand" in result ? result.byCommand : undefined;
+    };
+    const camel = perCommand({ caffeinateWhile: ["AI"], addSchedule: [], "show-recent.command": [] });
+    assert.deepEqual(byCommand(camel), { count: 3, using: ["caffeinateWhile"] });
+    assert.deepEqual(byCommand(perCommand({ "a b": ["AI"], ok: [] })), undefined, "one bad name drops them");
+
+    const supportPath = await mkdtemp(path.join(tmpdir(), "fudge-camel-"));
+    await writeCompatibility(supportPath, "scanner-1", new Map([[treeOf(1), fromReport(camel)]]));
+    assert.deepEqual((await readCompatibility(supportPath, "scanner-1")).get(treeOf(1)), fromReport(camel));
+    await rm(supportPath, { recursive: true, force: true });
 });
 
 test("a cached result keeps its commands, and one with a bad commands entry is dropped", async () => {

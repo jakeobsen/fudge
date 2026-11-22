@@ -1,0 +1,35 @@
+{
+  "comment": "The command name rule (ExtensionManifest.isValidCommandName), pinned for both Swift and isCommandName in scripts/compat/source-files.ts, which the compatibility scan and the Extension Store share, so they can't drift apart. Raycast accepts letters of either case and dots.",
+  "valid": [
+    "caffeinateWhile",
+    "addSchedule",
+    "search-ableton-live-projects.command",
+    "a_b-c.d",
+    "x1",
+    "8-ball",
+    "notion_researcher",
+    "Search",
+    "fooBar",
+    "a..b",
+    "x."
+  ],
+  "invalid": [
+    "",
+    ".hidden",
+    "-x",
+    "_x",
+    "a/b",
+    "../x",
+    "a b",
+    "é",
+    "café",
+    "a\\b",
+    ":group",
+    "a:b",
+    "~x",
+    "a*b",
+    "a\nb",
+    "x\n",
+    " x"
+  ]
+}

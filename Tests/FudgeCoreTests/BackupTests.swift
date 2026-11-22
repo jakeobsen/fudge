@@ -672,6 +672,38 @@ private func storeFolder(_ trees: [String: String]) throws -> Folder {
         "not-installed ones are the import's other list; the bundled store is never flagged; a name counts once")
 }
 
+/// SPEC-143: what's kept under a command named as Raycast accepts it (`caffeinateWhile`) comes back in its own case.
+@Test func aCamelCaseCommandsSettingsAndDataRoundTrip() throws {
+    let name = "made-up"
+    let source = try Folder()
+    try source.write(
+        "settings.json",
+        #"{"commands":{"\#(name)/caffeinateWhile":{"hotkey":"option+w","alias":"cw"},"\#(name)/addSchedule":{"enabled":false}}}"#
+    )
+    try source.write("history.json", #"{"\#(name)/caffeinateWhile":2}"#)
+    try source.write("command-metadata.json", #"{"\#(name)/caffeinateWhile":{"subtitle":"On"}}"#)
+    try source.write("form-values/\(name).json", #"{"addSchedule":{"when":"x"}}"#)
+    let file = source.url.appendingPathComponent("b.fudgebackup")
+    try BackupArchive.write(
+        Backup.collect(
+            from: source.paths, installed: [try installed(name, title: "Made Up")], fudgeVersion: "1.0", now: now
+        ).entries, to: file, password: password)
+    let target = try Folder()
+    _ = try Backup.apply(
+        try Backup.open(file, password: password), to: target.paths, installed: [], fudgeVersion: "1.0", now: now)
+
+    let settings = FudgeSettings.load(from: target.paths.settingsFile)
+    #expect(settings.commands["\(name)/caffeinateWhile"]?.hotkey == "option+w")
+    #expect(settings.commands["\(name)/caffeinateWhile"]?.alias == "cw")
+    #expect(!settings.isEnabled(extension: name, command: "addSchedule"))
+    for path in ["history.json", "form-values/\(name).json"] {
+        #expect(target.read(path) == source.read(path), "\(path)")
+    }
+    // A keyed file is merged extension by extension, so it's written again: its content comes back.
+    let metadata = target.json("command-metadata.json")?["\(name)/caffeinateWhile"] as? [String: Any]
+    #expect(metadata?["subtitle"] as? String == "On")
+}
+
 @Test func aBuiltInCommandsHotkeyAliasAndEnabledSurviveABackup() throws {
     let source = try Folder()
     try source.write(

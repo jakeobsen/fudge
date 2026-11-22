@@ -3,7 +3,7 @@
 // selection has rested on it; the list shows only what's cached.
 import { lstat, mkdir, readdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { hasSourceExtension, sourceExtensions } from "../../scripts/compat/source-files.ts";
+import { hasSourceExtension, isCommandName, sourceExtensions } from "../../scripts/compat/source-files.ts";
 import {
     isRaycastDomainHost,
     providersFromEnvironment,
@@ -118,9 +118,6 @@ export function signsInThroughRaycast(signIn: unknown, table: SignInTable): bool
  * place Fudge's text names where a sign-in goes. */
 export const throughRaycastSentence =
     "Signing in goes through raycast.com. The extension's author chose that, so Fudge can't change it.";
-
-/** A command name as the manifest rule has it (`isValidName`'s shape). */
-const isCommandName = (name: unknown): name is string => typeof name === "string" && /^[a-z0-9][a-z0-9_-]*$/.test(name);
 
 /** The report's per-command results, when they're all well formed. */
 function commandsOf(report: ScanReport): { name: string; unsupported: string[] }[] | undefined {
