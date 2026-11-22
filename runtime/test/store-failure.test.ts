@@ -70,6 +70,21 @@ test("npm missing means a damaged Fudge, since npm and Node.js come with it: Rei
     );
 });
 
+test("the compile step missing is a damaged Fudge too, in its own words rather than npm's (SPEC-147)", () => {
+    // `fudge build` with no Node.js or bundling script beside it (BuildError.noBundler), as it prints it.
+    const output =
+        "fudge: compiling needs Fudge's own Node.js and its bundling script, which aren't beside this fudge tool; " +
+        "use the fudge inside Fudge.app\n";
+    const cause = causeOf({ output, command: npmCommand, code: 1 });
+    assert.equal(cause.kind, "bundlerMissing");
+    assert.equal(
+        cause.text,
+        "Fudge couldn't find a part it needs to build extensions. It comes with Fudge, so this copy of Fudge is " +
+            "damaged. Reinstall Fudge.",
+    );
+    assert.doesNotMatch(cause.text, /npm/);
+});
+
 test("the npm registry unreachable, by npm's own error codes, and only when npm said so", () => {
     for (const line of [
         "npm error code ENOTFOUND\nnpm error network request to https://registry.npmjs.org/react failed, reason: getaddrinfo ENOTFOUND registry.npmjs.org",
@@ -146,6 +161,15 @@ test("git missing, a build error with its first line, and anything else", () => 
         code: 1,
     });
     assert.deepEqual(build, { kind: "buildFailed", text: 'The extension didn\'t build: Could not resolve "left-pad"' });
+    // The same, as `fudge build` prints it: the compile step's own first line, then esbuild's output (SPEC-147).
+    const printed = causeOf({
+        output:
+            '  compiling 1 command\nfudge: compiling the extension failed (exit 1):\n✘ [ERROR] Could not resolve "left-pad"' +
+            "\n\n    src/index.tsx:1:20:\n",
+        command: npmCommand,
+        code: 1,
+    });
+    assert.deepEqual(printed, build);
     assert.equal(causeOf({ output: "something odd happened", code: 1 }).text, "Something went wrong. Copy Error copies the whole error.");
     assert.deepEqual(causeOf({ output: "Another extension called a is installed. Uninstall it first.", refused: true }), {
         kind: "refused",
