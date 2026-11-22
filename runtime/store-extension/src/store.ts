@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isValidExtensionId } from "../../src/extension-id.ts";
 import {
+    addedRepository,
     commandTitles,
     isValidFolder,
     isValidName,
@@ -443,31 +444,32 @@ export function oneAtATime<T>(work: () => Promise<T>): Promise<T> {
 export type Busy = "installing" | "updating";
 
 /**
- * The names this store is installing or updating, from the press until the install's run ends, after the list has
- * loaded again (SPEC-153 B). The key is the manifest name, since the install folder is `<extensions>/<name>`. A press for
- * a name it holds, or one `busyElsewhere` names, does nothing: no toast, nothing queued. A press for another name waits
- * its turn in `work`, and its row says so meanwhile.
+ * The extensions this store is installing or updating, from the press until the install's run ends, after the list has
+ * loaded again (SPEC-153 B). The key is the extension's id (`entryId`, SPEC-157 E.7), since each id is built under its
+ * own lock into its own folder: the same name from another repository is another extension. A press for an id it
+ * holds, or one `busyElsewhere` names, does nothing: no toast, nothing queued. A press for another id waits its turn in
+ * `work`, and its row says so meanwhile.
  */
 export class InstallPresses {
-    private readonly names = new Map<string, Busy>();
+    private readonly ids = new Map<string, Busy>();
     private readonly changed: () => void;
-    private readonly busyElsewhere: (name: string) => boolean;
+    private readonly busyElsewhere: (id: string) => boolean;
 
-    constructor(changed: () => void = () => {}, busyElsewhere: (name: string) => boolean = () => false) {
+    constructor(changed: () => void = () => {}, busyElsewhere: (id: string) => boolean = () => false) {
         this.changed = changed;
         this.busyElsewhere = busyElsewhere;
     }
 
-    state(name: string): Busy | undefined {
-        return this.names.get(name);
+    state(id: string): Busy | undefined {
+        return this.ids.get(id);
     }
 
-    press(name: string, updating: boolean, work: () => Promise<void>): Promise<void> {
-        if (this.names.has(name) || this.busyElsewhere(name)) return Promise.resolve();
-        this.names.set(name, updating ? "updating" : "installing");
+    press(id: string, updating: boolean, work: () => Promise<void>): Promise<void> {
+        if (this.ids.has(id) || this.busyElsewhere(id)) return Promise.resolve();
+        this.ids.set(id, updating ? "updating" : "installing");
         this.changed();
         const ended = () => {
-            this.names.delete(name);
+            this.ids.delete(id);
             this.changed();
         };
         try {
@@ -499,12 +501,12 @@ export type InstallView = {
 export type InstallNotices = {
     /** `installEnded` in `fudge:app`. */
     report: (report: InstallEndReport) => Promise<InstallAnswer>;
-    /** Selects the row of `dir`, once. */
-    select: (dir: string) => void;
+    /** Selects the row of `dir` in the repository whose folder is `repository` (Raycast's when none), once. */
+    select: (dir: string, repository?: string) => void;
     /** A failure that got a notification: logged, its row marked, and kept for a click; no failure view. */
     failedNotified: (title: string, error: unknown, mark: FailureMark) => void;
-    /** The name installed or updated: its row's mark goes. */
-    succeeded?: (name: string) => void;
+    /** The name installed or updated from that repository (Raycast's when none): its row's mark goes. */
+    succeeded?: (name: string, repository?: string) => void;
     /** How long to wait for the answer (`reportLimit`, 5 s). */
     limit?: number;
 };
@@ -516,8 +518,11 @@ export type InstallNotices = {
  * C.6).
  */
 export async function installPressed(entry: StoreEntry, updating: boolean, context: StoreContext, view: InstallView): Promise<void> {
+    // An added repository's folder, which the report, the mark and the saved failure carry; none for Raycast's.
+    const repository = addedRepository(entry);
+    const fromRepository = repository === undefined ? {} : { repository };
     // Pressed again: a failure saved for a click is out of date (SPEC-156 D.4).
-    if (view.notices) await removeSavedFailure(context.supportPath, { name: entry.name });
+    if (view.notices) await removeSavedFailure(context.supportPath, { name: entry.name, ...fromRepository });
     const toast = await view.toast(`${updating ? "Updating" : "Installing"} ${entry.title}…`);
     // The last `fudge build` the install ran, for the app to know it by (SPEC-156 C.1).
     let build: BuildId | undefined;
@@ -525,6 +530,7 @@ export async function installPressed(entry: StoreEntry, updating: boolean, conte
         ...(build ? { build: { pid: build.pid, startedAt: build.startedAt } } : {}),
         name: entry.name,
         dir: entry.dir,
+        ...fromRepository,
         title: entry.title,
         updating,
         outcome,
@@ -542,10 +548,10 @@ export async function installPressed(entry: StoreEntry, updating: boolean, conte
         const shown = doneToast(entry.title, updating, done);
         // The app decides whether a notification says it (SPEC-156 D.1); then no HUD repeats it.
         const answer = view.notices ? await reportEnd(view.notices.report, end("installed"), view.notices.limit) : unanswered;
-        view.notices?.succeeded?.(entry.name);
+        view.notices?.succeeded?.(entry.name, repository);
         if (answer.notified) await toast.hide();
         else toast.done(shown.title, shown.message);
-        if (!answer.onScreen) view.notices?.select(entry.dir);
+        if (!answer.onScreen) view.notices?.select(entry.dir, repository);
     } catch (error) {
         if (error instanceof AlreadyBuilding) {
             toast.done(error.message);
@@ -561,13 +567,14 @@ export async function installPressed(entry: StoreEntry, updating: boolean, conte
             const mark: FailureMark = {
                 name: entry.name,
                 dir: entry.dir,
+                ...fromRepository,
                 title: entry.title,
                 updating,
                 failedAt: (context.now?.() ?? new Date()).toISOString(),
                 details: failureDetails(error),
             };
             view.notices.failedNotified(title, error, mark);
-            view.notices.select(entry.dir);
+            view.notices.select(entry.dir, repository);
             await saveFailure(context.supportPath, mark, context.log);
             return;
         }

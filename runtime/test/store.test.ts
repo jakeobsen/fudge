@@ -30,18 +30,25 @@ import {
 } from "../store-extension/src/notices.ts";
 import {
     accessoryTexts,
+    addedRepository,
     allFilter,
+    byTitle,
     categories,
     distinctFolders,
+    entryId,
     failedInstallTag,
     failedUpdateTag,
     filterEntries,
     iconURL,
     installedFilter,
+    installedRecord,
     isValidName,
+    namedRowId,
     parseManifest,
+    raycastCopy,
     readCatalog,
     rowActions,
+    rowId,
     searchKeywords,
     sections,
     status,
@@ -118,6 +125,8 @@ import {
     filterImages,
     imageSource,
     isGitHubImage,
+    readmeKey,
+    readmeKeyParts,
     readmeNotFetched,
     refetching,
     rendererPass,
@@ -242,6 +251,8 @@ test("an entry has the manifest's fields, and only a plain icon file name", () =
     assert.deepEqual(entry, {
         name: "alpha",
         dir: "alpha",
+        copyId: "raycast",
+        repositoryFolder: "raycast/extensions",
         title: "Alpha",
         description: "The alpha extension",
         author: "someone",
@@ -272,7 +283,7 @@ test("the catalog reads valid manifests only, sorted by title", async () => {
     await writeFile(path.join(repo, "extensions/broken-json"), "");
     await mkdir(path.join(repo, "extensions/broken"), { recursive: true });
     await writeFile(path.join(repo, "extensions/broken/package.json"), "{ not json");
-    const entries = await readCatalog(repo);
+    const entries = await readCatalog(repo, raycastCopy);
     assert.deepEqual(
         entries.map((entry) => [entry.name, entry.dir]),
         [
@@ -283,11 +294,94 @@ test("the catalog reads valid manifests only, sorted by title", async () => {
         ],
         "by title; Upper's name isn't valid, and .hidden isn't a folder the store reads",
     );
-    assert.deepEqual(await readCatalog(path.join(repo, "missing")), []);
+    assert.deepEqual(await readCatalog(path.join(repo, "missing"), raycastCopy), []);
 });
 
 test("folders that differ only by case are one folder, as on APFS", () => {
     assert.deepEqual(distinctFolders(["dup", "Zeta", "Dup", "alpha", "DUP"]), ["DUP", "Zeta", "alpha"]);
+});
+
+/** An added repository's copy, as `repositories.ts` names one: a made-up address's copy id and folder. */
+const addedCopy = { copyId: "0123456789abcdef", repositoryFolder: "owner/repository" };
+
+test("rows know their copy and repository: every entry of a copy gets its copy id and folder", async () => {
+    const repo = await temporary();
+    await writeJSON(path.join(repo, "extensions/alpha/package.json"), manifest("alpha"));
+    await writeJSON(path.join(repo, "extensions/amazon-aws/package.json"), manifest("aws", { title: "Amazon AWS" }));
+    for (const copy of [raycastCopy, addedCopy]) {
+        assert.deepEqual(
+            (await readCatalog(repo, copy)).map((entry) => [entry.name, entry.dir, entry.copyId, entry.repositoryFolder]),
+            [
+                ["alpha", "alpha", copy.copyId, copy.repositoryFolder],
+                ["aws", "amazon-aws", copy.copyId, copy.repositoryFolder],
+            ],
+        );
+    }
+    assert.deepEqual(raycastCopy, { copyId: "raycast", repositoryFolder: "raycast/extensions" });
+    const raycasts = parseManifest("alpha", manifest("alpha"))!;
+    assert.equal(raycasts.copyId, "raycast", "a manifest read with no copy is Raycast's");
+    assert.equal(raycasts.repositoryFolder, "raycast/extensions");
+    const added = parseManifest("alpha", manifest("alpha"), addedCopy)!;
+    assert.equal(added.copyId, addedCopy.copyId);
+    assert.equal(added.repositoryFolder, addedCopy.repositoryFolder);
+});
+
+test("the same title, name and folder in two copies sorts by the copy id last", () => {
+    const raycasts = parseManifest("alpha", manifest("alpha"))!;
+    const added = parseManifest("alpha", manifest("alpha"), addedCopy)!;
+    assert.ok(byTitle(added, raycasts) < 0, "0123… before raycast");
+    assert.ok(byTitle(raycasts, added) > 0);
+    assert.deepEqual([raycasts, added].sort(byTitle).map((entry) => entry.copyId), [addedCopy.copyId, "raycast"]);
+    // The title still comes first.
+    const zeta = parseManifest("zeta", manifest("zeta"))!;
+    assert.deepEqual([zeta, added].sort(byTitle).map((entry) => entry.name), ["alpha", "zeta"]);
+});
+
+test("a row's extension id, its list id and its added repository: the same name from two repositories is two", () => {
+    const raycasts = parseManifest("github", manifest("github"))!;
+    const added = parseManifest("github", manifest("github"), addedCopy)!;
+    assert.equal(entryId(raycasts), "github", "Raycast's keep their bare names");
+    assert.equal(entryId(added), "owner+repository+github");
+    assert.equal(entryId({ name: "github", repositoryFolder: "git.example.org_8443/team/tools" }), "git.example.org_8443+team+tools+github");
+    // A name too long for the id rule still keys its own row, apart from any other.
+    const long = "a".repeat(190);
+    assert.equal(entryId({ name: long, repositoryFolder: "owner/repository" }), `owner+repository+${long}`);
+    assert.equal(rowId(raycasts.repositoryFolder, raycasts.dir), "raycast/extensions:github");
+    assert.equal(rowId(added.repositoryFolder, added.dir), "owner/repository:github");
+    assert.notEqual(rowId(raycasts.repositoryFolder, raycasts.dir), rowId(added.repositoryFolder, added.dir));
+    assert.equal(addedRepository(raycasts), undefined, "Raycast's rows carry no repository");
+    assert.equal(addedRepository(added), "owner/repository");
+    // A record, a report or a mark names its row by its folder and its added repository, Raycast's by none.
+    assert.equal(namedRowId("github", undefined), rowId(raycasts.repositoryFolder, raycasts.dir));
+    assert.equal(namedRowId("github", "owner/repository"), rowId(added.repositoryFolder, added.dir));
+});
+
+test("installedRecord matches the row's id and folder: a record of the same name from another repository isn't this row's", () => {
+    const raycasts = parseManifest("github", manifest("github"))!;
+    const added = parseManifest("github", manifest("github"), addedCopy)!;
+    const raycastRecord = { tree: "t1", commit: "c1", installedAt: "2026-11-22T00:00:00.000Z", dir: "github" };
+    const addedRecord = { ...raycastRecord, tree: "t2", repository: "owner/repository" };
+    assert.equal(installedRecord(raycasts, { github: raycastRecord }), raycastRecord);
+    assert.equal(installedRecord(added, { github: raycastRecord }), undefined, "Raycast's install isn't the added row's");
+    assert.equal(installedRecord(added, { "owner+repository+github": addedRecord }), addedRecord);
+    assert.equal(installedRecord(raycasts, { "owner+repository+github": addedRecord }), undefined);
+    const both = { github: raycastRecord, "owner+repository+github": addedRecord };
+    assert.equal(installedRecord(raycasts, both), raycastRecord);
+    assert.equal(installedRecord(added, both), addedRecord);
+    assert.equal(status(added, both, new Map([["github", "t3"]])), "update", "each row from its own record");
+    assert.equal(status(raycasts, both, new Map([["github", "t1"]])), "installed");
+    // A record under the id that names another repository isn't the row's either.
+    assert.equal(installedRecord(added, { "owner+repository+github": { ...addedRecord, repository: "owner/other" } }), undefined);
+    assert.equal(installedRecord(raycasts, { github: { ...raycastRecord, repository: "owner/repository" } }), undefined);
+});
+
+test("a README is kept by its copy, its folder and its tree", () => {
+    const key = readmeKey(addedCopy.copyId, "github", "abc");
+    assert.notEqual(key, readmeKey("raycast", "github", "abc"));
+    assert.notEqual(key, readmeKey(addedCopy.copyId, "github-2", "abc"));
+    assert.deepEqual(readmeKeyParts(key), { copyId: addedCopy.copyId, dir: "github", tree: "abc" });
+    assert.equal(shownReadme(key, { [key]: "# GitHub" }, new Set()), "# GitHub");
+    assert.equal(shownReadme(readmeKey("raycast", "github", "abc"), { [key]: "# GitHub" }, new Set()), undefined);
 });
 
 // MARK: - Rows
@@ -1860,32 +1954,32 @@ test("moving through 20 rows quickly fetches nothing; the row the selection rest
     const checks = new CompatibilityChecks({
         timers: clock.timers,
         cached: (tree) => results.get(tree),
-        check: (dir, _tree, cancelled) => oneAtATime(() => checkFolder(dir, context, cancelled)),
-        changed: (dir, tree, result) => {
+        check: (_copyId, dir, _tree, cancelled) => oneAtATime(() => checkFolder(dir, context, cancelled)),
+        changed: (_copyId, dir, tree, result) => {
             if (result !== "failed") results.set(tree, result);
             settled([dir, result]);
         },
     });
     for (let row = 0; row < 20; row++) {
-        checks.select(`row${row}`, treeOf(row));
+        checks.select("raycast", `row${row}`, treeOf(row));
         clock.advance(100);
         await settle();
     }
     assert.equal(git.calls.length, 0, "nothing fetched while moving");
     assert.equal(cli.calls.length, 0);
-    checks.select(`row7`, treeOf(7));
+    checks.select("raycast", `row7`, treeOf(7));
     clock.advance(499);
     await settle();
     assert.equal(git.calls.length, 0, "not before half a second of rest");
-    checks.select(`row7`, treeOf(7));
+    checks.select("raycast", `row7`, treeOf(7));
     clock.advance(1);
     assert.deepEqual(await done, ["row7", { notSupported: [], missing: [], signsIn: false, signsInThroughRaycast: false, unreadable: false }]);
     assert.equal(cli.calls.length, 1);
     assert.equal(git.calls.filter((call) => call.args[1] === "add").length, 1);
 
     const before = git.calls.length;
-    checks.select(undefined, undefined);
-    checks.select(`row7`, treeOf(7));
+    checks.select(undefined, undefined, undefined);
+    checks.select("raycast", `row7`, treeOf(7));
     clock.advance(5000);
     await settle();
     assert.equal(git.calls.length, before, "a cached row never fetches");
@@ -1899,12 +1993,12 @@ test("moving on cancels a check before its fetch, and a failed check says so", a
     const checks = new CompatibilityChecks({
         timers: clock.timers,
         cached: () => undefined,
-        check: (dir, _tree, cancelled) => checkFolder(dir, context, cancelled),
-        changed: (dir, _tree, result) => changes.push([dir, result]),
+        check: (_copyId, dir, _tree, cancelled) => checkFolder(dir, context, cancelled),
+        changed: (_copyId, dir, _tree, result) => changes.push([dir, result]),
     });
-    checks.select("alpha", treeOf(1));
+    checks.select("raycast", "alpha", treeOf(1));
     clock.advance(500);
-    checks.select("beta", treeOf(2)); // while alpha's listing is still being read
+    checks.select("raycast", "beta", treeOf(2)); // while alpha's listing is still being read
     await settle();
     assert.deepEqual(git.calls.map((call) => call.args[0]), ["ls-tree"], "alpha's source isn't fetched");
     assert.equal(changes.length, 0);
@@ -1914,10 +2008,10 @@ test("moving on cancels a check before its fetch, and a failed check says so", a
     const failed = new CompatibilityChecks({
         timers: clock.timers,
         cached: () => undefined,
-        check: (dir, _tree, cancelled) => checkFolder(dir, failing.context, cancelled),
-        changed: (dir, _tree, result) => changes.push([dir, result]),
+        check: (_copyId, dir, _tree, cancelled) => checkFolder(dir, failing.context, cancelled),
+        changed: (_copyId, dir, _tree, result) => changes.push([dir, result]),
     });
-    failed.select("alpha", treeOf(1));
+    failed.select("raycast", "alpha", treeOf(1));
     clock.advance(500);
     await settle();
     assert.deepEqual(changes, [["alpha", "failed"]]);
@@ -2241,7 +2335,7 @@ test("clone, list, fetch a README on demand, and see an update after a refresh",
     const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}`, allowProtocols: "file" });
     await repo.clone();
     assert.deepEqual(
-        (await readCatalog(repo.path)).map((entry) => entry.name),
+        (await readCatalog(repo.path, raycastCopy)).map((entry) => entry.name),
         ["alpha", "beta"],
     );
     const readme = path.join(repo.path, "extensions/alpha/README.md");
@@ -2779,7 +2873,7 @@ test("a linked package.json leaves the list, and a linked or missing file fails 
     await mkdir(path.join(repo, "extensions/beta"), { recursive: true });
     await symlink("/dev/zero", path.join(repo, "extensions/beta/package.json"));
     assert.deepEqual(
-        (await readCatalog(repo)).map((entry) => entry.name),
+        (await readCatalog(repo, raycastCopy)).map((entry) => entry.name),
         ["alpha"],
     );
 
@@ -2971,10 +3065,10 @@ function gatedBuilds(context: StoreContext) {
     return { builds, release: () => release() };
 }
 
-/** The view's `runInstall` (extension-store.tsx): one press per name, each in the queue. */
+/** The view's `runInstall` (extension-store.tsx): one press per extension id, each in the queue. */
 function pressing(context: StoreContext, view: InstallView, presses = new InstallPresses()) {
     return (entry: StoreEntry, updating: boolean) =>
-        presses.press(entry.name, updating, () => oneAtATime(() => installPressed(entry, updating, context, view)));
+        presses.press(entryId(entry), updating, () => oneAtATime(() => installPressed(entry, updating, context, view)));
 }
 
 test("a second press on a name that's installing does nothing; a press on another name waits its turn", async () => {
@@ -3083,12 +3177,18 @@ test("while a name installs, every row of that name says so and offers no Instal
         }
     }
 
-    // The key is the manifest name, so a second folder with the same name is busy too.
+    // The key is the extension's id, so a second folder with the same name in one repository is busy too, while the same
+    // name from another repository is another extension and isn't (SPEC-157 E.7).
     const presses = new InstallPresses();
     let finish = () => {};
     const pressed = presses.press("alpha", false, () => new Promise<void>((resolve) => (finish = resolve)));
     const twin = parseManifest("alpha-two", manifest("alpha"))!;
-    assert.equal(presses.state(twin.name), "installing");
+    assert.equal(presses.state(entryId(twin)), "installing");
+    const added = parseManifest("alpha", manifest("alpha"), addedCopy)!;
+    assert.equal(presses.state(entryId(added)), undefined, "the added repository's alpha isn't busy");
+    let ranAdded = false;
+    await presses.press(entryId(added), false, async () => void (ranAdded = true));
+    assert.equal(ranAdded, true, "and installs meanwhile");
     finish();
     await pressed;
 
@@ -3426,6 +3526,15 @@ test("a record whose build still runs: its rows say so, and nothing is written",
     assert.equal(updating.builds.busy("alpha"), "updating");
 });
 
+test("another session's build is busy by the extension's id: an added repository's alpha leaves Raycast's alpha free", async () => {
+    const record = otherRecord({ id: "owner+repository+alpha", repository: "owner/repository" });
+    const session = await otherSession([record]);
+    session.fake.running(record);
+    await session.builds.check();
+    assert.equal(session.builds.busy("owner+repository+alpha"), "installing");
+    assert.equal(session.builds.busy("alpha"), undefined, "Raycast's alpha is another extension");
+});
+
 test("an ended build is a zombie of the host: a state starting with Z, or <defunct>, has ended, and gets no signal", async () => {
     const past = new Date(Date.now() - 1000).toISOString();
     for (const state of [{ stat: "Z", args: "<defunct>" }, { stat: "ZN" }, { stat: "S", args: "<defunct>" }]) {
@@ -3724,7 +3833,8 @@ function noticesView(answer: InstallAnswer | (() => Promise<InstallAnswer>), lim
             reports.push(report);
             return typeof answer === "function" ? answer() : answer;
         },
-        select: (dir) => void selected.push(dir),
+        // Raycast's rows by folder alone, an added repository's as `<repository>:<folder>`.
+        select: (dir, repository) => void selected.push(repository === undefined ? dir : `${repository}:${dir}`),
         failedNotified: (title, _error, mark) => void quiet.push({ title, mark }),
         ...(limit === undefined ? {} : { limit }),
     };
@@ -3761,6 +3871,28 @@ test("a finished install is reported with its build, and the answer decides the 
             build: undefined, name: "alpha", dir: "alpha", title: "Alpha", updating: false, outcome: "installed",
         });
     }
+});
+
+test("an added repository's install names its repository in the report, the mark, the selection and the saved failure", async () => {
+    const { context, supportPath } = await storeContext({ cliCode: 1 });
+    const view = noticesView({ onScreen: false, notified: true });
+    const added = parseManifest("alpha", manifest("alpha"), addedCopy)!;
+    await installPressed(added, false, context, view.view);
+    assert.equal(view.reports[0]?.outcome, "failed");
+    assert.equal(view.reports[0]?.repository, "owner/repository");
+    const mark = view.quiet[0]!.mark;
+    assert.equal(mark.repository, "owner/repository");
+    assert.deepEqual(view.selected, ["owner/repository:alpha"]);
+    assert.deepEqual(await readSavedFailure(supportPath, { name: "alpha", repository: "owner/repository" }), mark);
+    assert.equal(await readSavedFailure(supportPath, { name: "alpha" }), undefined, "Raycast's alpha has no failure");
+
+    // Raycast's names none, as its records don't.
+    const raycast = await storeContext({ cliCode: 1 });
+    const plain = noticesView({ onScreen: false, notified: true });
+    await installPressed(alphaEntry, false, raycast.context, plain.view);
+    assert.equal("repository" in plain.reports[0]!, false);
+    assert.equal("repository" in plain.quiet[0]!.mark, false);
+    assert.deepEqual(plain.selected, ["alpha"]);
 });
 
 test("an install that built twice reports its last build", async () => {

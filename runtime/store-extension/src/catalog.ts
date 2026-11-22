@@ -1,7 +1,7 @@
 // The store's list: one entry per extension in the repository copy, with what's installed and what can be updated.
 import { readdir } from "node:fs/promises";
 import path from "node:path";
-import { isValidName } from "../../src/extension-id.ts";
+import { extensionId, isValidName, raycastFolder } from "../../src/extension-id.ts";
 import { maxManifestBytes, readRegularFile } from "./files.ts";
 
 // `ExtensionManifest.isValidName`, the one extension name rule, kept beside the id rule that builds on it.
@@ -26,13 +26,27 @@ export function sameFolder(a: string, b: string): boolean {
 
 export type StoreCommand = { name: string; title: string; description?: string; mode?: string };
 
+/** Raycast's copy's copy id (SPEC-157 A.5): its copy is `<supportPath>/repo`. */
+export const raycastCopyId = "raycast";
+
+/** The copy a row was read from (`copyId`) and the folder of the repository it installs into (`repositoryFolder`,
+ * SPEC-158's), as `readCatalog` gives them to every row of that copy. */
+export type RepositoryCopy = { copyId: string; repositoryFolder: string };
+
+export const raycastCopy: RepositoryCopy = Object.freeze({ copyId: raycastCopyId, repositoryFolder: raycastFolder });
+
 export type StoreEntry = {
     /** The manifest's `name`, the extension's identity as in Raycast: its installed folder, and its `installed.json`
      * key, settings and data. */
     name: string;
-    /** Its folder in Raycast's repository, which can differ from `name`: for the sparse pattern, the README, the
-     * scan, the build's source and the URLs. It also tells apart two folders whose manifests share a name. */
+    /** Its folder in its repository, which can differ from `name`: for the sparse pattern, the README, the scan, the
+     * build's source and the URLs. It also tells apart two folders whose manifests share a name. */
     dir: string;
+    /** The copy it was read from: `raycast`, or an added repository's copy id. */
+    copyId: string;
+    /** The folder of its repository under the extensions folder (`raycast/extensions` for Raycast's), which its install
+     * goes into and its id names. */
+    repositoryFolder: string;
     title: string;
     description: string;
     author: string;
@@ -55,8 +69,8 @@ export type Status = "available" | "installed" | "update";
 const strings = (value: unknown): string[] =>
     Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 
-/** A manifest as an entry, or undefined when the folder or the name isn't valid, or it has no commands. */
-export function parseManifest(folder: string, manifest: unknown): StoreEntry | undefined {
+/** A manifest in `copy` as an entry, or undefined when the folder or the name isn't valid, or it has no commands. */
+export function parseManifest(folder: string, manifest: unknown, copy: RepositoryCopy = raycastCopy): StoreEntry | undefined {
     if (!isValidFolder(folder) || typeof manifest !== "object" || manifest === null) return undefined;
     const object = manifest as Record<string, unknown>;
     if (!isValidName(object.name) || typeof object.title !== "string") return undefined;
@@ -78,6 +92,8 @@ export function parseManifest(folder: string, manifest: unknown): StoreEntry | u
     return {
         name: object.name,
         dir: folder,
+        copyId: copy.copyId,
+        repositoryFolder: copy.repositoryFolder,
         title: object.title,
         description: typeof object.description === "string" ? object.description : "",
         author: typeof object.author === "string" ? object.author : "",
@@ -102,8 +118,9 @@ export function distinctFolders(names: string[]): string[] {
         });
 }
 
-/** Every valid entry under `<repo>/extensions/`. A folder's name is checked before it's joined into a path. */
-export async function readCatalog(repo: string): Promise<StoreEntry[]> {
+/** Every valid entry under `<repo>/extensions/`, the copy `copy` names. A folder's name is checked before it's joined
+ * into a path. */
+export async function readCatalog(repo: string, copy: RepositoryCopy): Promise<StoreEntry[]> {
     const root = path.join(repo, "extensions");
     const listed = await readdir(root, { withFileTypes: true }).catch(() => []);
     const folders = distinctFolders(
@@ -116,7 +133,7 @@ export async function readCatalog(repo: string): Promise<StoreEntry[]> {
             );
             if (text === undefined) return undefined;
             try {
-                return parseManifest(folder, JSON.parse(text));
+                return parseManifest(folder, JSON.parse(text), copy);
             } catch {
                 return undefined;
             }
@@ -129,18 +146,52 @@ export function byTitle(a: StoreEntry, b: StoreEntry): number {
     return (
         a.title.localeCompare(b.title, "en", { sensitivity: "base" }) ||
         a.name.localeCompare(b.name) ||
-        a.dir.localeCompare(b.dir)
+        a.dir.localeCompare(b.dir) ||
+        a.copyId.localeCompare(b.copyId)
     );
 }
 
-/** What `installed.json` has for this row: its name's record, when that came from this row's folder. Another folder
- * whose manifest has the same name isn't installed, though its name is. */
-export function installedRecord(entry: StoreEntry, installed: Installed): InstallRecord | undefined {
-    const record = installed[entry.name];
-    return record && sameFolder(record.dir, entry.dir) ? record : undefined;
+/**
+ * The id of the extension a row installs (SPEC-158 C): its name in Raycast's repository, else its repository's
+ * segments and its name joined with `+`. It keys the row's record and its busy state, so the same name from two
+ * repositories is two extensions. A name too long for the id rule still gets that joined text, which no record has
+ * and whose build is refused.
+ */
+export function entryId(entry: Pick<StoreEntry, "name" | "repositoryFolder">): string {
+    return (
+        extensionId(entry.name, entry.repositoryFolder) ?? [...entry.repositoryFolder.split("/"), entry.name].join("+")
+    );
 }
 
-/** Installed when `installed.json` has it from this folder; an update when that folder's tree id has changed since. */
+/** The folder of an added repository a row is from, as records, reports and marks carry it; none for Raycast's. */
+export function addedRepository(entry: Pick<StoreEntry, "repositoryFolder">): string | undefined {
+    return entry.repositoryFolder === raycastFolder ? undefined : entry.repositoryFolder;
+}
+
+/** A row's list id: its repository's folder and its folder there, so the same folder in two repositories is two
+ * rows. A folder has no `:`, and a development build's row id (`development:<name>`) has no `/`. */
+export function rowId(repositoryFolder: string, dir: string): string {
+    return `${repositoryFolder}:${dir}`;
+}
+
+/** The list id of the row a record, a report or a mark names: its folder in its added repository, or in Raycast's when
+ * it names none. */
+export function namedRowId(dir: string, repository: string | undefined): string {
+    return rowId(repository ?? raycastFolder, dir);
+}
+
+/** What `installed.json` has for this row: its id's record, when that came from this row's folder. Another folder
+ * whose manifest has the same name isn't installed, though its name is, and neither is the same name from another
+ * repository, whose record is under another id. */
+export function installedRecord(entry: StoreEntry, installed: Installed): InstallRecord | undefined {
+    const record = installed[entryId(entry)];
+    return record && sameFolder(record.dir, entry.dir) && record.repository === addedRepository(entry)
+        ? record
+        : undefined;
+}
+
+/** Installed when `installed.json` has it from this folder; an update when that folder's tree id has changed since.
+ * `trees` is the row's own copy's. */
 export function status(entry: StoreEntry, installed: Installed, trees: Map<string, string>): Status {
     const record = installedRecord(entry, installed);
     if (!record) return "available";

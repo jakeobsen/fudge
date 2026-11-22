@@ -261,9 +261,9 @@ export class RowSelection {
         return this.asked;
     }
 
-    /** Selects the row of `dir`, once; a row already selected stays, and an earlier ask goes. */
-    select(dir: string): void {
-        this.ask(dir === this.selected ? undefined : dir);
+    /** Selects the row whose list id is `id` (`rowId`), once; a row already selected stays, and an earlier ask goes. */
+    select(id: string): void {
+        this.ask(id === this.selected ? undefined : id);
     }
 
     /** The app's `onSelectionChange`: once the row asked for is selected, from here the user moves it. */
@@ -272,18 +272,18 @@ export class RowSelection {
         if (id !== null && id === this.asked) this.ask(undefined);
     }
 
-    private ask(dir: string | undefined): void {
-        if (dir === this.asked) return;
-        this.asked = dir;
-        this.changed(dir);
+    private ask(id: string | undefined): void {
+        if (id === this.asked) return;
+        this.asked = id;
+        this.changed(id);
     }
 }
 
 /** What opening a click's or the launch context's target needs from the store's view. */
 export type TargetSteps = {
     supportPath: string;
-    /** Selects the row of that folder, once. */
-    select: (dir: string) => void;
+    /** Selects the row of that folder in the repository whose folder is `repository` (Raycast's when none), once. */
+    select: (dir: string, repository?: string) => void;
     /** This session's marks: a failure it has in memory. */
     marks: Pick<RowMarks, "get">;
     /** Pushes the failure view. */
@@ -295,7 +295,7 @@ export type TargetSteps = {
  * memory or else the file saved for it; the saved file goes once it's opened. With neither, only the selection.
  */
 export async function openNoticeTarget(target: NoticeTarget, steps: TargetSteps): Promise<void> {
-    steps.select(target.dir);
+    steps.select(target.dir, target.repository);
     if (!target.failed) return;
     // The target's own row's failure: by its folder, since two folders can hold one name.
     const held = steps.marks.get(target.dir, target.repository);

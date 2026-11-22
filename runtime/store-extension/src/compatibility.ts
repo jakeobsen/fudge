@@ -583,7 +583,8 @@ export async function checkFolder(
  * Scans the row the selection rests on, one at a time (`RestingWork`): a check starts only after the selection has
  * stayed on an uncached row for `delay` ms, and a new `select` cancels the last: its timer, or the check itself, which
  * stops before its fetch or scan, and whose fetch is ended (`signal`). So moving through rows fetches nothing, and a
- * cached row never fetches.
+ * cached row never fetches. A row is its copy (`copyId`) and its folder there; the cache is by tree id alone, since a
+ * tree id names the same files in any repository.
  */
 export class CompatibilityChecks {
     readonly #work: RestingWork<Compatibility>;
@@ -593,26 +594,27 @@ export class CompatibilityChecks {
         timers?: Timers;
         cached: (tree: string) => Compatibility | undefined;
         check: (
+            copyId: string,
             dir: string,
             tree: string,
             cancelled: () => boolean,
             signal: AbortSignal,
         ) => Promise<Compatibility | undefined>;
-        changed: (dir: string, tree: string, result: Compatibility | "failed") => void;
+        changed: (copyId: string, dir: string, tree: string, result: Compatibility | "failed") => void;
     }) {
-        const split = (key: string) => key.split("\0") as [string, string];
+        const split = (key: string) => key.split("\0") as [string, string, string];
         this.#work = new RestingWork({
             delay: options.delay,
             timers: options.timers,
-            done: (key) => options.cached(split(key)[1]) !== undefined,
+            done: (key) => options.cached(split(key)[2]) !== undefined,
             run: (key, cancelled, signal) => options.check(...split(key), cancelled, signal),
             changed: (key, result) => options.changed(...split(key), result),
         });
     }
 
-    /** The row now selected with the detail showing, or nothing. */
-    select(dir: string | undefined, tree: string | undefined): void {
-        this.#work.select(dir && tree ? `${dir}\0${tree}` : undefined);
+    /** The row now selected with the detail showing (its copy, its folder and its tree), or nothing. */
+    select(copyId: string | undefined, dir: string | undefined, tree: string | undefined): void {
+        this.#work.select(copyId && dir && tree ? `${copyId}\0${dir}\0${tree}` : undefined);
     }
 
     /** Cancels the waiting or running check. */

@@ -222,10 +222,11 @@ export class OtherBuilds {
         return [...this.known.values()].map((known) => known.record);
     }
 
-    /** Whether another session's build of `name` is running or not settled yet, as B shows it on every row of that name. */
-    busy(name: string): Busy | undefined {
+    /** Whether another session's build of the extension `id` is running or not settled yet, as B shows it on that
+     * extension's rows (SPEC-157 E.7). A record without an `id` is Raycast's, whose id is its name. */
+    busy(id: string): Busy | undefined {
         for (const known of this.known.values()) {
-            if (known.record.name === name) return known.record.updating ? "updating" : "installing";
+            if ((known.record.id ?? known.record.name) === id) return known.record.updating ? "updating" : "installing";
         }
         return undefined;
     }
@@ -312,8 +313,8 @@ export type SettledSteps = {
     marks: Pick<RowMarks, "mark">;
     /** Reports the end to the app, within the report's time limit. */
     report: (end: InstallEndReport) => Promise<InstallAnswer>;
-    /** Selects the row of that folder, once. */
-    select: (dir: string) => void;
+    /** Selects the row of that folder in the repository whose folder is `repository` (Raycast's when none), once. */
+    select: (dir: string, repository?: string) => void;
     /** Saves a failure that got a notification for a click. */
     save: (mark: FailureMark) => Promise<void>;
     toast: (shown: { failed: boolean; title: string; message?: string }) => Promise<void>;
@@ -357,11 +358,11 @@ export async function settledNotice(outcome: Settled, steps: SettledSteps): Prom
         outcome: mark ? "failed" : "installed",
     });
     if (mark && answer.notified) {
-        steps.select(record.dir);
+        steps.select(record.dir, record.repository);
         await steps.save(mark);
         return;
     }
-    if (!mark && !answer.onScreen) steps.select(record.dir);
+    if (!mark && !answer.onScreen) steps.select(record.dir, record.repository);
     if (answer.notified) return;
     await steps.toast(shown);
     if (mark) steps.show(mark);

@@ -107,23 +107,34 @@ export function rendererPass(markdown: string): string {
 /** A README whose last fetch failed, with none on its way: the detail says so, since "" means the folder has none. */
 export const readmeNotFetched = Symbol("the README couldn't be fetched");
 
+/** The key the store keeps a row's README under: its copy, its folder there and the folder's tree id (SPEC-157 D.1). */
+export function readmeKey(copyId: string, dir: string, tree: string): string {
+    return `${copyId}\0${dir}\0${tree}`;
+}
+
+/** A README key's parts, as `readmeKey` joined them. */
+export function readmeKeyParts(key: string): { copyId: string; dir: string; tree: string } {
+    const [copyId, dir, tree] = key.split("\0") as [string, string, string];
+    return { copyId, dir, tree };
+}
+
 /**
- * What the detail shows for a folder's tree, as the store keeps its READMEs: the text fetched ("" for none), else
+ * What the detail shows for a README key, as the store keeps its READMEs: the text fetched ("" for none), else
  * `readmeNotFetched` when its last fetch failed, else undefined, loading: a fetch is waiting or running.
  */
 export function shownReadme(
-    tree: string,
+    key: string,
     readmes: Readonly<Record<string, string>>,
     failed: ReadonlySet<string>,
 ): string | typeof readmeNotFetched | undefined {
-    return readmes[tree] ?? (failed.has(tree) ? readmeNotFetched : undefined);
+    return readmes[key] ?? (failed.has(key) ? readmeNotFetched : undefined);
 }
 
-/** The failed trees once a fetch for `tree` is on its way again (⌘R, or the selection back on its row). */
-export function refetching(failed: ReadonlySet<string>, tree: string): ReadonlySet<string> {
-    if (!failed.has(tree)) return failed;
+/** The failed README keys once a fetch for `key` is on its way again (⌘R, or the selection back on its row). */
+export function refetching(failed: ReadonlySet<string>, key: string): ReadonlySet<string> {
+    if (!failed.has(key)) return failed;
     const kept = new Set(failed);
-    kept.delete(tree);
+    kept.delete(key);
     return kept;
 }
 
