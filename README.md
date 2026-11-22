@@ -326,11 +326,11 @@ No keyword can contain another, so a keyword never expands inside a longer one.
 
 Type a calculation in root search and the answer shows above the results: arithmetic (`5+5/10*39`), units (`13kg to lbs`), time zones (`3pm cet in pst`) and currencies (`100 usd to eur`, `€100 in usd`, `100 € in kr`). ↵ copies the answer.
 
-Numbers follow your Mac's number format, or the one you pick under **Settings… → General → Number format**: "1,234.5" or "1.234,5".
+Numbers follow your Mac's number format, or the one you pick under **Settings… → Calculator → Number format** (in the Extensions part of the sidebar): "1,234.5" or "1.234,5".
 In "1.234,5", `1.000 + 1` is 1.001, and `1.5` isn't a number, so it gets no answer rather than a wrong one.
 
 Currency conversion uses the European Central Bank's daily exchange rates.
-Turn it on under **Settings… → General**; until then, a currency query shows a card that takes you there.
+Turn it on under **Settings… → Calculator**; until then, a currency query shows a card that takes you there.
 
 ### Search Files
 

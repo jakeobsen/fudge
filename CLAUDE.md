@@ -112,7 +112,7 @@ Extensions run in a separate Node.js process, the extension host.
       `captureLayout` keeps every standard window (`AXWindow.standard`, `kAXStandardWindowSubrole`) of the regular apps on the screens: its app's bundle id, its place among that app's standard windows front to back (a full-screen window counts but isn't kept), its screen (`WindowScreen.name`, `NSScreen.localizedName`, and its place in the screen list) and its fractions; never a title.
       `apply` places each saved window by app and place on its screen (`SavedScreen.match`: by name, then place, then the primary), once (a hand-edited file's second entry for the same app and place is skipped), skips what isn't there (an app that isn't running is never launched), and the HUD says `LayoutPlacement.message` ("Placed 5 windows; skipped 2").
       Save Layout… reads the windows (`WindowLayoutActions`; a snapshot run's are `--layout-windows`' made-up ones, and it moves nothing), then asks for the name in the Save Layout form (`LayoutForm`, `LayoutDraft`), shown like Create Snippet.
-      **The Window Management page** (`WindowManagementPage.swift`, after Snippets) lists the positions (+, Edit…, −; the sheet takes x, y, width and height in percent, checked by `PositionDraft.problems`, with a drawing) and the layouts (Rename…, −).
+      **The Window Management page** (`WindowManagementPage.swift`, under Extensions) lists the positions (+, Edit…, −; the sheet takes x, y, width and height in percent, checked by `PositionDraft.problems`, with a drawing) and the layouts (Rename…, −).
       Deleting one also removes its command's alias, hotkey and Enabled from `settings.json`.
       `--edit-position [<name>]` shows the sheet in the page in a snapshot run, never as a sheet.
     - **System commands** (`BuiltInCommandGroup.system`, one command per `SystemCommand`): Lock Screen, Sleep, Restart, Shut Down, Log Out, Empty Trash, Eject All Disks, Toggle Dark Mode, Hide All Apps and Quit All Apps.
@@ -188,7 +188,7 @@ Extensions run in a separate Node.js process, the extension host.
       each copy hides the panel with a HUD.
       Its empty view offers Pick Color.
       Its hotkey shows it as a view command's does, or hides the panel when it's already on screen.
-      **The Color Picker page** (`ColorPickerPage.swift`, after Sign-in) has Copy Format, a `SettingsPopupRow`; changing it draws Recent Colors again if it's open.
+      **The Color Picker page** (`ColorPickerPage.swift`, under Extensions) has Copy Format, a `SettingsPopupRow`; changing it draws Recent Colors again if it's open.
     - **Define Word** (SPEC-091, the Tools group) takes an optional Word argument (`DefineWord.argument`), and `define` is its default alias (`BuiltInCommand.defaultAlias`), so `define serendipity` hands "serendipity" to the field.
       `DefineWord.start` (core) takes the typed word, else the frontmost app's selection (`LauncherModel.selectedText`, `selection.text` as the user's own call, read only when nothing was typed), each cut to its first line that isn't blank, trimmed, at most 100 characters (`DefineWord.word`); with neither, root search shows the Word field with the keyboard in it.
       The word is looked up through `DefinitionLookup`: the app's `DictionaryServicesLookup` is `DCSCopyTextDefinition`, the Mac's active dictionaries, offline; snapshot runs read no selection and get `FixedDefinitions` (`--definitions <file>`, a JSON object of word to made-up definition, else none), and tests fakes.
@@ -216,8 +216,8 @@ Extensions run in a separate Node.js process, the extension host.
       After a new read (a calendar change, Days Ahead, a refresh), the selection stays on the event it was on (`ScheduleList.row(after:selected:in:)`), known by its day, its start and a hash of its title held in memory only, or keeps its place when that event is gone.
       The calendars are read off the main thread (`LauncherModel.readSchedule`, and the Calendar page's `loadCalendars`), since every EventKit call waits on the calendar agent: the list shows as loading until the read lands, and ⌘D draws again from it without reading again.
       `EventKitCalendarSource` runs every call on one serial queue, and makes its store on first use.
-      **Settings → Calendar** (`CalendarPage.swift`, after Sign-in) has Days Ahead and a checkbox per calendar.
-    - **Settings → Development** (`DevelopmentPage.swift`, after Calendar, SPEC-145 §1) has one row: **Command Line Tools**, the folder Fudge builds extensions' parts written in Swift with, and its status line.
+      **Settings → Calendar** (`CalendarPage.swift`, under Extensions) has Days Ahead and a checkbox per calendar.
+    - **Settings → Development** (`DevelopmentPage.swift`, after Sign-in, SPEC-145 §1) has one row: **Command Line Tools**, the folder Fudge builds extensions' parts written in Swift with, and its status line.
       `CommandLineTools.resolve` (core) is the one place that finds them, for the page, the Extension Store and `fudge build`, so they never disagree: the folder chosen with Choose… (`commandLineTools` in `settings.json`, an absolute path; Use Default clears it), else `/Library/Developer/CommandLineTools`, the only one found by itself (D-117: "only Apple's Command Line Tools").
       A chosen folder's Swift is its `usr/bin/swift`, else `Toolchains/XcodeDefault.xctoolchain/usr/bin/swift`, so choosing Xcode's `Contents/Developer` works too.
       A Swift that is, or leads to, one of macOS's stubs in `/usr/bin` (a chosen `/`) is never run, and counts as not found, since the stub offers to install the tools; nothing runs `xcrun` either.
@@ -321,11 +321,11 @@ Extensions run in a separate Node.js process, the extension host.
       A zone's label is its familiar abbreviation where `TimeZoneConversion.named` has one (`Copenhagen, CET`), else Foundation's offset (`GMT+8`).
       The card is selected first, and ↵ copies the answer (`RootActions.calculatorSections`, plus Copy Question and Answer ⌘⇧C) and closes the panel with a HUD.
       `now` and the time zone are parameters, so tests fix them.
-    - **Currency rates** come from the European Central Bank, and only while `currencyRates` is on in `settings.json` (off by default; the General page's switch).
+    - **Currency rates** come from the European Central Bank, and only while `currencyRates` is on in `settings.json` (off by default; the Calculator page's switch).
       `ExchangeRateUpdater` (core) loads `exchange-rates.json` and downloads when `ExchangeRatePolicy` says so: on turning it on, when the rates are a day old, at most once per 12 hours, one download at a time, keeping the old rates when one fails. ↵ on the "Couldn't download exchange rates" card retries at once.
       `ExchangeRates` parses the ECB's XML and says how fresh the rates are, under the card's arrow.
       The app's `ECBRatesFetcher` uses an ephemeral `URLSession` (no cookies, credentials or cache; 15 s; 1 MB), and `ExchangeRateSchedule` checks every hour.
-      With the setting off, a currency query still gets a card ("Currency conversion is off"), and its ↵ opens Settings on the General page.
+      With the setting off, a currency query still gets a card ("Currency conversion is off"), and its ↵, like its Turn On Currency Conversion, opens Settings on the Calculator page (`RootActions.currencySettingsPage`).
       When the rates change (they arrive, a download starts or fails), a currency card is evaluated again for the open query, keeping the selection (`Calculator.afterRatesChange`), with a command open too, so the card is right when the user comes back to root search.
       Snapshots never download.
     - **The update check** (SPEC-082) asks GitHub for the newest release, and only once `updateCheck` in `settings.json` has been chosen: `daily`, `weekly`, `monthly` or `off` (`UpdateCheckSetting`; unset until onboarding's Updates step or General's Check for Updates saves it, and an unknown value reads as unset).
@@ -472,7 +472,7 @@ Extensions run in a separate Node.js process, the extension host.
     - **The General page** (`GeneralPage.swift`) is the Settings window's first page, and the one ⌘, Settings… and "Fudge Settings" open on:
       Open at Login, the launcher's hotkey, Show Fudge on, Pop to Root Search, Escape Key Behavior (all three `SettingsPopupRow`s), Keyboard (Hyperkey and its Quick press switch, which is disabled while Hyperkey is off), Updates (Check for Updates, another `SettingsPopupRow` with Daily, Weekly, Monthly and Never, then `UpdateStatusRow`:
       While the update check is unset, that popup shows Not Chosen first (`UpdateCheckSetting.popupOptions`): it checks nothing, as Never does, and can't be picked again once something is chosen.
-      the last check's result and time, Check Now, and Download… while a newer release is known; saved through `change {}`), the currency switch, the calculator's Number format (Same as macOS, "1,234.5" or "1.234,5", saved through `change {}`; changing it re-evaluates the open query), Clear Search History…, and Import / Export.
+      the last check's result and time, Check Now, and Download… while a newer release is known; saved through `change {}`), Clear Search History…, Logs, and Import / Export.
       The launcher's hotkey is recorded like a command's, through the same `HotkeyRecordingPrompt`, but it can't be cleared: ⌫ and the Reset button set ⌥Space (`HotKeyRecording.launcherEdit`).
       A command's hotkey wins, so a launcher hotkey that equals one is refused, naming the command.
       It's registered before it's saved, and a refusal or a failed save leaves both the registration and the file as they were (`HotKeyRegistry.changeLauncher`); a failed save shows the `settingsProblem` banner.
@@ -481,6 +481,7 @@ Extensions run in a separate Node.js process, the extension host.
       `LoginItemState.change` registers or unregisters, then reads the status back, with any error to show.
       It turns nothing on while Fudge runs from its disk image or a translocated copy (`AppLocation.loginItemRefusal`), since that path goes away, and says to move Fudge to Applications first.
       **Clear Search History…** confirms in a sheet, then `LauncherModel.clearHistory()` empties `LaunchHistory` and `history.json`.
+    - **The Calculator page** (`CalculatorPage.swift`, under Extensions) has the currency switch and the calculator's Number format (Same as macOS, "1,234.5" or "1.234,5", saved through `change {}`; changing it re-evaluates the open query), under the `settingsProblem` banner.
     - **Import / Export** (`BackupSection.swift`, at the bottom of General) writes and reads a `.fudgebackup` (declared in `App/Info.plist`).
       `Backup` (core) collects the parts from the support folder:
       - `colors.json`
@@ -591,7 +592,7 @@ Extensions run in a separate Node.js process, the extension host.
       A conflict (`HotKeyConflict`: the launcher's key, another installed command's, named by its title, with its extension's when two share one, `CommandNames`, or no ⌘ ⌥ ⌃) or a shortcut the system refuses keeps the old hotkey and shows why in the cell.
       A command that isn't installed keeps its saved hotkey for a reinstall, but doesn't block the key: taking it clears that one's hotkey, keeping its alias and Enabled state (`HotKeyConflict.displaced`), and the cell says so (`HotKeyConflict.displacedNote`): by the command's title, and a deleted quicklink's key as "a deleted quicklink", never its id.
       A command that's off by default says why on a line under its title (`SettingsModel.offByDefaultReason`, `CommandCompatibility.reason`: "Uses Raycast AI, which Fudge doesn't support.").
-    - **The Sign-in page** (`SignInPage.swift`, after Window Management) sets the server extensions sign in through (SPEC-056): Off (the default), **Fudge's sign-in server** (`SignInServer.fudgeURL`, `https://fudge-oauth.rackofpain.net`) or **Your own server…**, whose address is saved on ↵ once `SignInServer.validate` accepts it (`https://`, or `http://` on `localhost` or `127.0.0.1`;
+    - **The Sign-in page** (`SignInPage.swift`, after Commands) sets the server extensions sign in through (SPEC-056): Off (the default), **Fudge's sign-in server** (`SignInServer.fudgeURL`, `https://fudge-oauth.rackofpain.net`) or **Your own server…**, whose address is saved on ↵ once `SignInServer.validate` accepts it (`https://`, or `http://` on `localhost` or `127.0.0.1`;
       no user info, query or fragment).
       It's saved as the worker's `new URL()` writes it (scheme and host in lowercase, no default port, dot segments resolved), since a sign-in's authorize URL is compared with what the worker sends back; a host that parser would rewrite otherwise (non-ASCII, percent-encoded, IPv6, IPv4 in another notation) isn't accepted.
       Every choice but Off shows a consent sheet first ("Extensions will sign in through <host>."), and only Continue saves `signInServer` (`"fudge"` or the URL) with `signInServerConsentAt`; `FudgeSettings.signIn` needs both, so a hand-set server counts as off, and Off removes both.
@@ -670,12 +671,12 @@ Extensions run in a separate Node.js process, the extension host.
       Waiting picks are dropped too once no instance is still to render (`MenuBarLifecycle.awaitsFirstRender`: it failed or exited first, or the host stopped), so a later launch never runs them.
       UserInitiated errors show in the HUD; Background ones are logged and add a disabled "⚠ Last refresh failed" until a later render.
       `LauncherModel` starts the controller's commands (`launchMenuBarCommand`) and routes their sessions' `render`, `error`, `eventSettled` and `exit` to it; their rpcs are answered like any command's.
-    - **The Quicklinks page** (`QuicklinksPage.swift`) comes after Commands:
+    - **The Quicklinks page** (`QuicklinksPage.swift`, under Extensions):
       a table of every quicklink's Name, Link, Open With, and its Alias and Hotkey, read only, with "Edit on the Commands page" as their help, sorted by name, read again whenever the page is shown or the window becomes key, so changes made in the launcher show. + opens a sheet with the same three fields, Edit… (or a double-click) opens it filled in, and − (or ⌫) deletes after a confirmation sheet.
       The sheet saves through `SettingsModel.saveQuicklink`, which reads the file again and shows `QuicklinkDraft.problems` under the fields.
       An unreadable `quicklinks.json` shows the notice and disables changes.
       Each change calls `quicklinksChanged`, so root search reads the file again.
-    - **The Snippets page** (`SnippetsPage.swift`) comes after Quicklinks and works like it, under the Expand Snippets as You Type switch: a table of every snippet's Name, Keyword and the start of its text on one line, sorted by name, read again when the page is shown or the window becomes key.
+    - **The Snippets page** (`SnippetsPage.swift`, under Extensions) works like the Quicklinks page, under the Expand Snippets as You Type switch: a table of every snippet's Name, Keyword and the start of its text on one line, sorted by name, read again when the page is shown or the window becomes key.
       + and Edit… (or a double-click) open a sheet with Name, a several-line Snippet and Keyword, and − (or ⌫) deletes after a confirmation sheet.
       The sheet saves through `SettingsModel.saveSnippet`, which reads the file again and shows `SnippetDraft.problems` under the fields.
       An unreadable `snippets.json` shows the notice and disables changes.
@@ -712,7 +713,7 @@ Extensions run in a separate Node.js process, the extension host.
       `Onboarding` (core) keeps the answered step ids in `onboarding.json` and decides what to show (`pending`): the unanswered steps, in order, then Done.
       Once it has been completed, Welcome isn't shown again, and a step added later shows on its own, then Done, under "Something new to decide" (`hasSomethingNew`).
       **`OnboardingStep`'s cases are the one list of steps**: adding a step means adding its case and drawing it.
-      The steps use General's own controls (`LauncherHotkeyControls`, `OpenAtLoginControls`, `CurrencyRatesToggle`, `HyperkeyControls`, and the Permissions page's `AccessibilityControls`), so an answer takes effect at once.
+      The steps use General's own controls (`LauncherHotkeyControls`, `OpenAtLoginControls`, `HyperkeyControls`, the Calculator page's `CurrencyRatesToggle`, and the Permissions page's `AccessibilityControls`), so an answer takes effect at once.
       The **Extension Store** step (after Currency) shows the store's consent sheet's own words (`ExtensionStore.Consent`), with **Turn On Extension Store**, which writes what the switch and its sheet write and also ticks the store's Enabled (`FudgeSettings.turnOnExtensionStore`), and **Not Now**, which is ↵.
       The **Sign-in** step is the Sign-in page's own choice (`SignInServerControls`, shared with the page, with `SignInServer.explanation`), whose consent sheets show on the onboarding window (`OnboardingModel.ask`; laid out off-screen in snapshot runs), with Continue as ↵, so Off stays Off.
       The **Raycast** step (after Sign-in, SPEC-132 §3.3, D-88, `RaycastStep`) says that Fudge runs extensions made for Raycast, that with Raycast on the same Mac the two can get in each other's way, and that signing in to some extensions ends with a Raycast link, which has to open Fudge.
@@ -731,7 +732,11 @@ Extensions run in a separate Node.js process, the extension host.
     - `SettingsWindow.swift` is the Settings window, with a fixed 200 pt sidebar beside the page (a `List` with the sidebar material, not a `NavigationSplitView`, so there's no divider to drag and nothing to collapse).
       Every way in goes through `SettingsWindowController.show`, which deminiaturizes the window, moves it to the current Space, activates Fudge with `activate(ignoringOtherApps:)` (`activateFromUserAction`; the plain `activate()` can be declined since macOS 14, leaving the window behind the app in front) and orders it front and key.
       It's for user-initiated entries only, never a background path: `show` takes the call's `CallOrigin` and does nothing for a background one. ⌘Q closes the window as ⌘W and its close button do (`SettingsNSWindow.performKeyEquivalent`, `WindowShortcut` in core), and Fudge keeps running; while a hotkey is being recorded, the recorder takes ⌘Q like any other key.
-      The sidebar lists the extensions with preferences, and the Extension Store, whose page starts with its switch (`InstalledExtension.settingsPages`), enabled or not.
+      The sidebar lists Fudge's core pages on top: General, Permissions, Notifications, Commands, Sign-in and Development.
+      Under Extensions, one list sorted by title with `localizedStandardCompare` holds Fudge's Calculator, Calendar, Color Picker, Quicklinks, Snippets and Window Management pages, the extensions with preferences, and the Extension Store, whose page starts with its switch (`InstalledExtension.settingsPages`), enabled or not.
+      `SettingsSidebar` (core) gives both lists and the tags of Fudge's own pages, which start with `:`, so no extension name can take one; `SettingsView` only draws them.
+      Rows with exactly the same title put Fudge's own page first, then the extensions by tag, so the order never changes; such an extension shows " (installed)" after its title (`SettingsSidebar.title(of:)`; the store has a Color Picker of its own).
+      A selected page that's no longer listed, such as an extension removed while its page is open, gives way to General (`SettingsSidebar.lists`).
       The window holds each extension's preferences, stored by `PreferenceStore` in `preferences/<extension>.json`.
       Before a launch, `PreferenceResolver` merges stored values, manifest defaults and type defaults.
       It turns appPicker references into Raycast `Application` objects, and the launch message carries the values to `getPreferenceValues()`.

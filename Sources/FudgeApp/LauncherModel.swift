@@ -572,7 +572,7 @@ final class LauncherModel {
     private func activateCalculator() {
         switch calculator?.enter {
         case .copy: copyCalculatorAnswer()
-        case .turnOnCurrencyConversion: showSettings(extension: nil)
+        case .turnOnCurrencyConversion: showSettings(extension: RootActions.currencySettingsPage)
         case .retryExchangeRates: retryExchangeRates()
         case .nothing, nil: break
         }
@@ -1719,7 +1719,7 @@ final class LauncherModel {
         case .copyQuestionAndAnswer:
             copyCalculatorAnswer(withQuestion: true)
         case .turnOnCurrencyConversion:
-            showSettings(extension: nil)
+            showSettings(extension: RootActions.currencySettingsPage)
         case .retryExchangeRates:
             retryExchangeRates()
         case .copyQuicklink(let link):
