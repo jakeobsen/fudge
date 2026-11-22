@@ -10,6 +10,7 @@ import {
     Toast,
     trash,
     useNavigation,
+    type LaunchProps,
 } from "@raycast/api";
 import path from "node:path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -23,6 +24,8 @@ import {
     iconURL,
     installedFilter,
     installingTag,
+    failedInstallTag,
+    failedUpdateTag,
     readCatalog,
     rowActions,
     searchKeywords,
@@ -59,8 +62,20 @@ import {
     type StoreContext,
 } from "./store.ts";
 import { systemProbe } from "./build-records.ts";
-import { heldRefresh, heldRefreshMessage, openCopy, OtherBuilds, settledToast } from "./other-builds.ts";
-import { commandLineToolsReady, logToFudge } from "fudge:app";
+import { heldRefresh, heldRefreshMessage, openCopy, OtherBuilds, settledNotice } from "./other-builds.ts";
+import { askForNotifications, commandLineToolsReady, installEnded, logToFudge, nextNotificationClick } from "fudge:app";
+import {
+    followClicks,
+    LaunchTarget,
+    openNoticeTarget,
+    pruneSavedFailures,
+    removeSavedFailure,
+    reportEnd,
+    RowMarks,
+    saveFailure,
+    type FailureMark,
+    type NoticeTarget,
+} from "./notices.ts";
 import { installedWithoutSwift, type SwiftPartsChoice } from "./swift-parts.ts";
 import { SwiftPartsView } from "./swift-parts-view.tsx";
 
@@ -81,7 +96,7 @@ type Loaded = {
 type Checked = { scanner: string; results: Map<string, Compatibility>; failed: Set<string> };
 
 const tagColor = (tag: string) =>
-    tag === "Not compatible"
+    tag === "Not compatible" || tag === failedInstallTag || tag === failedUpdateTag
         ? Color.Red
         : tag === "Update available" || tag === "Partly compatible"
           ? Color.Orange
@@ -91,7 +106,7 @@ const tagColor = (tag: string) =>
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-export default function Command() {
+export default function Command(props: LaunchProps) {
     const cli = process.env.FUDGE_CLI;
     const extensionsDir = process.env.FUDGE_EXTENSIONS_DIR;
     if (!cli || !extensionsDir) {
@@ -105,10 +120,10 @@ export default function Command() {
             </List>
         );
     }
-    return <Store cli={cli} extensionsDir={extensionsDir} />;
+    return <Store cli={cli} extensionsDir={extensionsDir} launchContext={props.launchContext} />;
 }
 
-function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
+function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsDir: string; launchContext?: unknown }) {
     const { push } = useNavigation();
     const repo = useMemo(() => new StoreRepository(path.join(environment.supportPath, "repo")), []);
     const [loaded, setLoaded] = useState<Loaded>();
@@ -139,6 +154,12 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
     const busyChanged = useCallback(() => setBusyChanges((count) => count + 1), []);
     // `load`, for a settled record, which is made before it.
     const loadNow = useRef<() => Promise<void>>(async () => {});
+    // The failed rows of this session (SPEC-156 D.3), kept in memory only.
+    const marks = useMemo(() => new RowMarks(busyChanged), [busyChanged]);
+    // The row to select once (SPEC-156 D.1, D.5, E.1), until the selection reaches it.
+    const [selectOnce, setSelectOnce] = useState<string>();
+    // `showFailure`, for a settled record and a click, which are made before it.
+    const showFailureNow = useRef<(mark: FailureMark) => void>(() => {});
 
     // The builds an earlier store left running (SPEC-153 C): their rows say Installing…, one that ended is settled in
     // the queue, and nothing rewrites `repo/` under them.
@@ -152,22 +173,32 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                 log: logLine,
                 settled: async (outcome) => {
                     await loadNow.current().catch(() => undefined);
-                    // One found already ended when the store opened is settled without a toast.
-                    if (!outcome.seen) return;
-                    const shown = settledToast(outcome);
-                    await showToast({
-                        style: shown.failed ? Toast.Style.Failure : Toast.Style.Success,
-                        title: shown.title,
-                        ...(shown.message ? { message: shown.message } : {}),
+                    await settledNotice(outcome, {
+                        logFailure: (title, failure) =>
+                            void logToFudge("error", failureLog(title, failure)).catch(() => {}),
+                        marks,
+                        report: (end) => reportEnd(installEnded, end),
+                        select: (dir) => setSelectOnce(dir),
+                        save: (mark) => saveFailure(environment.supportPath, mark, logLine),
+                        toast: async (shown) => {
+                            await showToast({
+                                style: shown.failed ? Toast.Style.Failure : Toast.Style.Success,
+                                title: shown.title,
+                                ...(shown.message ? { message: shown.message } : {}),
+                            });
+                        },
+                        show: (mark) => showFailureNow.current(mark),
                     });
                 },
             }),
-        [extensionsDir, busyChanged],
+        [extensionsDir, busyChanged, marks],
     );
     useEffect(() => {
         others.start();
         return () => others.stop();
     }, [others]);
+    // Failures saved for a click that nobody opened for a week go (SPEC-156 D.4).
+    useEffect(() => void pruneSavedFailures(environment.supportPath), []);
     // The names this store is installing: a second press does nothing (SPEC-153 B).
     const presses = useMemo(
         () => new InstallPresses(busyChanged, (name) => others.busy(name) !== undefined),
@@ -291,6 +322,8 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
             log: logLine,
             // Asked each time an install needs it, never cached, so tools set up meanwhile count (SPEC-145 §3).
             commandLineToolsReady: () => commandLineToolsReady().catch(() => false),
+            // macOS asks about notifications after the user confirms, never from a background path (SPEC-156 G).
+            askForNotifications: () => askForNotifications(),
             chooseSwiftParts: (title) =>
                 new Promise<SwiftPartsChoice>((resolve) => push(<SwiftPartsView title={title} choose={resolve} />)),
         }),
@@ -356,9 +389,65 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                     />,
                 );
             },
+            // Install notifications (SPEC-156 D.1): the app's answer decides the toast, the selection and the mark.
+            notices: {
+                report: (report) => installEnded(report),
+                select: (dir) => setSelectOnce(dir),
+                failedNotified: (title, error, mark) => {
+                    logFailure(title, error);
+                    marks.mark(mark);
+                },
+                succeeded: (name) => marks.clear(name),
+            },
         };
         return presses.press(entry.name, updating, () => oneAtATime(() => installPressed(entry, updating, context, view)));
     };
+
+    /** The failure view for a marked row, a click or the launch context, with Try Again. */
+    const pushFailure = (mark: FailureMark) => {
+        const entry = loadedNow.current?.entries.find((candidate) => candidate.dir === mark.dir);
+        push(
+            <FailureView
+                title={`Couldn't ${mark.updating ? "update" : "install"} ${mark.title}`}
+                details={mark.details}
+                pageURL={loadedNow.current ? folderURL(mark.dir, loadedNow.current.commit) : undefined}
+                cli={cli}
+                retry={() => {
+                    if (entry) void runInstall(entry, mark.updating);
+                }}
+            />,
+        );
+    };
+    /** Show Error and a settled failure: the view, and the failure saved for its notification goes (D.4). */
+    const showFailure = (mark: FailureMark) => {
+        void removeSavedFailure(environment.supportPath, mark.name);
+        pushFailure(mark);
+    };
+    showFailureNow.current = showFailure;
+
+    /** A click or the launch context (SPEC-156 D.5, E.1): the row selected, and with `failed` its failure view. */
+    const openTarget = (target: NoticeTarget) =>
+        openNoticeTarget(target, {
+            supportPath: environment.supportPath,
+            select: (dir) => setSelectOnce(dir),
+            marks,
+            show: (mark) => pushFailure(mark),
+        });
+    const openTargetNow = useRef(openTarget);
+    openTargetNow.current = openTarget;
+
+    // The launch context a click opens the store with (D.5): once, after the first load and the records found at open.
+    const [launch] = useState(() => new LaunchTarget(launchContext, others, (target) => openTargetNow.current(target)));
+    useEffect(() => void launch.loaded(loaded !== undefined), [launch, loaded]);
+
+    // A click while this session is loaded (E.1): one call waits at a time, made again after each answer.
+    useEffect(() => {
+        let stopped = false;
+        void followClicks(nextNotificationClick, (target) => openTargetNow.current(target), () => stopped);
+        return () => {
+            stopped = true;
+        };
+    }, []);
 
     const runUninstall = (entry: StoreEntry) =>
         oneAtATime(async () => {
@@ -409,7 +498,8 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
         const state = loaded ? status(entry, loaded.installed, loaded.trees) : "available";
         // Every row with a name that's being installed or updated, here or by an earlier store's build (SPEC-153 B, C).
         const busy = busyOf(entry.name);
-        const offered = rowActions(state, busy);
+        const mark = marks.get(entry.dir);
+        const offered = rowActions(state, busy, mark);
         const icon = loaded ? iconURL(entry, loaded.commit) : undefined;
         const tree = loaded?.trees.get(entry.dir);
         const compatibility = tree === undefined ? undefined : compatibilityTag(checked.results.get(tree));
@@ -424,7 +514,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                 accessories={
                     showingDetail
                         ? undefined
-                        : accessoryTexts(entry, state, compatibility, busy).map((accessory) =>
+                        : accessoryTexts(entry, state, compatibility, busy, mark).map((accessory) =>
                               "tag" in accessory
                                   ? { tag: { value: accessory.tag, color: tagColor(accessory.tag) } }
                                   : { text: accessory.text },
@@ -448,6 +538,21 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                     entry.dir !== actionsFor ? undefined : (
                     <ActionPanel>
                         <ActionPanel.Section>
+                            {offered.tryAgain && mark && (
+                                <Action
+                                    title="Try Again"
+                                    icon={Icon.ArrowClockwise}
+                                    onAction={() => runInstall(entry, mark.updating)}
+                                />
+                            )}
+                            {offered.showError && mark && (
+                                <Action
+                                    title="Show Error"
+                                    icon={Icon.ExclamationMark}
+                                    shortcut={{ modifiers: ["cmd"], key: "return" }}
+                                    onAction={() => showFailure(mark)}
+                                />
+                            )}
                             {offered.install && (
                                 <Action title="Install" icon={Icon.Download} onAction={() => runInstall(entry, false)} />
                             )}
@@ -506,7 +611,12 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
             isLoading={!loaded && !loadError}
             isShowingDetail={showingDetail}
             searchBarPlaceholder="Search extensions"
-            onSelectionChange={setSelected}
+            selectedItemId={selectOnce}
+            onSelectionChange={(id) => {
+                setSelected(id);
+                // Selected once: from here the user moves it.
+                if (id !== null && id === selectOnce) setSelectOnce(undefined);
+            }}
             searchBarAccessory={
                 <List.Dropdown tooltip="Category" value={filter} onChange={setFilter}>
                     <List.Dropdown.Item title="All" value={allFilter} />

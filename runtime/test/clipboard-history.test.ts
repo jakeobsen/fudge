@@ -10,14 +10,17 @@ import { createApiModule } from "../src/api/module.ts";
 import { Clipboard } from "../src/api/system.ts";
 import { connect, settle, type RpcRequest } from "../src/bridge.ts";
 import {
+    askForNotifications,
     clearClipboardHistory,
     clipboardImage,
     commandLineToolsReady,
     copyClipboardEntry,
     createFudgeAppModule,
     deleteClipboardEntry,
+    installEnded,
     listClipboardHistory,
     logToFudge,
+    nextNotificationClick,
     openDevelopmentSettings,
     pasteClipboardEntry,
     pinClipboardEntry,
@@ -175,6 +178,9 @@ test("the fudge:app module is frozen and holds every call", () => {
         logToFudge,
         commandLineToolsReady,
         openDevelopmentSettings,
+        installEnded,
+        askForNotifications,
+        nextNotificationClick,
         searchFiles,
         listClipboardHistory,
         clipboardImage,

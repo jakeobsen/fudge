@@ -181,6 +181,13 @@ final class LauncherModel {
     @ObservationIgnored var panelOnScreen: () -> Bool = { true }
     /// Whether the launcher panel is on screen; set by the app delegate.
     @ObservationIgnored var isVisible: () -> Bool = { false }
+    /// Install notifications' one decider (SPEC-156 C), set by the app delegate; nil until then.
+    @ObservationIgnored var installNotices: InstallNoticeCenter?
+    /// Reads `installing/` once on the outcome watcher's queue, for a store session that ended (C.2); set by the app
+    /// delegate.
+    @ObservationIgnored var readInstallOutcomes: (@escaping @MainActor ([InstallEnd]) -> Void) -> Void = { _ in }
+    /// Clicks on install notifications on their way to a store session (E.1), by its waiting call's id.
+    @ObservationIgnored private var notificationClicks = NotificationClicks<Int>()
     /// Pick Color's loupe. `AppDelegate` gives snapshot runs one that never shows it.
     @ObservationIgnored var colorSampler: any ColorSampling = ScreenColorSampler()
     /// Define Word's dictionary. `AppDelegate` gives snapshot runs `--definitions`' made-up ones.
@@ -704,6 +711,99 @@ final class LauncherModel {
     /// made counts, which needs the panel to hold the keyboard (`ArgumentInput.follows`, FUD-140).
     func fieldTookKeyboard(_ index: Int?, panelHoldsKeyboard: Bool) {
         if arguments.follows(index, panelHoldsKeyboard: panelHoldsKeyboard) { arguments.focus = index }
+    }
+
+    // MARK: - Install notifications (SPEC-156)
+
+    /// The store session on screen's command, if the screen's command is one (the panel may be hidden).
+    private var storeSessionOnScreen: String? {
+        guard let command, sessionExtensions[command.session] == ExtensionStore.extensionName else { return nil }
+        return command.session
+    }
+
+    /// Whether the store is on screen: the panel is visible and its command is a store session (C.1).
+    private var storeOnScreen: Bool { isVisible() && storeSessionOnScreen != nil }
+
+    /// Whether a store session is loaded: one is running in the host (C.2).
+    var storeSessionLoaded: Bool {
+        sessionExtensions.contains { $0.value == ExtensionStore.extensionName && hostSessions.isRunning($0.key) }
+    }
+
+    /// `store.installEnded`, `store.askForNotifications` and `store.nextNotificationClick`, from a store session.
+    private func storeNotificationCall(_ method: String, params: JSONValue, session: String, id: Int) {
+        switch method {
+        case "store.installEnded":
+            // D.1: decided once per build, answered with `{ onScreen, notified }`.
+            guard let end = InstallEnd(report: params), let center = installNotices else {
+                send(.rpcResult(session: session, id: id, result: nil, error: "That isn't an install's end"))
+                return
+            }
+            let onScreen = storeOnScreen
+            Task {
+                let answer = await center.report(end, onScreen: onScreen)
+                send(.rpcResult(session: session, id: id, result: answer.json, error: nil))
+            }
+        case "store.askForNotifications":
+            // G: only after the user confirmed an install, so only for a user-initiated session; not waited for.
+            send(.rpcResult(session: session, id: id, result: .null, error: nil))
+            guard origin(of: session).mayComeForward, let center = installNotices else { return }
+            Task { await center.ask(needsSwitch: true) }
+        default:
+            // E.1: kept waiting until a click comes, or answered at once with a click kept for it.
+            let (now, replaced) = notificationClicks.wait(session: session, call: id)
+            if let replaced { send(.rpcResult(session: session, id: replaced, result: .null, error: nil)) }
+            if let now { send(.rpcResult(session: session, id: id, result: now.json, error: nil)) }
+        }
+    }
+
+    /// A store session ended: its waiting call and kept click go, and the outcomes it left are decided (C.2), read on
+    /// the watcher's queue.
+    private func storeSessionEnded(_ session: String) {
+        _ = notificationClicks.ended(session: session)
+        guard let center = installNotices else { return }
+        readInstallOutcomes { [weak self] ends in
+            guard !ends.isEmpty else { return }
+            let onScreen = self?.storeOnScreen ?? false
+            Task { await center.sessionEnded(ends, onScreen: onScreen) }
+        }
+    }
+
+    /// A click on an install notification (E): to the store session on screen's command, which shows without the
+    /// reset (its waiting `nextNotificationClick` answered, or the click kept for its next call), else a launch of the
+    /// store as the user's own from root search, after the reset if it's due, with the target as its launch context.
+    func notificationClicked(_ target: NoticeTarget) {
+        let session = storeSessionOnScreen
+        switch notificationClicks.click(target, loadedSession: session) {
+        case .answer(let call, let target):
+            if let session { send(.rpcResult(session: session, id: call, result: target.json, error: nil)) }
+        case .kept:
+            break
+        case .launch(let target):
+            resettingFirst { launchStore(for: target) }
+        }
+        show()
+    }
+
+    /// Launches the store's view command for a click, as root search would.
+    private func launchStore(for target: NoticeTarget) {
+        guard let installed = extensions[ExtensionStore.extensionName],
+            let command = installed.manifest.commands.first(where: { $0.mode == "view" })
+        else { return }
+        guard FudgeSettings.load(from: paths.settingsFile).isEnabled(extension: ExtensionStore.extensionName) else {
+            screen = .failure(.extensionStoreOff)
+            return
+        }
+        let prepared = prepareLaunch(of: installed, command: command, userInitiated: true)
+        guard prepared.preferences.missing.isEmpty else {
+            showNeedsSettings(
+                command.title, extension: ExtensionStore.extensionName, missing: prepared.preferences.missing,
+                origin: .userInitiated)
+            return
+        }
+        launch(
+            command.title, of: installed, command: command,
+            launchProps: LaunchProps(launchContext: target.launchContext),
+            prepared: prepared)
     }
 
     // MARK: - Command views
@@ -4075,6 +4175,9 @@ final class LauncherModel {
         FudgeLog.error(
             "the extension host stopped"
                 + (running.isEmpty ? "" : ", ending \(running.sorted().joined(separator: ", "))"))
+        for (session, name) in sessionExtensions where name == ExtensionStore.extensionName {
+            if hostSessions.isRunning(session) { storeSessionEnded(session) }
+        }
         hostSessions.endAll()
         background.removeAll()
         quietSessions.removeAll()
@@ -4238,6 +4341,7 @@ final class LauncherModel {
 
         case .exit(let session, let reason):
             endSignIn(of: session)
+            if sessionExtensions[session] == ExtensionStore.extensionName { storeSessionEnded(session) }
             if sessionExtensions[session] == ClipboardHistory.extensionName { clipboardHistory.clearPreviews() }
             sessionExtensions[session] = nil
             sessionCommands[session] = nil
@@ -4324,6 +4428,16 @@ final class LauncherModel {
                     if case .string(let name) = values["level"] { LogLevel(rawValue: name) ?? .error } else { .error }
                 FudgeLog.write(level, "Extension Store: \(message)")
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
+            case "store.installEnded", "store.askForNotifications", "store.nextNotificationClick":
+                // Install notifications (SPEC-156 C.5): the Extension Store's calls, refused for any other extension.
+                guard sessionExtensions[session] == ExtensionStore.extensionName else {
+                    send(
+                        .rpcResult(
+                            session: session, id: id, result: nil,
+                            error: "Only the Extension Store asks about install notifications"))
+                    break
+                }
+                storeNotificationCall(method, params: params, session: session, id: id)
             case "commandLineTools.ready", "commandLineTools.openSettings":
                 // The Extension Store's questions about extensions with a part written in Swift (SPEC-145 §3), refused
                 // for any other extension.

@@ -147,15 +147,16 @@ public final class ChildProcesses: @unchecked Sendable {
     nonisolated(unsafe) private static var signalSources: [any DispatchSourceSignal] = []
 
     /// Makes SIGTERM, SIGINT and SIGHUP end the children first (`endAll`) and delete what `deleteOnSignal` named,
-    /// then this process, with 128 + the signal as its status. For the tool's long-running commands, `scan` and
-    /// `build`.
-    public static func endChildrenOnSignals() {
+    /// then this process, with 128 + the signal as its status, which `beforeExit` is given just before (`fudge build`
+    /// writes its outcome there, SPEC-156 A.3). For the tool's long-running commands, `scan` and `build`.
+    public static func endChildrenOnSignals(beforeExit: @escaping @Sendable (Int32) -> Void = { _ in }) {
         for signal in [SIGTERM, SIGINT, SIGHUP] {
             Darwin.signal(signal, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: signal, queue: .global())
             source.setEventHandler {
                 shared.endAll(exiting: true)
                 shared.deleteLeftovers()
+                beforeExit(128 + signal)
                 exit(128 + signal)
             }
             source.resume()

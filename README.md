@@ -34,6 +34,7 @@ sudo ln -s /Applications/Fudge.app/Contents/Helpers/fudge /usr/local/bin/fudge
   Run it again after changing the extension.
   `--into <folder>` installs it in that extensions folder instead.
   It stops at once, with exit status 75, while another build of the same extension into the same folder is running.
+  `--outcome <folder>` writes its exit status to `<folder>/<pid>.ended.json` as it ends, which the Extension Store passes so that it learns how a build ended after the store was closed.
 - `fudge scan <folder>` says what the extension uses that Fudge doesn't have yet or doesn't support, without building or running it (`--json` for a script).
 - `fudge version` prints Fudge's version.
 
@@ -171,6 +172,10 @@ In the **Extension Store** command, search the extensions, or pick a category in
 - The store needs Git, which comes with Apple's Command Line Tools.
   Without them, the store offers **Install Command Line Tools** (↵), macOS's own installer, and ⌘R checks again once they're in.
 - While an extension installs, its row says so, and closing the store doesn't stop the install: a store you open again shows it installing and records it when it's done.
+  When an install or update finishes or fails while the store isn't on screen, Fudge shows a notification, and clicking it opens the store on that extension.
+  macOS asks whether Fudge may show notifications the first time you confirm an install or update.
+  An install that failed after you closed the store is marked on its row the next time you open the store, with **Try Again** and **Show Error**.
+  **Settings… → Notifications** chooses which of these notifications Fudge shows.
 - It never touches extensions you installed with `fudge build` yourself.
   An extension installs under its own name, so it can't be installed while another extension of that name is: uninstall that one first.
 

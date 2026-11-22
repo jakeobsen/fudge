@@ -10,17 +10,18 @@ final class SettingsModel {
     private(set) var extensions: [InstalledExtension] = []
     /// The page shown. Change it with `select(_:)`, which ends a hotkey recording on the page being left.
     private(set) var selected: String?
-    /// The General and Commands pages' entries in the sidebar; extension names can't start with ":".
-    static let generalPage = ":general"
-    static let commandsPage = ":commands"
-    static let permissionsPage = ":permissions"
-    static let quicklinksPage = ":quicklinks"
-    static let snippetsPage = ":snippets"
-    static let colorPickerPage = ":color-picker"
-    static let windowManagementPage = ":window-management"
-    static let signInPage = ":sign-in"
-    static let calendarPage = ":calendar"
-    static let developmentPage = ":development"
+    /// The sidebar's pages of Fudge's own (`SettingsPages`, where the tags are); extension names can't start with ":".
+    static let generalPage = SettingsPages.generalPage
+    static let commandsPage = SettingsPages.commandsPage
+    static let permissionsPage = SettingsPages.permissionsPage
+    static let quicklinksPage = SettingsPages.quicklinksPage
+    static let snippetsPage = SettingsPages.snippetsPage
+    static let colorPickerPage = SettingsPages.colorPickerPage
+    static let windowManagementPage = SettingsPages.windowManagementPage
+    static let signInPage = SettingsPages.signInPage
+    static let calendarPage = SettingsPages.calendarPage
+    static let developmentPage = SettingsPages.developmentPage
+    static let notificationsPage = SettingsPages.notificationsPage
     /// Every installed extension, for the Commands page.
     private(set) var allExtensions: [InstalledExtension] = []
     /// `settings.json`, as the Commands page edits it.
@@ -80,13 +81,8 @@ final class SettingsModel {
         loadWindowLayouts()
         loadSignIns()
         loadCalendars()
-        if selected != Self.generalPage, selected != Self.commandsPage, selected != Self.permissionsPage,
-            selected != Self.quicklinksPage, selected != Self.snippetsPage, selected != Self.signInPage,
-            selected != Self.colorPickerPage, selected != Self.windowManagementPage, selected != Self.calendarPage,
-            selected != Self.developmentPage, !extensions.contains(where: { $0.manifest.name == selected })
-        {
-            select(Self.generalPage)
-        }
+        // A page that's no longer there (an extension removed while its page is open) gives way to General.
+        if !SettingsPages.keeps(selected, extensionNames: extensions.map(\.manifest.name)) { select(Self.generalPage) }
     }
 
     /// Shows `page`. Leaving a page ends a hotkey recording on it, with no change, and Fudge's hotkeys resume.
@@ -196,6 +192,50 @@ final class SettingsModel {
     func setColorFormat(_ format: ColorFormat) {
         guard format != colorFormat, change({ $0.colorFormat = format }) else { return }
         colorFormatChanged()
+    }
+
+    /// macOS's answer for Fudge's notifications (SPEC-156 F), read and never asked: when the Notifications page appears
+    /// and when the window becomes key. Nil until the first read.
+    var notificationPermission: NotificationPermission?
+    /// macOS's notifications, or a snapshot run's fixed answer; set by the app delegate.
+    @ObservationIgnored var notifications: any InstallNotifications = FixedInstallNotifications(.unknown)
+    /// Asks macOS (G), at most once per run, through the app's one notice center; set by the app delegate.
+    /// `needsSwitch`: only with either switch on.
+    @ObservationIgnored var askForNotifications: (_ needsSwitch: Bool) async -> Void = { _ in }
+    /// Settings → Notifications' **Install or update finished** (`notifyInstallFinished`).
+    var notifyInstallFinished: Bool { fudgeSettings.notifyInstallFinished }
+    /// **Install or update failed** (`notifyInstallFailed`).
+    var notifyInstallFailed: Bool { fudgeSettings.notifyInstallFailed }
+
+    func setNotifyInstallFinished(_ on: Bool) {
+        guard on != notifyInstallFinished, change({ $0.notifyInstallFinished = on }) else { return }
+        if on { askForNotificationsNow(needsSwitch: true) }
+    }
+
+    func setNotifyInstallFailed(_ on: Bool) {
+        guard on != notifyInstallFailed, change({ $0.notifyInstallFailed = on }) else { return }
+        if on { askForNotificationsNow(needsSwitch: true) }
+    }
+
+    /// Reads macOS's answer again.
+    func refreshNotificationPermission() {
+        let notifications = notifications
+        Task { notificationPermission = await notifications.permission() }
+    }
+
+    /// Ask Now, or a switch turned on: macOS asks while it hasn't been asked, then the row reads its answer.
+    func askForNotificationsNow(needsSwitch: Bool = false) {
+        let ask = askForNotifications
+        let notifications = notifications
+        Task {
+            await ask(needsSwitch)
+            notificationPermission = await notifications.permission()
+        }
+    }
+
+    /// Open Notification Settings: System Settings' Notifications pane.
+    func openNotificationSettings() {
+        NSWorkspace.shared.open(NotificationPermission.settingsURL)
     }
 
     /// How the calculator reads and shows numbers (`numberFormat` in `settings.json`).
@@ -1388,6 +1428,7 @@ final class SettingsWindowController {
                 MainActor.assumeIsolated {
                     model.refreshLoginItem()
                     model.refreshRaycastLinks()
+                    model.refreshNotificationPermission()
                     model.loadQuicklinks()
                     model.loadSnippets()
                     model.loadWindowLayouts()
@@ -1445,6 +1486,7 @@ struct SettingsView: View {
             List(selection: Binding(get: { model.selected }, set: { model.select($0) })) {
                 Label("General", systemImage: "gearshape").tag(SettingsModel.generalPage)
                 Label("Permissions", systemImage: "hand.raised").tag(SettingsModel.permissionsPage)
+                Label("Notifications", systemImage: "bell").tag(SettingsModel.notificationsPage)
                 Label("Commands", systemImage: "command").tag(SettingsModel.commandsPage)
                 Label("Quicklinks", systemImage: "link").tag(SettingsModel.quicklinksPage)
                 Label("Snippets", systemImage: "doc.text").tag(SettingsModel.snippetsPage)
@@ -1469,6 +1511,8 @@ struct SettingsView: View {
                     GeneralPage(model: model)
                 } else if model.selected == SettingsModel.permissionsPage {
                     PermissionsPage(model: model)
+                } else if model.selected == SettingsModel.notificationsPage {
+                    NotificationsPage(model: model)
                 } else if model.selected == SettingsModel.commandsPage {
                     CommandsPage(model: model)
                 } else if model.selected == SettingsModel.quicklinksPage {

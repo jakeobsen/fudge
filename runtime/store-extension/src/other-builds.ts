@@ -5,23 +5,31 @@ import { lstat } from "node:fs/promises";
 import path from "node:path";
 import {
     ownBuilds,
+    readBuildOutput,
     readBuildRecords,
-    removeBuildRecord,
+    removeBuildFiles,
     stillRunning,
     type BuildRecord,
+    type FoundBuildRecord,
     type ProcessProbe,
 } from "./build-records.ts";
-import { doneToast, oneAtATime, readInstalled, writeInstalled, type Busy } from "./store.ts";
+import type { FailureDetails } from "./failure.ts";
+import type { FailureMark, InstallAnswer, InstallEndReport, RowMarks } from "./notices.ts";
+import { alreadyBuildingStatus, doneToast, oneAtATime, readInstalled, writeInstalled, type Busy } from "./store.ts";
 
 /** How often the open store checks a running record's pid. */
 export const pollInterval = 2000;
 
 /** A record settled: whether its build was adopted into `installed.json`, and whether it ended while this store was
- * open (`seen`), which is when the store says how it ended. */
-export type Settled = { record: BuildRecord; adopted: boolean; seen: boolean };
+ * open (`seen`), which is when the store says how it ended. A drop as failed has the build's `failure` (SPEC-156 D.2);
+ * a quiet drop (a 75, or a 0 whose folder changed since) has none. */
+export type Settled = { record: BuildRecord; adopted: boolean; seen: boolean; failure?: FailureDetails };
+
+/** The line a failed drop's output ends with when the build wrote no outcome (it was killed, or crashed). */
+export const stoppedLine = "Its build stopped before it finished.";
 
 type Known = {
-    record: BuildRecord;
+    record: FoundBuildRecord;
     /** This store saw the build running. */
     seenRunning: boolean;
     /** When this store first saw it ended. */
@@ -89,14 +97,24 @@ export class OtherBuilds {
         for (const record of records) {
             if (own.has(record.pid) || this.givenUp.has(record.pid)) continue;
             present.add(record.pid);
-            if (!this.known.has(record.pid)) {
+            const known = this.known.get(record.pid);
+            if (!known) {
                 this.known.set(record.pid, { record, seenRunning: false, signalled: false, settling: false });
+            } else if (!known.settling) {
+                // The same build, now perhaps with its outcome.
+                known.record = record;
             }
         }
         // A record whose file went another way.
         for (const [pid, known] of this.known) if (!known.settling && !present.has(pid)) this.known.delete(pid);
         for (const known of this.known.values()) {
             if (known.settling) continue;
+            // A build that wrote its outcome has ended (SPEC-156 A.3), whatever its process looks like yet.
+            if (known.record.outcome) {
+                known.endedAt ??= now();
+                this.settle(known);
+                continue;
+            }
             const running = await stillRunning(known.record, probe);
             if (running === undefined) continue;
             const at = now();
@@ -137,21 +155,45 @@ export class OtherBuilds {
     }
 
     /**
-     * Adopts the build when `<extensions>/<name>` was made between the record's start and the end bound and the record has
-     * a tree, writing the `installed.json` entry the dead session would have written; drops it otherwise (it failed or was
-     * stopped, or the folder came from somewhere else). Then the record goes, and the list loads again.
+     * With the build's outcome (SPEC-156 D.2): 0 is adopted when `<extensions>/<name>` was made between the record's start
+     * and the build's own end and the record has a tree, else dropped quietly with a line in the log; 75 is dropped
+     * quietly; anything else is dropped as failed. Without one (it was killed, or crashed), C.4 decides: adopted when the
+     * folder was made between the start and the end bound, else dropped as failed. Adopting writes the `installed.json`
+     * entry the dead session would have written. A failed drop carries the build's output, its command and status. Then
+     * all of the pid's files go, and the list loads again.
      */
-    private async settleNow(record: BuildRecord, bound: Date, seen: boolean): Promise<void> {
-        const { supportPath, extensionsDir, now = () => new Date() } = this.options;
+    private async settleNow(record: FoundBuildRecord, bound: Date, seen: boolean): Promise<void> {
+        const { supportPath, extensionsDir, now = () => new Date(), log } = this.options;
         const folder = path.join(extensionsDir, record.name);
-        const adopted =
-            record.tree !== undefined && (await createdBetween(folder, Date.parse(record.startedAt), bound.getTime()));
+        const made = async (end: number) =>
+            record.tree !== undefined && (await createdBetween(folder, Date.parse(record.startedAt), end));
+        const { outcome } = record;
+        let adopted = false;
+        let failed = false;
+        if (outcome === undefined) {
+            adopted = await made(bound.getTime());
+            failed = !adopted;
+        } else if (outcome.status === 0) {
+            adopted = await made(Date.parse(outcome.endedAt));
+            if (!adopted) log?.(`The build of ${record.title} finished, but its folder changed since, so the store left it out`);
+        } else if (outcome.status !== alreadyBuildingStatus) {
+            failed = true;
+        }
         if (adopted) {
             const entry = { tree: record.tree!, commit: record.commit, installedAt: now().toISOString(), dir: record.dir };
             await writeInstalled(supportPath, { ...(await readInstalled(supportPath)), [record.name]: entry });
         }
-        await removeBuildRecord(supportPath, record.pid);
-        await this.options.settled({ record, adopted, seen });
+        let failure: FailureDetails | undefined;
+        if (failed) {
+            const output = await readBuildOutput(supportPath, record.pid).catch(() => "");
+            failure = {
+                output: outcome === undefined ? [output, stoppedLine].filter((part) => part.length > 0).join("\n") : output,
+                command: ["fudge", ...record.command.slice(1)].join(" "),
+                ...(outcome === undefined ? {} : { code: outcome.status }),
+            };
+        }
+        await removeBuildFiles(supportPath, record.pid);
+        await this.options.settled({ record, adopted, seen, ...(failure ? { failure } : {}) });
     }
 
     /** Whether a build from another session is still running, or has ended and isn't settled yet. */
@@ -234,15 +276,77 @@ export function heldRefreshMessage(records: BuildRecord[]): string {
 }
 
 /** The toast for a build from another session that ended while this store was open: the usual done toast when it was
- * adopted, else a Failure toast with no failure view, since its output went with the old session. */
-export function settledToast(outcome: Settled): { failed: boolean; title: string; message?: string } {
-    const { record, adopted } = outcome;
+ * adopted, a Failure toast pointing to the failure view when it failed, and none for a quiet drop. */
+export function settledToast(outcome: Settled): { failed: boolean; title: string; message?: string } | undefined {
+    const { record, adopted, failure } = outcome;
     if (adopted) return { failed: false, title: doneToast(record.title, record.updating, {}).title };
-    return {
-        failed: true,
-        title: `Couldn't ${record.updating ? "update" : "install"} ${record.title}`,
-        message: "Its build stopped before it finished. Try again to see the error.",
-    };
+    if (!failure) return undefined;
+    return { failed: true, title: settledFailureTitle(record), message: "See the details." };
+}
+
+/** A failed drop's title, as the store's own failure says it. */
+export function settledFailureTitle(record: BuildRecord): string {
+    return `Couldn't ${record.updating ? "update" : "install"} ${record.title}`;
+}
+
+/** What a settled record's notice needs from the store's view (SPEC-156 D.1, D.2, D.3). */
+export type SettledSteps = {
+    /** Writes a failure to Fudge.log. */
+    logFailure: (title: string, failure: FailureDetails) => void;
+    marks: Pick<RowMarks, "mark">;
+    /** Reports the end to the app, within the report's time limit. */
+    report: (end: InstallEndReport) => Promise<InstallAnswer>;
+    /** Selects the row of that folder, once. */
+    select: (dir: string) => void;
+    /** Saves a failure that got a notification for a click. */
+    save: (mark: FailureMark) => Promise<void>;
+    toast: (shown: { failed: boolean; title: string; message?: string }) => Promise<void>;
+    /** Pushes the failure view. */
+    show: (mark: FailureMark) => void;
+    now?: () => Date;
+};
+
+/**
+ * A record from another session, settled: a failed drop is logged and marked on its row whenever it ended (D.2, D.3).
+ * One this store saw end is reported (D.1), and the app's answer decides as for the store's own: notified, its row is
+ * selected and a failure saved for a click, with no toast; not notified, the toast, and a failure's view.
+ * One found already ended at open gets no report, no toast and no view.
+ */
+export async function settledNotice(outcome: Settled, steps: SettledSteps): Promise<void> {
+    const { record, failure } = outcome;
+    let mark: FailureMark | undefined;
+    if (failure) {
+        steps.logFailure(settledFailureTitle(record), failure);
+        mark = {
+            name: record.name,
+            dir: record.dir,
+            title: record.title,
+            updating: record.updating,
+            failedAt: (steps.now?.() ?? new Date()).toISOString(),
+            details: failure,
+        };
+        steps.marks.mark(mark);
+    }
+    if (!outcome.seen) return;
+    const shown = settledToast(outcome);
+    if (!shown) return;
+    const answer = await steps.report({
+        build: { pid: record.pid, startedAt: record.startedAt },
+        name: record.name,
+        dir: record.dir,
+        title: record.title,
+        updating: record.updating,
+        outcome: mark ? "failed" : "installed",
+    });
+    if (mark && answer.notified) {
+        steps.select(record.dir);
+        await steps.save(mark);
+        return;
+    }
+    if (!mark && !answer.onScreen) steps.select(record.dir);
+    if (answer.notified) return;
+    await steps.toast(shown);
+    if (mark) steps.show(mark);
 }
 
 /** What `openCopy` works with: the store's copy and these builds. */

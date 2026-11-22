@@ -70,6 +70,11 @@ public struct FudgeSettings: Sendable, Equatable {
     public var hyperkey = false
     /// **Quick press toggles Caps Lock** (`hyperkeyQuickPress`): a tap of Caps Lock still toggles caps. Off by default.
     public var hyperkeyQuickPress = false
+    /// Settings → Notifications' **Install or update finished** (`notifyInstallFinished`, SPEC-156 F): on unless `false`,
+    /// and only `false` is written.
+    public var notifyInstallFinished = true
+    /// **Install or update failed** (`notifyInstallFailed`): on unless `false`, and only `false` is written.
+    public var notifyInstallFailed = true
     /// The Color Picker's **Copy Format** (`colorFormat`): HEX unless set. An unknown value reads as HEX.
     public var colorFormat: ColorFormat = .default
     /// The calendars My Schedule leaves out (`calendarHidden`, by EventKit's calendar id), so a new one shows.
@@ -267,6 +272,8 @@ public struct FudgeSettings: Sendable, Equatable {
         settings.updateCheck = UpdateCheckSetting(settingsValue: object["updateCheck"])
         settings.hyperkey = object["hyperkey"] as? Bool ?? false
         settings.hyperkeyQuickPress = object["hyperkeyQuickPress"] as? Bool ?? false
+        settings.notifyInstallFinished = object["notifyInstallFinished"] as? Bool != false
+        settings.notifyInstallFailed = object["notifyInstallFailed"] as? Bool != false
         settings.colorFormat = (object["colorFormat"] as? String).flatMap(ColorFormat.init(rawValue:)) ?? .default
         settings.calendarHidden = (object["calendarHidden"] as? [Any] ?? []).compactMap { $0 as? String }
         if let days = object["calendarDaysAhead"] as? Int, Schedule.daysAheadChoices.contains(days) {
@@ -313,6 +320,8 @@ public struct FudgeSettings: Sendable, Equatable {
         object["updateCheck"] = updateCheck?.rawValue
         object["hyperkey"] = hyperkey ? true : nil
         object["hyperkeyQuickPress"] = hyperkeyQuickPress ? true : nil
+        object["notifyInstallFinished"] = notifyInstallFinished ? nil : false
+        object["notifyInstallFailed"] = notifyInstallFailed ? nil : false
         object["colorFormat"] = colorFormat == .default ? nil : colorFormat.rawValue
         object["calendarHidden"] = calendarHidden.isEmpty ? nil : calendarHidden
         object["calendarDaysAhead"] = calendarDaysAhead == Schedule.defaultDaysAhead ? nil : calendarDaysAhead

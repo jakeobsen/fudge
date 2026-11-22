@@ -44,6 +44,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var availableSeparator: NSMenuItem?
     /// Not in snapshot runs, which install nothing that outlives them.
     private var extensionsWatcher: ExtensionsWatcher?
+    /// The only code that touches `UNUserNotificationCenter` (SPEC-156 C.6), made in `applicationWillFinishLaunching`
+    /// so a click that launches Fudge is delivered. Never in snapshot runs.
+    private var systemNotifications: SystemInstallNotifications?
+    /// The store's builds' outcomes in `installing/` (SPEC-156 C.2). Not in snapshot runs.
+    private var installOutcomes: InstallOutcomeWatcher?
     /// The Quick Look preview (SPEC-049). Never in snapshot runs.
     private var quickLook: QuickLookPreview?
     /// Hyperkey (SPEC-093): Caps Lock as ⌘⌥⌃⇧. Never in snapshot runs.
@@ -68,6 +73,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSAppleEventManager.shared().setEventHandler(
             self, andSelector: #selector(openLink(_:withReplyEvent:)), forEventClass: AEEventClass(kInternetEventClass),
             andEventID: AEEventID(kAEGetURL))
+        // Install notifications' delegate goes in before launch finishes too, so a click that launches Fudge is
+        // delivered; a snapshot run never touches Notification Center.
+        if !Snapshot.isRequested(CommandLine.arguments) { systemNotifications = SystemInstallNotifications() }
     }
 
     /// A `raycast:` or `com.raycast:` link Fudge Links handed on. Only the direct sign-in waiting for it takes it;
@@ -170,6 +178,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.raycastLinks = raycastLinks
         settingsModel.raycastLinks = raycastLinks
         settingsModel.snapshotOwnAppSignIn = Snapshot(arguments: CommandLine.arguments)?.ownAppSignIn ?? false
+        // Install notifications (SPEC-156): macOS's in the real app, a fixed answer (`--notifications`) in a snapshot
+        // run, which never posts or asks.
+        let notifications = FixedInstallNotifications.pick(
+            snapshot: Snapshot.isRequested(CommandLine.arguments), arguments: CommandLine.arguments
+        ) { [systemNotifications] () -> any InstallNotifications in
+            if let systemNotifications { return systemNotifications }
+            return FixedInstallNotifications(.unknown)
+        }
+        let settingsFile = paths.settingsFile
+        let notices = InstallNoticeCenter(notifications: notifications) {
+            InstallNotificationSwitches(FudgeSettings.load(from: settingsFile))
+        }
+        model.installNotices = notices
+        settingsModel.notifications = notifications
+        settingsModel.askForNotifications = { needsSwitch in await notices.ask(needsSwitch: needsSwitch) }
         settingsWindow = SettingsWindowController(model: settingsModel)
         onboardingWindow = OnboardingWindowController(settings: settingsModel, file: paths.onboardingFile)
         onboardingWindow.openLauncher = { [weak self] in self?.showPanel() }
@@ -428,6 +451,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             FudgeLog.error("couldn't watch \(watcher.directory.path): \(error)")
         }
         extensionsWatcher = watcher
+
+        // The store's builds that end while no store session is loaded (SPEC-156 C.2): the stream starts first, then
+        // the folder is read once, and outcomes already there count as decided.
+        if !Snapshot.isRequested(CommandLine.arguments), let notices = model.installNotices {
+            let outcomes = InstallOutcomeWatcher(
+                folder: ExtensionStore.installingDirectory(paths), found: { notices.foundAtLaunch($0) },
+                ended: { [weak self] ends in
+                    let loaded = self?.model.storeSessionLoaded ?? false
+                    Task { await notices.outcomes(ends, storeLoaded: loaded) }
+                })
+            outcomes.start()
+            installOutcomes = outcomes
+            model.readInstallOutcomes = { then in outcomes.readAll(then: then) }
+            // A click, the one that launched Fudge included, opens the store now that the extensions have loaded.
+            systemNotifications?.onClick { [weak self] target in self?.model.notificationClicked(target) }
+        }
 
         // Run from the disk image or a translocated copy, Fudge offers to move itself first (SPEC-114 §1), before
         // onboarding; moving quits this copy and opens the one in Applications.
@@ -883,6 +922,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// and onboarding's Raycast step; neither touches LaunchServices.
 /// `--command-line-tools found|old|missing` is what Settings → Development and the Extension Store take Apple's Command
 /// Line Tools to be (missing by default); no snapshot run asks the Mac.
+/// `--notifications not-asked|allowed|quiet|off|unknown` is macOS's answer for Fudge's notifications on Settings →
+/// Notifications (`FixedInstallNotifications`, not asked by default); no snapshot run asks macOS or posts one.
 /// `--update-available <version>` shows that version as found by an update check, wherever Fudge shows one (the
 /// General page). No snapshot run asks GitHub. `--menu-items <file>` gives Search Menu Items a made-up app and menus.
 /// For checking the layout without looking at the screen.
