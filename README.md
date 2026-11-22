@@ -177,7 +177,8 @@ In the **Extension Store** command, search the extensions, or pick a category in
 Some extensions sign in to a service, such as GitHub or Jira.
 Pick a sign-in server under **Settings… → Sign-in**: **Fudge's sign-in server**, or **Your own server…**.
 Fudge's sign-in server offers GitHub and Atlassian (Jira and Confluence).
-Under your choice, the page names the services the chosen server offers, when the server lists them.
+Under your choice, the page names up to five of the services the chosen server offers, when the server lists them.
+With more than five, it gives their number, and **Show All** lists them.
 A company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth), which supports many more services.
 [fudge-oauth's README](https://github.com/jakeobsen/fudge-oauth#confirmed-integrations) lists the services confirmed so far.
 Extensions that sign in with an app of their own work too, once **Extensions with their own sign-in** is on under **Settings… → Sign-in**.

@@ -5,7 +5,8 @@ import Observation
 /// server answers `GET <server>/api/services` with `{"services":[{"id":"github",…},…]}`.
 ///
 /// Only each entry's `id` is read. Fudge keeps the ids `OAuthProviders` has, in the server's order and once each, and
-/// writes its own names for them, so no text from the server reaches the page. Anything else gives
+/// writes its own names for them, so no text from the server reaches the page. Up to `maxNames` names are written in
+/// the line; past that, the line gives their number, and **Show All** lists them (SPEC-155). Anything else gives
 /// `SignInServer.explanation`, with no error.
 public enum SignInServices {
     /// The address under the server, as `SignInServer.servicesURL` builds it.
@@ -14,8 +15,12 @@ public enum SignInServices {
     public static let timeout: TimeInterval = 5
     /// At most this many bytes of the answer are read; more is no answer.
     public static let byteLimit = 64 * 1024
-    /// At most this many names are written; with more, the first `maxNames - 1` and "and N more".
+    /// At most this many names are written in the line; with more, the line gives their number instead.
     public static let maxNames = 5
+    /// The button after the number, which lists every name.
+    public static let showAllTitle = "Show All"
+    /// The heading of Show All's list.
+    public static let listTitle = "Services on this server"
 
     /// The ids in a server's answer, in its order: a JSON object whose `services` is an array of objects, each with a
     /// string `id`. Other fields are ignored. Nil for anything else, or over `byteLimit` bytes.
@@ -45,24 +50,25 @@ public enum SignInServices {
         return names
     }
 
-    /// The line under the choice: the names, or `SignInServer.explanation` with none.
+    /// The line under the choice: up to `maxNames` names, else their number, or `SignInServer.explanation` with none.
+    /// Neither the names line nor the number line ends with a full stop; the plain line keeps its own.
     public static func line(names: [String]) -> String {
         guard !names.isEmpty else { return SignInServer.explanation }
-        return "Extensions sign in to \(list(names)) through this server."
+        if showsAll(names: names) { return "This server offers sign in through \(names.count) services" }
+        return "This server offers sign in through \(list(names))"
     }
 
-    /// The names as an English list, as `ListFormatter` writes one in English ("A", "A and B", "A, B, and C"). Past
-    /// `maxNames`, the first `maxNames - 1` and "N more", so there are never more than `maxNames` items.
+    /// Whether the line gives a number, so Show All follows it: more than `maxNames` names.
+    public static func showsAll(names: [String]) -> Bool {
+        names.count > maxNames
+    }
+
+    /// Every name given, as a list with no comma before the last one ("A", "A and B", "A, B and C").
     public static func list(_ names: [String]) -> String {
-        var items = names
-        if names.count > maxNames {
-            items = Array(names.prefix(maxNames - 1)) + ["\(names.count - (maxNames - 1)) more"]
-        }
-        switch items.count {
+        switch names.count {
         case 0: return ""
-        case 1: return items[0]
-        case 2: return "\(items[0]) and \(items[1])"
-        default: return items.dropLast().joined(separator: ", ") + ", and " + items[items.count - 1]
+        case 1: return names[0]
+        default: return names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
         }
     }
 
@@ -296,6 +302,9 @@ public final class SignInServicesLine {
 
     /// What the line says.
     public var text: String { SignInServices.line(names: names) }
+
+    /// Whether Show All follows the line: false while loading, and right after the server on screen changes.
+    public var showsAll: Bool { SignInServices.showsAll(names: names) }
 
     /// Shows `server`'s services once it answers, the plain line meanwhile; nil asks nothing.
     public func load(_ server: SignInServer?, using fetcher: any SignInServicesFetching) async {

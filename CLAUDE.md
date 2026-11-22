@@ -595,9 +595,14 @@ Extensions run in a separate Node.js process, the extension host.
       Every choice but Off shows a consent sheet first ("Extensions will sign in through <host>."), and only Continue saves `signInServer` (`"fudge"` or the URL) with `signInServerConsentAt`; `FudgeSettings.signIn` needs both, so a hand-set server counts as off, and Off removes both.
       Changing the server signs out of everything, after its own sheet when there are sign-ins.
       **The line under the choice** (SPEC-149) names the services the server on screen offers, from its answer to `GET <server>/api/services` (`SignInServer.servicesURL`, built as `endpoint` builds a provider's, so a server under a path works).
-      `SignInServices` (core) reads only each entry's `id`, keeps the ids `OAuthProviders` has, in the server's order and once each, and writes Fudge's own names for them, so no text from the server reaches the page: at most five, else the first four and "and N more".
+      `SignInServices` (core) reads only each entry's `id`, keeps the ids `OAuthProviders` has, in the server's order and once each, and writes Fudge's own names for them, so no text from the server reaches the page.
+      Up to five names, the line is "This server offers sign in through GitHub, Linear and Slack", with no comma before "and" and no full stop (SPEC-155).
+      Past five, it's "This server offers sign in through 26 services" and **Show All**, whose popover lists every name in the server's order under "Services on this server".
+      The number counts Fudge's names, after that mapping and dedupe.
       Anything else shows `SignInServer.explanation`, with no error: Off, still loading, an address of your own that's typed but not saved (`SignInServices.serverOnScreen`), no answer, any status but 200, a redirect, more than 64 KB, more than 5 s for the whole request, another shape of JSON, or no id Fudge knows.
       `SignInServerControls` asks through `.task(id:)` on the server on screen, and `SignInServicesLine` drops an answer that comes after the server changed or its task was cancelled; nothing is stored.
+      Past five names, `SignInServerControls` puts Show All after the number, in the picker's label (`SignInServicesLine.showsAll`, false while loading and after a change of server, so the button and its popover go then).
+      It's a popover, not a sheet, because a popover anchors to the button in whichever window it's in, so the Settings window and onboarding's both get it without `ask`.
       `URLSessionSignInServices` (core) is the request: an ephemeral `URLSession` with no cookies, credentials or cache, `User-Agent: Fudge/<version>`, `Accept: application/json` and `Accept-Language: en`, `timeoutIntervalForResource` 5 s, and no redirects.
       The fetcher is picked once at launch (`SignInServices.fetcher`): a snapshot run gets `FixedSignInServices`, never the network, even with a server chosen.
       Under the server choice, **Extensions with their own sign-in** (SPEC-132 §5, D-89, `OwnAppSignInControls`) is a switch of its own, off by default and independent of the server.
@@ -647,6 +652,7 @@ Extensions run in a separate Node.js process, the extension host.
       Snapshot runs keep sign-ins in memory (`--sign-ins <extension>/<providerId>=<Provider>,…`), and `--sign-in-consent` saves the Sign-in page's consent alert: laid out by `NSAlert.layout()` without being shown, and moved to a `SnapshotSheet` that refuses key status and is never ordered in (`SettingsWindowController.snapshotSheet`).
       So the image has the app's icon, which the real sheet leaves out.
       `--sign-in-services "github|atlassian"` is the sign-in server's answer in a snapshot run: relay ids, read, named and limited as a server's are; without it there's no answer, and the line under the choice is the plain one.
+      `--sign-in-services-list`, with `--settings :sign-in`, draws Show All's list over the page in place of its popover (`SettingsModel.snapshotServicesList`), and nothing while the line names five services or fewer.
     - **Menu bar commands.**
       `MenuBarController` puts each active `menu-bar` command in the menu bar as one `NSStatusItem` with an `NSMenu`.
       Running one from root search (or its hotkey) activates it; running it again refreshes it and opens its menu. ⌘K on an active one offers Deactivate Menu Bar Item (`RootAction.deactivateMenuBarItem`).
