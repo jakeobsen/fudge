@@ -236,6 +236,23 @@ test("no partial clone: the clone is stopped, no copy is left, and the run had s
     assert.equal(calls.length, 1, "nothing ran after the stopped clone");
 });
 
+test("no partial clone: a clone that ended by itself after the warning still leaves no copy", async () => {
+    // git deletes a clone it was stopped in; one that finished before the signal landed leaves the whole copy.
+    const root = await temporary();
+    const repoPath = path.join(root, "support/repo");
+    const run: Run = async (_program, args) => {
+        if (args.includes("clone")) {
+            await mkdir(path.join(repoPath, ".git"), { recursive: true });
+            await writeFile(path.join(repoPath, "everything.bin"), "all of it");
+            return { code: 0, stdout: "", stderr: `warning: ${partialCloneWarning}, ignoring\n`, stopped: true };
+        }
+        return { code: 0, stdout: "", stderr: "" };
+    };
+    const repo = new StoreRepository(repoPath, { url: "https://git.example.org/team/extensions", run });
+    await assert.rejects(repo.clone(), (error: unknown) => error instanceof NoPartialClone);
+    await assert.rejects(stat(repoPath), "the copy is deleted");
+});
+
 test("no partial clone on a refresh: the fetch is stopped and the copy stays as it was", async () => {
     const root = await temporary();
     const { source, bare } = await remote(root);
