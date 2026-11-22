@@ -53,7 +53,8 @@ func build(_ arguments: BuildArguments) {
         let count = installed.manifest.commands.count
         print("→ installed \(installed.manifest.title) (\(count) command\(count == 1 ? "" : "s"))")
     } catch {
-        fail(String(describing: error))
+        // Another build of this extension into this folder: 75, which the Extension Store reads (SPEC-153 A).
+        fail(String(describing: error), status: (error as? BuildError)?.exitStatus ?? 1)
     }
 }
 

@@ -71,6 +71,21 @@ public enum BuildError: Error, Equatable, CustomStringConvertible {
     /// The compile step exited with `status`, and `output` is what esbuild printed. The step is named rather than its
     /// command, which holds a request file that's deleted with the build's scratch folder.
     case compileFailed(status: Int32, output: String)
+    /// Another build of this extension into this folder holds its lock (`ExtensionBuilder.lockBuild`), so this one
+    /// stopped before writing anything. The name and the extensions folder.
+    case alreadyBuilding(String, String)
+    /// The build's lock file couldn't be opened or locked, for a reason other than another build holding it.
+    case cantLock(path: String, reason: String)
+
+    /// `fudge build`'s exit status for `alreadyBuilding` (`EX_TEMPFAIL`), which it uses for nothing else; the Extension
+    /// Store reads it (`alreadyBuildingStatus` in `store.ts`), and `runtime/test/fixtures/build-statuses.json` pins both.
+    public static let alreadyBuildingStatus: Int32 = 75
+
+    /// The exit status `fudge build` ends with for this error.
+    public var exitStatus: Int32 {
+        if case .alreadyBuilding = self { return Self.alreadyBuildingStatus }
+        return 1
+    }
 
     public var description: String {
         switch self {
@@ -97,6 +112,10 @@ public enum BuildError: Error, Equatable, CustomStringConvertible {
                 + "use the fudge inside Fudge.app"
         case .compileFailed(let status, let output):
             ShellError.describe("compiling the extension", status: status, output: output)
+        case .alreadyBuilding(let name, let folder):
+            "another fudge build is installing \(name) into \(folder); try again when it has finished"
+        case .cantLock(let path, let reason):
+            "couldn't lock \(path): \(reason)"
         }
     }
 }
@@ -138,6 +157,9 @@ public struct ExtensionBuilder: Sendable {
     public var commandLineTools: @Sendable () -> CommandLineTools.Tools? = { nil }
     /// SwiftPM's shared cache (`FudgePaths.swiftPackageCache`).
     public var swiftPackageCache = FudgePaths.swiftPackageCache()
+    /// Called with the build's lock held, just before the finished build replaces the install: a seam for the test of
+    /// two builds of one extension racing to `replace`.
+    var beforeReplace: (@Sendable () -> Void)?
 
     public init(
         esbuild: URL, node: BundledNode? = nil, bundler: URL? = nil,
@@ -159,6 +181,11 @@ public struct ExtensionBuilder: Sendable {
         guard !manifest.commands.isEmpty else { throw BuildError.noCommands }
         try Self.checkCommandNames(manifest.commands.map(\.name))
         let entries = try manifest.commands.map { try Self.entry(for: $0.name, in: source) }
+        // One build of this extension into this folder at a time (SPEC-153 A): a second stops here, before writing
+        // anything. The kernel drops the lock when this process ends, however it ends.
+        try files.createDirectory(at: extensionsDirectory, withIntermediateDirectories: true)
+        let lock = try Self.lockBuild(of: manifest.name, in: extensionsDirectory)
+        defer { close(lock) }
         try Self.checkDestination(extensionsDirectory.appendingPathComponent(manifest.name), source: source)
         // Every build runs Fudge's own Node.js: the bundling script compiles, and its npm installs the dependencies.
         let installsDependencies =
@@ -183,7 +210,6 @@ public struct ExtensionBuilder: Sendable {
             nodePaths = [try Self.installDependencies(of: source, into: scratch, with: node).path]
         }
 
-        try files.createDirectory(at: extensionsDirectory, withIntermediateDirectories: true)
         let staging = extensionsDirectory.appendingPathComponent(".staging-\(manifest.name)-\(UUID().uuidString)")
         children.deleteOnSignal(staging)
         defer {
@@ -241,6 +267,7 @@ public struct ExtensionBuilder: Sendable {
         let destination = extensionsDirectory.appendingPathComponent(manifest.name, isDirectory: true)
         // From here the staging folder is the install: a signal no longer deletes it.
         children.forget(staging)
+        beforeReplace?()
         try Self.replace(destination, with: staging)
         return InstalledExtension(manifest: manifest, directory: destination, compatibility: compatibility)
     }
@@ -438,6 +465,33 @@ public struct ExtensionBuilder: Sendable {
             return FileManager.default.temporaryDirectory
         }
         return URL(fileURLWithPath: path, isDirectory: true)
+    }
+
+    /// The lock file of the builds of `name` into `extensionsDirectory`: a dot file, which the watcher, the layout and
+    /// `InstalledExtension.all` skip. It stays after the build, since deleting a lock file another build may have open
+    /// would break the lock.
+    static func lockFile(of name: String, in extensionsDirectory: URL) -> URL {
+        extensionsDirectory.appendingPathComponent(".build-\(name).lock")
+    }
+
+    /// Takes the exclusive lock of the builds of `name` into `extensionsDirectory`, without waiting, and returns its
+    /// descriptor, which the caller closes. Another build holding it throws `alreadyBuilding`. The lock belongs to this
+    /// open of the file, so a second open in this process conflicts too, and the kernel drops it when the process ends.
+    /// `O_CLOEXEC` keeps it out of any program the build starts, on top of `ChildProcesses.spawn`'s
+    /// `POSIX_SPAWN_CLOEXEC_DEFAULT`, so a child left running never holds it.
+    static func lockBuild(of name: String, in extensionsDirectory: URL) throws -> Int32 {
+        let file = lockFile(of: name, in: extensionsDirectory)
+        let descriptor = open(file.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o644)
+        guard descriptor >= 0 else {
+            throw BuildError.cantLock(path: file.path, reason: String(cString: strerror(errno)))
+        }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            let error = errno
+            close(descriptor)
+            if error == EWOULDBLOCK { throw BuildError.alreadyBuilding(name, extensionsDirectory.path) }
+            throw BuildError.cantLock(path: file.path, reason: String(cString: strerror(error)))
+        }
+        return descriptor
     }
 
     /// Moves `staging` to `destination`, replacing what's there.

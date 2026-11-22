@@ -24,7 +24,8 @@ import {
 } from "./compatibility.ts";
 import type { FailureDetails } from "./failure.ts";
 import { maxManifestBytes, readRegularFile } from "./files.ts";
-import { GitError, spawnProgram, type Run, type StoreRepository } from "./git.ts";
+import { buildRecordFiles, ownBuilds, recordBuild, type BuildAbout, type BuildRecordFiles } from "./build-records.ts";
+import { GitError, spawnProgram, type GitResult, type Run, type StoreRepository } from "./git.ts";
 import { sourceProblem } from "./sources.ts";
 import { askedForSwiftParts, decideSwiftParts, type SwiftParts, type SwiftPartsChoice } from "./swift-parts.ts";
 import { buildTimeout, swiftBuildTimeout } from "./timeouts.ts";
@@ -43,6 +44,23 @@ export class BuildFailed extends StoreError {
         this.command = command;
         this.code = code;
     }
+}
+
+/** `fudge build`'s exit status when another build of the same extension into the same folder is running
+ * (`BuildError.alreadyBuildingStatus`); `runtime/test/fixtures/build-statuses.json` pins both. */
+export const alreadyBuildingStatus = 75;
+
+/** `fudge build` stopped at once because another build of this extension is running: started from Terminal, or by a
+ * store that couldn't see it. Neither a failure nor an install (SPEC-153 C.6). */
+export class AlreadyBuilding extends Error {
+    constructor(title: string) {
+        super(alreadyBuildingTitle(title));
+    }
+}
+
+/** The toast for `AlreadyBuilding`. */
+export function alreadyBuildingTitle(title: string): string {
+    return `${title} is already being installed`;
 }
 
 export type StoreContext = {
@@ -65,7 +83,38 @@ export type StoreContext = {
     chooseSwiftParts?: (title: string) => Promise<SwiftPartsChoice>;
     run?: Run;
     now?: () => Date;
+    /** Writes a line to `Fudge.log` (`logToFudge`); never throws. */
+    log?: (line: string) => void;
+    /** How the records of running builds are written (`installing/<pid>.json`); tests slow them down or fail them. */
+    buildRecords?: BuildRecordFiles;
+    /** The pids of this session's builds (`ownBuilds`). */
+    ownBuilds?: Set<number>;
 };
+
+/**
+ * Runs `fudge build` with its record in `installing/` (SPEC-153 C.1): written once it has a pid, and removed when the run
+ * has ended, after the write has settled. The record never changes the run's result.
+ */
+async function recordedBuild(
+    context: StoreContext,
+    run: Run,
+    args: string[],
+    timeout: number,
+    about: Omit<BuildAbout, "command">,
+): Promise<GitResult> {
+    const record = recordBuild({ ...about, command: [context.cli, ...args] }, timeout, {
+        supportPath: context.supportPath,
+        now: context.now,
+        log: context.log,
+        files: context.buildRecords ?? buildRecordFiles,
+        own: context.ownBuilds ?? ownBuilds,
+    });
+    try {
+        return await run(context.cli, args, { timeout, started: record.started });
+    } finally {
+        await record.ended();
+    }
+}
 
 /** Where the store keeps what it installed. It survives turning the store off, unlike `repo/`. */
 export function installedFile(supportPath: string): string {
@@ -206,15 +255,18 @@ export async function install(entry: StoreEntry, context: StoreContext): Promise
     const unchecked = checked === undefined || checked.notChecked === true;
     const timeout = (parts?: SwiftParts) =>
         parts === "build" && (hasSwiftPart || unchecked) ? swiftBuildTimeout : buildTimeout;
+    const about = { name, dir, title: entry.title, ...(tree === undefined ? {} : { tree }), commit, updating: record !== undefined };
     let args = buildArguments(source, context.extensionsDir, swift.swiftParts);
-    let result = await run(context.cli, args, { timeout: timeout(swift.swiftParts) });
+    let result = await recordedBuild(context, run, args, timeout(swift.swiftParts), about);
+    if (result.code === alreadyBuildingStatus) throw new AlreadyBuilding(entry.title);
     // A `swift:` import the check missed, without the tools: the build stopped at it, asking what to do, so the view
     // asks the user instead of showing that as an error.
     if (result.code !== 0 && swift.swiftParts === undefined && askedForSwiftParts(`${result.stdout}\n${result.stderr}`)) {
         const choice = await choose();
         if (choice === "dont-install") return false;
         args = buildArguments(source, context.extensionsDir, choice);
-        result = await run(context.cli, args, { timeout: choice === "build" ? swiftBuildTimeout : buildTimeout });
+        result = await recordedBuild(context, run, args, choice === "build" ? swiftBuildTimeout : buildTimeout, about);
+        if (result.code === alreadyBuildingStatus) throw new AlreadyBuilding(entry.title);
     }
     if (result.code !== 0) {
         const output = [result.stdout, result.stderr].filter((part) => part.trim().length > 0).join("\n");
@@ -294,4 +346,89 @@ export function oneAtATime<T>(work: () => Promise<T>): Promise<T> {
     const next = queue.then(work, work);
     queue = next.catch(() => undefined);
     return next;
+}
+
+/** A row's extension being installed or updated, by this store or by a build an earlier one left running (SPEC-153 B). */
+export type Busy = "installing" | "updating";
+
+/**
+ * The names this store is installing or updating, from the press until the install's run ends, after the list has
+ * loaded again (SPEC-153 B). The key is the manifest name, since the install folder is `<extensions>/<name>`. A press for
+ * a name it holds, or one `busyElsewhere` names, does nothing: no toast, nothing queued. A press for another name waits
+ * its turn in `work`, and its row says so meanwhile.
+ */
+export class InstallPresses {
+    private readonly names = new Map<string, Busy>();
+    private readonly changed: () => void;
+    private readonly busyElsewhere: (name: string) => boolean;
+
+    constructor(changed: () => void = () => {}, busyElsewhere: (name: string) => boolean = () => false) {
+        this.changed = changed;
+        this.busyElsewhere = busyElsewhere;
+    }
+
+    state(name: string): Busy | undefined {
+        return this.names.get(name);
+    }
+
+    press(name: string, updating: boolean, work: () => Promise<void>): Promise<void> {
+        if (this.names.has(name) || this.busyElsewhere(name)) return Promise.resolve();
+        this.names.set(name, updating ? "updating" : "installing");
+        this.changed();
+        const ended = () => {
+            this.names.delete(name);
+            this.changed();
+        };
+        try {
+            return work().finally(ended);
+        } catch (error) {
+            ended();
+            return Promise.reject(error);
+        }
+    }
+}
+
+/** A toast the press changes as the install goes. Each change shows it again, so the style changes last when it's done. */
+export type InstallToast = {
+    hide: () => Promise<void>;
+    done: (title: string, message?: string) => void;
+    failed: (title: string, message: string) => void;
+};
+
+/** What the press needs from the view. `failed` logs the failure to `Fudge.log` and pushes `FailureView`. */
+export type InstallView = {
+    toast: (title: string) => Promise<InstallToast>;
+    load: () => Promise<void>;
+    failed: (title: string, error: unknown) => void;
+};
+
+/**
+ * ↵ Install, ⌘U Update and Try Again, in the store's queue: an animated toast, the install, the list loaded again and a
+ * Success toast (SPEC-130). A failure ends in a Failure toast and the failure view (SPEC-116); another build of the
+ * extension already running ends in a Success toast that says so, with no failure view and nothing in the log (SPEC-153
+ * C.6).
+ */
+export async function installPressed(entry: StoreEntry, updating: boolean, context: StoreContext, view: InstallView): Promise<void> {
+    const toast = await view.toast(`${updating ? "Updating" : "Installing"} ${entry.title}…`);
+    try {
+        const done = await install(entry, context);
+        if (!done) {
+            await toast.hide();
+            return;
+        }
+        await view.load();
+        // With the note when what's on and off isn't what the confirmation said (SPEC-121 §2).
+        const shown = doneToast(entry.title, updating, done);
+        toast.done(shown.title, shown.message);
+    } catch (error) {
+        if (error instanceof AlreadyBuilding) {
+            toast.done(error.message);
+            return;
+        }
+        // The whole error, its likely cause, Copy Error and Try Again, in a view of its own; the toast only says where
+        // to look.
+        const title = `Couldn't ${updating ? "update" : "install"} ${entry.title}`;
+        toast.failed(title, "See the details.");
+        view.failed(title, error);
+    }
 }

@@ -1007,6 +1007,8 @@ Extensions run in a separate Node.js process, the extension host.
     Install shares the cache both ways.
   - `store.ts` installs with `$FUDGE_CLI build <source> --into $FUDGE_EXTENSIONS_DIR`.
     Every git operation (refresh, a README's `sparse-checkout add`, a detail's scan, install, uninstall) waits its turn in one queue (`oneAtATime`), so none overlaps another.
+    A press of Install, Update or Try Again on a row whose name is already installing or updating does nothing (`InstallPresses`, SPEC-153 B): every row with that manifest name says `Installing…` or `Updating…` and offers no Install, Update or Uninstall until the install's run ends.
+    No refresh rewrites `repo/` while a build from a closed store session runs: the refresh, and the removal and clone after a copy that can't be read, wait before they enter the queue (`OtherBuilds.hold`, `heldRefresh`), never in it, since a record settles in the queue.
     Before asking, it takes this version's cached result, or runs `$FUDGE_CLI scan <source> --json` and caches it, and the confirmation says what it found (`compatibilityLine`).
     For Raycast AI or the Raycast Browser Extension, which Fudge doesn't support, it's "Partly compatible with Fudge", naming the commands its scan found, which the build turns off, or "Not compatible with Fudge" when that's every command; installing stays possible either way.
     The build scans the source again, exactly what it installs, so its `compatibility.json` is what's true: after the build, the store reads it (`builtCompatibility`), and when it isn't what the confirmation named, the done toast says what is (`installNote`, SPEC-121 §2).
@@ -1016,7 +1018,12 @@ Extensions run in a separate Node.js process, the extension host.
     It records the folder's git tree id in `installed.json` ("Update available" when the id changes), and uninstalls only what it recorded.
     **Unloading the store doesn't stop a `fudge build` it started** (or npm under it), unlike its git: the worker's timeout goes with it, so the build runs to the end, or until npm's own network timeouts give up.
     That's acceptable because nothing is installed half-way: the build writes into a staging folder and swaps it in only at the end, and the extensions watcher picks the result up like any install.
-    The store just doesn't record it, so it counts as installed another way.
+    **The store records each running build** in `installing/<pid>.json` in its support folder (`build-records.ts`, SPEC-153 C), written atomically once the build has a pid (`Run`'s `started`) and removed when its run ends, after the write has settled; a record it can't write or remove is logged, and never changes the install.
+    A reopened store reads them before its list (`openCopy`), apart from the copy, and while one runs its rows say `Installing…` and the open store checks it every 2 s (`OtherBuilds`).
+    An orphaned build stays a child of the host, so once it ends it's a zombie that `kill(pid, 0)` still finds: a build counts as running only while `ps -ww -o stat=,args=` shows a state that doesn't start with `Z` and exactly the recorded command, so a reused pid isn't taken for it.
+    An ended one is settled in the queue: it's adopted into `installed.json` only when `<extensions>/<name>` was made between its start and the end bound (when the open store saw it end, or its deadline when it ended before the store opened) and the record has a tree, and dropped otherwise.
+    One still running past its deadline gets SIGTERM, as the closed session's timer would have sent; this session's own records end through their own run.
+    A build that exits 75 (another build of that extension is running, `fudge build`'s lock) is neither a failure nor an install: the toast says it's already being installed.
     **A failed install or update** pushes `FailureView` (`failure-view.tsx`, SPEC-116) over the list, and the toast only says where to look.
     It has the title, the likely cause in plain words (`causeOf` in `failure.ts`: npm or Node.js not found, which, since both come with Fudge, means a damaged app to reinstall, the npm registry or GitHub unreachable, Git missing, the extension's own build error with its first line, or else something went wrong), and the last 40 lines of the step's output.
     The output is untrusted (package names, build scripts' output), so it's in a code block nothing in it can close (`codeBlock`), and the title and cause are escaped code point by code point (`escapeMarkdown`), so no package can add an image, a link or formatting.
@@ -1028,6 +1035,9 @@ Extensions run in a separate Node.js process, the extension host.
     That `NO_PROXY` is `localhost`, `127.0.0.1` and the Mac's bypass list, unless the user set their own.
     A proxy auto-configuration file can't be passed on, so a network failure's cause line says so.
 - **`fudge build <folder>` installs an extension** (`ExtensionBuilder` in `FudgeCore`).
+  - **One build per name per extensions folder** (SPEC-153 A): before anything is written, the build takes a non-blocking `flock` on `<extensions>/.build-<name>.lock` (`lockBuild`), opened with `O_CLOEXEC` on top of `ChildProcesses.spawn`'s `POSIX_SPAWN_CLOEXEC_DEFAULT`, so no program it starts holds the lock.
+    A second build of that name into that folder stops with `BuildError.alreadyBuilding` and exits with status 75 (`EX_TEMPFAIL`, used for nothing else), which the Extension Store reads; `runtime/test/fixtures/build-statuses.json` pins both sides.
+    The kernel drops the lock when the build's process ends, however it ends, and the empty dot file stays, since deleting a lock file another build may have open would break the lock.
   - It reads `package.json` (`ExtensionManifest`) and compiles every command's `src/<command>.{tsx,ts,jsx,js}` with esbuild into `<extensions>/<name>/<command>.cjs`, beside `package.json` and `assets/`, as Raycast installs it (SPEC-123).
     So a command's `__dirname` is the extension's folder, and `${__dirname}/assets/…` and `${__dirname}/package.json` are its own, as extensions such as the store's amazon-aws expect.
     esbuild writes into a folder of its own inside the staging folder, and only the commands' files move up, so anything else it writes (a stylesheet an import pulls in) never reaches the install.

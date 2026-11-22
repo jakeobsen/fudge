@@ -188,16 +188,37 @@ export function searchKeywords(entry: StoreEntry): string[] {
 
 export type AccessoryText = { text: string } | { tag: string };
 
+/** The tags of a row whose extension is being installed or updated (SPEC-153 B). */
+export const installingTag = "Installing…";
+export const updatingTag = "Updating…";
+
 /** The author, the number of commands, Not compatible or Partly compatible when a cached scan says so
- * (`compatibilityTag`), and Installed or Update available. */
-export function accessoryTexts(entry: StoreEntry, state: Status, compatibility?: string): AccessoryText[] {
+ * (`compatibilityTag`), and Installed or Update available, or, while its name is being installed or updated (`busy`),
+ * Installing… or Updating… in their place. */
+export function accessoryTexts(
+    entry: StoreEntry,
+    state: Status,
+    compatibility?: string,
+    busy?: "installing" | "updating",
+): AccessoryText[] {
     const accessories: AccessoryText[] = [];
     if (entry.author) accessories.push({ text: entry.author });
     accessories.push({ text: entry.commands.length === 1 ? "1 command" : `${entry.commands.length} commands` });
     if (compatibility) accessories.push({ tag: compatibility });
-    if (state === "installed") accessories.push({ tag: "Installed" });
-    if (state === "update") accessories.push({ tag: "Update available" });
+    if (busy) accessories.push({ tag: busy === "updating" ? updatingTag : installingTag });
+    else if (state === "installed") accessories.push({ tag: "Installed" });
+    else if (state === "update") accessories.push({ tag: "Update available" });
     return accessories;
+}
+
+/** Which of Install, Update and Uninstall a row offers: none while its name is being installed or updated (`busy`);
+ * Show Details, Open in Browser, Copy Name and Refresh stay. */
+export function rowActions(
+    state: Status,
+    busy?: "installing" | "updating",
+): { install: boolean; update: boolean; uninstall: boolean } {
+    if (busy) return { install: false, update: false, uninstall: false };
+    return { install: state === "available", update: state === "update", uninstall: state !== "available" };
 }
 
 /** A command's title by its name, as the store's sentences name commands; the name when the manifest has none. */
