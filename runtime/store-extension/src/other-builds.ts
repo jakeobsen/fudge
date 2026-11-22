@@ -15,7 +15,15 @@ import {
 } from "./build-records.ts";
 import type { FailureDetails } from "./failure.ts";
 import type { FailureMark, InstallAnswer, InstallEndReport, RowMarks } from "./notices.ts";
-import { alreadyBuildingStatus, doneToast, oneAtATime, readInstalled, writeInstalled, type Busy } from "./store.ts";
+import {
+    alreadyBuildingStatus,
+    doneToast,
+    installFolder,
+    oneAtATime,
+    readInstalled,
+    writeInstalled,
+    type Busy,
+} from "./store.ts";
 
 /** How often the open store checks a running record's pid. */
 export const pollInterval = 2000;
@@ -155,7 +163,9 @@ export class OtherBuilds {
     }
 
     /**
-     * With the build's outcome (SPEC-156 D.2): 0 is adopted when `<extensions>/<name>` was made between the record's start
+     * With the build's outcome (SPEC-156 D.2): 0 is adopted when `<extensions>/raycast/extensions/<name>` (`installFolder`),
+     * or the unmoved `<extensions>/<name>` an older `fudge build` finished at the top level when that isn't there, was
+     * made between the record's start
      * and the build's own end and the record has a tree, else dropped quietly with a line in the log; 75 is dropped
      * quietly; anything else is dropped as failed. Without one (it was killed, or crashed), C.4 decides: adopted when the
      * folder was made between the start and the end bound, else dropped as failed. Adopting writes the `installed.json`
@@ -164,7 +174,13 @@ export class OtherBuilds {
      */
     private async settleNow(record: FoundBuildRecord, bound: Date, seen: boolean): Promise<void> {
         const { supportPath, extensionsDir, now = () => new Date(), log } = this.options;
-        const folder = path.join(extensionsDir, record.name);
+        const moved = installFolder(extensionsDir, record.name);
+        const isFolder = await lstat(moved).then(
+            (info) => info.isDirectory(),
+            () => false,
+        );
+        // The next move files an unmoved one in Raycast's folder, keeping its creation time.
+        const folder = isFolder ? moved : path.join(extensionsDir, record.name);
         const made = async (end: number) =>
             record.tree !== undefined && (await createdBetween(folder, Date.parse(record.startedAt), end));
         const { outcome } = record;

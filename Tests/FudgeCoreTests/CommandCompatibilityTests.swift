@@ -275,6 +275,6 @@ struct BuildScansEndToEnd {
         if exited != true { process.terminate() }
         try #require(exited == true, "fudge build exited")
         try #require(process.terminationStatus == 0)
-        return try InstalledExtension.topLevel(from: extensions.appendingPathComponent("made-up"))
+        return try #require(InstalledExtension.all(in: extensions).first { $0.manifest.name == "made-up" })
     }
 }

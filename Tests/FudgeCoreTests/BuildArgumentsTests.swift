@@ -25,8 +25,27 @@ import Testing
     #expect(leaveOut.swiftParts == .leaveOut && leaveOut.destination?.path == "/tmp/ext")
 }
 
+/// `--repository` takes a repository folder (FUD-183): Raycast's, an added repository's, or the development folder,
+/// which is the same as none.
+@Test func buildTakesARepositoryFolder() throws {
+    let exists = { $0 == "/tmp/ext" }
+    #expect(try BuildArguments.parse(["src/greeter"], isDirectory: exists).repository == nil)
+    for folder in [
+        "raycast/extensions", "someone/tools", "fudgeapp/development", "git.example.org_8443/team/extensions",
+    ] {
+        let parsed = try BuildArguments.parse(
+            ["src/greeter", "--repository", folder, "--into", "/tmp/ext"], isDirectory: exists)
+        #expect(parsed.repository == folder && parsed.destination?.path == "/tmp/ext", "\(folder)")
+    }
+}
+
 @Test(arguments: [
     ([], "usage"),
+    (["src", "--repository"], "usage"),
+    (["src", "--repository", "development"], "--repository takes a repository folder"),
+    (["src", "--repository", "../x"], "--repository takes a repository folder"),
+    (["src", "--repository", "Someone/tools"], "--repository takes a repository folder"),
+    (["src", "--repository", "someone/.tools"], "--repository takes a repository folder"),
     (["src", "--swift-parts"], "--swift-parts takes build or leave-out"),
     (["src", "--swift-parts", "compile"], "--swift-parts takes build or leave-out"),
     (["src", "--swift-parts", "--into"], "--swift-parts takes build or leave-out"),
@@ -54,7 +73,10 @@ struct BuildIntoTests {
         let builder = Fixtures.builder()
         let installed = try builder.build(
             source: arguments.source, into: arguments.destination ?? defaultFolder)
-        #expect(installed.directory.deletingLastPathComponent().standardizedFileURL == into.standardizedFileURL)
+        #expect(
+            installed.directory.standardizedFileURL
+                == Development.folder(in: into).appendingPathComponent("greeter", isDirectory: true).standardizedFileURL
+        )
         #expect(!FileManager.default.fileExists(atPath: defaultFolder.path), "the default folder is untouched")
     }
 }
@@ -68,21 +90,25 @@ struct BuildNeverReplacesItsSourceTests {
         (try? FileManager.default.subpathsOfDirectory(atPath: folder.path))?.sorted() ?? []
     }
 
-    @Test func intoTheSourcesOwnParentIsRefused() throws {
-        let source = try Fixtures.greeterCopy()  // <tmp>/greeter, named "greeter"
+    /// The source is where the build would go: `<into>/fudgeapp/development/greeter`, without `--repository`.
+    @Test func intoTheFolderWhereTheSourceIsItsInstallIsRefused() throws {
+        let parent = try Fixtures.temporaryDirectory()
+        let source = Development.folder(in: parent).appendingPathComponent("greeter")
+        try FileManager.default.createDirectory(
+            at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: Fixtures.greeter, to: source)
         let before = sourceFiles(source)
-        #expect(
-            throws: BuildError.sourceIsDestination(
-                source.deletingLastPathComponent().appendingPathComponent("greeter").path)
-        ) {
-            try builder.build(source: source, into: source.deletingLastPathComponent())
+        #expect(throws: BuildError.sourceIsDestination(source.path)) {
+            try builder.build(source: source, into: parent)
         }
         #expect(sourceFiles(source) == before, "the source is untouched")
     }
 
     @Test func aCaseDifferentSourceFolderIsTheSameFolder() throws {
         let parent = try Fixtures.temporaryDirectory()
-        let source = parent.appendingPathComponent("Greeter")
+        let source = parent.appendingPathComponent("Fudgeapp/Development/Greeter")
+        try FileManager.default.createDirectory(
+            at: source.deletingLastPathComponent(), withIntermediateDirectories: true)
         try FileManager.default.copyItem(at: Fixtures.greeter, to: source)
         #expect {
             try builder.build(source: source, into: parent)
@@ -105,7 +131,7 @@ struct BuildNeverReplacesItsSourceTests {
 
     @Test func aFolderThatIsntAFudgeBuildIsNeverReplaced() throws {
         let extensions = try Fixtures.temporaryDirectory()
-        let inTheWay = extensions.appendingPathComponent("greeter")
+        let inTheWay = Development.folder(in: extensions).appendingPathComponent("greeter")
         try FileManager.default.createDirectory(
             at: inTheWay.appendingPathComponent("src"), withIntermediateDirectories: true)
         try Data("mine".utf8).write(to: inTheWay.appendingPathComponent("src/notes.txt"))

@@ -5,10 +5,16 @@ let usage = """
     Usage: fudge <command>
 
     Commands:
-      build <folder> [--into <extensions folder>] [--swift-parts build|leave-out]
-            [--outcome <folder>]
+      build <folder> [--into <extensions folder>] [--repository <repository folder>]
+            [--swift-parts build|leave-out] [--outcome <folder>]
                       Compile the Raycast extension in <folder> and install it, in the
                       default extensions folder or, with --into, in that one.
+                      Without --repository it goes in the development folder,
+                      fudgeapp/development, beside any other extension of that name,
+                      with its own settings and data.
+                      --repository raycast/extensions replaces the extension the
+                      Extension Store installed from Raycast's official repository,
+                      and keeps its settings.
                       An extension with a part written in Swift needs --swift-parts:
                       build it with Apple's Command Line Tools, or leave it out.
                       With --outcome, write <pid>.ended.json there as it ends.
@@ -60,7 +66,8 @@ func build(_ arguments: BuildArguments) -> Never {
     }
     do {
         let installed = try builder.build(
-            source: arguments.source, into: arguments.destination ?? FudgePaths.standard().extensionsDirectory)
+            source: arguments.source, into: arguments.destination ?? FudgePaths.standard().extensionsDirectory,
+            repository: arguments.repository)
         let count = installed.manifest.commands.count
         print("→ installed \(installed.manifest.title) (\(count) command\(count == 1 ? "" : "s"))")
         finish(0)

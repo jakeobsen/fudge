@@ -53,6 +53,7 @@ import { FailureView, LoadFailure, NeedsGit } from "./failure-view.tsx";
 import {
     failureDetails,
     failureLog,
+    installFolder,
     installPressed,
     InstallPresses,
     oneAtATime,
@@ -221,7 +222,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
         ]);
         const withoutSwift = new Set<string>();
         for (const name of Object.keys(installed)) {
-            if (await installedWithoutSwift(path.join(extensionsDir, name))) withoutSwift.add(name);
+            if (await installedWithoutSwift(installFolder(extensionsDir, name))) withoutSwift.add(name);
         }
         setLoaded({ entries, installed, trees, commit, withoutSwift });
         setChecked((current) => ({ scanner, results, failed: current.scanner === scanner ? current.failed : new Set() }));

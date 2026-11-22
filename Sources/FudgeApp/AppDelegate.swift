@@ -101,8 +101,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             level: FudgeSettings.load(from: paths.settingsFile).logLevel)
         NSApp.mainMenu = Self.mainMenu()
         // Before the extensions first load (in the model's `init`) and before the watcher starts, so it never sees
-        // the move. Snapshot runs change nothing.
-        if !Snapshot.isRequested(CommandLine.arguments) { Self.moveInstallsUp(in: paths.extensionsDirectory) }
+        // the moves. Snapshot runs change nothing.
+        if !Snapshot.isRequested(CommandLine.arguments) {
+            // Every install from before goes into Raycast's folder, keeping its name as its id (FUD-183). A move
+            // another Fudge is running (`fudge build`) is waited for at most 5 s; then the extensions load as they are.
+            ExtensionLayout.moveAtLaunch(extensions: paths.extensionsDirectory)
+            Self.moveInstallsUp(in: paths.extensionsDirectory)
+        }
         model = LauncherModel(paths: paths)
         // Snapshots never ask Spotlight: Search Files gets `--found-files`' results, or none.
         if let snapshot = Snapshot(arguments: CommandLine.arguments) {
@@ -497,15 +502,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return registry.refused
     }
 
-    /// Installs from before SPEC-123 keep their commands in `dist/`. Each moves to Raycast's layout once, at launch
-    /// (`ExtensionLayout.moveUp`); one stopped halfway finishes at the next launch, and `entry(for:)`'s fallback covers
-    /// it until then. One that can't move is left on the fallback, with a log line. The bundled extensions, built with
-    /// the app, are never touched.
+    /// Installs from before SPEC-123 keep their commands in `dist/`. Each install the walk finds moves to Raycast's
+    /// layout once, at launch (`ExtensionLayout.moveUp`); one stopped halfway finishes at the next launch, and
+    /// `entry(for:)`'s fallback covers it until then. One that can't move is left on the fallback, with a log line
+    /// naming its folder relative to the extensions folder. The bundled extensions, built with the app, are never
+    /// touched.
     private static func moveInstallsUp(in extensionsDirectory: URL) {
         let log = Logger(subsystem: "io.github.jakeobsen.fudge", category: "extensions")
-        for (name, outcome) in ExtensionLayout.moveUp(in: extensionsDirectory) {
+        for (folder, outcome) in ExtensionLayout.moveUp(in: extensionsDirectory) {
             guard case .leftAlone(let refusal) = outcome else { continue }
-            log.notice("install left in dist/: \(refusal.description, privacy: .public) \(name, privacy: .private)")
+            log.notice("install left in dist/: \(refusal.description, privacy: .public) \(folder, privacy: .private)")
         }
     }
 

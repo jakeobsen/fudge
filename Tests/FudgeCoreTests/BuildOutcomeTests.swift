@@ -208,7 +208,8 @@ enum OutcomeRun {
     let (root, extensions, temporary, installing) = try OutcomeRun.folders()
     defer { try? FileManager.default.removeItem(at: root) }
     let tool = try Tool.bundled(in: root.appendingPathComponent("app"), node: Tool.node)
-    let holder = try await LockHolder.start(locking: ExtensionBuilder.lockFile(of: "greeter", in: extensions))
+    let holder = try await LockHolder.start(
+        locking: ExtensionBuilder.lockFile(of: Development.id("greeter"), in: extensions))
     defer { holder.stop() }
     let ran = try await OutcomeRun.run(
         tool, ["build", Fixtures.greeter.path, "--into", extensions.path, "--outcome", installing.path],

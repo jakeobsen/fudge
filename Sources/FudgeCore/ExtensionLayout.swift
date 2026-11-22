@@ -42,15 +42,15 @@ public enum ExtensionLayout {
         case leftAlone(Refusal)
     }
 
-    /// Moves each install in `extensionsDirectory` that still has a `dist/` to the new layout (`moveUp(_:)`), and says
-    /// what happened to each, by folder name. Installs with nothing to move aren't listed.
+    /// Moves each install the walk finds in `extensionsDirectory` (`ExtensionWalk`) that still has a `dist/` to the new
+    /// layout (`moveUp(_:)`), and says what happened to each, by its folder relative to the extensions folder
+    /// (`someone/tools/github`). Installs with nothing to move aren't listed.
     public static func moveUp(in extensionsDirectory: URL) -> [String: Outcome] {
-        let folders =
-            (try? FileManager.default.contentsOfDirectory(
-                at: extensionsDirectory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
         var outcomes: [String: Outcome] = [:]
-        for folder in folders {
-            if let outcome = moveUp(folder) { outcomes[folder.lastPathComponent] = outcome }
+        for found in ExtensionWalk(extensionsDirectory).found {
+            if let outcome = moveUp(extensionsDirectory.appendingPathComponent(found.path, isDirectory: true)) {
+                outcomes[found.path] = outcome
+            }
         }
         return outcomes
     }
