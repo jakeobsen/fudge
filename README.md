@@ -32,11 +32,24 @@ sudo ln -s /Applications/Fudge.app/Contents/Helpers/fudge /usr/local/bin/fudge
 
 - `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for Fudge, which picks it up within a second, with nothing to reload.
   Run it again after changing the extension.
+  It goes in the development folder, `fudgeapp/development`, beside any extension of the same name that the Extension Store installed from Raycast's official repository, with its own settings, data and sign-ins, and Fudge shows it as "<title> (development)".
+  `--repository raycast/extensions` installs it in the folder of Raycast's official repository instead: it replaces the Extension Store's install of that name and keeps its settings, until the Extension Store's next Update of it.
+  To get Raycast's official version back, uninstall it with ⌃X in the Extension Store, then Install it there again.
   `--into <folder>` installs it in that extensions folder instead.
-  It stops at once, with exit status 75, while another build of the same extension into the same folder is running.
+  It stops at once, with exit status 75, while another build of the same extension into the same repository's folder is running.
   `--outcome <folder>` writes its exit status to `<folder>/<pid>.ended.json` as it ends, which the Extension Store passes so that it learns how a build ended after the store was closed.
 - `fudge scan <folder>` says what the extension uses that Fudge doesn't have yet or doesn't support, without building or running it (`--json` for a script).
 - `fudge version` prints Fudge's version.
+
+Fudge keeps each repository's extensions in a folder of their own, in its extensions folder (`~/Library/Application Support/fudge/extensions`):
+
+- `raycast/extensions/<name>`: Raycast's official repository, where the Extension Store installs.
+- `<owner>/<repository>/<name>`: a repository on GitHub, and `<server>/<path>/<name>` one on another server.
+- `fudgeapp/development/<name>`: the development folder, for `fudge build` and `make install-extension` without `--repository`.
+
+Each repository's extensions keep their own settings, data and sign-ins, so two extensions of one name from different places never share them.
+The first time this version of Fudge starts, it moves every extension already installed to `raycast/extensions/<name>`, and each keeps its settings.
+A later `fudge build` of one of them without `--repository` makes a separate copy in the development folder.
 
 ## First run
 
@@ -177,7 +190,8 @@ In the **Extension Store** command, search the extensions, or pick a category in
   An install that failed after you closed the store is marked on its row the next time you open the store, with **Try Again** and **Show Error**.
   **Settings… → Notifications** chooses which of these notifications Fudge shows.
 - It never touches extensions you installed with `fudge build` yourself.
-  An extension installs under its own name, so it can't be installed while another extension of that name is: uninstall that one first.
+  It installs in the folder of Raycast's official repository, so an extension can't be installed while another of that name is installed there without it: uninstall that one first.
+  A development build of the same name, in the development folder, doesn't stop it: the two are installed side by side.
 
 #### Extension repositories
 
@@ -492,7 +506,7 @@ make run     # build it and open it
 make test    # run the Swift and extension host tests
 make lint    # check formatting and types
 
-make install-extension DIR=path/to/extension   # compile and install an extension
+make install-extension DIR=path/to/extension   # compile and install an extension, in the development folder
 ```
 
 `make help` lists every target.
