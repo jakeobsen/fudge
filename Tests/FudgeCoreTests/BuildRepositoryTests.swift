@@ -231,6 +231,16 @@ struct BuildIntoARepositoryTests {
         #expect(names(in: repository) == ["greeter"])
     }
 
+    /// The extensions folder is made first, then the move's lock is taken in it, so a first build works.
+    @Test func aMissingExtensionsFolderIsMadeFirst() throws {
+        let folder = try Fixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let extensions = folder.appendingPathComponent("extensions")
+        let installed = try Fixtures.builder().build(source: Fixtures.greeter, into: extensions)
+        #expect(installed.id == Development.id("greeter"))
+        #expect(names(in: extensions) == [Development.lock("greeter"), ".move.lock", "fudgeapp"])
+    }
+
     @Test func somethingOnTheWayThatIsntAFolderIsRefused() throws {
         let extensions = try Fixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: extensions) }
