@@ -784,6 +784,7 @@ Extensions run in a separate Node.js process, the extension host.
     A redirect from the relay is an error, never followed, since a 307 or 308 would send that body on.
     Every other request keeps `fetch`'s own redirects, as in Raycast (D-65), so a third party's redirect to `*.oauth.raycast.com` isn't intercepted.
     The table holds the seven providers `OAuthService` has built in, at their default URLs, and Raycast's proxies for Jira and Zoom (`jira.oauth.raycast.com`, `zoom.oauth.raycast.com`), which the store's Jira and Zoom extensions set (FUD-137).
+    The Jira and Zoom entries are the one allowed exception to the rule against fixes for particular extensions (Conventions).
     Those go to the relay's `atlassian` and `zoom` providers, beside Atlassian's and Zoom's own URLs, so two entries can share a relay provider (`OAuthProvider.id`), and an entry is known by its authorize URL.
     One Atlassian app covers Jira and Confluence, so both Atlassian entries are named **Atlassian (Jira, Confluence)**.
     A sign-in stored with `relayProvider: "jira"`, the relay's Atlassian provider before fudge-oauth v0.3.0, counts as Atlassian's (`OAuthProviders.currentRelayProvider`).
@@ -1170,6 +1171,15 @@ Extensions run in a separate Node.js process, the extension host.
 - **Help text, in the app and the README, is brief and says what a feature does, for an end user.**
 - **Every feature that's off by default has an onboarding step** asking whether to turn it on, using the feature's own Settings control and consent, with ↵ leaving it off and nothing preselected.
   `OnboardingStep.optIns` maps each such `FudgeSettings` property to its step, and a test fails for a property that's neither there nor listed as not an opt-in.
+- **Fudge has no fixes for particular extensions** (D-83).
+  When an extension misbehaves, first check whether Fudge differs from Raycast's documented behaviour.
+  If it does, the fix goes in Fudge's implementation of `@raycast/api` (`runtime/src/api/`, or the app code behind it, such as the window calls), applies to every extension, and stays compatible with Raycast.
+  If it doesn't, the bug is the extension's, and Fudge changes nothing: no special case, setting or workaround keyed on any extension's name, owner or files, wherever it came from (Fudge's bundled extensions aside, see below).
+  **The one exception is sign-in** (D-84).
+  The sign-in table (`OAuthProviders`) sends Raycast's sign-in addresses to the relay: GitHub, Linear, Slack and Asana, which `OAuthService` uses by default, and Jira and Zoom, which only the store's Jira and Zoom extensions set.
+  Every other `*.oauth.raycast.com` address is refused (see "The fetch rewrite" above).
+  A new entry in that table needs an app on the relay, so it goes to the architect first.
+  Fudge's bundled extensions (the Extension Store, Search Files, Search Emoji & Symbols and Clipboard History, in `runtime/`) are Fudge's own code: changing them isn't a fix for an extension, and Fudge's own code may name them and give them what other extensions don't get.
 - **Docs are one sentence per line.**
   In `CLAUDE.md` and `README.md`, start each sentence on a new line, and add an item to a list as its own line, so two changes rarely touch the same line.
   `make lint` fails on a line over 400 characters outside code blocks and tables.
