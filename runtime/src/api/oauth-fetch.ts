@@ -142,7 +142,11 @@ export function route(
             : token !== null && key(token) === key(parsed)
               ? "token"
               : "refresh-token";
-        return { kind: "relay", provider, endpoint, ownHost: !raycast };
+        // A table match on any of Raycast's hosts (FUD-166's Todoist proxy, `*.oauth-proxy.raycast.com`, included) is
+        // Raycast's address, never the provider's own host. The narrow check stays, since `domains` is empty when
+        // `FUDGE_RAYCAST_DOMAINS` isn't set.
+        const ownHost = !(raycast || isRaycastDomainHost(parsed.hostname, domains));
+        return { kind: "relay", provider, endpoint, ownHost };
     }
     if (raycast) return { kind: "refused" };
     if (grant !== null && grants.has(grant) && isRaycastDomainHost(parsed.hostname, domains)) return { kind: "refused" };

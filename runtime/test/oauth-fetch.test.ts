@@ -24,6 +24,8 @@ import { signInOffMessage } from "../src/api/oauth.ts";
 import { noticeOf } from "../src/notice.ts";
 
 const fixture = readFileSync(new URL("./fixtures/oauth-providers.json", import.meta.url), "utf8");
+// Raycast's domains, as the app always hands them to the host (core's `OAuthProviders.raycastDomains`).
+process.env[raycastDomainsVariable] = '["raycast.com"]';
 const providers = providersFromEnvironment(fixture);
 const on: ServerAnswer = { server: "https://relay.example/base/", signedIn: true };
 
@@ -48,7 +50,24 @@ const post = (grant: string, extra: Record<string, string> = {}) => ({
 test("the table reads from the app's variable, and a bad one is empty", () => {
     assert.deepEqual(
         providers.map((provider) => provider.id),
-        ["github", "linear", "slack", "asana", "google", "atlassian", "atlassian", "zoom", "zoom"],
+        [
+            "github",
+            "github",
+            "linear",
+            "slack",
+            "asana",
+            "google",
+            "atlassian",
+            "atlassian",
+            "zoom",
+            "zoom",
+            "notion",
+            "notion",
+            "todoist",
+            "basecamp",
+            "gumroad",
+            "moneybird",
+        ],
     );
     assert.deepEqual(providersFromEnvironment("not json"), []);
     assert.deepEqual(providersFromEnvironment('{"id":"x"}'), []);
@@ -56,7 +75,7 @@ test("the table reads from the app's variable, and a bad one is empty", () => {
     assert.deepEqual(providersFromEnvironment(undefined), []);
 });
 
-test("exactly the seven providers' token and refresh requests go to the relay", async () => {
+test("exactly the table's token and refresh requests go to the relay", async () => {
     const { sent, fetch } = recorder();
     const asked: string[] = [];
     const wrapped = rewriteFetch(fetch, providers, async (provider) => (asked.push(provider), on), fetch);
@@ -81,6 +100,25 @@ test("exactly the seven providers' token and refresh requests go to the relay", 
         ["https://auth.atlassian.com/oauth/token", "atlassian/refresh-token", "refresh_token"],
         ["https://zoom.us/oauth/token", "zoom/token", "authorization_code"],
         ["https://zoom.us/oauth/token", "zoom/refresh-token", "refresh_token"],
+        // Raycast's other sign-in addresses that store extensions use (FUD-166). Notion's extension refreshes at its
+        // token URL, which isn't the entry's refresh URL, so it stays /token, and the relay's /token takes the refresh.
+        ["https://notion.oauth.raycast.com/token", "notion/token", "authorization_code"],
+        ["https://notion.oauth.raycast.com/token", "notion/token", "refresh_token"],
+        ["https://notion.oauth.raycast.com/refresh-token", "notion/refresh-token", "refresh_token"],
+        // Todoist's proxy refreshes at its token URL: the grant decides.
+        ["https://todoist.oauth-proxy.raycast.com/token", "todoist/token", "authorization_code"],
+        ["https://todoist.oauth-proxy.raycast.com/token", "todoist/refresh-token", "refresh_token"],
+        // The extensions' own apps on Raycast's shared proxy.
+        ["https://oauth.raycast.com/v1/token/iJqg8WNq5LKdm75IypyhlNY97FAffYDPq76nQ4XfEjlPF1ZwUq4mSlldpwhViz46X_biMUY6MOvB2ytQ8xP2s3y0dJ142g_0ywNHkuKpPYhs-nnzcXDFsfcDMMqvuDQNXDAte_jVRkXsKRD2r7o4Ucc", "github/token", "authorization_code"],
+        ["https://oauth.raycast.com/v1/token/iJqg8WNq5LKdm75IypyhlNY97FAffYDPq76nQ4XfEjlPF1ZwUq4mSlldpwhViz46X_biMUY6MOvB2ytQ8xP2s3y0dJ142g_0ywNHkuKpPYhs-nnzcXDFsfcDMMqvuDQNXDAte_jVRkXsKRD2r7o4Ucc", "github/refresh-token", "refresh_token"],
+        ["https://oauth.raycast.com/v1/token/Dcc7jqB2FwkuyDVKpiBI71VgY3qKbGWZxbmrHn9OHUvNSu-X63-RQgOGSgpb2jsY8IC-mVjl7Zrn1M_LvTt4VUgWRTLnf6Pf5dUJZ1T1clSJBps1mD0Vs00412TZofmQulfQMErWB5du-_2fACC_Rfe7xYY-", "notion/token", "authorization_code"],
+        ["https://oauth.raycast.com/v1/token/Dcc7jqB2FwkuyDVKpiBI71VgY3qKbGWZxbmrHn9OHUvNSu-X63-RQgOGSgpb2jsY8IC-mVjl7Zrn1M_LvTt4VUgWRTLnf6Pf5dUJZ1T1clSJBps1mD0Vs00412TZofmQulfQMErWB5du-_2fACC_Rfe7xYY-", "notion/refresh-token", "refresh_token"],
+        ["https://oauth.raycast.com/v1/token/wMaXr3BdE5QWGZQ_RE_7GyB37_wTuBYOg_9C7CxiqtwHYOELsCyxDKiOshV4mPWXj9NZ_cZ9-dLIkELMnqbN08GDHCnmBp0i2Z950v2kWuOU88VMf3YxkiQAxj5HiAGYW9ceuj9hTDeIBYyBIXciFpDsR6WPhJAjJsHqvz2j8IQQe28efSJFi18", "basecamp/token", "authorization_code"],
+        ["https://oauth.raycast.com/v1/refresh-token/zUVueWjJBw5e_3E04mUmut6L1LiT8fa6FdubGOtITFX_Gx3nilkwNIUISui62gZbvu6yXqDWHy7UKdM9R5RXPUQu-9q-zEsgnK2NhTktNwp2wmGT60Rg-mXFUUd_jg4fwBzIXj5cOBculalOYYodpTWi8bJJBp60XCxA_0C4hctAhKftD8soF-A", "basecamp/refresh-token", "refresh_token"],
+        ["https://oauth.raycast.com/v1/token/cAfVd74pOuU0WIWMymDxtIHXg2c1Hai7gBXmE4DZGFk4tRZczsTQlJzrFzbwSYE3TmlIEse4FP4uUy9EYX35zYfsI0_2mfKmLudJ4wsC-8zUsEXhJwnIn11TJmNeH2bpiWxqQpU-K4Q", "gumroad/token", "authorization_code"],
+        ["https://oauth.raycast.com/v1/refresh-token/-8K39Rwy5HY5-DzNTOVLTMvKH6EQVd5E50z9mvLJ4bahXJu2susPq_DcGFFUYrhctLgTTXZLhmYRvlBnpIaGuxPDB7QTscbBrsz63tOA4RvPXoqJYh4JKtyUgQMAheFWBKh6gvNI08Q", "gumroad/refresh-token", "refresh_token"],
+        ["https://oauth.raycast.com/v1/token/HkdQIb7W7JlFwNFCj2yL6zDPvJHb-vnTCrL_iPlT_K77Z-hQHyRJ-iiLSrkfjNta8Yys7_qRGKHBiAIVVt5GnqiV-VvvegeT9INJ24TrXTHk_P2MT0GOTd8fD9ogDuOgdPyMahi1mePSjhGKHTsBuPloYZFqNnDSzr4_ioxJBQ", "moneybird/token", "authorization_code"],
+        ["https://oauth.raycast.com/v1/refresh-token/66Tt7sCc6O70T4V3Rf_Dr4B941f08fkyizdDhimTODW0M7niNRllwvyk7FLX3XLaj0WNAWZBeOG1fZ8E1aTYWQR8ThljnyaUy3zS68Ocd5oxI6p4SUY7q2oIs_IauacmW75epq8Mn-mrdcpnmpuL19R7iPHgFy3FBS1ZeHRbSg", "moneybird/refresh-token", "refresh_token"],
     ];
     for (const [url, target, grant] of expected) {
         const init = post(grant, { code: "c" });
@@ -168,7 +206,12 @@ for (const [state, answer] of [
             ["https://github.oauth.raycast.com/token", { method: "GET" }],
             ["https://github.oauth.raycast.com/token", post("client_credentials")],
             ["https://slack.oauth.raycast.com/authorize", undefined],
-            ["https://notion.oauth.raycast.com/token", post("authorization_code")],
+            ["https://x.oauth.raycast.com/token", post("authorization_code")],
+            // FUD-166's addresses only exactly: an unknown blob on the shared proxy, a path added, or another scheme.
+            ["https://oauth.raycast.com/v1/token/unknown", post("authorization_code")],
+            ["https://oauth.raycast.com/v1/token/cAfVd74pOuU0WIWMymDxtIHXg2c1Hai7gBXmE4DZGFk4tRZczsTQlJzrFzbwSYE3TmlIEse4FP4uUy9EYX35zYfsI0_2mfKmLudJ4wsC-8zUsEXhJwnIn11TJmNeH2bpiWxqQpU-K4Q/x", post("authorization_code")],
+            ["http://todoist.oauth-proxy.raycast.com/token", post("authorization_code")],
+            ["https://todoist.oauth-proxy.raycast.com/token/x", post("authorization_code")],
             // Only the Jira and Zoom proxies' exact token and refresh URLs, over https, go to the relay.
             ["https://jira.oauth.raycast.com/token/x", post("authorization_code")],
             ["http://jira.oauth.raycast.com/token", post("authorization_code")],
@@ -306,7 +349,14 @@ test("Raycast's hosts are its domains and every host under them, read from the a
     assert.equal(raycastDomainsVariable, "FUDGE_RAYCAST_DOMAINS");
     assert.deepEqual(raycastDomainsFromEnvironment('["raycast.com"]'), ["raycast.com"]);
     assert.deepEqual(raycastDomainsFromEnvironment('["Raycast.COM", 3, ""]'), ["raycast.com"]);
-    for (const bad of ["not json", '{"x":1}', undefined]) assert.deepEqual(raycastDomainsFromEnvironment(bad), []);
+    for (const bad of ["not json", '{"x":1}', ""]) assert.deepEqual(raycastDomainsFromEnvironment(bad), []);
+    const saved = process.env[raycastDomainsVariable];
+    delete process.env[raycastDomainsVariable];
+    try {
+        assert.deepEqual(raycastDomainsFromEnvironment(), [], "a missing variable is an empty list");
+    } finally {
+        process.env[raycastDomainsVariable] = saved;
+    }
     for (const host of [
         "raycast.com",
         "www.raycast.com",
@@ -375,5 +425,35 @@ test("through fetch, a grant to raycast.com is refused while a GET there goes wh
     } finally {
         if (previous === undefined) delete process.env[raycastDomainsVariable];
         else process.env[raycastDomainsVariable] = previous;
+    }
+});
+
+// FUD-166 (SPEC-135 §4.1): a table match on any of Raycast's hosts is Raycast's address, never the provider's own
+// host, so Todoist's proxy (`*.oauth-proxy.raycast.com`) goes to the relay as GitHub's proxy does.
+
+test("Todoist's proxy is Raycast's: refused with sign-in off, and sent to the relay without a relay sign-in", async () => {
+    const off = recorder();
+    const refusing = rewriteFetch(off.fetch, providers, async () => ({ server: null, signedIn: false }), off.fetch);
+    const error = await refusing("https://todoist.oauth-proxy.raycast.com/token", post("authorization_code")).catch(
+        (caught: unknown) => caught,
+    );
+    assert.deepEqual(noticeOf(error), { notice: "signInOff", message: signInOffMessage });
+    assert.equal(off.sent.length, 0, "nothing is sent");
+
+    const { sent, fetch } = recorder();
+    const wrapped = rewriteFetch(fetch, providers, async () => ({ ...on, signedIn: false }), fetch);
+    await wrapped("https://todoist.oauth-proxy.raycast.com/token", post("authorization_code"));
+    assert.equal(sent.at(-1)!.url, "https://relay.example/base/todoist/token");
+
+    const routed = route("POST", "https://todoist.oauth-proxy.raycast.com/token", "authorization_code", providers, [
+        "raycast.com",
+    ]);
+    assert.equal(routed.kind === "relay" && `${routed.provider.id}/${routed.ownHost}`, "todoist/false");
+});
+
+test("without Raycast's domains, the proxy hosts in the table still aren't own hosts", () => {
+    for (const url of ["https://github.oauth.raycast.com/token", "https://notion.oauth.raycast.com/token"]) {
+        const routed = route("POST", url, "authorization_code", providers, []);
+        assert.equal(routed.kind === "relay" && routed.ownHost, false, url);
     }
 });

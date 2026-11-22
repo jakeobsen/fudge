@@ -4,17 +4,20 @@ import Foundation
 // lives in its own repository, jakeobsen/fudge-oauth. Fudge holds none: it sends `@raycast/utils`' built-in providers
 // to the relay instead of Raycast's servers, and keeps the tokens in the Keychain.
 
-/// One of the providers `@raycast/utils`' `OAuthService` has built in, with its default URLs (2.3.3), or Raycast's
-/// own proxy for one, as a store extension sets it.
+/// One of the providers `@raycast/utils`' `OAuthService` has built in, with its default URLs (2.3.3), Raycast's own
+/// proxy for one, as a store extension sets it, or another of Raycast's sign-in addresses a store extension uses
+/// (FUD-166): a proxy per service, or its author's app on Raycast's shared proxy.
 public struct OAuthProvider: Sendable, Equatable, Codable {
     /// The relay's path segment: `<server>/<id>/authorize`. Two entries share one when they're a provider's own URLs
-    /// and Raycast's proxy for it (Atlassian's, Zoom's); an entry is known by its authorize URL.
+    /// and Raycast's proxy for it (Atlassian's, Zoom's), or two extensions' addresses for one service (GitHub's,
+    /// Notion's); an entry is known by its authorize URL.
     public let id: String
     public let name: String
     public let authorizeURL: String
     public let tokenURL: String
-    /// Where `OAuthService` sends a refresh. For Google, Jira and Zoom that's the token URL, so a request there is a
-    /// refresh when its `grant_type` is `refresh_token`.
+    /// Where `OAuthService` sends a refresh. For Google, Jira, Zoom, Todoist, `github-copilot` and
+    /// `raycast-pomodoro-notion` that's the token URL, so a request there is a refresh when its `grant_type` is
+    /// `refresh_token`.
     public let refreshURL: String
 
     public init(id: String, name: String, authorizeURL: String, tokenURL: String, refreshURL: String) {
@@ -30,6 +33,17 @@ public struct OAuthProvider: Sendable, Equatable, Codable {
 public enum OAuthProviders {
     public static let all: [OAuthProvider] = [
         raycastProxy("github", "GitHub"),
+        // The store's `github-copilot` extension signs in with its author's GitHub app through Raycast's shared proxy, and
+        // refreshes at its token URL. The relay's GitHub app takes the author's place.
+        OAuthProvider(
+            id: "github", name: "GitHub",
+            authorizeURL:
+                "https://oauth.raycast.com/v1/authorize/ZJFTemDOnon9VgfOxbFostk2HJqDaHtXFizUhliOj5WNPEcL3n9Mjzf_NWXwTDo5UHmMpzAaX0hOk5GZggt_Gkq7J3VlakVu7C67POdoLtId--l3BOI9j-rxsyrYqdo4iFocQmEFYpNGY97ulVc",
+            tokenURL:
+                "https://oauth.raycast.com/v1/token/iJqg8WNq5LKdm75IypyhlNY97FAffYDPq76nQ4XfEjlPF1ZwUq4mSlldpwhViz46X_biMUY6MOvB2ytQ8xP2s3y0dJ142g_0ywNHkuKpPYhs-nnzcXDFsfcDMMqvuDQNXDAte_jVRkXsKRD2r7o4Ucc",
+            refreshURL:
+                "https://oauth.raycast.com/v1/token/iJqg8WNq5LKdm75IypyhlNY97FAffYDPq76nQ4XfEjlPF1ZwUq4mSlldpwhViz46X_biMUY6MOvB2ytQ8xP2s3y0dJ142g_0ywNHkuKpPYhs-nnzcXDFsfcDMMqvuDQNXDAte_jVRkXsKRD2r7o4Ucc"
+        ),
         raycastProxy("linear", "Linear"),
         raycastProxy("slack", "Slack"),
         raycastProxy("asana", "Asana"),
@@ -47,13 +61,64 @@ public enum OAuthProviders {
             tokenURL: "https://zoom.us/oauth/token", refreshURL: "https://zoom.us/oauth/token"),
         // The store's Zoom extension signs in through Raycast's Zoom proxy.
         raycastProxy("zoom", "Zoom"),
+        // The store's Notion extension signs in through Raycast's Notion proxy, and refreshes at its token URL.
+        raycastProxy("notion", "Notion"),
+        // The store's `raycast-pomodoro-notion` extension signs in with its author's Notion app through Raycast's shared
+        // proxy, and refreshes at its token URL. The relay's Notion app takes the author's place.
+        OAuthProvider(
+            id: "notion", name: "Notion",
+            authorizeURL:
+                "https://oauth.raycast.com/v1/authorize/c7Qokr0CiZIEHW7WoevaKukgEOtjEFGI1lYt3_kYC6k8CNeqRO8xF9BtpZUePirKQM2KwJH21RCJI1I2I4VeutakujJ2EZJQoypCI_Cg4OOaRCqT4a5MLxiYcBHGDXsp52ewVVrzzGM5KjfY951bomaB3ELg6qoLeQ",
+            tokenURL:
+                "https://oauth.raycast.com/v1/token/Dcc7jqB2FwkuyDVKpiBI71VgY3qKbGWZxbmrHn9OHUvNSu-X63-RQgOGSgpb2jsY8IC-mVjl7Zrn1M_LvTt4VUgWRTLnf6Pf5dUJZ1T1clSJBps1mD0Vs00412TZofmQulfQMErWB5du-_2fACC_Rfe7xYY-",
+            refreshURL:
+                "https://oauth.raycast.com/v1/token/Dcc7jqB2FwkuyDVKpiBI71VgY3qKbGWZxbmrHn9OHUvNSu-X63-RQgOGSgpb2jsY8IC-mVjl7Zrn1M_LvTt4VUgWRTLnf6Pf5dUJZ1T1clSJBps1mD0Vs00412TZofmQulfQMErWB5du-_2fACC_Rfe7xYY-"
+        ),
+        // The store's Todoist extension signs in through Raycast's Todoist proxy, and refreshes at its token URL.
+        OAuthProvider(
+            id: "todoist", name: "Todoist", authorizeURL: "https://todoist.oauth-proxy.raycast.com/authorize",
+            tokenURL: "https://todoist.oauth-proxy.raycast.com/token",
+            refreshURL: "https://todoist.oauth-proxy.raycast.com/token"),
+        // The store's `trek` extension signs in to Basecamp with its author's app through Raycast's shared proxy. The
+        // relay's Basecamp app takes the author's place.
+        OAuthProvider(
+            id: "basecamp", name: "Basecamp",
+            authorizeURL:
+                "https://oauth.raycast.com/v1/authorize/Yu5bylqUnHj-jHAkK4iRGFKxrV_ObMQz4TEPVf4zHD3UxkB9A2WIdhPF18B4B76kimV7t1ks7MZQE2wqKh6Zc9MVsxKqVB2CLZvhZfnkTBzRu1YXFn9EXbPJz0602roPZLt6p_x-PWbvi5OG8JIaZFkyiqbnkVE",
+            tokenURL:
+                "https://oauth.raycast.com/v1/token/wMaXr3BdE5QWGZQ_RE_7GyB37_wTuBYOg_9C7CxiqtwHYOELsCyxDKiOshV4mPWXj9NZ_cZ9-dLIkELMnqbN08GDHCnmBp0i2Z950v2kWuOU88VMf3YxkiQAxj5HiAGYW9ceuj9hTDeIBYyBIXciFpDsR6WPhJAjJsHqvz2j8IQQe28efSJFi18",
+            refreshURL:
+                "https://oauth.raycast.com/v1/refresh-token/zUVueWjJBw5e_3E04mUmut6L1LiT8fa6FdubGOtITFX_Gx3nilkwNIUISui62gZbvu6yXqDWHy7UKdM9R5RXPUQu-9q-zEsgnK2NhTktNwp2wmGT60Rg-mXFUUd_jg4fwBzIXj5cOBculalOYYodpTWi8bJJBp60XCxA_0C4hctAhKftD8soF-A"
+        ),
+        // The store's `gumroad` extension signs in with its author's app through Raycast's shared proxy. The relay's
+        // Gumroad app takes the author's place.
+        OAuthProvider(
+            id: "gumroad", name: "Gumroad",
+            authorizeURL:
+                "https://oauth.raycast.com/v1/authorize/6u4QNlwsUEvYJiwlmx-jGSBLpe0QloUowsc9PMy64xyP31e0kMWtiJCyTz4b_9EPuycLxrAIvZfFtVczX9fPJfU5Xt5h2ib3aZRDa85rRqQbFe1hqyVXIQdIPXo2mZdkSp9N7P2pFtAeykI3",
+            tokenURL:
+                "https://oauth.raycast.com/v1/token/cAfVd74pOuU0WIWMymDxtIHXg2c1Hai7gBXmE4DZGFk4tRZczsTQlJzrFzbwSYE3TmlIEse4FP4uUy9EYX35zYfsI0_2mfKmLudJ4wsC-8zUsEXhJwnIn11TJmNeH2bpiWxqQpU-K4Q",
+            refreshURL:
+                "https://oauth.raycast.com/v1/refresh-token/-8K39Rwy5HY5-DzNTOVLTMvKH6EQVd5E50z9mvLJ4bahXJu2susPq_DcGFFUYrhctLgTTXZLhmYRvlBnpIaGuxPDB7QTscbBrsz63tOA4RvPXoqJYh4JKtyUgQMAheFWBKh6gvNI08Q"
+        ),
+        // The store's `moneybird` extension signs in with its author's app through Raycast's shared proxy. The relay's
+        // Moneybird app takes the author's place.
+        OAuthProvider(
+            id: "moneybird", name: "Moneybird",
+            authorizeURL:
+                "https://oauth.raycast.com/v1/authorize/2QijvWZlCgJtKVzE9EG_mGx2DulRYvJQZlKC0cN8CwjSTccDV-mwsxiRx03lbj63Hl53CKRb5vi37PJ8AJMvarHholI5CvrGbIX7AeIIyoqcX-bAF2bnwnKGWzK-7EWxqJxog9aX4KD1lS_CyVONoOBVhhCIsTUpzeuusGMuDfD-H90",
+            tokenURL:
+                "https://oauth.raycast.com/v1/token/HkdQIb7W7JlFwNFCj2yL6zDPvJHb-vnTCrL_iPlT_K77Z-hQHyRJ-iiLSrkfjNta8Yys7_qRGKHBiAIVVt5GnqiV-VvvegeT9INJ24TrXTHk_P2MT0GOTd8fD9ogDuOgdPyMahi1mePSjhGKHTsBuPloYZFqNnDSzr4_ioxJBQ",
+            refreshURL:
+                "https://oauth.raycast.com/v1/refresh-token/66Tt7sCc6O70T4V3Rf_Dr4B941f08fkyizdDhimTODW0M7niNRllwvyk7FLX3XLaj0WNAWZBeOG1fZ8E1aTYWQR8ThljnyaUy3zS68Ocd5oxI6p4SUY7q2oIs_IauacmW75epq8Mn-mrdcpnmpuL19R7iPHgFy3FBS1ZeHRbSg"
+        ),
     ]
 
     /// Atlassian's name, as Settings and the sign-in prompt show it.
     public static let atlassianName = "Atlassian (Jira, Confluence)"
 
     /// Raycast's proxy at `<host>.oauth.raycast.com`, as `OAuthService` uses it by default for GitHub, Linear, Slack
-    /// and Asana, and store extensions set it for Jira and Zoom, sent to the relay's `relay` provider.
+    /// and Asana, and store extensions set it for Jira, Zoom and Notion, sent to the relay's `relay` provider.
     private static func raycastProxy(_ host: String, _ name: String, relay: String? = nil) -> OAuthProvider {
         let base = "https://\(host).oauth.raycast.com"
         return OAuthProvider(
