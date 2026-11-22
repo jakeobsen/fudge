@@ -236,13 +236,13 @@ public struct FudgeSettings: Sendable, Equatable {
         (try? existingObject(at: file)) != nil
     }
 
-    /// The JSON object in `file`; empty when the file is missing or blank. Throws `Unreadable` for anything else.
     /// Whether `value` is JSON's `false`: a boolean, never a number.
     static func isJSONFalse(_ value: Any?) -> Bool {
         guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return false }
         return !number.boolValue
     }
 
+    /// The JSON object in `file`; empty when the file is missing or blank. Throws `Unreadable` for anything else.
     private static func existingObject(at file: URL) throws -> [String: Any] {
         guard FileManager.default.fileExists(atPath: file.path) else { return [:] }
         guard let data = try? Data(contentsOf: file) else { throw Unreadable() }
