@@ -15,6 +15,7 @@ import Testing
             "notion",
             "notion", "todoist", "basecamp", "gumroad", "moneybird", "freeagent", "mollie", "plane", "homey", "figma",
             "intra42", "ticktick", "zoho", "webflow",
+            "bangumi", "wave", "whoop", "miro", "tesla",
         ])
     for provider in OAuthProviders.all {
         #expect(OAuthProviders.provider(authorizing: provider.authorizeURL) == provider, "\(provider.id)")
@@ -34,7 +35,8 @@ import Testing
     #expect(
         OAuthProviders.raycastHosts.sorted() == [
             "asana.oauth.raycast.com", "github.oauth.raycast.com", "jira.oauth.raycast.com",
-            "linear.oauth.raycast.com", "notion.oauth.raycast.com", "slack.oauth.raycast.com", "zoom.oauth.raycast.com",
+            "linear.oauth.raycast.com", "miro.oauth.raycast.com", "notion.oauth.raycast.com",
+            "slack.oauth.raycast.com", "whoop.oauth.raycast.com", "zoom.oauth.raycast.com",
         ])
     let google = OAuthProviders.all.first { $0.id == "google" }!
     #expect(google.refreshURL == google.tokenURL, "Google refreshes at its token URL")
@@ -185,6 +187,37 @@ import Testing
             "https://oauth.raycast.com/v1/token/q4QKZun0V_mQeHqwiKbrv-G8fdDGM1-an2xu3vMO5AqrmUHnzIC4pjEpHf_I2XWtpR3uMK42EtKQiqNljaEE3rtacJnOHrip0_2B4K7Ci3WClmnjzv9gwmyYtmaGl4qIeU10j2RTDWVRq_jeUwc5Ze2_RCwYWdikkqKsfiLkJWZVahPvI0-RaA",
             "https://oauth.raycast.com/v1/refresh-token/OUvaPcCuUx4pAsmO9NlL0SjzRIsj1iquQtVbDxZlJHw5AxRqpEykQrSAKVa13YZNyTulfh8hUtGnOsmNEdMCyvflcIegE6MhbCr5BYS9Zdznb95mcJiXhduhwmXr9OXV6srwF4DmOUEnVwMzH7Pv8i8KmFxRRjbmm9rku70X_yNeVIxu9bzKzg"
         ),
+        // `bangumi`, its author's app on Raycast's shared proxy; it refreshes at its token URL.
+        (
+            "bangumi", "Bangumi",
+            "https://oauth.raycast.com/v1/authorize/nAxnz5SEQ7fO5SRxM_DjKrJ4k3C00kfJCNh1-fp_ZcDFXVcYIxtPBI5BbGux3-EOO8WfSheAkSZ7EJRtTfq1EQkaxB4ZKpkJ9byrPZZfYMx35C1Ii85HfKYDVo4",
+            "https://oauth.raycast.com/v1/token/7CSgIYGNn4jFuD6fTG5ov64wsfsi3iegonKLu0FCzW4pWL1T1jgXa4Bxa4f5w-bZOModMtBbrKFPsx1bGT4LUL_pmFzC1O3PkRp4Al1FToLwL_OPG4wVCAnQBQv6d2A",
+            "https://oauth.raycast.com/v1/token/7CSgIYGNn4jFuD6fTG5ov64wsfsi3iegonKLu0FCzW4pWL1T1jgXa4Bxa4f5w-bZOModMtBbrKFPsx1bGT4LUL_pmFzC1O3PkRp4Al1FToLwL_OPG4wVCAnQBQv6d2A"
+        ),
+        // `wave`, its author's app on Raycast's shared proxy.
+        (
+            "wave", "Wave",
+            "https://oauth.raycast.com/v1/authorize/FM5tM_5g15vFDnfj7nm3vtkcoByMUAI69cCl58SB27ud1QGVoveYNA_BgjcsXvWyDqBQVyZoLYaUlIlZvpFcPvXxK7MqOHeO5hN5y0qwEnShw9Hv9PofZM7xqADLOih2-W62ftFCaRDVJIur7F0ccG7xVu8t8wSt3VXL5i7o3IQIPQ7ODWqswTt6Fx5KxL5y5MuqAgxP2jr7Xwz-yWQWc_A7EaKPxbno2oTPaz9AArfAd-t-YaPbXvTL3bi69cu1CmVTJygRdhM",
+            "https://oauth.raycast.com/v1/token/_wJ5kXg1rLhO75Pr62ge83y20RUwQ7SITWBOL86St6DKEY-FK1p9yWdFqDhcFE_SgHgaYril7-RoS3JfDNs5lVX8xQ2iEX2LAXmDQV8armzVls1lWJYKHVSw123e6h9d-C3JUkDzhYfBiWY6HaMrn2E03dhqiuiBN5SOLAfCqZKTgq1ULnvfJ7Nexi82FN54jsrn2gyHDspcz6d89jWStRIPvFSeVt3C3EEPmdnWbm7mKZNmxhuoFrOZ1B8N-KOObts8Bg",
+            "https://oauth.raycast.com/v1/refresh-token/TQsitwYgPmfM2Tm6ZC5NMaBiOIztfOmzALSrh4UM0o4SdlSqRCvGuJ3i56HXpOkkuiwOc0TtKfxtfBKDy96nmDKMfewczvXkpNnH1afTexQYGUDTQOpUYBE8Cxo9XMRdqdJKC2OIUitHjCXZHEAQDLaGNo5AXMeWKO4Kkg6MLooZuy2Zuh16neM6-DCwJ8Qs1ZLPHdF6ps8vZRd-viNgscOto3NwUXa4iOVWLXsn8xrVD3tOcCcDvC3R-JOIzn-5ipsSZQ"
+        ),
+        // The store's WHOOP extension, through Raycast's WHOOP proxy.
+        (
+            "whoop", "WHOOP", "https://whoop.oauth.raycast.com/authorize", "https://whoop.oauth.raycast.com/token",
+            "https://whoop.oauth.raycast.com/refresh-token"
+        ),
+        // The store's Miro extension, through Raycast's Miro proxy.
+        (
+            "miro", "Miro", "https://miro.oauth.raycast.com/authorize", "https://miro.oauth.raycast.com/token",
+            "https://miro.oauth.raycast.com/refresh-token"
+        ),
+        // `tesla-energy`, its author's app on Raycast's shared proxy.
+        (
+            "tesla", "Tesla",
+            "https://oauth.raycast.com/v1/authorize/iJYj_0c8sxOGHvexNi0qXCRaBHscvub2yLI7kZMyK4Ky2u5iV3xTuVTNE3LW-0ex07VjFpdLEVEoLB1yD2XlGoVYz8ph_4UjUroi4j4MNVYmvTQeIOZC5HZqR-FFWYliFhI",
+            "https://oauth.raycast.com/v1/token/p7q14_mMGdFpROFDg19bzNg2blC7PT5i4a6ngcQP9vOfa6PV5udRzR_zvXopGW1U1u9IVw-BweEiW1oOV7L9yOd8buGsNoPdJMf4wyhZ2A6fStxe1I66z_FOpZwt4Q",
+            "https://oauth.raycast.com/v1/refresh-token/xG23f3tmUA9zNOewrzh164GX_4cZ1FzUAmVD1kt9YLigM2OcdKeMPh78YwDZKuXNPM3ipD-BDuQXC_6mo7qPe7MPpX4u701JXxhPoAjx9yjLxf-_3IStAzrpwVHSzA"
+        ),
     ]
     let server = SignInServer.custom(URL(string: "https://relay.example")!)
     for entry in entries {
@@ -219,6 +252,18 @@ import Testing
     var zohoChanged = Array(zoho)
     zohoChanged[zohoChanged.count - 1] = zohoChanged.last == "A" ? "B" : "A"
     for lookalike in [zoho + "/", String(zohoChanged), zoho + "?x=1", "http" + zoho.dropFirst("https".count)] {
+        #expect(OAuthProviders.provider(authorizing: lookalike) == nil, "\(lookalike)")
+    }
+    // And for batch 4's: `wave`'s address, and Raycast's WHOOP and Miro proxies.
+    let wave =
+        "https://oauth.raycast.com/v1/authorize/FM5tM_5g15vFDnfj7nm3vtkcoByMUAI69cCl58SB27ud1QGVoveYNA_BgjcsXvWyDqBQVyZoLYaUlIlZvpFcPvXxK7MqOHeO5hN5y0qwEnShw9Hv9PofZM7xqADLOih2-W62ftFCaRDVJIur7F0ccG7xVu8t8wSt3VXL5i7o3IQIPQ7ODWqswTt6Fx5KxL5y5MuqAgxP2jr7Xwz-yWQWc_A7EaKPxbno2oTPaz9AArfAd-t-YaPbXvTL3bi69cu1CmVTJygRdhM"
+    var waveChanged = Array(wave)
+    waveChanged[waveChanged.count - 1] = waveChanged.last == "A" ? "B" : "A"
+    for lookalike in [
+        wave + "/", String(waveChanged), wave + "?x=1", "http" + wave.dropFirst("https".count),
+        "https://whoop.oauth.raycast.com.evil.test/authorize", "http://miro.oauth.raycast.com/authorize",
+        "https://miro.oauth.raycast.com/authorize/x",
+    ] {
         #expect(OAuthProviders.provider(authorizing: lookalike) == nil, "\(lookalike)")
     }
 }

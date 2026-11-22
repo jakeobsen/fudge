@@ -815,7 +815,7 @@ Extensions run in a separate Node.js process, the extension host.
     `OAuthService` fetches its token and refresh URLs itself, so the worker wraps `fetch`: a `Request`, or anything else read as a string, as `fetch` reads it.
     A request goes to the relay, as `<server>/<provider>/token` or `/refresh-token` with the same method, headers and body, only when it's a `POST` to one of the table's token or refresh URLs (by scheme, host and path) with `grant_type` `authorization_code` or `refresh_token`.
     Google, Atlassian and Zoom refresh at their own token URL, so there the grant picks the endpoint, and since those are the providers' own URLs, they go to the relay only when this extension has a relay sign-in for that provider, pending or stored (`SignInCalls.hasRelaySignIn`); an extension's own flow, or a service account's grant, goes where it was going.
-    Todoist's, `raycast-pomodoro-notion`'s and `github-copilot`'s entries refresh at their token URL too, so the grant picks the endpoint there as well.
+    Todoist's, `raycast-pomodoro-notion`'s, `github-copilot`'s and `bangumi`'s entries refresh at their token URL too, so the grant picks the endpoint there as well.
     Being Raycast's addresses, they always go to the relay, never to their own host: a table match on any of Raycast's hosts (`isRaycastDomainHost`, or the proxy hosts) isn't an own host (`ownHost`).
     **Nothing is ever sent to Raycast's proxy hosts** (`*.oauth.raycast.com`, with or without a trailing dot): what isn't rewritten there is refused, with sign-in on or off.
     **Token and refresh grants to any of Raycast's hosts are refused too** (SPEC-132 §2 step 5, `isRaycastDomainHost`, by the domains core hands over in `FUDGE_RAYCAST_DOMAINS`), through `fetch`, `http` and `https` alike.
@@ -829,6 +829,7 @@ Extensions run in a separate Node.js process, the extension host.
     Those are Notion's (`notion.oauth.raycast.com`) and Todoist's (`todoist.oauth-proxy.raycast.com`) proxies, and the exact shared-proxy addresses (`oauth.raycast.com/v1/…`) of `raycast-pomodoro-notion`, `trek`, `gumroad`, `moneybird`, `github-copilot`, `freeagent`, `mollie-for-raycast`, `plane`, `homey` and `figma-files`.
     They go to the relay's `notion`, `todoist`, `basecamp`, `gumroad`, `moneybird`, `github`, `freeagent`, `mollie`, `plane`, `homey` and `figma` providers, where the relay's own app takes the place of the extension author's.
     The table also holds the exact shared-proxy addresses of `42-api`, `ticktick-plus`, `zoho-mail` and `webflow-sites`, which go to the relay's `intra42`, `ticktick`, `zoho` and `webflow` providers.
+    The table also holds WHOOP's and Miro's proxies (`whoop.oauth.raycast.com`, `miro.oauth.raycast.com`) and the exact shared-proxy addresses of `bangumi`, `wave` and `tesla-energy`, which go to the relay's `whoop`, `miro`, `bangumi`, `wave` and `tesla` providers.
     A shared-proxy entry stops matching when the extension's author makes new addresses.
     These entries are the one allowed exception to the rule against fixes for particular extensions (Conventions).
     The Jira and Zoom entries go to the relay's `atlassian` and `zoom` providers, beside Atlassian's and Zoom's own URLs, so two entries can share a relay provider (`OAuthProvider.id`), and an entry is known by its authorize URL.
@@ -1236,7 +1237,7 @@ Extensions run in a separate Node.js process, the extension host.
   If it doesn't, the bug is the extension's, and Fudge changes nothing: no special case, setting or workaround keyed on any extension's name, owner or files, wherever it came from (Fudge's bundled extensions aside, see below).
   **The one exception is sign-in** (D-84).
   The sign-in table (`OAuthProviders`) sends Raycast's sign-in addresses to the relay: GitHub, Linear, Slack and Asana, which `OAuthService` uses by default, and Jira and Zoom, which only the store's Jira and Zoom extensions set.
-  It also sends Notion's and Todoist's proxies, and the shared-proxy addresses of fourteen store extensions, which only those extensions set (FUD-166).
+  It also sends Notion's, Todoist's, WHOOP's and Miro's proxies, and the shared-proxy addresses of seventeen store extensions, which only those extensions set (FUD-166).
   Every other `*.oauth.raycast.com` address is refused (see "The fetch rewrite" above).
   A new entry in that table is built from a reviewed spec like any other change, and needs an app on the relay before its sign-in works.
   Fudge's bundled extensions (the Extension Store, Search Files, Search Emoji & Symbols and Clipboard History, in `runtime/`) are Fudge's own code: changing them isn't a fix for an extension, and Fudge's own code may name them and give them what other extensions don't get.

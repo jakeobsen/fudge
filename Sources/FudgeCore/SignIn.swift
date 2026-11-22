@@ -15,9 +15,9 @@ public struct OAuthProvider: Sendable, Equatable, Codable {
     public let name: String
     public let authorizeURL: String
     public let tokenURL: String
-    /// Where `OAuthService` sends a refresh. For Google, Jira, Zoom, Todoist, `github-copilot` and
-    /// `raycast-pomodoro-notion` that's the token URL, so a request there is a refresh when its `grant_type` is
-    /// `refresh_token`.
+    /// Where `OAuthService` sends a refresh. For Google, Jira, Zoom, Todoist, `github-copilot`,
+    /// `raycast-pomodoro-notion` and `bangumi` that's the token URL, so a request there is a refresh when its
+    /// `grant_type` is `refresh_token`.
     public let refreshURL: String
 
     public init(id: String, name: String, authorizeURL: String, tokenURL: String, refreshURL: String) {
@@ -211,13 +211,51 @@ public enum OAuthProviders {
             refreshURL:
                 "https://oauth.raycast.com/v1/refresh-token/OUvaPcCuUx4pAsmO9NlL0SjzRIsj1iquQtVbDxZlJHw5AxRqpEykQrSAKVa13YZNyTulfh8hUtGnOsmNEdMCyvflcIegE6MhbCr5BYS9Zdznb95mcJiXhduhwmXr9OXV6srwF4DmOUEnVwMzH7Pv8i8KmFxRRjbmm9rku70X_yNeVIxu9bzKzg"
         ),
+        // The store's `bangumi` extension signs in with its author's app through Raycast's shared proxy, and
+        // refreshes at its token URL. The relay's Bangumi app takes the author's place.
+        OAuthProvider(
+            id: "bangumi", name: "Bangumi",
+            authorizeURL:
+                "https://oauth.raycast.com/v1/authorize/nAxnz5SEQ7fO5SRxM_DjKrJ4k3C00kfJCNh1-fp_ZcDFXVcYIxtPBI5BbGux3-EOO8WfSheAkSZ7EJRtTfq1EQkaxB4ZKpkJ9byrPZZfYMx35C1Ii85HfKYDVo4",
+            tokenURL:
+                "https://oauth.raycast.com/v1/token/7CSgIYGNn4jFuD6fTG5ov64wsfsi3iegonKLu0FCzW4pWL1T1jgXa4Bxa4f5w-bZOModMtBbrKFPsx1bGT4LUL_pmFzC1O3PkRp4Al1FToLwL_OPG4wVCAnQBQv6d2A",
+            refreshURL:
+                "https://oauth.raycast.com/v1/token/7CSgIYGNn4jFuD6fTG5ov64wsfsi3iegonKLu0FCzW4pWL1T1jgXa4Bxa4f5w-bZOModMtBbrKFPsx1bGT4LUL_pmFzC1O3PkRp4Al1FToLwL_OPG4wVCAnQBQv6d2A"
+        ),
+        // The store's `wave` extension signs in with its author's app through Raycast's shared proxy. The relay's
+        // Wave app takes the author's place.
+        OAuthProvider(
+            id: "wave", name: "Wave",
+            authorizeURL:
+                "https://oauth.raycast.com/v1/authorize/FM5tM_5g15vFDnfj7nm3vtkcoByMUAI69cCl58SB27ud1QGVoveYNA_BgjcsXvWyDqBQVyZoLYaUlIlZvpFcPvXxK7MqOHeO5hN5y0qwEnShw9Hv9PofZM7xqADLOih2-W62ftFCaRDVJIur7F0ccG7xVu8t8wSt3VXL5i7o3IQIPQ7ODWqswTt6Fx5KxL5y5MuqAgxP2jr7Xwz-yWQWc_A7EaKPxbno2oTPaz9AArfAd-t-YaPbXvTL3bi69cu1CmVTJygRdhM",
+            tokenURL:
+                "https://oauth.raycast.com/v1/token/_wJ5kXg1rLhO75Pr62ge83y20RUwQ7SITWBOL86St6DKEY-FK1p9yWdFqDhcFE_SgHgaYril7-RoS3JfDNs5lVX8xQ2iEX2LAXmDQV8armzVls1lWJYKHVSw123e6h9d-C3JUkDzhYfBiWY6HaMrn2E03dhqiuiBN5SOLAfCqZKTgq1ULnvfJ7Nexi82FN54jsrn2gyHDspcz6d89jWStRIPvFSeVt3C3EEPmdnWbm7mKZNmxhuoFrOZ1B8N-KOObts8Bg",
+            refreshURL:
+                "https://oauth.raycast.com/v1/refresh-token/TQsitwYgPmfM2Tm6ZC5NMaBiOIztfOmzALSrh4UM0o4SdlSqRCvGuJ3i56HXpOkkuiwOc0TtKfxtfBKDy96nmDKMfewczvXkpNnH1afTexQYGUDTQOpUYBE8Cxo9XMRdqdJKC2OIUitHjCXZHEAQDLaGNo5AXMeWKO4Kkg6MLooZuy2Zuh16neM6-DCwJ8Qs1ZLPHdF6ps8vZRd-viNgscOto3NwUXa4iOVWLXsn8xrVD3tOcCcDvC3R-JOIzn-5ipsSZQ"
+        ),
+        // The store's WHOOP extension signs in through Raycast's WHOOP proxy.
+        raycastProxy("whoop", "WHOOP"),
+        // The store's Miro extension signs in through Raycast's Miro proxy.
+        raycastProxy("miro", "Miro"),
+        // The store's `tesla-energy` extension signs in to Tesla with its author's app through Raycast's shared
+        // proxy. The relay's Tesla app takes the author's place.
+        OAuthProvider(
+            id: "tesla", name: "Tesla",
+            authorizeURL:
+                "https://oauth.raycast.com/v1/authorize/iJYj_0c8sxOGHvexNi0qXCRaBHscvub2yLI7kZMyK4Ky2u5iV3xTuVTNE3LW-0ex07VjFpdLEVEoLB1yD2XlGoVYz8ph_4UjUroi4j4MNVYmvTQeIOZC5HZqR-FFWYliFhI",
+            tokenURL:
+                "https://oauth.raycast.com/v1/token/p7q14_mMGdFpROFDg19bzNg2blC7PT5i4a6ngcQP9vOfa6PV5udRzR_zvXopGW1U1u9IVw-BweEiW1oOV7L9yOd8buGsNoPdJMf4wyhZ2A6fStxe1I66z_FOpZwt4Q",
+            refreshURL:
+                "https://oauth.raycast.com/v1/refresh-token/xG23f3tmUA9zNOewrzh164GX_4cZ1FzUAmVD1kt9YLigM2OcdKeMPh78YwDZKuXNPM3ipD-BDuQXC_6mo7qPe7MPpX4u701JXxhPoAjx9yjLxf-_3IStAzrpwVHSzA"
+        ),
     ]
 
     /// Atlassian's name, as Settings and the sign-in prompt show it.
     public static let atlassianName = "Atlassian (Jira, Confluence)"
 
     /// Raycast's proxy at `<host>.oauth.raycast.com`, as `OAuthService` uses it by default for GitHub, Linear, Slack
-    /// and Asana, and store extensions set it for Jira, Zoom and Notion, sent to the relay's `relay` provider.
+    /// and Asana, and store extensions set it for Jira, Zoom, Notion, WHOOP and Miro, sent to the relay's `relay`
+    /// provider.
     private static func raycastProxy(_ host: String, _ name: String, relay: String? = nil) -> OAuthProvider {
         let base = "https://\(host).oauth.raycast.com"
         return OAuthProvider(

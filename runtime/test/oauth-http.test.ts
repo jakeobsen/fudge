@@ -257,6 +257,25 @@ test("1.x token and refresh requests to the shared proxy's addresses go to the r
     );
 });
 
+// `whoop` locks @raycast/utils 1.13.6, which posts JSON through cross-fetch's node-fetch 2, and `miro` posts JSON with
+// node-fetch 3 (FUD-166): both call https.request, so Raycast's WHOOP and Miro proxies go to the relay that way.
+test("WHOOP's and Miro's proxies go to the relay through https.request, bodies unchanged", async () => {
+    answer = { server: `${base(relay)}/base/`, signedIn: false };
+    relaySeen.length = 0;
+    const refresh = JSON.stringify({ grant_type: "refresh_token", refresh_token: "r" });
+    await exchange(() => https.request("https://whoop.oauth.raycast.com/token", post), codeGrant);
+    await exchange(() => https.request("https://whoop.oauth.raycast.com/refresh-token", post), refresh);
+    await exchange(() => https.request("https://miro.oauth.raycast.com/token", post), codeGrant);
+    assert.deepEqual(
+        relaySeen.map((seen) => [seen.path, seen.body]),
+        [
+            ["/base/whoop/token", codeGrant],
+            ["/base/whoop/refresh-token", refresh],
+            ["/base/miro/token", codeGrant],
+        ],
+    );
+});
+
 test("a redirect from the relay fails the request, and its Location is never reached", async () => {
     answer = { server: base(relay), signedIn: false };
     for (const status of [301, 302, 303, 307, 308]) {
