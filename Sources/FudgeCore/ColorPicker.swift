@@ -213,7 +213,7 @@ public enum ToolCommand: String, CaseIterable, Sendable {
 extension BuiltInCommandGroup {
     /// Tools: small utilities that aren't about windows or the system, one command per `ToolCommand`.
     public static let tools = BuiltInCommandGroup(
-        name: ":tools", title: "Tools",
+        name: .tools, title: "Tools",
         commands: ToolCommand.allCases.map { command in
             let (title, keywords, symbol) = command.presentation
             return BuiltInCommand(

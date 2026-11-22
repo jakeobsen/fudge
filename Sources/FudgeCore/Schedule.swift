@@ -307,7 +307,7 @@ public enum Schedule {
 extension BuiltInCommandGroup {
     /// The Calendar group (SPEC-092): My Schedule.
     public static let calendar = BuiltInCommandGroup(
-        name: ":calendar", title: "Calendar",
+        name: .calendar, title: "Calendar",
         commands: [
             BuiltInCommand(
                 name: ScheduleList.commandName, title: ScheduleList.title,

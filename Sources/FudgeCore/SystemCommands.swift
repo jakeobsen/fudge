@@ -50,7 +50,7 @@ public enum SystemCommand: String, CaseIterable, Sendable {
 extension BuiltInCommandGroup {
     /// System: one command per `SystemCommand`, named by its raw value.
     public static let system = BuiltInCommandGroup(
-        name: ":system", title: "System",
+        name: .system, title: "System",
         commands: SystemCommand.allCases.map { command in
             let (title, keywords, symbol) = command.presentation
             return BuiltInCommand(

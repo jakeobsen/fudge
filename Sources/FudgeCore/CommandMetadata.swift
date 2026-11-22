@@ -14,13 +14,13 @@ public struct CommandMetadata: Sendable, Equatable {
         self.subtitles = subtitles
     }
 
-    public func subtitle(extension extensionName: String, command: String) -> String? {
-        subtitles[FudgeSettings.commandID(extension: extensionName, command: command)]
+    public func subtitle(extension id: ExtensionID, command: String) -> String? {
+        subtitles[FudgeSettings.commandID(owner: .extension(id), command: command)]
     }
 
     /// Sets a command's subtitle, or with nil goes back to the manifest's.
-    public mutating func setSubtitle(_ subtitle: String?, extension extensionName: String, command: String) {
-        subtitles[FudgeSettings.commandID(extension: extensionName, command: command)] = subtitle
+    public mutating func setSubtitle(_ subtitle: String?, extension id: ExtensionID, command: String) {
+        subtitles[FudgeSettings.commandID(owner: .extension(id), command: command)] = subtitle
     }
 
     /// Drops the entries of commands that aren't in `installed` (command ids). Returns whether any were dropped.

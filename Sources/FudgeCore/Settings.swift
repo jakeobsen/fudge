@@ -8,8 +8,9 @@ public struct FudgeSettings: Sendable, Equatable {
     public var hotkey: String?
     /// By command id (`FudgeSettings.commandID`).
     public var commands: [String: CommandSettings]
-    /// By extension name.
-    public var extensions: [String: ExtensionSettings]
+    /// By owner: an extension's id or one of Fudge's groups (C.8). A key in the file that's neither is left out here
+    /// and kept in the file as it is.
+    public var extensions: [CommandOwner: ExtensionSettings]
     /// Download exchange rates from the European Central Bank for the calculator. Off unless set.
     public var currencyRates: Bool
     /// How the calculator reads and shows numbers: the Mac's format unless set. An unknown value reads as the Mac's.
@@ -141,7 +142,8 @@ public struct FudgeSettings: Sendable, Equatable {
     }
 
     public init(
-        hotkey: String? = nil, commands: [String: CommandSettings] = [:], extensions: [String: ExtensionSettings] = [:],
+        hotkey: String? = nil, commands: [String: CommandSettings] = [:],
+        extensions: [CommandOwner: ExtensionSettings] = [:],
         currencyRates: Bool = false, numberFormat: NumberFormatSetting = .system
     ) {
         self.hotkey = hotkey
@@ -151,9 +153,9 @@ public struct FudgeSettings: Sendable, Equatable {
         self.numberFormat = numberFormat
     }
 
-    /// A command's key in `commands`: "<extension name>/<command name>".
-    public static func commandID(extension extensionName: String, command: String) -> String {
-        "\(extensionName)/\(command)"
+    /// A command's key in `commands`: "<owner>/<command name>", the owner an extension's id or a group's key.
+    public static func commandID(owner: CommandOwner, command: String) -> String {
+        "\(owner.key)/\(command)"
     }
 
     /// Commands that are off until the user turns them on, by id: those that use something Fudge doesn't support
@@ -163,9 +165,8 @@ public struct FudgeSettings: Sendable, Equatable {
 
     /// Whether a command is enabled: its extension is, and the command is by the user's choice or, without one, by
     /// default (`offByDefault`).
-    public func isEnabled(extension extensionName: String, command: String) -> Bool {
-        isEnabled(extension: extensionName)
-            && isEnabledOwn(commandID: Self.commandID(extension: extensionName, command: command))
+    public func isEnabled(owner: CommandOwner, command: String) -> Bool {
+        isEnabled(owner: owner) && isEnabledOwn(commandID: Self.commandID(owner: owner, command: command))
     }
 
     /// A command's own Enabled, its extension's aside: the user's choice, else the default.
@@ -173,19 +174,24 @@ public struct FudgeSettings: Sendable, Equatable {
         commands[id]?.enabled ?? !offByDefault.contains(id)
     }
 
-    /// `isEnabled` for a command id ("<extension name>/<command name>"), split at its first "/".
+    /// `isEnabled` for a command id ("<owner>/<command name>"), split at its first "/". An owner that's neither an
+    /// extension's id nor a group's key has no Enabled of its own, so the command's own decides.
     public func isEnabled(commandID id: String) -> Bool {
         guard let slash = id.firstIndex(of: "/") else { return true }
-        return isEnabled(extension: String(id[..<slash]), command: String(id[id.index(after: slash)...]))
+        guard let owner = CommandOwner(stored: String(id[..<slash])) else { return isEnabledOwn(commandID: id) }
+        return isEnabled(owner: owner, command: String(id[id.index(after: slash)...]))
     }
 
     /// Whether an extension is enabled on the Commands page. Every extension is until it's disabled, except the
     /// bundled Extension Store, which is off until it's enabled. An install from before that, with the store
     /// switched on, counts as enabled until either is changed.
-    public func isEnabled(extension name: String) -> Bool {
-        if let enabled = extensions[name]?.enabled { return enabled }
-        return name == ExtensionStore.extensionName ? isExtensionStoreOn : true
+    public func isEnabled(owner: CommandOwner) -> Bool {
+        if let enabled = extensions[owner]?.enabled { return enabled }
+        return owner == Self.extensionStore ? isExtensionStoreOn : true
     }
+
+    /// The bundled Extension Store, as an owner.
+    static let extensionStore = CommandOwner.extension(ExtensionStore.id)
 
     /// The user's Enabled toggle for a command (the Commands page's checkbox): written either way, true or false, so
     /// Fudge's default (`offByDefault`) never overrides it: a command the user turned on stays on, and one they turned
@@ -194,16 +200,16 @@ public struct FudgeSettings: Sendable, Equatable {
         commands[id, default: .init()].enabled = enabled
     }
 
-    /// Enables or disables an extension. The store's state is always written, since its default isn't on.
-    public mutating func setEnabled(_ enabled: Bool, extension name: String) {
-        extensions[name, default: .init()].enabled = enabled && name != ExtensionStore.extensionName ? nil : enabled
+    /// Enables or disables an extension or a group. The store's state is always written, since its default isn't on.
+    public mutating func setEnabled(_ enabled: Bool, owner: CommandOwner) {
+        extensions[owner, default: .init()].enabled = enabled && owner != Self.extensionStore ? nil : enabled
     }
 
     /// The Extension Store's switch: on records the consent date, off removes both keys. The store's Enabled is
     /// written down first, so the switch never changes it, even for an install from before, which takes it from
     /// the switch.
     public mutating func setExtensionStore(_ on: Bool, now: Date) {
-        setEnabled(isEnabled(extension: ExtensionStore.extensionName), extension: ExtensionStore.extensionName)
+        setEnabled(isEnabled(owner: Self.extensionStore), owner: Self.extensionStore)
         extensionStore = on
         extensionStoreConsentAt = on ? ISO8601DateFormatter().string(from: now) : nil
     }
@@ -212,15 +218,15 @@ public struct FudgeSettings: Sendable, Equatable {
     /// sheet write, and the store's Enabled on the Commands page too, so the store is in root search straight away.
     public mutating func turnOnExtensionStore(now: Date) {
         setExtensionStore(true, now: now)
-        setEnabled(true, extension: ExtensionStore.extensionName)
+        setEnabled(true, owner: Self.extensionStore)
     }
 
     /// The hotkeys to register: those of the commands in `installed` (command ids) that are enabled. Entries for
     /// commands that aren't installed are kept in the file but aren't available.
     public func availableHotkeys(installed: Set<String>) -> [String: HotKeySpec] {
         commandHotkeys.filter { id, _ in
-            guard installed.contains(id), let slash = id.firstIndex(of: "/") else { return false }
-            return isEnabled(extension: String(id[..<slash]), command: String(id[id.index(after: slash)...]))
+            guard installed.contains(id), id.contains("/") else { return false }
+            return isEnabled(commandID: id)
         }
     }
 
@@ -324,8 +330,10 @@ public struct FudgeSettings: Sendable, Equatable {
                 hotkey: entry["hotkey"] as? String, alias: entry["alias"] as? String, enabled: entry["enabled"] as? Bool
             )
         }
-        for case (let name, let entry as [String: Any]) in object["extensions"] as? [String: Any] ?? [:] {
-            settings.extensions[name] = ExtensionSettings(enabled: entry["enabled"] as? Bool)
+        // Each key read as a string and kept when it's an owner; any other stays in the file, untouched by `save`.
+        for case (let key, let entry as [String: Any]) in object["extensions"] as? [String: Any] ?? [:] {
+            guard let owner = CommandOwner(stored: key) else { continue }
+            settings.extensions[owner] = ExtensionSettings(enabled: entry["enabled"] as? Bool)
         }
         return settings
     }
@@ -387,12 +395,15 @@ public struct FudgeSettings: Sendable, Equatable {
         }
         object["commands"] = commandObjects.isEmpty ? nil : commandObjects
 
+        // Only the keys this reads or sets: one that's no owner (a hand edit, a newer Fudge's) is left as the file has
+        // it, never cleared because it isn't in memory.
         var extensionObjects = object["extensions"] as? [String: Any] ?? [:]
-        for name in Set(extensionObjects.keys).union(extensions.keys) {
-            var entry = extensionObjects[name] as? [String: Any] ?? [:]
-            let enabled = extensions[name]?.enabled
-            entry["enabled"] = name == ExtensionStore.extensionName ? enabled : (enabled == false ? false : nil)
-            extensionObjects[name] = entry.isEmpty ? nil : entry
+        let owners = Set(extensionObjects.keys.compactMap(CommandOwner.init(stored:))).union(extensions.keys)
+        for owner in owners {
+            var entry = extensionObjects[owner.key] as? [String: Any] ?? [:]
+            let enabled = extensions[owner]?.enabled
+            entry["enabled"] = owner == Self.extensionStore ? enabled : (enabled == false ? false : nil)
+            extensionObjects[owner.key] = entry.isEmpty ? nil : entry
         }
         object["extensions"] = extensionObjects.isEmpty ? nil : extensionObjects
 

@@ -70,7 +70,7 @@ final class SettingsModel {
     func reload() {
         let installed = InstalledExtension.all(paths: paths, resources: Bundle.main.resourceURL)
         extensions = InstalledExtension.settingsPages(of: installed)
-        stored = Dictionary(uniqueKeysWithValues: extensions.map { ($0.manifest.name, store.load($0.manifest.name)) })
+        stored = Dictionary(uniqueKeysWithValues: extensions.map { ($0.manifest.name, store.load($0.id)) })
         allExtensions = installed.sorted {
             $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending
         }
@@ -107,7 +107,7 @@ final class SettingsModel {
     private var installedCommandIDs: Set<String> {
         Set(
             allExtensions.flatMap { item in
-                item.manifest.commands.map { FudgeSettings.commandID(extension: item.manifest.name, command: $0.name) }
+                item.manifest.commands.map { FudgeSettings.commandID(owner: .extension(item.id), command: $0.name) }
             } + BuiltInCommandGroup.commandIDs(in: builtInGroups) + QuicklinkCommands.commandIDs(quicklinks))
     }
 
@@ -313,17 +313,17 @@ final class SettingsModel {
     /// The file holds something fudge can't read, so the answers can't be changed here.
     private(set) var launchPermissionsUnreadable = false
 
-    /// An installed extension's title, or nil when it isn't installed.
-    func extensionTitle(_ name: String) -> String? {
-        allExtensions.first { $0.manifest.name == name }?.manifest.title
+    /// An installed extension's title, by its id, or nil when it isn't installed.
+    func extensionTitle(_ id: ExtensionID) -> String? {
+        allExtensions.first { $0.id == id }?.manifest.title
     }
 
-    func setLaunchPermission(_ allowed: Bool, caller: String, target: String) {
+    func setLaunchPermission(_ allowed: Bool, caller: ExtensionID, target: ExtensionID) {
         changeLaunchPermissions { $0.record(allowed, caller: caller, target: target) }
     }
 
     /// Forgets an answer, so the user is asked again next time.
-    func forgetLaunchPermission(caller: String, target: String) {
+    func forgetLaunchPermission(caller: ExtensionID, target: ExtensionID) {
         changeLaunchPermissions { $0.forget(caller: caller, target: target) }
     }
 
@@ -661,7 +661,7 @@ final class SettingsModel {
             FudgeLog.error("couldn't delete it: \(message)")
             return
         }
-        let id = FudgeSettings.commandID(extension: BuiltInCommandGroup.windowManagement.name, command: command)
+        let id = FudgeSettings.commandID(owner: .group(BuiltInCommandGroup.windowManagement.name), command: command)
         if fudgeSettings.commands[id] != nil, change({ $0.commands[id] = nil }) { _ = applyHotkeys() }
     }
 
@@ -1082,7 +1082,7 @@ final class SettingsModel {
 
     func signOut(_ entry: SignInEntry) {
         do {
-            try tokenStore.remove(extension: entry.extensionName, provider: entry.providerID)
+            try tokenStore.remove(entry)
             signInProblem = nil
         } catch {
             signInProblem = String(describing: error)
@@ -1299,9 +1299,9 @@ final class SettingsModel {
         return settings
     }
 
-    /// The Extension Store is off unless enabled (`FudgeSettings.isEnabled(extension:)`).
-    func isEnabled(extension name: String) -> Bool {
-        fudgeSettings.isEnabled(extension: name)
+    /// The Extension Store is off unless enabled (`FudgeSettings.isEnabled(owner:)`).
+    func isEnabled(owner: CommandOwner) -> Bool {
+        fudgeSettings.isEnabled(owner: owner)
     }
 
     /// Enables or disables a command: a disabled one leaves root search, and its hotkey stops working.
@@ -1310,9 +1310,9 @@ final class SettingsModel {
         _ = applyHotkeys()
     }
 
-    /// Enables or disables every command of an extension.
-    func setEnabled(_ enabled: Bool, extension name: String) {
-        change { $0.setEnabled(enabled, extension: name) }
+    /// Enables or disables every command of an extension or a group.
+    func setEnabled(_ enabled: Bool, owner: CommandOwner) {
+        change { $0.setEnabled(enabled, owner: owner) }
         _ = applyHotkeys()
     }
 
@@ -1332,7 +1332,7 @@ final class SettingsModel {
         }
         for installed in allExtensions {
             for command in installed.manifest.commands
-            where FudgeSettings.commandID(extension: installed.manifest.name, command: command.name) == commandID {
+            where FudgeSettings.commandID(owner: .extension(installed.id), command: command.name) == commandID {
                 return command.title
             }
         }
@@ -1357,8 +1357,10 @@ final class SettingsModel {
             values.extensionValues[preference.name] = value
         }
         stored[extensionName] = values
+        // A settings page is an installed extension's, so its install is there; the file is kept by its id.
+        guard let id = extensions.first(where: { $0.manifest.name == extensionName })?.id else { return }
         do {
-            try store.save(values, for: extensionName)
+            try store.save(values, for: id)
         } catch {
             FudgeLog.error("couldn't save preferences: \(error)")
         }

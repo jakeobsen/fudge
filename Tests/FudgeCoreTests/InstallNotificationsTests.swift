@@ -341,16 +341,18 @@ private func center(
 
 @Test func onlyAStoreSessionStillRunningTakesAClick() {
     let running: (String) -> Bool = { $0 == "s1" }
-    let store = ExtensionStore.extensionName
-    #expect(ExtensionStore.sessionOnScreen("s1", extensionName: store, isRunning: running) == "s1")
-    #expect(ExtensionStore.sessionOnScreen("s2", extensionName: store, isRunning: running) == nil, "its host stopped")
-    #expect(ExtensionStore.sessionOnScreen("s1", extensionName: "github", isRunning: running) == nil, "another's")
-    #expect(ExtensionStore.sessionOnScreen(nil, extensionName: nil, isRunning: running) == nil, "no command on screen")
+    let store = ExtensionStore.id
+    #expect(ExtensionStore.sessionOnScreen("s1", extension: store, isRunning: running) == "s1")
+    #expect(ExtensionStore.sessionOnScreen("s2", extension: store, isRunning: running) == nil, "its host stopped")
+    #expect(
+        ExtensionStore.sessionOnScreen("s1", extension: ExtensionID(stored: "github")!, isRunning: running) == nil,
+        "another's")
+    #expect(ExtensionStore.sessionOnScreen(nil, extension: nil, isRunning: running) == nil, "no command on screen")
     // A click with a stopped store on the screen launches the store with its target.
     var clicks = NotificationClicks<Int>()
     _ = clicks.wait(session: "s2", call: 1)
     let target = NoticeTarget(name: "github", dir: "github", failed: false)
-    let loaded = ExtensionStore.sessionOnScreen("s2", extensionName: store, isRunning: running)
+    let loaded = ExtensionStore.sessionOnScreen("s2", extension: store, isRunning: running)
     guard case .launch(let launched) = clicks.click(target, loadedSession: loaded) else {
         Issue.record("expected a launch")
         return

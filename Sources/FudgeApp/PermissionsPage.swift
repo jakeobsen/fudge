@@ -184,12 +184,12 @@ struct LaunchPermissionsSection: View {
         }
     }
 
-    /// The extension's title, or its name in grey when it isn't installed.
-    @ViewBuilder private func name(_ extensionName: String) -> some View {
-        if let title = model.extensionTitle(extensionName) {
+    /// The extension's title, or its id in grey when it isn't installed.
+    @ViewBuilder private func name(_ id: ExtensionID) -> some View {
+        if let title = model.extensionTitle(id) {
             Text(title)
         } else {
-            Text(extensionName).foregroundStyle(.secondary).help("Not installed")
+            Text(id.key).foregroundStyle(.secondary).help("Not installed")
         }
     }
 }

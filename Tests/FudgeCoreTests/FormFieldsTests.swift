@@ -141,21 +141,22 @@ private let tagPickerJSON = #"""
 
 @Test func storesSubmittedValuesByExtensionCommandAndField() throws {
     let store = FormValueStore(directory: try Fixtures.temporaryDirectory().appendingPathComponent("form-values"))
-    #expect(store.load(extension: "notes", command: "new").isEmpty)
-    try store.save(["title": .string("Hello"), "tags": .array([.string("red")])], extension: "notes", command: "new")
-    try store.save(["title": .string("Other command")], extension: "notes", command: "edit")
-    try store.save(["done": .bool(true)], extension: "notes", command: "new")
-    try store.save(["title": .string("Elsewhere")], extension: "todo", command: "new")
+    let (notes, todo) = (try #require(ExtensionID(stored: "notes")), try #require(ExtensionID(stored: "todo")))
+    #expect(store.load(extension: notes, command: "new").isEmpty)
+    try store.save(["title": .string("Hello"), "tags": .array([.string("red")])], extension: notes, command: "new")
+    try store.save(["title": .string("Other command")], extension: notes, command: "edit")
+    try store.save(["done": .bool(true)], extension: notes, command: "new")
+    try store.save(["title": .string("Elsewhere")], extension: todo, command: "new")
     #expect(
-        store.load(extension: "notes", command: "new")
+        store.load(extension: notes, command: "new")
             == ["title": .string("Hello"), "tags": .array([.string("red")]), "done": .bool(true)])
-    #expect(store.load(extension: "notes", command: "edit") == ["title": .string("Other command")])
-    #expect(store.load(extension: "todo", command: "new") == ["title": .string("Elsewhere")])
+    #expect(store.load(extension: notes, command: "edit") == ["title": .string("Other command")])
+    #expect(store.load(extension: todo, command: "new") == ["title": .string("Elsewhere")])
 
     // A Date crosses the bridge as a $date marker and comes back the same.
     let date: JSONValue = .object(["$date": .string("2026-11-20T12:00:00.000Z")])
-    try store.save(["due": date], extension: "notes", command: "new")
-    #expect(store.load(extension: "notes", command: "new")["due"] == date)
+    try store.save(["due": date], extension: notes, command: "new")
+    #expect(store.load(extension: notes, command: "new")["due"] == date)
 }
 
 @Test func focusEventsCarryTheFieldAndItsValue() throws {

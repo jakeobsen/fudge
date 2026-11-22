@@ -142,7 +142,7 @@ extension BuiltInCommandGroup {
     /// Window Management: one command per `WindowCommand`, named by its raw value, then Switch Windows
     /// (`SwitchWindowsList`).
     public static let windowManagement = BuiltInCommandGroup(
-        name: ":window-management", title: "Window Management",
+        name: .windowManagement, title: "Window Management",
         commands: WindowCommand.allCases.map { command in
             let (title, keywords, symbol) = command.presentation
             return BuiltInCommand(

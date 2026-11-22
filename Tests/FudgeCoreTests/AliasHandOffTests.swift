@@ -11,7 +11,8 @@ private func quicklink(_ id: String, alias: String) -> RootItem {
     var item = RootItem(
         id: "quicklink:\(id)", title: "Docs Search", subtitle: "Quicklink",
         kind: .command(
-            extension: "x", command: id, mode: "no-view", entry: URL(fileURLWithPath: "/x/\(id).cjs")),
+            extension: ExtensionID(stored: "x")!, command: id, mode: "no-view",
+            entry: URL(fileURLWithPath: "/x/\(id).cjs")),
         arguments: [query])
     item.alias = alias
     return item

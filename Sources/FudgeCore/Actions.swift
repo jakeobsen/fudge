@@ -103,7 +103,7 @@ public enum RootAction: Sendable, Equatable {
     /// quit fudge.
     case open
     /// Opens the Settings window on an extension's preferences.
-    case configureExtension(String)
+    case configureExtension(ExtensionID)
     /// Removes an active menu-bar command's item and unloads it, by command id (`FudgeSettings.commandID`).
     case deactivateMenuBarItem(String)
     /// Shows an application in Finder.
@@ -171,7 +171,7 @@ public enum RootActions {
 
     /// The one entry of the Extension Store's "off" view: its Settings page, as ⌘⇧, opens it.
     public static let extensionStoreOffSections = section([
-        (ExtensionStore.Off.action, enter, .configureExtension(ExtensionStore.extensionName))
+        (ExtensionStore.Off.action, enter, .configureExtension(ExtensionStore.id))
     ])
 
     /// The entries for `item`, the first one being what ↵ does. A menu-bar command that's active in the menu bar
@@ -180,17 +180,17 @@ public enum RootActions {
         guard let item else { return [] }
         let entries: [(String, KeyShortcut?, RootAction)] =
             switch item.kind {
-            case .command(let extensionName, let commandName, let mode, _):
+            case .command(let id, let commandName, let mode, _):
                 [("Open Command", enter, .open)]
                     + (mode == "menu-bar" && isActiveInMenuBar
                         ? [
                             (
                                 "Deactivate Menu Bar Item", nil,
                                 .deactivateMenuBarItem(
-                                    FudgeSettings.commandID(extension: extensionName, command: commandName))
+                                    FudgeSettings.commandID(owner: .extension(id), command: commandName))
                             )
                         ] : [])
-                    + [("Configure Extension", configureExtensionShortcut, .configureExtension(extensionName))]
+                    + [("Configure Extension", configureExtensionShortcut, .configureExtension(id))]
             case .application(let url):
                 [("Open Application", enter, .open), ("Show in Finder", showInFinderShortcut, .showInFinder(url))]
             case .settings:

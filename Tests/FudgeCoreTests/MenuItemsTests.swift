@@ -420,7 +420,7 @@ private enum MenuTestError: Error {
 
 @Test func searchMenuItemsIsTheAppsGroupsCommand() throws {
     #expect(BuiltInCommandGroup.all.contains(.apps))
-    let found = try #require(BuiltInCommandGroup.command(group: ":apps", command: MenuItemsList.commandName))
+    let found = try #require(BuiltInCommandGroup.command(group: .apps, command: MenuItemsList.commandName))
     #expect(found.command.title == "Search Menu Items")
     #expect(NSImage(systemSymbolName: found.command.symbol, accessibilityDescription: nil) != nil)
     #expect(BuiltInCommandGroup.commandIDs().contains(":apps/search-menu-items"))

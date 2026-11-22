@@ -335,11 +335,12 @@ private let folders = #"""
     let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: folder) }
     let store = SearchBarDropdown.Store(file: folder.appendingPathComponent("dropdown-values.json"))
-    let key = SearchBarDropdown.Store.key(extension: "projects", command: "search", dropdown: nil)
+    let projects = ExtensionID(stored: "projects")!
+    let key = SearchBarDropdown.Store.key(extension: projects, command: "search", dropdown: nil)
     #expect(key == "projects/search")
     #expect(store.value(for: key) == nil)
     try store.set("work", for: key)
-    try store.set("x", for: SearchBarDropdown.Store.key(extension: "projects", command: "search", dropdown: "tags"))
+    try store.set("x", for: SearchBarDropdown.Store.key(extension: projects, command: "search", dropdown: "tags"))
     #expect(store.value(for: key) == "work")
     #expect(store.value(for: "projects/search/tags") == "x")
 }

@@ -19,7 +19,7 @@ public struct StoredPreferences: Sendable, Equatable, Codable {
     }
 }
 
-/// Reads and writes `preferences/<extension>.json` in fudge's support folder.
+/// Reads and writes `preferences/<extension id>.json` in fudge's support folder.
 public struct PreferenceStore: Sendable {
     public var directory: URL
 
@@ -27,20 +27,20 @@ public struct PreferenceStore: Sendable {
         self.directory = directory
     }
 
-    public func load(_ extensionName: String) -> StoredPreferences {
-        guard let data = try? Data(contentsOf: file(for: extensionName)) else { return StoredPreferences() }
+    public func load(_ id: ExtensionID) -> StoredPreferences {
+        guard let data = try? Data(contentsOf: file(for: id)) else { return StoredPreferences() }
         return (try? JSONDecoder().decode(StoredPreferences.self, from: data)) ?? StoredPreferences()
     }
 
-    public func save(_ preferences: StoredPreferences, for extensionName: String) throws {
+    public func save(_ preferences: StoredPreferences, for id: ExtensionID) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try encoder.encode(preferences).write(to: file(for: extensionName), options: .atomic)
+        try encoder.encode(preferences).write(to: file(for: id), options: .atomic)
     }
 
-    private func file(for extensionName: String) -> URL {
-        directory.appendingPathComponent("\(extensionName).json")
+    private func file(for id: ExtensionID) -> URL {
+        directory.appendingPathComponent("\(id.key).json")
     }
 }
 

@@ -58,7 +58,7 @@ private func items(_ quicklinks: [Quicklink], _ settings: FudgeSettings) -> [Roo
 
 @Test func theGroupListsEveryQuicklinkByName() {
     let group = QuicklinkCommands.group([search, jira, docs])
-    #expect(group.name == ":quicklinks")
+    #expect(group.name == .quicklinks && group.id == ":quicklinks")
     #expect(group.title == "Quicklinks")
     #expect(group.commands.map(\.title) == ["Docs", "Jira Issue", "Search Wiki"])
     #expect(group.commands.map(\.name) == [docs.id, jiraID, search.id])
@@ -175,7 +175,7 @@ private func items(_ quicklinks: [Quicklink], _ settings: FudgeSettings) -> [Roo
     #expect(CommandNames.name(of: ":quicklinks/\(jiraID)", in: [], groups: groups) == "Jira Issue")
     let twin = Quicklink(name: "First Tool", link: "https://example.com")
     let tools = BuiltInCommandGroup(
-        name: ":test-tools", title: "Test Tools",
+        name: .tools, title: "Test Tools",
         commands: [BuiltInCommand(name: "first", title: "First Tool", symbol: "1.circle")])
     #expect(
         CommandNames.name(of: ":quicklinks/\(twin.id)", in: [], groups: [tools, QuicklinkCommands.group([twin])])
@@ -195,11 +195,11 @@ private func items(_ quicklinks: [Quicklink], _ settings: FudgeSettings) -> [Roo
     #expect(items([jira, docs], settings).map(\.title) == ["Docs"])
     #expect(Array(settings.availableHotkeys(installed: installed).keys) == [":quicklinks/\(docs.id)"])
 
-    settings.setEnabled(false, extension: QuicklinkCommands.groupName)
+    settings.setEnabled(false, owner: .group(.quicklinks))
     #expect(items([jira, docs], settings).isEmpty, "the group's Enabled turns every quicklink off")
     #expect(settings.availableHotkeys(installed: installed).isEmpty)
-    settings.setEnabled(true, extension: QuicklinkCommands.groupName)
-    #expect(settings.extensions[QuicklinkCommands.groupName]?.enabled == nil, "on is the default")
+    settings.setEnabled(true, owner: .group(.quicklinks))
+    #expect(settings.extensions[.group(.quicklinks)]?.enabled == nil, "on is the default")
 }
 
 @Test func deletedQuicklinksSettingsArePruned() {
@@ -209,11 +209,11 @@ private func items(_ quicklinks: [Quicklink], _ settings: FudgeSettings) -> [Roo
     settings.commands[":quicklinks/a/b"] = .init(alias: "odd")
     settings.commands["scratch/create"] = .init(alias: "sc")
     settings.commands[":window-management/left-half"] = .init(alias: "lh")
-    settings.extensions[QuicklinkCommands.groupName] = .init(enabled: false)
+    settings.extensions[.group(.quicklinks)] = .init(enabled: false)
     #expect(QuicklinkCommands.prune(&settings, keeping: [docs]))
     #expect(
         Set(settings.commands.keys) == [":quicklinks/\(docs.id)", "scratch/create", ":window-management/left-half"])
-    #expect(settings.extensions[QuicklinkCommands.groupName]?.enabled == false, "the group's Enabled stays")
+    #expect(settings.extensions[.group(.quicklinks)]?.enabled == false, "the group's Enabled stays")
     #expect(!QuicklinkCommands.prune(&settings, keeping: [docs]), "nothing left to take out")
 }
 
@@ -247,7 +247,7 @@ private func items(_ quicklinks: [Quicklink], _ settings: FudgeSettings) -> [Roo
 }
 
 @Test func theQuicklinksGroupIsTypedQuicklinksOnTheCommandsPage() {
-    #expect(BuiltInCommandGroup.typeLabels(ofGroup: QuicklinkCommands.groupName) == ("Quicklinks", "Quicklink"))
+    #expect(BuiltInCommandGroup.typeLabels(ofGroup: .quicklinks) == ("Quicklinks", "Quicklink"))
     for group in BuiltInCommandGroup.all {
         #expect(BuiltInCommandGroup.typeLabels(ofGroup: group.name) == ("Built-in", "Command"))
     }

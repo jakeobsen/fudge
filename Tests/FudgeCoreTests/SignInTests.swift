@@ -3,6 +3,8 @@ import Testing
 
 @testable import FudgeCore
 
+private func id(_ key: String) -> ExtensionID { ExtensionID(stored: key)! }
+
 // SPEC-056: sign-in through a fudge-oauth relay. The provider table, the settings rules, the callback parser and the
 // token store, with a fake Keychain.
 
@@ -274,8 +276,8 @@ import Testing
     let store = OAuthTokenStore(secrets: secrets)
     var old = StoredTokenSet(accessToken: "a", updatedAt: "2026-11-21T12:00:00Z")
     old.relayProvider = "jira"
-    try store.save(old, extension: "jira", provider: "jira")
-    let calls = SignInCalls(store: store, extensionName: "jira", pending: [])
+    try store.save(old, extension: id("jira"), provider: "jira")
+    let calls = SignInCalls(store: store, extension: id("jira"), pending: [])
     #expect(try calls.hasRelaySignIn(provider: "atlassian"))
     #expect(try !calls.hasRelaySignIn(provider: "zoom"))
     #expect(OAuthProviders.currentRelayProvider("jira") == "atlassian")
@@ -613,16 +615,17 @@ private final class Listener {}
     let secrets = MemorySecretStore()
     let store = OAuthTokenStore(secrets: secrets)
     #expect(OAuthTokenStore.service == "io.github.jakeobsen.fudge.oauth")
-    #expect(try store.tokens(extension: "github", provider: "github") == nil)
+    #expect(try store.tokens(extension: id("github"), provider: "github") == nil)
     let tokens = StoredTokenSet(
         accessToken: "a", refreshToken: "r", expiresIn: 3600, scope: "repo", updatedAt: "2026-11-21T02:00:00Z",
         providerName: "GitHub")
-    try store.save(tokens, extension: "github", provider: "github")
+    try store.save(tokens, extension: id("github"), provider: "github")
     try store.save(
-        StoredTokenSet(accessToken: "b", updatedAt: "2026-11-21T03:00:00Z"), extension: "linear", provider: "linear")
+        StoredTokenSet(accessToken: "b", updatedAt: "2026-11-21T03:00:00Z"), extension: id("linear"),
+        provider: "linear")
     #expect(try secrets.accounts() == ["github/github", "linear/linear"])
-    #expect(try store.tokens(extension: "github", provider: "github") == tokens)
-    #expect(try store.tokens(extension: "linear", provider: "github") == nil, "another extension's are its own")
+    #expect(try store.tokens(extension: id("github"), provider: "github") == tokens)
+    #expect(try store.tokens(extension: id("linear"), provider: "github") == nil, "another extension's are its own")
 
     let entries = try store.entries()
     #expect(entries.map(\.id) == ["github/github", "linear/linear"])
@@ -630,15 +633,15 @@ private final class Listener {}
     #expect(entries[1].providerName == "linear", "without a name, the provider id")
     #expect(entries[0].updatedAt == ISO8601DateFormatter().date(from: "2026-11-21T02:00:00Z"))
 
-    try store.remove(extension: "github", provider: "github")
-    #expect(try store.tokens(extension: "github", provider: "github") == nil)
+    try store.remove(extension: id("github"), provider: "github")
+    #expect(try store.tokens(extension: id("github"), provider: "github") == nil)
     try store.removeAll()
     #expect(try store.entries().isEmpty)
 
-    #expect(throws: OAuthTokenStore.Failure.invalidName) { try store.tokens(extension: "a/b", provider: "x") }
-    #expect(throws: OAuthTokenStore.Failure.invalidName) { try store.tokens(extension: "a", provider: "x/y") }
-    #expect(throws: OAuthTokenStore.Failure.invalidName) { try store.tokens(extension: "a", provider: "") }
-    #expect(throws: OAuthTokenStore.Failure.invalidName) { try store.tokens(extension: "", provider: "x") }
+    #expect(ExtensionID(stored: "a/b") == nil, "no id holds a slash, so an account splits one way only")
+    #expect(throws: OAuthTokenStore.Failure.invalidName) { try store.tokens(extension: id("a"), provider: "x/y") }
+    #expect(throws: OAuthTokenStore.Failure.invalidName) { try store.tokens(extension: id("a"), provider: "") }
+    #expect(ExtensionID(stored: "") == nil, "and no id is empty")
 }
 
 @Test func tokensTravelToAndFromTheWorkerAsJSON() {
@@ -662,8 +665,8 @@ private final class Listener {}
     let secrets = MemorySecretStore()
     let store = OAuthTokenStore(secrets: secrets)
     let theirs = StoredTokenSet(accessToken: "theirs", updatedAt: "2026-11-21T02:00:00Z")
-    try store.save(theirs, extension: "other", provider: "github")
-    let calls = SignInCalls(store: store, extensionName: "mine", pending: [])
+    try store.save(theirs, extension: id("other"), provider: "github")
+    let calls = SignInCalls(store: store, extension: id("mine"), pending: [])
     func call(_ method: String, _ params: [String: JSONValue]) throws -> JSONValue {
         try calls.answer(method, .object(params))
     }
@@ -675,10 +678,10 @@ private final class Listener {}
     let mine: JSONValue = .object(["accessToken": .string("mine"), "updatedAt": .string("2026-11-21T03:00:00Z")])
     _ = try call("oauth.tokens.set", ["providerId": .string("github"), "tokens": mine, "extension": .string("other")])
     _ = try call("oauth.tokens.remove", ["providerId": .string("github"), "extension": .string("other")])
-    #expect(try store.tokens(extension: "other", provider: "github") == theirs, "theirs untouched")
-    #expect(try store.tokens(extension: "mine", provider: "github") == nil, "set, then removed: its own")
+    #expect(try store.tokens(extension: id("other"), provider: "github") == theirs, "theirs untouched")
+    #expect(try store.tokens(extension: id("mine"), provider: "github") == nil, "set, then removed: its own")
     _ = try call("oauth.tokens.set", ["providerId": .string("github"), "tokens": mine])
-    #expect(try store.tokens(extension: "mine", provider: "github")?.accessToken == "mine")
+    #expect(try store.tokens(extension: id("mine"), provider: "github")?.accessToken == "mine")
     #expect(throws: OAuthTokenStore.Failure.invalidTokens) {
         try call("oauth.tokens.set", ["providerId": .string("github"), "tokens": .object([:])])
     }
@@ -691,25 +694,25 @@ private final class Listener {}
         if let relay { object["relayProvider"] = .string(relay) }
         return .object(object)
     }
-    let prepared = SignInCalls(store: store, extensionName: "google-ext", pending: ["google"])
+    let prepared = SignInCalls(store: store, extension: id("google-ext"), pending: ["google"])
     #expect(try prepared.hasRelaySignIn(provider: "google"), "pending")
     _ = try prepared.answer("oauth.tokens.set", .object(["providerId": .string("google"), "tokens": tokens("google")]))
-    #expect(try store.tokens(extension: "google-ext", provider: "google")?.relayProvider == "google")
+    #expect(try store.tokens(extension: id("google-ext"), provider: "google")?.relayProvider == "google")
 
     // A later worker refreshes without a sign-in: the stored mark stays, and it still counts.
-    let later = SignInCalls(store: store, extensionName: "google-ext", pending: [])
+    let later = SignInCalls(store: store, extension: id("google-ext"), pending: [])
     #expect(try later.hasRelaySignIn(provider: "google"), "stored")
     _ = try later.answer("oauth.tokens.set", .object(["providerId": .string("google"), "tokens": tokens(nil)]))
-    #expect(try store.tokens(extension: "google-ext", provider: "google")?.relayProvider == "google")
+    #expect(try store.tokens(extension: id("google-ext"), provider: "google")?.relayProvider == "google")
     #expect(try !later.hasRelaySignIn(provider: "zoom"))
 
     // An extension can't claim a relay sign-in it didn't prepare.
-    let claims = SignInCalls(store: store, extensionName: "own-flow", pending: [])
+    let claims = SignInCalls(store: store, extension: id("own-flow"), pending: [])
     _ = try claims.answer("oauth.tokens.set", .object(["providerId": .string("google"), "tokens": tokens("google")]))
-    #expect(try store.tokens(extension: "own-flow", provider: "google")?.relayProvider == nil)
+    #expect(try store.tokens(extension: id("own-flow"), provider: "google")?.relayProvider == nil)
     #expect(try !claims.hasRelaySignIn(provider: "google"))
     // Nor see another extension's.
-    #expect(try !SignInCalls(store: store, extensionName: "google", pending: []).hasRelaySignIn(provider: "google"))
+    #expect(try !SignInCalls(store: store, extension: id("google"), pending: []).hasRelaySignIn(provider: "google"))
 }
 
 @Test func onlyThisSignInsCallbackEndsTheWait() {

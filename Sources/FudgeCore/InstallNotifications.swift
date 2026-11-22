@@ -322,9 +322,11 @@ extension ExtensionStore {
     /// still running in the host. One whose host stopped counts as none, so a click launches the store again rather than
     /// wait for a call that can't come, and the store isn't on screen for an install's end.
     public static func sessionOnScreen(
-        _ session: String?, extensionName: String?, isRunning: (String) -> Bool
+        _ session: String?, extension caller: ExtensionID?, isRunning: (String) -> Bool
     ) -> String? {
-        guard let session, extensionName == Self.extensionName, isRunning(session) else { return nil }
+        guard let session, BundledCalls.mayCall(.storeNotifications, from: caller), isRunning(session) else {
+            return nil
+        }
         return session
     }
 }

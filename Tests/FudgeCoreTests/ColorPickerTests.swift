@@ -350,12 +350,12 @@ private actor Copies {
 @Test func theToolsGroupHasPickColorAndRecentColors() {
     let tools = BuiltInCommandGroup.tools
     #expect(BuiltInCommandGroup.all.contains(tools))
-    #expect(BuiltInCommandGroup.isValidName(tools.name))
+    #expect(BuiltInCommandGroup.isValidName(tools.id))
     #expect(tools.title == "Tools")
     #expect(tools.commands.map(\.title) == ["Pick Color", "Recent Colors", "Define Word"])
     #expect(
         tools.commands.map(tools.commandID) == [":tools/pick-color", ":tools/recent-colors", ":tools/define-word"])
-    #expect(BuiltInCommandGroup.command(group: ":tools", command: "pick-color")?.command.symbol == "eyedropper")
+    #expect(BuiltInCommandGroup.command(group: .tools, command: "pick-color")?.command.symbol == "eyedropper")
 }
 
 // MARK: - Copy Format

@@ -126,19 +126,19 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("preferences", isDirectory: true)
     }
 
-    /// An extension's own folder for files it keeps (`environment.supportPath`).
-    public func supportDirectory(forExtension name: String) -> URL {
-        supportDirectory.appendingPathComponent("extension-data/\(name)", isDirectory: true)
+    /// An extension's own folder for files it keeps (`environment.supportPath`), by its id.
+    public func supportDirectory(forExtension id: ExtensionID) -> URL {
+        supportDirectory.appendingPathComponent("extension-data/\(id.key)", isDirectory: true)
     }
 
-    /// Where an extension's `Cache` lives.
-    public func cacheDirectory(forExtension name: String) -> URL {
-        supportDirectory.appendingPathComponent("cache/\(name)", isDirectory: true)
+    /// Where an extension's `Cache` lives, by its id.
+    public func cacheDirectory(forExtension id: ExtensionID) -> URL {
+        supportDirectory.appendingPathComponent("cache/\(id.key)", isDirectory: true)
     }
 
-    /// Where an extension's `LocalStorage` lives.
-    public func localStorageFile(forExtension name: String) -> URL {
-        supportDirectory.appendingPathComponent("local-storage/\(name).json")
+    /// Where an extension's `LocalStorage` lives, by its id.
+    public func localStorageFile(forExtension id: ExtensionID) -> URL {
+        supportDirectory.appendingPathComponent("local-storage/\(id.key).json")
     }
 
     /// The https images extensions showed, kept by `RemoteImageCache`.

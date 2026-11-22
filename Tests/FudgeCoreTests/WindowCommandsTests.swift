@@ -188,7 +188,7 @@ private func run(_ command: WindowCommand, on desk: Desk, _ frames: inout Window
 @Test func windowManagementHasOneCommandPerWindowCommandThenSwitchWindows() {
     let group = BuiltInCommandGroup.windowManagement
     #expect(BuiltInCommandGroup.all.contains(group))
-    #expect(BuiltInCommandGroup.isValidName(group.name) && !ExtensionManifest.isValidName(group.name))
+    #expect(BuiltInCommandGroup.isValidName(group.id) && !ExtensionManifest.isValidName(group.id))
     #expect(group.commands.map(\.name) == WindowCommand.allCases.map(\.rawValue) + ["switch-windows"])
     #expect(group.commandID(group.commands[0]) == ":window-management/left-half")
     #expect(group.commands.allSatisfy { $0.keywords.contains("window") })
