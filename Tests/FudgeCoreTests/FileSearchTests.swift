@@ -247,15 +247,22 @@ private func params(_ query: String, limit: Int? = nil) -> JSONValue {
 private let homeOptions = FileSearchOptions(scope: .home, leaveOut: [home + "/Library"], home: home)
 
 @Test func onlySearchFilesMayCall() async throws {
-    let queries = Queries([FakeQuery([])])
+    // One query for each caller, so a caller let through fails the checks below instead of running out of queries.
+    let queries = Queries((0..<6).map { _ in FakeQuery([]) })
     let search = FileSearch(makeQuery: queries.next)
-    for caller in ["weather", "fudge-extension-store", nil] as [String?] {
+    let weather = try #require(ExtensionID(stored: "weather"))
+    let store = try #require(ExtensionID(stored: "fudge-extension-store"))
+    // An extension of Search Files' name from another repository, or a development build of one, is another id.
+    let lookalikes = try ["someone+tools+fudge-file-search", "fudgeapp+development+fudge-file-search"].map {
+        try #require(ExtensionID(stored: $0))
+    }
+    for caller in [weather, store, nil] + lookalikes {
         await #expect(throws: FileSearchError.notSearchFiles) {
             try await search.search(params("x"), options: homeOptions, session: "s-1", caller: caller)
         }
     }
     await #expect(throws: FileSearchError.notSearchFiles, "refused before its params are read") {
-        try await search.search(.null, options: homeOptions, session: "s-1", caller: "weather")
+        try await search.search(.null, options: homeOptions, session: "s-1", caller: weather)
     }
     #expect(queries.count == 0, "Spotlight isn't asked")
     #expect(FileSearchError.notSearchFiles.description == "files.search is only for Fudge's Search Files.")
@@ -269,7 +276,7 @@ private let homeOptions = FileSearchOptions(scope: .home, leaveOut: [home + "/Li
     let queries = Queries([query])
     let search = FileSearch(makeQuery: queries.next)
     let found = try await search.search(
-        params("report", limit: 1), options: homeOptions, session: "s-1", caller: FileSearch.extensionName)
+        params("report", limit: 1), options: homeOptions, session: "s-1", caller: FileSearch.id)
     #expect(found.map(\.path) == [home + "/x/report.pdf"])
     #expect(query.started?.request == FileSearchRequest(query: "report", limit: 1))
     #expect(query.started?.scope == .home)
@@ -282,7 +289,7 @@ private let homeOptions = FileSearchOptions(scope: .home, leaveOut: [home + "/Li
     files[599] = file(home + "/docs/budget.xlsx")
     let search = FileSearch(makeQuery: Queries([FakeQuery(files)]).next)
     let found = try await search.search(
-        params("budget", limit: 200), options: homeOptions, session: "s-1", caller: FileSearch.extensionName)
+        params("budget", limit: 200), options: homeOptions, session: "s-1", caller: FileSearch.id)
     #expect(found.count == 200)
     #expect(found.first?.name == "budget.xlsx")
 }
@@ -293,7 +300,7 @@ private let homeOptions = FileSearchOptions(scope: .home, leaveOut: [home + "/Li
     let other = FakeQuery([file(home + "/other.txt")])
     let queries = Queries([older, other, newer])
     let search = FileSearch(timeLimit: .seconds(60), makeQuery: queries.next)
-    let caller = FileSearch.extensionName
+    let caller = FileSearch.id
 
     let first = Task { try await search.search(params("o"), options: homeOptions, session: "s-1", caller: caller) }
     let deadline = ContinuousClock.now + .seconds(30)
@@ -317,7 +324,7 @@ private let homeOptions = FileSearchOptions(scope: .home, leaveOut: [home + "/Li
     let search = FileSearch(timeLimit: .milliseconds(100), makeQuery: Queries([slow]).next)
     let started = ContinuousClock.now
     let found = try await search.search(
-        params("slow"), options: homeOptions, session: "s-1", caller: FileSearch.extensionName)
+        params("slow"), options: homeOptions, session: "s-1", caller: FileSearch.id)
     let elapsed = ContinuousClock.now - started
     #expect(found.map(\.name) == ["slow.txt"])
     #expect(elapsed >= .milliseconds(100))
@@ -327,7 +334,7 @@ private let homeOptions = FileSearchOptions(scope: .home, leaveOut: [home + "/Li
 @Test func spotlightFailingIsTheCallsError() async throws {
     let search = FileSearch(makeQuery: Queries([FakeQuery([], .fails("Spotlight is off."))]).next)
     await #expect(throws: FileSearchError.spotlight("Spotlight is off.")) {
-        try await search.search(params("x"), options: homeOptions, session: "s-1", caller: FileSearch.extensionName)
+        try await search.search(params("x"), options: homeOptions, session: "s-1", caller: FileSearch.id)
     }
 }
 
@@ -360,9 +367,9 @@ private let homeOptions = FileSearchOptions(scope: .home, leaveOut: [home + "/Li
         installed.map(\.manifest.title) == ["Extension Store", "Search Emoji & Symbols", "Search Files", "Weather"],
         "the impostor gives way")
     let settings = FudgeSettings()
-    #expect(settings.isEnabled(extension: FileSearch.extensionName), "unlike the store")
-    #expect(settings.isEnabled(extension: "fudge-emoji"))
-    #expect(!settings.isEnabled(extension: ExtensionStore.extensionName))
+    #expect(settings.isEnabled(owner: .extension(FileSearch.id)), "unlike the store")
+    #expect(settings.isEnabled(owner: .extension(ExtensionID(stored: "fudge-emoji")!)))
+    #expect(!settings.isEnabled(owner: .extension(ExtensionStore.id)))
 }
 
 @Test func theHomeFolderIsTheOneTheExtensionSees() {

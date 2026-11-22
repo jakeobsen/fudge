@@ -93,7 +93,7 @@ extension InstalledExtension {
         var ids = Set<String>()
         for installed in installed {
             for command in installed.manifest.commands where installed.compatibility.commands[command.name] != nil {
-                ids.insert(FudgeSettings.commandID(extension: installed.manifest.name, command: command.name))
+                ids.insert(FudgeSettings.commandID(owner: .extension(installed.id), command: command.name))
             }
         }
         return ids

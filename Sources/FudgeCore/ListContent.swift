@@ -554,8 +554,8 @@ public struct SearchBarDropdown: Sendable, Equatable {
             self.file = file
         }
 
-        public static func key(extension name: String, command: String, dropdown: String?) -> String {
-            [name, command, dropdown].compactMap { $0 }.joined(separator: "/")
+        public static func key(extension id: ExtensionID, command: String, dropdown: String?) -> String {
+            [id.key, command, dropdown].compactMap { $0 }.joined(separator: "/")
         }
 
         public func value(for key: String) -> String? {

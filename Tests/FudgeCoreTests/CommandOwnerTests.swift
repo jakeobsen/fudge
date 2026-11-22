@@ -4,15 +4,15 @@ import Testing
 @testable import FudgeCore
 
 @Test func eachBuiltInGroupIsTodaysKey() {
-    #expect(BuiltInGroup.apps.rawValue == BuiltInCommandGroup.apps.name)
-    #expect(BuiltInGroup.calendar.rawValue == BuiltInCommandGroup.calendar.name)
-    #expect(BuiltInGroup.system.rawValue == BuiltInCommandGroup.system.name)
-    #expect(BuiltInGroup.tools.rawValue == BuiltInCommandGroup.tools.name)
-    #expect(BuiltInGroup.windowManagement.rawValue == BuiltInCommandGroup.windowManagement.name)
+    #expect(BuiltInGroup.apps.rawValue == BuiltInCommandGroup.apps.id)
+    #expect(BuiltInGroup.calendar.rawValue == BuiltInCommandGroup.calendar.id)
+    #expect(BuiltInGroup.system.rawValue == BuiltInCommandGroup.system.id)
+    #expect(BuiltInGroup.tools.rawValue == BuiltInCommandGroup.tools.id)
+    #expect(BuiltInGroup.windowManagement.rawValue == BuiltInCommandGroup.windowManagement.id)
     #expect(BuiltInGroup.quicklinks.rawValue == QuicklinkCommands.groupName)
     #expect(
         Set(BuiltInGroup.allCases.map(\.rawValue))
-            == Set(BuiltInCommandGroup.all.map(\.name) + [QuicklinkCommands.groupName]))
+            == Set(BuiltInCommandGroup.all.map(\.id) + [QuicklinkCommands.groupName]))
     for group in BuiltInGroup.allCases { #expect(BuiltInCommandGroup.isValidName(group.rawValue), "\(group)") }
 }
 

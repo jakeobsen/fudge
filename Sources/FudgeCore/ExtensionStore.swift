@@ -24,10 +24,11 @@ public enum ExtensionStore {
         public static let action = "Open Extension Store Settings"
     }
 
-    /// Whether launching a command of `extensionName` shows the "off" view instead: it's the store, and the store
-    /// isn't on (`FudgeSettings.isExtensionStoreOn`). The app decides this before the store's code would start.
-    public static func isOff(_ extensionName: String, settings: FudgeSettings) -> Bool {
-        extensionName == Self.extensionName && !settings.isExtensionStoreOn
+    /// Whether launching a command of the extension `id` shows the "off" view instead: it's the store, by its whole
+    /// id, and the store isn't on (`FudgeSettings.isExtensionStoreOn`). The app decides this before the store's code
+    /// would start.
+    public static func isOff(_ id: ExtensionID, settings: FudgeSettings) -> Bool {
+        id == Self.id && !settings.isExtensionStoreOn
     }
 
     /// The bundled extension: `store-extension/` in the app's resources, when it's there.
@@ -38,23 +39,23 @@ public enum ExtensionStore {
     /// The store's downloaded copy of the repository. Turning the store off deletes it, and only it: the store's
     /// `installed.json` beside it stays, so the store still knows what it installed when it's turned on again.
     public static func repositoryDirectory(_ paths: FudgePaths) -> URL {
-        paths.supportDirectory(forExtension: extensionName).appendingPathComponent("repo", isDirectory: true)
+        paths.supportDirectory(forExtension: id).appendingPathComponent("repo", isDirectory: true)
     }
 
     /// Where the store keeps its running builds' records, output and outcomes (`installing/`, SPEC-153 C.1, SPEC-156 A),
     /// which the app watches for outcomes.
     public static func installingDirectory(_ paths: FudgePaths) -> URL {
-        paths.supportDirectory(forExtension: extensionName).appendingPathComponent("installing", isDirectory: true)
+        paths.supportDirectory(forExtension: id).appendingPathComponent("installing", isDirectory: true)
     }
 
     /// The status of Raycast's copy (FUD-182), beside it.
     public static func repositoryStatusFile(_ paths: FudgePaths) -> URL {
-        paths.supportDirectory(forExtension: extensionName).appendingPathComponent("repo-status.json")
+        paths.supportDirectory(forExtension: id).appendingPathComponent("repo-status.json")
     }
 
     /// The copies of the added repositories, each in `repositories/<copyId>/` with its `repo/` and `status.json`.
     public static func repositoriesDirectory(_ paths: FudgePaths) -> URL {
-        paths.supportDirectory(forExtension: extensionName).appendingPathComponent("repositories", isDirectory: true)
+        paths.supportDirectory(forExtension: id).appendingPathComponent("repositories", isDirectory: true)
     }
 
     /// The status file of the copy with `copyId`: Raycast's beside `repo/`, an added one's in its folder.

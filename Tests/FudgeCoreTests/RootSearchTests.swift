@@ -258,8 +258,9 @@ private func byTitle(_ titles: [String]) -> [String] {
     #expect(items[1].arguments.map(\.name) == ["who"])
     #expect(
         items[1].kind
-            == .command(extension: "greeter", command: "quiet", mode: "no-view", entry: installed.entry(for: "quiet"))
-    )
+            == .command(
+                extension: ExtensionID(stored: "greeter")!, command: "quiet", mode: "no-view",
+                entry: installed.entry(for: "quiet")))
 }
 
 // MARK: - No subtitle that only repeats the title (SPEC-120)
@@ -297,8 +298,9 @@ private func commandItems(_ json: String, metadata: CommandMetadata = CommandMet
 }
 
 @Test func aBuiltInCommandNamedLikeItsGroupHasNoSubtitle() {
+    // A made-up group under the Calendar group's key, since a group's key is one of a closed list (`BuiltInGroup`).
     let group = BuiltInCommandGroup(
-        name: ":clock", title: "Clock",
+        name: .calendar, title: "Clock",
         commands: [
             BuiltInCommand(name: "clock", title: "Clock", symbol: "clock"),
             BuiltInCommand(name: "timer", title: "Start Timer", symbol: "timer"),
@@ -314,7 +316,8 @@ private func commandItems(_ json: String, metadata: CommandMetadata = CommandMet
 
 @Test func aSubtitleTheCommandSetItselfIsShownAsSet() throws {
     var metadata = CommandMetadata()
-    metadata.setSubtitle("Clipboard History", extension: "clipboard", command: "clipboard-history")
+    metadata.setSubtitle(
+        "Clipboard History", extension: ExtensionID(stored: "clipboard")!, command: "clipboard-history")
     let items = try commandItems(
         #"""
         {"name":"clipboard","title":"Clipboard History","commands":[

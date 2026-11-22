@@ -99,7 +99,7 @@ private let commandItem = RootItem(
     id: "command:scratch/create-scratch",
     title: "Create Scratch",
     kind: .command(
-        extension: "scratch", command: "create-scratch", mode: "no-view",
+        extension: ExtensionID(stored: "scratch")!, command: "create-scratch", mode: "no-view",
         entry: URL(fileURLWithPath: "/tmp/create-scratch.cjs"))
 )
 private let applicationItem = RootItem.application(
@@ -124,7 +124,8 @@ private let applicationItem = RootItem.application(
     let menuBarItem = RootItem(
         id: "command:inbox/status", title: "Status",
         kind: .command(
-            extension: "inbox", command: "status", mode: "menu-bar", entry: URL(fileURLWithPath: "/tmp/status.cjs")))
+            extension: ExtensionID(stored: "inbox")!, command: "status", mode: "menu-bar",
+            entry: URL(fileURLWithPath: "/tmp/status.cjs")))
     #expect(rootEntries(menuBarItem) == ["Open Command ↵", "Configure Extension ⇧⌘,"])
     #expect(
         rootEntries(menuBarItem, isActiveInMenuBar: true) == [
@@ -134,7 +135,7 @@ private let applicationItem = RootItem.application(
     #expect(deactivate.target == .root(.deactivateMenuBarItem("inbox/status")))
 
     let command = ActionPanelReader.flat(RootActions.sections(for: commandItem))
-    #expect(command.map(\.target) == [.root(.open), .root(.configureExtension("scratch"))])
+    #expect(command.map(\.target) == [.root(.open), .root(.configureExtension(ExtensionID(stored: "scratch")!))])
     let application = ActionPanelReader.flat(RootActions.sections(for: applicationItem))
     #expect(
         application.map(\.target) == [
@@ -147,7 +148,7 @@ private let applicationItem = RootItem.application(
     let commandActions = RootActions.sections(for: commandItem)
     #expect(
         ActionPanelReader.action(for: RootActions.configureExtensionShortcut, in: commandActions)?.target
-            == .root(.configureExtension("scratch")))
+            == .root(.configureExtension(ExtensionID(stored: "scratch")!)))
     #expect(
         ActionPanelReader.action(for: RootActions.showInFinderShortcut, in: RootActions.sections(for: applicationItem))?
             .title == "Show in Finder")

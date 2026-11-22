@@ -7,8 +7,9 @@ import Testing
 // default never looks like the user's choice (the spec review's MUST).
 
 private let slack = "slack"
-private let emojis = FudgeSettings.commandID(extension: slack, command: "search-emojis")
-private let search = FudgeSettings.commandID(extension: slack, command: "search")
+private let slackOwner = CommandOwner.extension(ExtensionID(stored: slack)!)
+private let emojis = FudgeSettings.commandID(owner: slackOwner, command: "search-emojis")
+private let search = FudgeSettings.commandID(owner: slackOwner, command: "search")
 
 /// An installed extension with these commands, and what `compatibility.json` says they use.
 private func installed(_ commands: [String], using: [String: [CommandCompatibility.Unsupported]]) -> InstalledExtension
@@ -117,7 +118,7 @@ private func installed(_ commands: [String], using: [String: [CommandCompatibili
     #expect(!settings.isEnabled(commandID: emojis))
 
     // The extension's own Enabled still applies.
-    settings.extensions[slack] = .init(enabled: false)
+    settings.extensions[slackOwner] = .init(enabled: false)
     #expect(!settings.isEnabled(commandID: search))
 }
 

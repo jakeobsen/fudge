@@ -21,7 +21,7 @@ Extensions run in a separate Node.js process, the extension host.
     The GPL family calls these the Appropriate Legal Notices (v3 §0, §5(d)), so they stay in the panel.
     Esc, ⌘W and ⌘Q close it (`AboutFudge.closesPanel`), since an accessory app has no File menu; snapshot runs have no menu, so they never open it.
     - **Global hotkeys** go through Carbon (`CarbonHotKeys` in `HotKey.swift`), which needs no Accessibility permission: one event handler, one id per registration.
-      `HotKeyRegistry` (core) decides what's registered: the launcher's hotkey (`hotkey` in `settings.json`, default ⌥Space, read and written through `FudgeSettings.launcherHotkey`) and each installed command's (`commands` in `settings.json`, by `<extension>/<command>`), registering only what changed.
+      `HotKeyRegistry` (core) decides what's registered: the launcher's hotkey (`hotkey` in `settings.json`, default ⌥Space, read and written through `FudgeSettings.launcherHotkey`) and each installed command's (`commands` in `settings.json`, by `<id>/<command>`), registering only what changed.
       A refused change of the launcher's hotkey registers the old one again (`setLauncher`); one refused at launch stays wanted, marked `launcherRefused`, and is tried again on every `resume`.
       A change that's registered but can't be saved puts back exactly what was there, the old hotkey registered or still refused (`changeLauncher`), so the registration and the file never disagree.
       `AppDelegate.launcherHotkeyChanged` shows the outcome on the General page and in the menu bar item's "Open Fudge (…)" title.
@@ -406,7 +406,7 @@ Extensions run in a separate Node.js process, the extension host.
       A `Form.FilePicker` lists its paths with a × each, and Select… opens an `NSOpenPanel` as a sheet on the launcher (`FilePicking`, core, keeps the paths).
       The open panel only takes typing while Fudge is the active app, so Fudge activates for it, and `hidePanel` gives the keyboard back to the app that had it.
       The Dropdown and TagPicker both open the dropdown panel under the field: the panel has a source (`DropdownPanelSource`: the List's search bar, a Form dropdown or a TagPicker), and `FormFieldBounds` tells `LauncherView` where the field is.
-      A field with `storeValue` (never a PasswordField) starts on the value saved when its form was last submitted (`FormValueStore`: `form-values/<extension>.json`, by command and field `id`), ahead of `defaultValue`.
+      A field with `storeValue` (never a PasswordField) starts on the value saved when its form was last submitted (`FormValueStore`: `form-values/<extension id>.json`, by command and field `id`), ahead of `defaultValue`.
       A Dropdown's or TagPicker's stored value waits for the field's items when they arrive after the first render, unless the field is changed first (`FormContent.Field.start`).
       When a field starts on something the extension's Form didn't register, such as a stored value or a dropdown's first item, the app reports it with `onChange`.
       `onFocus` and `onBlur` fire with Raycast's `FormEvent` when the keyboard moves from one field to another.
@@ -441,13 +441,13 @@ Extensions run in a separate Node.js process, the extension host.
       It holds public facts only: window classes and levels, bundle ids and decisions, never paths, titles or typing.
       Read it with `/usr/bin/log show --last 2m --predicate 'subsystem == "io.github.jakeobsen.fudge"' --info` (in zsh, a bare `log` is a builtin).
     - **The log files** (SPEC-124) are in `~/Library/Logs/Fudge/` (`FudgePaths.logsDirectory`), or `$FUDGE_SUPPORT_DIR/Logs/` when that's set, so tests and snapshot runs never write the user's logs.
-      `Fudge.log` is Fudge's own, and `Extensions/<name>.log` each extension's, bundled ones included, by its manifest `name`.
+      `Fudge.log` is Fudge's own, and `Extensions/<id>.log` each extension's, bundled ones included, by its id (`LogFile.extension`, checked with the id rule), which is the manifest `name` for Raycast's and the bundled ones.
       Folders and files are made with the first line written to them.
       A line is a local ISO 8601 time with milliseconds and its offset, the level, `[<command>]` on an extension's line, and the message, its further lines indented under the first (`LogLine`).
       Each file's first line in a run is Fudge's version and commit.
       **What goes in `Fudge.log`:** every `fudge: couldn't …` line, through `FudgeLog`, which also writes it to stderr as before, so `make run` from a terminal still shows them.
       Also the extension host's own stderr, a refused protocol message, a launch that failed, and the host stopping, naming the commands it ended.
-      A command that fails gets one line of Fudge's own, `<extension>/<command> failed` and where its error is (`FudgeLog.commandError`), never the error's text or stack, which go to the extension's file and stderr.
+      A command that fails gets one line of Fudge's own, `<id>/<command> failed` and where its error is (`FudgeLog.commandError`), never the error's text or stack, which go to the extension's file and stderr.
       Also installs, updates and removals as the app sees them when it reads the extensions folder (`InstallStamp`), so the store's and `fudge build`'s alike.
       Also the Extension Store's failed downloads, installs, updates and uninstalls with the build's output (`logToFudge` in `fudge:app`, the `fudge.log` call, answered only for the store), sign-in errors, and failed update checks.
       **What goes in an extension's file:** its `console` (`console.error` an error, `console.warn` a warning, `console.log` and `console.info` info, `console.debug` debug), and what it writes to stdout (info) or stderr (error) itself.
@@ -559,10 +559,10 @@ Extensions run in a separate Node.js process, the extension host.
       The `clipboardHistory.*` calls (`list`, `image`, `paste`, `copy`, `pin`, `delete`, `clear`) answer only Clipboard History's sessions.
       `list` sends at most 20,000 characters of an entry's text, `paste` goes through `clipboard.paste`'s path and turn, and `image` decrypts a copy into a private folder that's deleted when the command ends or Fudge quits.
       Any extension's `Clipboard.read({ offset })` from 1 to 5, Raycast's documented range, gets the nth previous copy from the history (`ClipboardHistory.entry(offset:)`), or nothing while it's off; `ClipboardOffset` (core) reads the offset without an `Int` conversion that could trap, and anything above 5 or fractional is no copy, so no extension pages through the history.
-      The caller check is `ClipboardHistory.mayCall`.
+      The caller check is `ClipboardHistory.mayCall`, through `BundledCalls`.
     - **The Extension Store** (FUD-50) is an extension bundled with the app (`Contents/Resources/store-extension`).
       Using it takes two steps.
-      **Enabled**, on the Commands page, is off by default for the store alone (`FudgeSettings.isEnabled(extension:)`, which always writes the store's state), so until it's ticked the store isn't in root search, its hotkeys aren't registered and `launchCommand` can't reach it.
+      **Enabled**, on the Commands page, is off by default for the store alone (`FudgeSettings.isEnabled(owner:)`, which always writes the store's state), so until it's ticked the store isn't in root search, its hotkeys aren't registered and `launchCommand` can't reach it.
       An install that had the store switched on before counts as enabled until either is changed.
       **The switch** is the first row of the store's Settings page (`ExtensionStoreSwitch`): turning it on shows the consent sheet and writes `extensionStore` and the ISO 8601 `extensionStoreConsentAt`.
       `FudgeSettings.isExtensionStoreOn` needs both, so a hand-set `true` counts as off.
@@ -636,7 +636,7 @@ Extensions run in a separate Node.js process, the extension host.
       Off gives both schemes back explicitly to the first other app that claims both and isn't Fudge's (`handBackTarget`, `giveBack`), so the choice macOS saves names that app; with no such app it's disabled while on, and its line says there's nothing to give them back to.
       A change that doesn't take shows the system's message, or that macOS didn't make it, and the switch shows what LaunchServices says.
       Below them, **Signed in** lists each stored sign-in (the extension's title, the provider, when) with Sign Out.
-      **Sign-ins** are Keychain generic passwords (`KeychainSecretStore`), service `io.github.jakeobsen.fudge.oauth`, account `<extension>/<providerId>`, holding a JSON `StoredTokenSet`;
+      **Sign-ins** are Keychain generic passwords (`KeychainSecretStore`), service `io.github.jakeobsen.fudge.oauth`, account `<extension id>/<providerId>`, holding a JSON `StoredTokenSet`;
       `OAuthTokenStore` (core) reads and writes them through the `SecretStore` protocol, and the `oauth.tokens.*` calls go through `SignInCalls` (core) with the calling session's extension, never one named in the call, so one extension never reads, sets or removes another's.
       A stored sign-in keeps `relayProvider`, the provider its relay sign-in was for, only when the session prepared that sign-in; a refresh keeps the mark.
       **Signing in** (`LauncherModel.authorizeSignIn`): a background call is refused ("Sign in from Fudge to continue.").
@@ -681,7 +681,7 @@ Extensions run in a separate Node.js process, the extension host.
       `MenuBarStore` (core) keeps the active commands in `menu-bar.json`, at most 50, pruned of commands that aren't installed.
       It keeps keys it doesn't know, and never overwrites a file it can't read (`Unreadable`): activating or deactivating then fails with a toast saying why.
       A disabled command, or one of a disabled extension, stays in it but leaves the menu bar and stops refreshing, and comes back when it's turned on again (`MenuBarStore.shown`; `LauncherModel.applySettings` hands the controller the settings).
-      Each item's autosave name is `menubar:<extension>/<command>` (`MenuBarStore.autosaveName`), so it keeps its own position and never takes over another item's saved state, and it's made visible whenever it's put in the menu bar.
+      Each item's autosave name is `menubar:<id>/<command>` (`MenuBarStore.autosaveName`), so it keeps its own position and never takes over another item's saved state, and it's made visible whenever it's put in the menu bar.
       `MenuBarContent` (core) reads the `MenuBarExtra` tree: items without `onAction` disabled, sections as a heading between separators, submenus, ⌥ alternates, and each item's position path.
       `MenuBarLifecycle` (core) decides loads and unloads: at most one instance per command; Background at Fudge's start and on the manifest `interval` (`MenuBarInterval`, at least 10 s, a `.common`-mode timer), UserInitiated when the menu opens or root search runs it; a tick while loaded is skipped and a click just opens the menu;
       unloaded once it has rendered without `isLoading`, its menu is closed and every `onAction` has settled (`eventSettled`).
@@ -756,7 +756,7 @@ Extensions run in a separate Node.js process, the extension host.
       `SettingsSidebar` (core) gives both lists and the tags of Fudge's own pages, which start with `:`, so no extension name can take one; `SettingsView` only draws them.
       Rows with exactly the same title put Fudge's own page first, then the extensions by tag, so the order never changes; such an extension shows " (installed)" after its title (`SettingsSidebar.title(of:)`; the store has a Color Picker of its own).
       A selected page that's no longer listed, such as an extension removed while its page is open, gives way to General (`SettingsSidebar.lists`).
-      The window holds each extension's preferences, stored by `PreferenceStore` in `preferences/<extension>.json`.
+      The window holds each extension's preferences, stored by `PreferenceStore` in `preferences/<extension id>.json`.
       Before a launch, `PreferenceResolver` merges stored values, manifest defaults and type defaults.
       It turns appPicker references into Raycast `Application` objects, and the launch message carries the values to `getPreferenceValues()`.
       A command with an unset required preference opens this window instead of running.
@@ -921,17 +921,18 @@ Extensions run in a separate Node.js process, the extension host.
     `LauncherModel` handles `preferences.*`, `oauth.*` (sign-in), `command.launch`, `command.updateMetadata`, `clipboard.paste` (it hides the panel), `form.storeValues` and the window calls: toasts in the bottom bar, the HUD (`HUDWindow`), `alert.confirm` (an `NSAlert` sheet on the panel), `window.close`, `window.popToRoot` and `searchBar.clear`.
     A toast's actions come back through the `toastAction` message.
   - **`updateCommandMetadata`** (`src/api/command-metadata.ts`) sends `command.updateMetadata` with the calling command's new root-search subtitle, or null to go back to the manifest's.
-    `CommandMetadata` (core) keeps it in `command-metadata.json`, by `<extension>/<command>`, keeps keys it doesn't know, and drops the entries of commands that aren't installed when the file is loaded (never from an empty listing); the manifest is never touched.
+    `CommandMetadata` (core) keeps it in `command-metadata.json`, by `<id>/<command>`, keeps keys it doesn't know, and drops the entries of commands that aren't installed when the file is loaded (never from an empty listing); the manifest is never touched.
     It never overwrites a file it can't read (`Unreadable`): the update fails instead, and the extension's promise rejects saying why.
     A command's root item shows that subtitle, else the manifest's `subtitle`, else its extension's title, and search matches the extension's title either way.
     The extension's title is left out when it only repeats the command's title, ignoring case and spaces around them (`RootItem.subtitle(_:unlessItRepeats:)`, SPEC-120), so a one-command extension named like its command shows its name once; a subtitle the author set is shown as set, and a built-in group's title falls back the same way.
   - **`launchCommand`** (`src/api/launch-command.ts`) checks its options in the worker, makes the arguments strings, and encodes `context` with `encode` (`src/protocol.ts`): Dates as `{ "$date": iso }`, Buffers as `{ "$buffer": base64 }`.
     It then sends `command.launch`.
     In the app, `LaunchRequest` reads the call and `CommandLocator` (core) finds the command: in the caller's extension, or in the one with that name and owner (else author).
+    When several installs have that name and owner, it takes the caller itself, then the one from the caller's repository, then Raycast's, then the development build, and refuses two or more left after that (`LaunchCommandError.ambiguous`); a bundled extension is the only one with its name.
     It fills every manifest argument, and its checks turn away what can't run: view commands in the background, a menu-bar command in the background unless it's active (`checkMode`), and missing required arguments or preferences in the background.
     A menu-bar command goes to `MenuBarController`: Background refreshes it like an interval tick, and UserInitiated activates it if needed and refreshes it, without opening its menu.
     A user-initiated launch with a required argument empty shows root search with the command's fields instead; an unset required preference opens Settings.
-    The first time an extension opens another extension's command, the user is asked through `confirm`, and `LaunchPermissions` keeps the answer in `launch-permissions.json`; only a call from a session the user is using may ask, whatever `LaunchType` it requests.
+    The first time an extension opens another extension's command, the user is asked through `confirm`, and `LaunchPermissions` keeps the answer in `launch-permissions.json`, by the caller's and the target's ids; only a call from a session the user is using may ask, whatever `LaunchType` it requests.
     The caller's origin is read when the call comes in, and a background caller's request runs as Background (`LaunchRequest.asCalled(from:)`), so it fails where a Background launch would instead of showing the panel, argument fields or Settings.
     It never overwrites a file it can't read (`Unreadable`), which the Permissions page then says.
     The launch itself goes through `prepareLaunch` and `launch`, as from root search.
@@ -1146,6 +1147,12 @@ Extensions run in a separate Node.js process, the extension host.
     `InstalledExtension` carries its `id` and its `repository` (`.raycast`, `.development`, `.added(folder)` or `.bundled`), both from where it was found, and `displayTitle` adds " (development)" or " (<folder>)".
     The loader reads the extensions folder's top level, and each install there is Raycast's, under its manifest name.
     `CommandOwner` (core) is a command id's owner, one of Fudge's groups (`BuiltInGroup`, the six `:` keys) or an `ExtensionID`, and `BundledCalls.mayCall` says whether a session's extension may make a call only one bundled extension makes, comparing whole ids.
+    **Every keyed store and helper takes an `ExtensionID`**, never a `String` or `manifest.name`: the support, cache and LocalStorage folders (`FudgePaths`), `PreferenceStore`, `FormValueStore`, the dropdown values' key, `CommandMetadata`, `OAuthTokenStore` and `SignInCalls`, `LaunchPermissions`, `LogFile`, `InstallStamp` and the launcher's index (`InstalledExtension.index`).
+    So a place that passes a manifest name to a store doesn't compile, and no app code makes an id from a name: a running session keeps its install's id (`LauncherModel.sessionExtensions`), as do the command screen and its notices.
+    Command ids are made only by `FudgeSettings.commandID(owner:command:)` and `RootItem.commandID(owner:command:)`, which take a `CommandOwner`, as the Enabled functions do; `isEnabled(commandID:)` and `availableHotkeys` read the owner back with `CommandOwner(stored:)`, and an id whose owner is neither a group nor an id has only the command's own Enabled.
+    `settings.json`'s `extensions` and `launch-permissions.json` read their keys as strings and keep those an owner or an id accepts; any other key is left out in memory and written back as the file has it.
+    The only place an extension's manifest name stands for it is what it sees of itself, `environment.extensionName`: the launch message carries its id as `extensionId`, beside `environment`, and the host names its log lines by it without passing it to the worker.
+    The calls only one bundled extension may make (`fudge.log`, `commandLineTools.*` and `store.*` for the Extension Store, `clipboardHistory.*`, `files.search`), and the checks for the store's own sessions, go through `BundledCalls.mayCall`, so an extension of the same name from another repository is refused like any other.
     Command names are letters of either case, digits, `.`, `-` and `_`, starting with a letter or digit, as Raycast accepts them (`caffeinateWhile`, `search-projects.command`): `ExtensionManifest.isValidCommandName`, which the build and `compatibility.json` use.
     The compatibility scan and the store share it as `isCommandName` (`scripts/compat/source-files.ts`), and `runtime/test/fixtures/command-names.json` pins both.
     A command's name keeps its case everywhere: its `src/<command>.…` file is found as the disk finds it (the Mac's usually ignores case), but its built file and its id are the name as written, and two commands whose names differ only in case are refused.

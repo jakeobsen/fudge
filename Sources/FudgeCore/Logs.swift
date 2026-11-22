@@ -31,20 +31,19 @@ public enum LogLevel: String, Sendable, CaseIterable, Codable {
     }
 }
 
-/// A log file: Fudge's own, or one extension's, by its manifest `name`.
+/// A log file: Fudge's own, or one extension's, by its id (its manifest `name` for Raycast's and the bundled ones).
 public enum LogFile: Hashable, Sendable {
     case fudge
-    case extensionNamed(String)
+    case `extension`(ExtensionID)
 
-    /// `Fudge.log`, or `Extensions/<name>.log`; nil for a name that isn't a valid extension name, which never names
-    /// a file.
+    /// `Fudge.log`, or `Extensions/<id>.log`; nil for an id the id rule refuses, which never names a file.
     public func url(in folder: URL) -> URL? {
         switch self {
         case .fudge:
             folder.appendingPathComponent("Fudge.log")
-        case .extensionNamed(let name):
-            ExtensionManifest.isValidName(name)
-                ? folder.appendingPathComponent("Extensions", isDirectory: true).appendingPathComponent("\(name).log")
+        case .extension(let id):
+            ExtensionID.isValid(id.key)
+                ? folder.appendingPathComponent("Extensions", isDirectory: true).appendingPathComponent("\(id.key).log")
                 : nil
         }
     }
@@ -53,7 +52,7 @@ public enum LogFile: Hashable, Sendable {
     public var cap: Int {
         switch self {
         case .fudge: 5_000_000
-        case .extensionNamed: 1_000_000
+        case .extension: 1_000_000
         }
     }
 
@@ -284,12 +283,12 @@ public enum FudgeLog {
     /// A line about a running command, for its extension's file only (never `Fudge.log`), and stderr as
     /// `[session] level: message`. The host has already left out lines below the Log level.
     public static func command(
-        _ level: LogLevel, _ message: String, session: String, extensionName: String?, command: String?
+        _ level: LogLevel, _ message: String, session: String, extension id: ExtensionID?, command: String?
     ) {
         let (writer, setting) = lock.withLock { (self.writer, self.setting) }
         FileHandle.standardError.write(Data("[\(session)] \(level.rawValue): \(message)\n".utf8))
-        guard setting.records(level), let extensionName else { return }
-        writer?.write(level, message, command: command, to: .extensionNamed(extensionName))
+        guard setting.records(level), let id else { return }
+        writer?.write(level, message, command: command, to: .extension(id))
     }
 
     /// What the app does with a command's error from the host (`HostMessage.error`). Its message and stack are the
@@ -297,12 +296,12 @@ public enum FudgeLog {
     /// as `[session] error: …`. A fatal one also gets a line of Fudge's own in `Fudge.log`: the extension and command,
     /// and that they failed, never the command's text (SPEC-124 §2).
     public static func commandError(
-        _ message: String, stack: String?, fatal: Bool, session: String, extensionName: String?, command: String?
+        _ message: String, stack: String?, fatal: Bool, session: String, extension id: ExtensionID?, command: String?
     ) {
         FileHandle.standardError.write(Data("[\(session)] error: \(stack ?? message)\n".utf8))
         guard fatal else { return }
-        let named = "\(extensionName ?? "an extension")/\(command ?? "a command") failed"
-        write(.error, extensionName.map { "\(named); its error is in Extensions/\($0).log" } ?? named)
+        let named = "\(id?.key ?? "an extension")/\(command ?? "a command") failed"
+        write(.error, id.map { "\(named); its error is in Extensions/\($0.key).log" } ?? named)
     }
 }
 
@@ -319,21 +318,30 @@ public struct InstallStamp: Sendable, Equatable {
         self.created = created
     }
 
-    /// The stamp of each extension the user installed (not the bundled ones), by name.
-    public static func of(_ installed: [InstalledExtension], bundled: URL?) -> [String: InstallStamp] {
-        var stamps: [String: InstallStamp] = [:]
+    /// The stamp of each extension the user installed (not the bundled ones), by id.
+    public static func of(_ installed: [InstalledExtension], bundled: URL?) -> [ExtensionID: InstallStamp] {
+        var stamps: [ExtensionID: InstallStamp] = [:]
         for item in installed where bundled.map({ !item.directory.path.hasPrefix($0.path) }) ?? true {
             let created = try? item.directory.resourceValues(forKeys: [.creationDateKey]).creationDate
-            stamps[item.manifest.name] = InstallStamp(version: item.manifest.version, created: created)
+            stamps[item.id] = InstallStamp(version: item.manifest.version, created: created)
         }
         return stamps
     }
 
-    /// One line per change, by name.
-    public static func changes(from before: [String: InstallStamp], to after: [String: InstallStamp]) -> [String] {
+    /// One line per change, by id: the extension's name, then the repository folder it's from in brackets when that
+    /// isn't Raycast's (`installed github (someone/tools) 1.2`).
+    public static func changes(
+        from before: [ExtensionID: InstallStamp], to after: [ExtensionID: InstallStamp]
+    ) -> [String] {
         let version = { (stamp: InstallStamp) in stamp.version.map { " \($0)" } ?? "" }
-        return Set(before.keys).union(after.keys).sorted().compactMap { name in
-            switch (before[name], after[name]) {
+        let named = { (id: ExtensionID) -> String in
+            var parts = id.key.split(separator: Character(ExtensionID.separator)).map(String.init)
+            let name = parts.removeLast()
+            return parts.isEmpty ? name : "\(name) (\(parts.joined(separator: "/")))"
+        }
+        return Set(before.keys).union(after.keys).sorted { $0.key < $1.key }.compactMap { id in
+            let name = named(id)
+            return switch (before[id], after[id]) {
             case (nil, let new?): "installed \(name)\(version(new))"
             case (_?, nil): "removed \(name)"
             case (let old?, let new?) where old != new:

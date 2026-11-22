@@ -58,8 +58,11 @@ public enum Backup {
         public enum Source: String, Codable, Sendable {
             /// Installed from the Extension Store (recorded in its `installed.json`).
             case store
-            /// Built from a local folder.
+            /// Built from a local folder: one in Raycast's folder the store didn't record, or a development build.
             case local
+            /// From a repository added to the Extension Store (FUD-183). An older Fudge can't read this case, so it
+            /// refuses the whole backup.
+            case repository
         }
 
         public var name: String
@@ -69,6 +72,14 @@ public enum Backup {
         /// For an extension the Extension Store installed, the git tree id its `installed.json` records, which
         /// changes when the store updates it. `nil` for local builds, and in backups made before it was recorded.
         public var storeTree: String?
+        /// Its id, for an install that isn't Raycast's (FUD-183); nil for Raycast's, whose id is the name, and in
+        /// backups made before ids.
+        public var id: String?
+        /// Its repository's folder, for a development build or an added repository's install; nil for Raycast's.
+        public var repository: String?
+
+        /// What it's kept under: its id, else its name, as in a backup made before ids.
+        public var key: String { id ?? name }
     }
 
     /// What a backup holds, for the export's and the import's sheets.
@@ -249,12 +260,12 @@ public enum Backup {
             let file = segments[1]
             guard file.hasSuffix(".json") else { throw BackupError.refused(.path(path)) }
             let name = String(file.dropLast(5))
-            guard ExtensionManifest.isValidName(name) else { throw BackupError.refused(.extensionName(name)) }
+            guard ExtensionID.isValid(name) else { throw BackupError.refused(.extensionName(name)) }
             return .perExtension(folder: folder, name: name)
         case (dataFolder, 3...):
             let name = segments[1]
-            guard ExtensionManifest.isValidName(name) else { throw BackupError.refused(.extensionName(name)) }
-            guard name != ExtensionStore.extensionName else { throw BackupError.refused(.path(path)) }
+            guard ExtensionID.isValid(name) else { throw BackupError.refused(.extensionName(name)) }
+            guard name != ExtensionStore.id.key else { throw BackupError.refused(.path(path)) }
             return .data(name: name, path: segments.dropFirst(2).joined(separator: "/"))
         default:
             throw BackupError.refused(.path(path))
@@ -275,8 +286,9 @@ public enum Backup {
         }
         try checkFormat(manifestData)
         guard let manifest = decodeManifest(manifestData) else { throw BackupError.unreadable }
-        for listed in manifest.extensions where !ExtensionManifest.isValidName(listed.name) {
-            throw BackupError.refused(.extensionName(listed.name))
+        for listed in manifest.extensions
+        where !ExtensionManifest.isValidName(listed.name) || listed.id.map(ExtensionID.isValid) == false {
+            throw BackupError.refused(.extensionName(listed.key))
         }
         var seen: Set<String> = []
         var root: [String: Data] = [:]
@@ -355,6 +367,7 @@ public enum Backup {
             case source(now: Listed.Source)
         }
 
+        /// Its key: the id, which is the name for Raycast's extensions.
         public var name: String
         /// The current install's title.
         public var title: String
@@ -367,25 +380,26 @@ public enum Backup {
             case .storeUpdated: "updated in the Extension Store since the backup"
             case .source(.local): "installed from a local folder now"
             case .source(.store): "installed from the Extension Store now"
+            case .source(.repository): "installed from a repository now"
             }
         }
     }
 
     /// The backup's extensions that are installed now but changed since it was made, sorted by title. They're
-    /// matched by name, and the first rule that applies says why: a different version when both have one, a
+    /// matched by id, and the first rule that applies says why: a different version when both have one, a
     /// different Extension Store tree when both have one, or a different source. What it can't tell isn't listed,
     /// and neither is the bundled Extension Store, nor an extension that isn't installed (the import lists those).
     public static func changedExtensions(
         _ contents: Contents, installed: [InstalledExtension], paths: FudgePaths
     ) -> [Changed] {
         let current = Dictionary(
-            listed(installed, paths: paths).map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+            listed(installed, paths: paths).map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
         var seen: Set<String> = []
         return contents.manifest.extensions.compactMap { backup in
-            guard backup.name != ExtensionStore.extensionName, seen.insert(backup.name).inserted,
-                let now = current[backup.name], let reason = changeReason(from: backup, to: now)
+            guard backup.key != ExtensionStore.id.key, seen.insert(backup.key).inserted,
+                let now = current[backup.key], let reason = changeReason(from: backup, to: now)
             else { return nil }
-            return Changed(name: backup.name, title: now.title, reason: reason)
+            return Changed(name: backup.key, title: now.title, reason: reason)
         }
         .sorted { first, second in
             let order = first.title.localizedStandardCompare(second.title)
@@ -505,10 +519,10 @@ public enum Backup {
         }
         try? FileManager.default.removeItem(at: staging)
 
-        let installedNames = Set(installed.map(\.manifest.name))
+        let installedIDs = Set(installed.map(\.id.key))
         return ImportResult(
             beforeImport: beforeImport,
-            notInstalled: contents.manifest.extensions.filter { !installedNames.contains($0.name) },
+            notInstalled: contents.manifest.extensions.filter { !installedIDs.contains($0.key) },
             hadExtensionStore: contents.hadExtensionStore)
     }
 
@@ -573,17 +587,40 @@ public enum Backup {
             ?? imported
     }
 
-    /// The installed extensions as a backup lists them, by name: each one's source, and for the Extension Store's
-    /// installs the tree it recorded.
+    /// The installed extensions as a backup lists them, by id: each one's source, and for the Extension Store's
+    /// installs the tree it recorded. Raycast's are listed as before, by name; a development build is `local` and an
+    /// added repository's install is `repository`, each with its id and its repository's folder.
     static func listed(_ installed: [InstalledExtension], paths: FudgePaths) -> [Listed] {
         let store = storeInstalls(paths)
         return installed.map { installed in
-            let record = store[installed.manifest.name]
-            return Listed(
-                name: installed.manifest.name, title: installed.manifest.title, version: installed.manifest.version,
-                source: record == nil ? .local : .store, storeTree: record?.tree)
+            let record = store[installed.id.key]
+            let manifest = installed.manifest
+            switch installed.repository {
+            case .raycast, .bundled:
+                return Listed(
+                    name: manifest.name, title: manifest.title, version: manifest.version,
+                    source: record == nil ? .local : .store, storeTree: record?.tree)
+            case .development:
+                return Listed(
+                    name: manifest.name, title: manifest.title, version: manifest.version, source: .local,
+                    id: installed.id.key, repository: installed.repository.folder)
+            case .added(let folder):
+                return Listed(
+                    name: manifest.name, title: manifest.title, version: manifest.version, source: .repository,
+                    storeTree: record?.tree, id: installed.id.key, repository: folder)
+            }
         }
-        .sorted { $0.name < $1.name }
+        .sorted { $0.key < $1.key }
+    }
+
+    /// Where a listed extension is from, as the import's sheet says it: the Extension Store, an added repository by
+    /// its folder, or a local folder, which a development build is built from too.
+    public static func whereFrom(_ listed: Listed) -> String {
+        switch listed.source {
+        case .store: "from the Extension Store"
+        case .repository: "from \(listed.repository ?? "a repository")"
+        case .local: "built from a local folder"
+        }
     }
 
     /// One of the Extension Store's installs, as its `installed.json` records it.
@@ -595,7 +632,7 @@ public enum Backup {
     /// What the Extension Store recorded as its installs (`installed.json`: `{ "<name>": { "tree", "commit",
     /// "installedAt" } }`), by name. A missing or broken file reads as none.
     static func storeInstalls(_ paths: FudgePaths) -> [String: StoreInstall] {
-        let file = paths.supportDirectory(forExtension: ExtensionStore.extensionName)
+        let file = paths.supportDirectory(forExtension: ExtensionStore.id)
             .appendingPathComponent("installed.json")
         guard let data = try? Data(contentsOf: file),
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -660,7 +697,7 @@ private final class SupportReader {
         return names.sorted().compactMap { file in
             guard file.hasSuffix(".json") else { return nil }
             let name = String(file.dropLast(5))
-            guard ExtensionManifest.isValidName(name), let data = self.file(folder.appendingPathComponent(file)) else {
+            guard ExtensionID.isValid(name), let data = self.file(folder.appendingPathComponent(file)) else {
                 return nil
             }
             return (name, data)
@@ -673,7 +710,7 @@ private final class SupportReader {
         guard isPlainFolder(folder) else { return [] }
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
         return names.sorted().compactMap { name in
-            guard ExtensionManifest.isValidName(name), name != ExtensionStore.extensionName else { return nil }
+            guard ExtensionID.isValid(name), name != ExtensionStore.id.key else { return nil }
             let root = folder.appendingPathComponent(name, isDirectory: true)
             guard isPlainFolder(root) else { return nil }
             var entries: [BackupEntry] = []

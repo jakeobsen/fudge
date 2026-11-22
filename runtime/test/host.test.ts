@@ -546,6 +546,7 @@ async function launchLogging(host: Host, session: string) {
         entry: fixture("logging.cjs"),
         mode: "menu-bar",
         environment: { extensionName: "amazon-aws", commandName: "console" },
+        extensionId: "amazon-aws",
     });
     const view = (await host.next(of(session, "render"))).view as UINode;
     const items = new Map(view.children.map((item) => [String(item.props.title), item.id]));
@@ -637,6 +638,7 @@ test("a command that floods and then crashes still has its count, then the crash
         entry: fixture("flood-then-crash-no-view.cjs"),
         mode: "no-view",
         environment: { extensionName: "amazon-aws", commandName: "console" },
+        extensionId: "amazon-aws",
     });
     assert.equal((await host.next(of("fc", "exit"))).reason, "crashed");
     const lines = logsOf(host, "fc").map((m) => String(m.message));
@@ -650,5 +652,37 @@ test("a command that floods and then crashes still has its count, then the crash
         [crash?.level, crash?.message, crash?.extension, crash?.command],
         ["error", "The command crashed (exit code 3).", "amazon-aws", "console"],
     );
+    await host.close();
+});
+
+test("a command's log lines are named by the launch's extension id, which the extension itself never gets", async () => {
+    const host = start();
+    host.send({
+        type: "launch",
+        session: "id",
+        entry: fixture("extension-id.cjs"),
+        mode: "no-view",
+        environment: { extensionName: "github", commandName: "search" },
+        extensionId: "someone+tools+github",
+    });
+    await host.next(of("id", "exit"));
+    const line = logsOf(host, "id").find((m) => String(m.message).startsWith("{"));
+    assert.deepEqual([line?.extension, line?.command], ["someone+tools+github", "search"]);
+    assert.deepEqual(JSON.parse(String(line?.message)), { name: "github", idInEnvironment: false, idInWorkerData: false });
+    await host.close();
+});
+
+test("a launch without an extension id names no extension on its log lines, whatever its environment says", async () => {
+    const host = start();
+    host.send({
+        type: "launch",
+        session: "noid",
+        entry: fixture("extension-id.cjs"),
+        mode: "no-view",
+        environment: { extensionName: "github", commandName: "search" },
+    });
+    await host.next(of("noid", "exit"));
+    const line = logsOf(host, "noid").find((m) => String(m.message).startsWith("{"));
+    assert.deepEqual([line?.extension, line?.command], [undefined, "search"]);
     await host.close();
 });

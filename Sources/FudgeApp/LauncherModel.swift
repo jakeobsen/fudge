@@ -19,7 +19,7 @@ final class LauncherModel {
         /// A notice is drawn like an empty view: `symbol`, the title and the message. Its actions take Back's place
         /// (↵ runs the first, ⌘K lists them, and their shortcuts work), and ⌘⇧, opens `extensionName`'s settings.
         struct Notice: Equatable {
-            var extensionName: String
+            var extensionID: ExtensionID?
             var actions: [ActionSection]
             /// An SF Symbol.
             var symbol = "puzzlepiece.extension"
@@ -29,14 +29,15 @@ final class LauncherModel {
         static let extensionStoreOff = Failure(
             title: ExtensionStore.Off.title, message: "",
             notice: Notice(
-                extensionName: ExtensionStore.extensionName, actions: RootActions.extensionStoreOffSections))
+                extensionID: ExtensionStore.id, actions: RootActions.extensionStoreOffSections))
     }
 
     /// A running view command.
     struct CommandScreen: Equatable {
         var session: String
         var title: String
-        var extensionName = ""
+        /// The extension the command is from; nil for Fudge's own forms.
+        var extensionID: ExtensionID?
         var commandName = ""
         /// The extension's assets folder, for its icons and images.
         var assets: URL?
@@ -241,7 +242,7 @@ final class LauncherModel {
 
     @ObservationIgnored private let paths: FudgePaths
     @ObservationIgnored private var items: [RootItem] = []
-    @ObservationIgnored private var extensions: [String: InstalledExtension] = [:]
+    @ObservationIgnored private var extensions: [ExtensionID: InstalledExtension] = [:]
     @ObservationIgnored private var history: LaunchHistory
     @ObservationIgnored private var host: ExtensionHost?
     /// The sessions host messages may name (SPEC-067).
@@ -278,16 +279,16 @@ final class LauncherModel {
         var unasked: Set<String> = []
     }
     /// The extension each session belongs to.
-    @ObservationIgnored private var sessionExtensions: [String: String] = [:]
+    @ObservationIgnored private var sessionExtensions: [String: ExtensionID] = [:]
     /// The installed extensions at the last read, for `Fudge.log`'s install lines; nil before the first.
-    @ObservationIgnored private var installStamps: [String: InstallStamp]?
+    @ObservationIgnored private var installStamps: [ExtensionID: InstallStamp]?
 
     /// Unloads every running session of `extensionName`'s commands and waits until each has exited (the host stops a
     /// worker 1 s after `unload` at the latest), or 2 s. Turning the Extension Store off calls it before deleting the
     /// copy the store's git works in; the store ends its git when it's unloaded. A view of it on screen goes back to
     /// root search.
-    func unloadSessions(ofExtension extensionName: String) async {
-        let sessions = sessionExtensions.filter { $0.value == extensionName }.map(\.key)
+    func unloadSessions(ofExtension id: ExtensionID) async {
+        let sessions = sessionExtensions.filter { $0.value == id }.map(\.key)
         guard !sessions.isEmpty else { return }
         for session in sessions {
             // A view under Fudge's form goes; the form then closes to root search.
@@ -381,8 +382,7 @@ final class LauncherModel {
             for line in InstallStamp.changes(from: installStamps, to: stamps) { FudgeLog.info(line) }
         }
         installStamps = stamps
-        extensions = Dictionary(
-            installedExtensions.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
+        extensions = InstalledExtension.index(installedExtensions)
         loadCommandMetadata(installedExtensions)
     }
 
@@ -435,7 +435,7 @@ final class LauncherModel {
         var metadata = CommandMetadata.load(from: paths.commandMetadataFile)
         let ids = installed.flatMap { installed in
             installed.manifest.commands.map {
-                FudgeSettings.commandID(extension: installed.manifest.name, command: $0.name)
+                FudgeSettings.commandID(owner: .extension(installed.id), command: $0.name)
             }
         }
         if metadata.prune(keeping: Set(ids)) { try? metadata.save(to: paths.commandMetadataFile) }
@@ -445,12 +445,12 @@ final class LauncherModel {
     /// `updateCommandMetadata` from the command running in `session`: stores its subtitle, which root search
     /// shows the next time it's drawn. The results keep their order and selection.
     private func updateCommandMetadata(_ params: JSONValue, from session: String) throws {
-        guard let extensionName = sessionExtensions[session], let commandName = sessionCommands[session],
-            let installed = extensions[extensionName]
+        guard let id = sessionExtensions[session], let commandName = sessionCommands[session],
+            let installed = extensions[id]
         else { throw CommandMetadata.InvalidMetadata("the calling command isn't running") }
         let subtitle = try CommandMetadata.subtitle(fromParams: params)
         var metadata = commandMetadata
-        metadata.setSubtitle(subtitle, extension: extensionName, command: commandName)
+        metadata.setSubtitle(subtitle, extension: id, command: commandName)
         try metadata.save(to: paths.commandMetadataFile)
         commandMetadata = metadata
         // Through the settings too, so the command keeps its alias.
@@ -718,7 +718,7 @@ final class LauncherModel {
     /// The store session on screen's command, if the screen's command is one still running (the panel may be hidden).
     private var storeSessionOnScreen: String? {
         ExtensionStore.sessionOnScreen(
-            command?.session, extensionName: command.flatMap { sessionExtensions[$0.session] },
+            command?.session, extension: command.flatMap { sessionExtensions[$0.session] },
             isRunning: { hostSessions.isRunning($0) })
     }
 
@@ -727,7 +727,9 @@ final class LauncherModel {
 
     /// Whether a store session is loaded: one is running in the host (C.2).
     var storeSessionLoaded: Bool {
-        sessionExtensions.contains { $0.value == ExtensionStore.extensionName && hostSessions.isRunning($0.key) }
+        sessionExtensions.contains {
+            BundledCalls.mayCall(.storeNotifications, from: $0.value) && hostSessions.isRunning($0.key)
+        }
     }
 
     /// `store.installEnded`, `store.askForNotifications` and `store.nextNotificationClick`, from a store session.
@@ -791,17 +793,17 @@ final class LauncherModel {
 
     /// Launches the store's view command for a click, as root search would.
     private func launchStore(for target: NoticeTarget) {
-        guard let installed = extensions[ExtensionStore.extensionName],
+        guard let installed = extensions[ExtensionStore.id],
             let command = installed.manifest.commands.first(where: { $0.mode == "view" })
         else { return }
-        guard FudgeSettings.load(from: paths.settingsFile).isEnabled(extension: ExtensionStore.extensionName) else {
+        guard FudgeSettings.load(from: paths.settingsFile).isEnabled(owner: .extension(ExtensionStore.id)) else {
             screen = .failure(.extensionStoreOff)
             return
         }
         let prepared = prepareLaunch(of: installed, command: command, userInitiated: true)
         guard prepared.preferences.missing.isEmpty else {
             showNeedsSettings(
-                command.title, extension: ExtensionStore.extensionName, missing: prepared.preferences.missing,
+                command.title, extension: ExtensionStore.id, missing: prepared.preferences.missing,
                 origin: .userInitiated)
             return
         }
@@ -842,9 +844,9 @@ final class LauncherModel {
                 return RootActions.calculatorSections(for: calculator?.enter ?? .copy)
             }
             var isActiveInMenuBar = false
-            if case .command(let extensionName, let commandName, "menu-bar", _) = selectedRootItem?.kind {
+            if case .command(let id, let commandName, "menu-bar", _) = selectedRootItem?.kind {
                 isActiveInMenuBar = menuBar.isActive(
-                    FudgeSettings.commandID(extension: extensionName, command: commandName))
+                    FudgeSettings.commandID(owner: .extension(id), command: commandName))
             }
             return RootActions.sections(for: selectedRootItem, isActiveInMenuBar: isActiveInMenuBar)
         }
@@ -1017,8 +1019,11 @@ final class LauncherModel {
         }
         let form = FormContent(view)
         if command.storedFormValues == nil {
-            command.storedFormValues = FormValueStore(directory: paths.formValuesDirectory)
-                .load(extension: command.extensionName, command: command.commandName)
+            command.storedFormValues =
+                command.extensionID.map {
+                    FormValueStore(directory: paths.formValuesDirectory).load(
+                        extension: $0, command: command.commandName)
+                } ?? [:]
         }
         var values: [Int: FieldValue] = [:]
         var pending: [Int: JSONValue] = [:]
@@ -1049,8 +1054,10 @@ final class LauncherModel {
         guard case .command(var command) = screen, command.session == session, let form = command.form,
             case .object(let object) = params, case .object(let submitted) = object["values"]
         else { return }
-        try? FormValueStore(directory: paths.formValuesDirectory)
-            .save(form.valuesToStore(submitted), extension: command.extensionName, command: command.commandName)
+        if let id = command.extensionID {
+            try? FormValueStore(directory: paths.formValuesDirectory)
+                .save(form.valuesToStore(submitted), extension: id, command: command.commandName)
+        }
         command.storedFormValues = nil
         screen = .command(command)
     }
@@ -1122,9 +1129,10 @@ final class LauncherModel {
             if let controlled = dropdown.value { command.dropdown?.value = controlled }
             return
         }
-        let key = SearchBarDropdown.Store.key(
-            extension: command.extensionName, command: command.commandName, dropdown: dropdown.name)
-        let stored = dropdown.storesValue ? dropdownStore.value(for: key) : nil
+        let key = command.extensionID.map {
+            SearchBarDropdown.Store.key(extension: $0, command: command.commandName, dropdown: dropdown.name)
+        }
+        let stored = dropdown.storesValue ? key.flatMap { dropdownStore.value(for: $0) } : nil
         let initial = dropdown.initialValue(stored: stored)
         command.dropdown = DropdownState(node: dropdown.id, value: initial)
         if let initial, dropdown.hasOnChange {
@@ -1137,9 +1145,8 @@ final class LauncherModel {
         guard var command, let dropdown = command.list?.dropdown else { return }
         command.dropdown = DropdownState(node: dropdown.id, value: value)
         screen = .command(command)
-        if dropdown.storesValue {
-            let key = SearchBarDropdown.Store.key(
-                extension: command.extensionName, command: command.commandName, dropdown: dropdown.name)
+        if dropdown.storesValue, let id = command.extensionID {
+            let key = SearchBarDropdown.Store.key(extension: id, command: command.commandName, dropdown: dropdown.name)
             try? dropdownStore.set(value, for: key)
         }
         if dropdown.hasOnChange {
@@ -1703,8 +1710,8 @@ final class LauncherModel {
         switch action {
         case .open:
             activate()
-        case .configureExtension(let name):
-            showSettings(extension: name)
+        case .configureExtension(let id):
+            showSettings(extension: id.key)
         case .deactivateMenuBarItem(let id):
             do {
                 try menuBar.deactivate(id)
@@ -1748,11 +1755,11 @@ final class LauncherModel {
         _ notice: String?, message: String, session: String, commandTitle: String?
     ) -> SignInNotice? {
         guard notice != nil else { return nil }
-        let name = sessionExtensions[session] ?? ""
+        guard let id = sessionExtensions[session] else { return nil }
         return SignInNotice(
-            notice: notice, message: message, extensionName: name,
-            extensionTitle: extensions[name]?.manifest.title ?? "",
-            commandID: sessionCommands[session].map { FudgeSettings.commandID(extension: name, command: $0) },
+            notice: notice, message: message, extension: id,
+            extensionTitle: extensions[id]?.manifest.title ?? "",
+            commandID: sessionCommands[session].map { FudgeSettings.commandID(owner: .extension(id), command: $0) },
             commandTitle: commandTitle)
     }
 
@@ -2653,22 +2660,22 @@ final class LauncherModel {
             return true
         }
         if pressed == RootActions.configureExtensionShortcut {
-            if let name = currentExtensionName { showSettings(extension: name) }
+            if let id = currentExtension { showSettings(extension: id.key) }
             return true
         }
         return false
     }
 
     /// The extension of the command selected in root search, or of the one running.
-    private var currentExtensionName: String? {
+    private var currentExtension: ExtensionID? {
         switch screen {
         case .root:
             if case .command(let name, _, _, _) = selectedRootItem?.kind { return name }
             return nil
         case .command(let command):
-            return command.extensionName.isEmpty ? nil : command.extensionName
+            return command.extensionID
         case .failure(let failure):
-            return failure.notice?.extensionName
+            return failure.notice?.extensionID
         }
     }
 
@@ -3435,11 +3442,11 @@ final class LauncherModel {
             return
         }
         let mode: String
-        var running: (extensionName: String, commandName: String)?
+        var running: (extensionID: ExtensionID, commandName: String)?
         switch item.kind {
-        case .command(let extensionName, let commandName, let commandMode, _):
+        case .command(let id, let commandName, let commandMode, _):
             mode = commandMode
-            running = (extensionName, commandName)
+            running = (id, commandName)
         case .quicklink:
             mode = "no-view"
         default:
@@ -3449,7 +3456,7 @@ final class LauncherModel {
         // too while the panel is hidden: the panel's next show would reset it anyway, so this changes nothing.
         resettingFirst {
             let onScreen =
-                isVisible() && running != nil && command?.extensionName == running?.extensionName
+                isVisible() && running != nil && command?.extensionID == running?.extensionID
                 && command?.commandName == running?.commandName
             let action: HotKeyLaunch
             if case .quicklink(let quicklink) = item.kind {
@@ -3545,11 +3552,11 @@ final class LauncherModel {
             recordLaunch(item.id)
             searchText = ""
             showSettings(extension: nil)
-        case .command(let extensionName, let commandName, "menu-bar", _):
+        case .command(let id, let commandName, "menu-bar", _):
             // Activates it, or refreshes it and opens its menu; the panel closes either way.
             recordLaunch(item)
             do {
-                try menuBar.runFromRootSearch(FudgeSettings.commandID(extension: extensionName, command: commandName))
+                try menuBar.runFromRootSearch(FudgeSettings.commandID(owner: .extension(id), command: commandName))
             } catch {
                 showFailureToast("Can't activate \(item.title)", message: String(describing: error))
                 return
@@ -3582,8 +3589,8 @@ final class LauncherModel {
             showSnippetForm(SnippetDraft())
         case .builtInCommand(let group, let command):
             runBuiltIn(item, group: group, command: command, fromHotkey: false)
-        case .command(let extensionName, let commandName, _, _):
-            guard let installed = extensions[extensionName],
+        case .command(let id, let commandName, _, _):
+            guard let installed = extensions[id],
                 let command = installed.manifest.commands.first(where: { $0.name == commandName })
             else {
                 recordLaunch(item.id)
@@ -3596,7 +3603,7 @@ final class LauncherModel {
             let prepared = prepareLaunch(of: installed, command: command, userInitiated: true)
             guard prepared.preferences.missing.isEmpty else {
                 showNeedsSettings(
-                    item.title, extension: extensionName, missing: prepared.preferences.missing,
+                    item.title, extension: id, missing: prepared.preferences.missing,
                     origin: .userInitiated)
                 return
             }
@@ -3623,7 +3630,7 @@ final class LauncherModel {
     /// Records a root item's launch, unless it's one that never counts (`RootItem.recordsLaunch`: Quit).
     /// Runs one of Fudge's own commands (`BuiltInCommandGroup`), from root search or its hotkey, which goes no other
     /// way: each group's commands decide whether the panel shows.
-    private func runBuiltIn(_ item: RootItem, group: String, command: String, fromHotkey: Bool) {
+    private func runBuiltIn(_ item: RootItem, group: BuiltInGroup, command: String, fromHotkey: Bool) {
         if group == BuiltInCommandGroup.windowManagement.name, command == SwitchWindowsList.commandName {
             openSwitchWindows(item, fromHotkey: fromHotkey)
             return
@@ -3743,10 +3750,10 @@ final class LauncherModel {
 
     /// The preferences of `session`'s command as they are now, resolved as a launch resolves them.
     private func preferenceValues(of session: String) -> [String: JSONValue] {
-        guard let name = sessionExtensions[session], let installed = extensions[name],
+        guard let id = sessionExtensions[session], let installed = extensions[id],
             let command = installed.manifest.commands.first(where: { $0.name == sessionCommands[session] })
         else { return [:] }
-        let stored = PreferenceStore(directory: paths.preferencesDirectory).load(name)
+        let stored = PreferenceStore(directory: paths.preferencesDirectory).load(id)
         return PreferenceResolver.resolve(installed.manifest, command: command, stored: stored).values
     }
 
@@ -3756,12 +3763,11 @@ final class LauncherModel {
     private func prepareLaunch(
         of installed: InstalledExtension, command: ExtensionManifest.Command, userInitiated: Bool
     ) -> (preferences: ResolvedPreferences, environment: LaunchEnvironment) {
-        let name = installed.manifest.name
-        if userInitiated { recordLaunch(RootItem.commandID(extension: name, command: command.name)) }
+        if userInitiated { recordLaunch(RootItem.commandID(owner: .extension(installed.id), command: command.name)) }
         let preferences = PreferenceResolver.resolve(
             installed.manifest,
             command: command,
-            stored: PreferenceStore(directory: paths.preferencesDirectory).load(name)
+            stored: PreferenceStore(directory: paths.preferencesDirectory).load(installed.id)
         )
         let environment = LaunchEnvironment.make(
             for: installed,
@@ -3775,7 +3781,7 @@ final class LauncherModel {
     /// A required preference isn't set: say so, and open Settings on the extension instead of running the command.
     /// Settings comes forward only for a user-initiated `origin`.
     private func showNeedsSettings(
-        _ title: String, extension name: String, missing: [ExtensionManifest.Preference], origin: CallOrigin
+        _ title: String, extension id: ExtensionID, missing: [ExtensionManifest.Preference], origin: CallOrigin
     ) {
         let names = missing.map { $0.title ?? $0.name }.joined(separator: ", ")
         screen = .failure(
@@ -3784,7 +3790,7 @@ final class LauncherModel {
                 message: "Set \(names) in the Settings window, then run the command again.", commandTitle: title
             )
         )
-        openSettings(name, origin)
+        openSettings(id.key, origin)
     }
 
     /// Starts a prepared command in the extension host: the one way commands launch, from root search and from
@@ -3800,9 +3806,9 @@ final class LauncherModel {
         prepared: (preferences: ResolvedPreferences, environment: LaunchEnvironment),
         quiet: Bool = false
     ) -> String? {
-        let extensionName = installed.manifest.name
+        let extensionID = installed.id
         // The app decides whether the store is on, from settings.json as it is now, before any of its code runs.
-        if ExtensionStore.isOff(extensionName, settings: FudgeSettings.load(from: paths.settingsFile)) {
+        if ExtensionStore.isOff(extensionID, settings: FudgeSettings.load(from: paths.settingsFile)) {
             if !quiet { screen = .failure(.extensionStoreOff) }
             return ExtensionStore.Off.title
         }
@@ -3811,18 +3817,18 @@ final class LauncherModel {
             host = try ensureHost()
         } catch {
             FudgeLog.error(
-                "couldn't launch \(extensionName)/\(command.name): the extension host didn't start: \(error)")
+                "couldn't launch \(extensionID)/\(command.name): the extension host didn't start: \(error)")
             if !quiet { screen = .failure(Failure(title: "Can't run extensions", message: String(describing: error))) }
             return String(describing: error)
         }
         let session = SessionID.make()
         hostSessions.started(session)
-        sessionExtensions[session] = extensionName
+        sessionExtensions[session] = extensionID
         sessionCommands[session] = command.name
         if command.mode == "view" {
             screen = .command(
                 CommandScreen(
-                    session: session, title: title, extensionName: extensionName, commandName: command.name,
+                    session: session, title: title, extensionID: extensionID, commandName: command.name,
                     assets: installed.assetsDirectory))
         } else if quiet {
             quietSessions[session] = QuietSession(title: title)
@@ -3836,10 +3842,10 @@ final class LauncherModel {
                 .launch(
                     session: session, entry: installed.entry(for: command.name).path, mode: command.mode,
                     launchProps: launchProps, preferences: prepared.preferences.values,
-                    environment: prepared.environment)
+                    environment: prepared.environment, extensionId: installed.id)
             )
         } catch {
-            FudgeLog.error("couldn't launch \(extensionName)/\(command.name): \(error)")
+            FudgeLog.error("couldn't launch \(extensionID)/\(command.name): \(error)")
             hostSessions.ended(session)
             sessionExtensions[session] = nil
             sessionCommands[session] = nil
@@ -3862,7 +3868,7 @@ final class LauncherModel {
         let prepared = prepareLaunch(of: installed, command: command, userInitiated: false)
         guard prepared.preferences.missing.isEmpty else {
             let origin = CallOrigin.launched(userInitiated: userInitiated)
-            if origin.mayComeForward { openSettings(installed.manifest.name, origin) }
+            if origin.mayComeForward { openSettings(installed.id.key, origin) }
             let names = prepared.preferences.missing.map { $0.title ?? $0.name }.joined(separator: ", ")
             return .failure(.init(message: "set \(names) in the Settings window first"))
         }
@@ -3874,7 +3880,7 @@ final class LauncherModel {
         }
         let session = SessionID.make()
         hostSessions.started(session)
-        sessionExtensions[session] = installed.manifest.name
+        sessionExtensions[session] = installed.id
         sessionCommands[session] = command.name
         let launchProps = LaunchProps(launchType: userInitiated ? "userInitiated" : "background")
         do {
@@ -3882,7 +3888,7 @@ final class LauncherModel {
                 .launch(
                     session: session, entry: installed.entry(for: command.name).path, mode: command.mode,
                     launchProps: launchProps, preferences: prepared.preferences.values,
-                    environment: prepared.environment))
+                    environment: prepared.environment, extensionId: installed.id))
         } catch {
             hostSessions.ended(session)
             sessionExtensions[session] = nil
@@ -3910,13 +3916,13 @@ final class LauncherModel {
     private func launchCommand(
         _ params: JSONValue, from session: String, call id: Int, origin: CallOrigin
     ) async throws {
-        guard let callerName = sessionExtensions[session], let caller = extensions[callerName] else {
+        guard let callerID = sessionExtensions[session], let caller = extensions[callerID] else {
             throw LaunchCommandError.invalid("the calling command isn't running")
         }
         let request = try LaunchRequest(params: params).asCalled(from: origin)
         let target = try CommandLocator.locate(
-            request, caller: callerName, in: Array(extensions.values), settings: settings)
-        let targetID = FudgeSettings.commandID(extension: target.installed.manifest.name, command: target.command.name)
+            request, caller: caller, in: Array(extensions.values), settings: settings)
+        let targetID = FudgeSettings.commandID(owner: .extension(target.installed.id), command: target.command.name)
         try CommandLocator.checkMode(target.command, type: request.type, isActiveInMenuBar: menuBar.isActive(targetID))
         if target.isOtherExtension {
             try await checkPermission(of: caller, toOpen: target, origin: origin, from: session)
@@ -3938,7 +3944,7 @@ final class LauncherModel {
             answer()
             if onScreen != nil { leaveCommand() }
             showNeedsSettings(
-                target.command.title, extension: target.installed.manifest.name,
+                target.command.title, extension: target.installed.id,
                 missing: prepared.preferences.missing, origin: origin)
             return
         }
@@ -3992,8 +3998,8 @@ final class LauncherModel {
     ) async throws {
         let file = paths.launchPermissionsFile
         var permissions = LaunchPermissions.load(from: file)
-        let callerName = caller.manifest.name
-        let targetName = target.installed.manifest.name
+        let callerName = caller.id
+        let targetName = target.installed.id
         let allowed: Bool
         switch LaunchPermissions.step(
             answer: permissions.answer(caller: callerName, target: targetName), origin: origin)
@@ -4098,7 +4104,7 @@ final class LauncherModel {
             .merging(trust.environment) { _, new in new },
             log: { session, level, message, source in
                 FudgeLog.command(
-                    level, message, session: session, extensionName: source?.extensionName, command: source?.command)
+                    level, message, session: session, extension: source?.extensionID, command: source?.command)
             })
         self.host = host
         // Before any launch, so every command starts at the setting (SPEC-124).
@@ -4180,7 +4186,7 @@ final class LauncherModel {
         FudgeLog.error(
             "the extension host stopped"
                 + (running.isEmpty ? "" : ", ending \(running.sorted().joined(separator: ", "))"))
-        for (session, name) in sessionExtensions where name == ExtensionStore.extensionName {
+        for (session, id) in sessionExtensions where BundledCalls.mayCall(.storeNotifications, from: id) {
             if hostSessions.isRunning(session) { storeSessionEnded(session) }
         }
         hostSessions.endAll()
@@ -4242,7 +4248,7 @@ final class LauncherModel {
             case .error(_, let text, let stack, let fatal, _):
                 menuBar.handle(message)
                 FudgeLog.commandError(
-                    text, stack: stack, fatal: fatal, session: session, extensionName: sessionExtensions[session],
+                    text, stack: stack, fatal: fatal, session: session, extension: sessionExtensions[session],
                     command: sessionCommands[session])
                 return
             case .exit:
@@ -4328,7 +4334,7 @@ final class LauncherModel {
                 if fatal, let signIn {
                     // The command can't go on: the notice takes its place, as the store's "off" one does.
                     leaveCommand()
-                    screen = .failure(Failure(signIn, extensionName: command.extensionName))
+                    screen = .failure(Failure(signIn, extension: command.extensionID))
                 } else if fatal {
                     command.failure = Failure(title: "\(command.title) failed", message: message, details: stack)
                     screen = .command(command)
@@ -4337,17 +4343,19 @@ final class LauncherModel {
                 }
             } else if let title = background[session] {
                 screen = .failure(
-                    signIn.map { Failure($0, extensionName: sessionExtensions[session] ?? "") }
+                    signIn.map { Failure($0, extension: sessionExtensions[session]) }
                         ?? Failure(title: "\(title) failed", message: message, details: stack, commandTitle: title))
             }
             FudgeLog.commandError(
-                message, stack: stack, fatal: fatal, session: session, extensionName: sessionExtensions[session],
+                message, stack: stack, fatal: fatal, session: session, extension: sessionExtensions[session],
                 command: sessionCommands[session])
 
         case .exit(let session, let reason):
             endSignIn(of: session)
-            if sessionExtensions[session] == ExtensionStore.extensionName { storeSessionEnded(session) }
-            if sessionExtensions[session] == ClipboardHistory.extensionName { clipboardHistory.clearPreviews() }
+            if BundledCalls.mayCall(.storeNotifications, from: sessionExtensions[session]) {
+                storeSessionEnded(session)
+            }
+            if sessionExtensions[session] == ClipboardHistory.id { clipboardHistory.clearPreviews() }
             sessionExtensions[session] = nil
             sessionCommands[session] = nil
             if let quiet = quietSessions.removeValue(forKey: session) {
@@ -4391,7 +4399,7 @@ final class LauncherModel {
                     send(.rpcResult(session: session, id: id, result: nil, error: Self.backgroundSettingsError))
                     break
                 }
-                if let extensionName = sessionExtensions[session] { openSettings(extensionName, origin) }
+                if let id = sessionExtensions[session] { openSettings(id.key, origin) }
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
             case let method where method.hasPrefix("clipboardHistory."):
                 // Clipboard History's own calls (SPEC-077), refused for any other extension.
@@ -4420,7 +4428,7 @@ final class LauncherModel {
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
             case "fudge.log":
                 // The Extension Store's failures, for `Fudge.log` (SPEC-124); no other extension writes there.
-                guard sessionExtensions[session] == ExtensionStore.extensionName,
+                guard BundledCalls.mayCall(.fudgeLog, from: sessionExtensions[session]),
                     case .object(let values) = params, case .string(let message) = values["message"]
                 else {
                     send(
@@ -4435,7 +4443,7 @@ final class LauncherModel {
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
             case "store.installEnded", "store.askForNotifications", "store.nextNotificationClick":
                 // Install notifications (SPEC-156 C.5): the Extension Store's calls, refused for any other extension.
-                guard sessionExtensions[session] == ExtensionStore.extensionName else {
+                guard BundledCalls.mayCall(.storeNotifications, from: sessionExtensions[session]) else {
                     send(
                         .rpcResult(
                             session: session, id: id, result: nil,
@@ -4446,7 +4454,7 @@ final class LauncherModel {
             case "store.repositories":
                 // The list of repositories from Settings (FUD-182), read afresh for each call: the Extension Store's
                 // call, refused for any other extension.
-                guard sessionExtensions[session] == ExtensionStore.extensionName else {
+                guard BundledCalls.mayCall(.storeRepositories, from: sessionExtensions[session]) else {
                     send(
                         .rpcResult(
                             session: session, id: id, result: nil,
@@ -4461,7 +4469,7 @@ final class LauncherModel {
             case "commandLineTools.ready", "commandLineTools.openSettings":
                 // The Extension Store's questions about extensions with a part written in Swift (SPEC-145 §3), refused
                 // for any other extension.
-                guard sessionExtensions[session] == ExtensionStore.extensionName else {
+                guard BundledCalls.mayCall(.commandLineTools, from: sessionExtensions[session]) else {
                     send(
                         .rpcResult(
                             session: session, id: id, result: nil,
@@ -4538,7 +4546,7 @@ final class LauncherModel {
                         // (sign-in off, cancelled, timed out, refused) is a warning.
                         FudgeLog.write(
                             refusal.notice == nil ? .error : .warning,
-                            "sign-in: \(method) for \(sessionExtensions[session] ?? "an extension"): \(refusal)")
+                            "sign-in: \(method) for \(sessionExtensions[session]?.key ?? "an extension"): \(refusal)")
                         send(
                             .rpcResult(
                                 session: session, id: id, result: nil, error: refusal.message,
@@ -4547,7 +4555,7 @@ final class LauncherModel {
                         // Only the error's kind: its description could hold the call's params, such as a token.
                         let failure = error as NSError
                         FudgeLog.error(
-                            "sign-in: \(method) for \(sessionExtensions[session] ?? "an extension") failed: "
+                            "sign-in: \(method) for \(sessionExtensions[session]?.key ?? "an extension") failed: "
                                 + "\(failure.domain) \(failure.code)")
                         send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
                     }
@@ -4578,7 +4586,7 @@ final class LauncherModel {
             // Only from a host started without a log handler; the app's goes straight to the files.
             FudgeLog.command(
                 LogLevel(rawValue: level) ?? .error, message, session: session,
-                extensionName: source?.extensionName, command: source?.command)
+                extension: source?.extensionID, command: source?.command)
 
         case .protocolError(let message):
             FudgeLog.error("the extension host refused a message: \(message)")
@@ -4770,9 +4778,9 @@ final class LauncherModel {
 
     /// The token calls of `session`'s extension: the extension comes from the session, never from the call.
     private func signInCalls(_ session: String) -> SignInCalls? {
-        guard let extensionName = sessionExtensions[session] else { return nil }
+        guard let id = sessionExtensions[session] else { return nil }
         return SignInCalls(
-            store: OAuthTokenStore(secrets: tokenSecrets), extensionName: extensionName,
+            store: OAuthTokenStore(secrets: tokenSecrets), extension: id,
             pending: signInRequests.pending(of: session))
     }
 
@@ -4960,10 +4968,10 @@ final class LauncherModel {
 
 extension LauncherModel.Failure {
     /// A sign-in notice (SPEC-095), drawn like the store's "off" notice: no trace, and nothing red.
-    init(_ notice: SignInNotice, extensionName: String) {
+    init(_ notice: SignInNotice, extension id: ExtensionID?) {
         self.init(
             title: notice.title, message: notice.message,
-            notice: Notice(extensionName: extensionName, actions: notice.actions, symbol: "person.badge.key"),
+            notice: Notice(extensionID: id, actions: notice.actions, symbol: "person.badge.key"),
             commandTitle: notice.commandTitle)
     }
 }

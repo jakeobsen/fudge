@@ -43,7 +43,7 @@ type Session = {
     worker: Worker;
     done: boolean;
     unloadTimer?: NodeJS.Timeout;
-    /** The names its log lines carry, from the launch's environment. */
+    /** The names its log lines carry: the extension's id from the launch message, the command's from its environment. */
     names: { extension?: string; command?: string };
     log: LogBudget;
 };
@@ -72,7 +72,7 @@ function launch(message: Extract<AppMessage, { type: "launch" }>): void {
     };
     const worker = new Worker(workerUrl, { workerData, stdout: true, stderr: true });
     const named = (name: unknown) => (typeof name === "string" && name !== "" ? name : undefined);
-    const names = { extension: named(message.environment?.extensionName), command: named(message.environment?.commandName) };
+    const names = { extension: named(message.extensionId), command: named(message.environment?.commandName) };
     const session: Session = { worker, done: false, names, log: { windowStart: 0, sent: 0, dropped: 0 } };
     sessions.set(id, session);
 

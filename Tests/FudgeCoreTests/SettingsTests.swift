@@ -87,10 +87,11 @@ func everyRecordableKeyRoundTrips(text: String, keyCode: UInt32) throws {
 @Test func commandSettingsRoundTrip() throws {
     let folder = try Fixtures.temporaryDirectory()
     let file = folder.appendingPathComponent("settings.json")
+    let nextTask = CommandOwner.extension(ExtensionID(stored: "next-task")!)
     var settings = FudgeSettings(hotkey: "ctrl+space")
     settings.commands["scratch/scratch-folders"] = .init(hotkey: "option+s", alias: "sf")
     settings.commands["scratch/create-scratch"] = .init(enabled: false)
-    settings.extensions["next-task"] = .init(enabled: false)
+    settings.extensions[nextTask] = .init(enabled: false)
     try settings.save(to: file)
     #expect(FudgeSettings.load(from: file) == settings)
     #expect(FudgeSettings.load(from: file).commandHotkeys == ["scratch/scratch-folders": HotKeySpec.parse("option+s")!])
@@ -99,7 +100,7 @@ func everyRecordableKeyRoundTrips(text: String, keyCode: UInt32) throws {
     // set, true included (SPEC-109), so only an unset one is a default.
     settings.commands["scratch/scratch-folders"] = .init()
     settings.commands["scratch/create-scratch"] = .init()
-    settings.extensions["next-task"] = .init()
+    settings.extensions[nextTask] = .init()
     try settings.save(to: file)
     let object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
     #expect(object.keys.sorted() == ["hotkey"])
@@ -110,8 +111,9 @@ func everyRecordableKeyRoundTrips(text: String, keyCode: UInt32) throws {
     let folder = try Fixtures.temporaryDirectory()
     let file = folder.appendingPathComponent("settings.json")
     var settings = FudgeSettings()
-    let awake = FudgeSettings.commandID(extension: "made-up", command: "caffeinateWhile")
-    let schedule = FudgeSettings.commandID(extension: "made-up", command: "addSchedule")
+    let madeUp = CommandOwner.extension(ExtensionID(stored: "made-up")!)
+    let awake = FudgeSettings.commandID(owner: madeUp, command: "caffeinateWhile")
+    let schedule = FudgeSettings.commandID(owner: madeUp, command: "addSchedule")
     #expect(awake == "made-up/caffeinateWhile")
     settings.commands[awake] = .init(hotkey: "option+w", alias: "cw")
     settings.setEnabled(false, commandID: schedule)
@@ -122,7 +124,7 @@ func everyRecordableKeyRoundTrips(text: String, keyCode: UInt32) throws {
     #expect(loaded.alias(ofCommand: awake) == "cw")
     #expect(loaded.availableHotkeys(installed: [awake, schedule]) == [awake: HotKeySpec.parse("option+w")!])
     #expect(loaded.isEnabled(commandID: awake) && !loaded.isEnabled(commandID: schedule))
-    #expect(loaded.isEnabled(extension: "made-up", command: "caffeinateWhile"))
+    #expect(loaded.isEnabled(owner: madeUp, command: "caffeinateWhile"))
     #expect(loaded.commands["made-up/caffeinatewhile"] == nil, "the name keeps its case")
 }
 

@@ -258,10 +258,10 @@ import Testing
     #expect(onboarded.extensionStoreConsentAt == switched.extensionStoreConsentAt)
     #expect(onboarded.extensionStoreConsentAt == ISO8601DateFormatter().string(from: now))
     // The switch alone never enables it on the Commands page; onboarding's Turn On does, so it's in root search.
-    #expect(!switched.isEnabled(extension: ExtensionStore.extensionName))
-    #expect(onboarded.isEnabled(extension: ExtensionStore.extensionName))
+    #expect(!switched.isEnabled(owner: .extension(ExtensionStore.id)))
+    #expect(onboarded.isEnabled(owner: .extension(ExtensionStore.id)))
     // Not Now writes nothing: the defaults stay off.
-    #expect(!FudgeSettings().isExtensionStoreOn && !FudgeSettings().isEnabled(extension: ExtensionStore.extensionName))
+    #expect(!FudgeSettings().isExtensionStoreOn && !FudgeSettings().isEnabled(owner: .extension(ExtensionStore.id)))
 }
 
 @Test func theStepsShowTheirSettingsOwnWords() {

@@ -32,13 +32,14 @@ public struct BuiltInCommand: Sendable, Equatable {
 /// A group's name is `:` and then a valid extension name (`:window-management`). The extension name rule allows no
 /// `:`, so no installed extension can take a group's keys (`isValidName`).
 public struct BuiltInCommandGroup: Sendable, Equatable, Identifiable {
-    public var name: String
+    /// Its key, one of a closed list, so no group is made from a free string.
+    public var name: BuiltInGroup
     public var title: String
     public var commands: [BuiltInCommand]
 
-    public var id: String { name }
+    public var id: String { name.rawValue }
 
-    public init(name: String, title: String, commands: [BuiltInCommand]) {
+    public init(name: BuiltInGroup, title: String, commands: [BuiltInCommand]) {
         self.name = name
         self.title = title
         self.commands = commands
@@ -49,8 +50,8 @@ public struct BuiltInCommandGroup: Sendable, Equatable, Identifiable {
 
     /// The Commands page's Type column for a group's row and for its commands' rows: "Built-in" and "Command" for
     /// Fudge's own groups, "Quicklinks" and "Quicklink" for the quicklinks.
-    public static func typeLabels(ofGroup name: String) -> (group: String, command: String) {
-        name == QuicklinkCommands.groupName ? ("Quicklinks", "Quicklink") : ("Built-in", "Command")
+    public static func typeLabels(ofGroup name: BuiltInGroup) -> (group: String, command: String) {
+        name == .quicklinks ? ("Quicklinks", "Quicklink") : ("Built-in", "Command")
     }
 
     /// Whether `name` can name a group: `:` and a valid extension name, so it's never an extension's name.
@@ -60,7 +61,7 @@ public struct BuiltInCommandGroup: Sendable, Equatable, Identifiable {
 
     /// The `settings.json` id of one of the group's commands.
     public func commandID(_ command: BuiltInCommand) -> String {
-        FudgeSettings.commandID(extension: name, command: command.name)
+        FudgeSettings.commandID(owner: .group(name), command: command.name)
     }
 
     /// The ids of every command in `groups`. Their hotkeys are registered, and block a key, as installed commands'
@@ -70,7 +71,7 @@ public struct BuiltInCommandGroup: Sendable, Equatable, Identifiable {
     }
 
     /// The group and command a root item's `.builtInCommand` kind names.
-    public static func command(group name: String, command: String, in groups: [BuiltInCommandGroup] = all)
+    public static func command(group name: BuiltInGroup, command: String, in groups: [BuiltInCommandGroup] = all)
         -> (group: BuiltInCommandGroup, command: BuiltInCommand)?
     {
         guard let group = groups.first(where: { $0.name == name }),

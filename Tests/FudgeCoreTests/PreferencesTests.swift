@@ -83,14 +83,15 @@ private let fakeApplications: @Sendable (String) -> JSONValue? = { reference in
 
 @Test func storesPreferencesPerExtension() throws {
     let store = PreferenceStore(directory: try Fixtures.temporaryDirectory().appendingPathComponent("preferences"))
-    #expect(store.load("scratch") == StoredPreferences())
+    let scratch = ExtensionID(stored: "scratch")!
+    #expect(store.load(scratch) == StoredPreferences())
     let preferences = StoredPreferences(
         extensionValues: ["staleDays": .string("3")],
         commandValues: ["folders": ["sort": .string("name")]]
     )
-    try store.save(preferences, for: "scratch")
-    #expect(store.load("scratch") == preferences)
-    #expect(store.load("other") == StoredPreferences())
+    try store.save(preferences, for: scratch)
+    #expect(store.load(scratch) == preferences)
+    #expect(store.load(ExtensionID(stored: "other")!) == StoredPreferences())
 }
 
 @Test func resolvesApplicationsByPathWithTheirBundleIdentifier() throws {

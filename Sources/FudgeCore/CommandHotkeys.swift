@@ -207,8 +207,8 @@ public enum CommandNames {
             for command in item.manifest.commands {
                 titles.append(
                     (
-                        FudgeSettings.commandID(extension: item.manifest.name, command: command.name), command.title,
-                        item.manifest.title
+                        FudgeSettings.commandID(owner: .extension(item.id), command: command.name), command.title,
+                        item.displayTitle
                     ))
             }
         }
