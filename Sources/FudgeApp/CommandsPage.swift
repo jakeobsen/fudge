@@ -92,7 +92,7 @@ struct CommandsPage: View {
         }
         let extensions = model.allExtensions.map { installed in
             GroupRow(
-                name: .extension(installed.id), title: installed.manifest.title, type: "Extension",
+                name: .extension(installed.id), title: installed.displayTitle, type: "Extension",
                 icon: .asset(installed.manifest.icon, installed),
                 commands: installed.manifest.commands.filter { ["view", "no-view", "menu-bar"].contains($0.mode) }
                     .map { command in

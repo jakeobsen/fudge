@@ -17,7 +17,7 @@ public enum SettingsSidebar {
         }
     }
 
-    // Fudge's own pages are tagged with a leading ":", which no extension name can have, so no extension takes one.
+    // Fudge's own pages are tagged with a leading ":", which no extension id can have, so no extension takes one.
     public static let generalPage = ":general"
     public static let permissionsPage = ":permissions"
     public static let notificationsPage = ":notifications"
@@ -54,15 +54,21 @@ public enum SettingsSidebar {
     /// Every page of Fudge's own, on top or under Extensions.
     public static var fixedTags: Set<String> { Set((top + builtInExtensions).map(\.tag)) }
 
-    /// The page an installed extension's row selects: its manifest name, which Configure Extension and
-    /// `openExtensionPreferences()` open the window on too.
-    public static func tag(of installed: InstalledExtension) -> String { installed.manifest.name }
+    /// The page an installed extension's row selects: its id (FUD-183), which Configure Extension and
+    /// `openExtensionPreferences()` open the window on too, so two extensions of one name have a page each.
+    public static func tag(of installed: InstalledExtension) -> String { installed.id.key }
 
-    /// An installed extension's row title: its own, followed by " (installed)" when it's exactly the title of one of
-    /// Fudge's own pages under Extensions (the store has a "Color Picker"), so the two rows don't look the same.
+    /// An installed extension's row title, so no two rows look the same: a development build's and an added
+    /// repository's say where they're from (`displayTitle`), and one from Raycast's official repository is followed
+    /// by " (installed)" when it's exactly the title of one of Fudge's own pages under Extensions (the Extension Store
+    /// has a "Color Picker"). Never both.
     public static func title(of installed: InstalledExtension) -> String {
-        let title = installed.manifest.title
-        return builtInExtensions.contains { sameTitle($0.title, title) } ? title + " (installed)" : title
+        switch installed.repository {
+        case .development, .added: return installed.displayTitle
+        case .raycast, .bundled:
+            let title = installed.manifest.title
+            return builtInExtensions.contains { sameTitle($0.title, title) } ? title + " (installed)" : title
+        }
     }
 
     /// The Extensions section: Fudge's own pages there and `pages` (`InstalledExtension.settingsPages`), one list

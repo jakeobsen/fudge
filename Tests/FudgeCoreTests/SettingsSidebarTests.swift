@@ -10,6 +10,16 @@ private func page(_ name: String, _ title: String) throws -> InstalledExtension 
     return InstalledExtension.topLevel(manifest: manifest, directory: URL(fileURLWithPath: "/nonexistent/\(name)"))
 }
 
+/// A made-up extension `name` with a Settings page, installed in the repository folder `folder`.
+private func page(_ name: String, _ title: String, in folder: String) throws -> InstalledExtension {
+    let json = #"{ "name": "\#(name)", "title": "\#(title)", "preferences": [], "commands": [] }"#
+    return InstalledExtension(
+        manifest: try JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8)),
+        directory: URL(fileURLWithPath: "/nonexistent/\(folder)/\(name)"),
+        id: try #require(ExtensionID(name: name, repositoryFolder: folder)),
+        repository: try #require(InstalledExtension.Repository(folder: folder)))
+}
+
 @Test func theTopListIsFudgesCorePagesInOrder() {
     #expect(
         SettingsSidebar.top.map(\.title) == [
@@ -57,7 +67,7 @@ private func page(_ name: String, _ title: String) throws -> InstalledExtension 
 
 @Test func noExtensionCanTakeOneOfFudgesPages() throws {
     let own = SettingsSidebar.top + SettingsSidebar.builtInExtensions
-    #expect(own.allSatisfy { $0.tag.hasPrefix(":") }, "an extension name can't start with \":\"")
+    #expect(own.allSatisfy { $0.tag.hasPrefix(":") }, "an extension id can't start with \":\"")
     #expect(Set(own.map(\.tag)).count == own.count, "each page has its own tag")
     #expect(SettingsSidebar.tag(of: try page("calendar", "Calendar")) == "calendar")
 }
@@ -102,6 +112,35 @@ private func page(_ name: String, _ title: String) throws -> InstalledExtension 
     }
     #expect(tags(pages) == ["coffee-a", "coffee-b"])
     #expect(tags(pages.reversed()) == ["coffee-a", "coffee-b"], "whichever order they're given in")
+}
+
+@Test func twoGitHubPagesHaveTwoTags() throws {
+    let pages = [
+        try page("github", "GitHub", in: "someone/tools"), try page("github", "GitHub", in: "raycast/extensions"),
+        try page("github", "GitHub", in: "fudgeapp/development"),
+    ]
+    let rows = SettingsSidebar.extensions(pages).filter { !$0.tag.hasPrefix(":") }
+    #expect(
+        rows.map(\.tag) == ["fudgeapp+development+github", "github", "someone+tools+github"], "each page by its id")
+    #expect(rows.map(\.title) == ["GitHub (development)", "GitHub", "GitHub (someone/tools)"])
+    #expect(SettingsSidebar.extensions(pages.reversed()) == SettingsSidebar.extensions(pages))
+    for tag in ["github", "someone+tools+github", "fudgeapp+development+github"] {
+        #expect(SettingsSidebar.lists(tag, among: pages), "\(tag)")
+        #expect(!SettingsSidebar.lists(tag, among: pages.filter { $0.id.key != tag }), "\(tag) removed")
+    }
+}
+
+@Test func aCopyFromElsewhereSaysWhereItsFromNeverInstalledAsWell() throws {
+    #expect(
+        SettingsSidebar.title(of: try page("color-picker", "Color Picker", in: "raycast/extensions"))
+            == "Color Picker (installed)")
+    #expect(
+        SettingsSidebar.title(of: try page("color-picker", "Color Picker", in: "fudgeapp/development"))
+            == "Color Picker (development)")
+    #expect(
+        SettingsSidebar.title(of: try page("color-picker", "Color Picker", in: "someone/tools"))
+            == "Color Picker (someone/tools)")
+    #expect(SettingsSidebar.title(of: try page("bear", "Bear", in: "someone/tools")) == "Bear (someone/tools)")
 }
 
 @Test func theFixedTagsAreEveryPageOfFudgesOwn() {

@@ -271,10 +271,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         case .error(_, let message, _, let fatal, let notice):
             guard let item else { return }
             // A refusal on purpose (sign-in is off, SPEC-095) says so, never as a failure with its trace.
-            let manifest = item.installed.manifest
             let signIn = SignInNotice(
-                notice: notice, message: message, extension: item.installed.id, extensionTitle: manifest.title,
-                commandID: nil)
+                notice: notice, message: message, extension: item.installed.id,
+                extensionTitle: item.installed.displayTitle, commandID: nil)
             let hud = signIn?.hud ?? MessageText.joined("\(item.command.title) failed", message)
             if fatal {
                 if item.lifecycle.failed(session) { host.showHUD(hud) }

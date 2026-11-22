@@ -313,9 +313,9 @@ final class SettingsModel {
     /// The file holds something fudge can't read, so the answers can't be changed here.
     private(set) var launchPermissionsUnreadable = false
 
-    /// An installed extension's title, by its id, or nil when it isn't installed.
+    /// An installed extension's title as Fudge shows it (`displayTitle`), by its id, or nil when it isn't installed.
     func extensionTitle(_ id: ExtensionID) -> String? {
-        allExtensions.first { $0.id == id }?.manifest.title
+        allExtensions.first { $0.id == id }?.displayTitle
     }
 
     func setLaunchPermission(_ allowed: Bool, caller: ExtensionID, target: ExtensionID) {
@@ -1283,11 +1283,12 @@ final class SettingsModel {
         fudgeSettings.isEnabledOwn(commandID: commandID)
     }
 
-    /// Why a command is off by default, for its row on the Commands page; nil for one that isn't.
+    /// Why a command is off by default, for its row on the Commands page; nil for one that isn't. The part of its id
+    /// before the first `/` is its extension's id.
     func offByDefaultReason(command commandID: String) -> String? {
         guard let slash = commandID.firstIndex(of: "/") else { return nil }
-        let name = String(commandID[..<slash])
-        return allExtensions.first { $0.manifest.name == name }?.compatibility
+        let owner = String(commandID[..<slash])
+        return allExtensions.first { $0.id.key == owner }?.compatibility
             .reason(for: String(commandID[commandID.index(after: slash)...]))
     }
 
@@ -1667,11 +1668,11 @@ private struct ExtensionPreferencesForm: View {
     var body: some View {
         let manifest = installed.manifest
         Form {
-            if manifest.name == ExtensionStore.extensionName {
+            if installed.id == ExtensionStore.id {
                 ExtensionStoreSwitch(model: model)
                 ExtensionRepositoriesSection(model: model)
             }
-            if manifest.name == ClipboardHistory.extensionName {
+            if installed.id == ClipboardHistory.id {
                 ClipboardHistorySettings(model: model)
             }
             if !manifest.preferences.isEmpty {

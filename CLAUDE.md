@@ -635,7 +635,7 @@ Extensions run in a separate Node.js process, the extension host.
       On does what onboarding's Open Raycast Links with Fudge does (`RaycastLinks.openWithFudge(helper:location:)`), and is refused while Fudge runs from its disk image or a translocated copy (`AppLocation.raycastLinksRefusal`), as Open at Login is.
       Off gives both schemes back explicitly to the first other app that claims both and isn't Fudge's (`handBackTarget`, `giveBack`), so the choice macOS saves names that app; with no such app it's disabled while on, and its line says there's nothing to give them back to.
       A change that doesn't take shows the system's message, or that macOS didn't make it, and the switch shows what LaunchServices says.
-      Below them, **Signed in** lists each stored sign-in (the extension's title, the provider, when) with Sign Out.
+      Below them, **Signed in** lists each stored sign-in (the extension's `displayTitle`, the provider, when) with Sign Out.
       **Sign-ins** are Keychain generic passwords (`KeychainSecretStore`), service `io.github.jakeobsen.fudge.oauth`, account `<extension id>/<providerId>`, holding a JSON `StoredTokenSet`;
       `OAuthTokenStore` (core) reads and writes them through the `SecretStore` protocol, and the `oauth.tokens.*` calls go through `SignInCalls` (core) with the calling session's extension, never one named in the call, so one extension never reads, sets or removes another's.
       A stored sign-in keeps `relayProvider`, the provider its relay sign-in was for, only when the session prepared that sign-in; a refresh keeps the mark.
@@ -671,7 +671,7 @@ Extensions run in a separate Node.js process, the extension host.
       "Sign-in is off" with Open Extension Settings (↵, ⌘⇧,) and Open Sign-in Settings (⌘⌥,), or the others with Try Again (`RootAction.retryCommand`, as root search runs it).
       A background or menu-bar command shows its `hud` instead.
       Any other error keeps the failure view with its details.
-      Snapshot runs keep sign-ins in memory (`--sign-ins <extension>/<providerId>=<Provider>,…`), and `--sign-in-consent` saves the Sign-in page's consent alert: laid out by `NSAlert.layout()` without being shown, and moved to a `SnapshotSheet` that refuses key status and is never ordered in (`SettingsWindowController.snapshotSheet`).
+      Snapshot runs keep sign-ins in memory (`--sign-ins <extension id>/<providerId>=<Provider>,…`, an id the id rule refuses left out), and `--sign-in-consent` saves the Sign-in page's consent alert: laid out by `NSAlert.layout()` without being shown, and moved to a `SnapshotSheet` that refuses key status and is never ordered in (`SettingsWindowController.snapshotSheet`).
       So the image has the app's icon, which the real sheet leaves out.
       `--sign-in-services "github|atlassian"` is the sign-in server's answer in a snapshot run: relay ids, read, named and limited as a server's are; without it there's no answer, and the line under the choice is the plain one.
       `--sign-in-services-list`, with `--settings :sign-in`, draws Show All's list over the page in place of its popover (`SettingsModel.snapshotServicesList`), and nothing while the line names five services or fewer.
@@ -753,8 +753,11 @@ Extensions run in a separate Node.js process, the extension host.
       It's for user-initiated entries only, never a background path: `show` takes the call's `CallOrigin` and does nothing for a background one. ⌘Q closes the window as ⌘W and its close button do (`SettingsNSWindow.performKeyEquivalent`, `WindowShortcut` in core), and Fudge keeps running; while a hotkey is being recorded, the recorder takes ⌘Q like any other key.
       The sidebar lists Fudge's core pages on top: General, Permissions, Notifications, Commands, Sign-in and Development.
       Under Extensions, one list sorted by title with `localizedStandardCompare` holds Fudge's Calculator, Calendar, Color Picker, Quicklinks, Snippets and Window Management pages, the extensions with preferences, and the Extension Store, whose page starts with its switch (`InstalledExtension.settingsPages`), enabled or not.
-      `SettingsSidebar` (core) gives both lists and the tags of Fudge's own pages, which start with `:`, so no extension name can take one; `SettingsView` only draws them.
-      Rows with exactly the same title put Fudge's own page first, then the extensions by tag, so the order never changes; such an extension shows " (installed)" after its title (`SettingsSidebar.title(of:)`; the store has a Color Picker of its own).
+      `SettingsSidebar` (core) gives both lists and the tags of Fudge's own pages, which start with `:`, so no extension id can take one; `SettingsView` only draws them.
+      An extension's page is tagged with its id (`SettingsSidebar.tag(of:)`), so two extensions of one name have a page each, and `--settings <id>` opens one in a snapshot run.
+      Rows with exactly the same title put Fudge's own page first, then the extensions by tag, so the order never changes.
+      An extension from Raycast's official repository with exactly the title of one of Fudge's own pages shows " (installed)" after its title (`SettingsSidebar.title(of:)`; the Extension Store has a Color Picker of its own).
+      A development build's and an added repository's rows show their `displayTitle` instead ("GitHub (development)", "GitHub (someone/tools)"), never " (installed)" as well.
       A selected page that's no longer listed, such as an extension removed while its page is open, gives way to General (`SettingsSidebar.lists`).
       The window holds each extension's preferences, stored by `PreferenceStore` in `preferences/<extension id>.json`.
       Before a launch, `PreferenceResolver` merges stored values, manifest defaults and type defaults.
