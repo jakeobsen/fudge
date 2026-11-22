@@ -4632,7 +4632,8 @@ final class LauncherModel {
             description: text("description"), icon: values["providerIcon"].flatMap { $0 == .null ? nil : $0 })
         if let method = prepared.request.directMethod {
             prompt.canPaste = method.canPaste
-            prompt.linksElsewhere = RaycastReturn.elsewhereHint(raycastLinks.status(fudge: Bundle.main.bundleURL))
+            let helper = RaycastLinksHelper.url(in: Bundle.main.bundleURL)
+            prompt.linksElsewhere = RaycastReturn.elsewhereHint(raycastLinks.status(helper: helper))
         }
         signIn = prompt
         actionPanel = nil

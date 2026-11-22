@@ -11,7 +11,7 @@ Extensions run in a separate Node.js process, the extension host.
 
 ## Architecture
 
-- **One Swift package, three targets.**
+- **One Swift package, four targets.**
   - `FudgeApp` is the app: an accessory app with a menu bar item and no Dock icon.
     The item's glyph is `MenuBarIcon`, a fudge cube drawn in code as a template image.
     Its autosave name is `fudge` (`AppDelegate.statusItemName`), because macOS keeps whether a status item is shown in the app's preferences under that name, and an unnamed item's `Item-0` was once saved as hidden.
@@ -583,7 +583,11 @@ Extensions run in a separate Node.js process, the extension host.
       Under the server choice, **Extensions with their own sign-in** (SPEC-132 §5, D-89, `OwnAppSignInControls`) is a switch of its own, off by default and independent of the server.
       Its line, "Let extensions sign in with their own apps. Most of them come back through raycast.com.", is one string (`OwnAppSignIn.explanation`) for the page, its consent sheet and onboarding.
       Only the sheet's Continue saves `ownAppSignIn` with `ownAppSignInConsentAt` (`FudgeSettings.isOwnAppSignInOn` needs both, and both are this Mac's, in `Backup.consentKeys`); off removes both, and sign-ins already stored stay under Signed in.
-      Under it, the **Raycast links** row (`RaycastLinksRow`) says which app opens `raycast://oauth` and `com.raycast:/oauth` (Fudge, another app by name, or "another copy of Fudge"), with **Open with Fudge** when it isn't Fudge, read when the page appears and when the window becomes key.
+      Under it, the **Fudge opens Raycast links** switch (`RaycastLinksRow`, `RaycastLinksToggle` in core, D-114) is on while Fudge Links opens both `raycast://oauth` and `com.raycast:/oauth`, read from LaunchServices when the page appears and when the window becomes key, never stored.
+      Its line says who opens them while it's off (another app by name, no app, or "another copy of Fudge": another copy's Fudge Links, or a build from before Fudge Links that declares the schemes itself), and who gets them back while it's on.
+      On does what onboarding's Open Raycast Links with Fudge does (`RaycastLinks.openWithFudge(helper:location:)`), and is refused while Fudge runs from its disk image or a translocated copy (`AppLocation.raycastLinksRefusal`), as Open at Login is.
+      Off gives both schemes back explicitly to the first other app that claims both and isn't Fudge's (`handBackTarget`, `giveBack`), so the choice macOS saves names that app; with no such app it's disabled while on, and its line says there's nothing to give them back to.
+      A change that doesn't take shows the system's message, or that macOS didn't make it, and the switch shows what LaunchServices says.
       Below them, **Signed in** lists each stored sign-in (the extension's title, the provider, when) with Sign Out.
       **Sign-ins** are Keychain generic passwords (`KeychainSecretStore`), service `io.github.jakeobsen.fudge.oauth`, account `<extension>/<providerId>`, holding a JSON `StoredTokenSet`;
       `OAuthTokenStore` (core) reads and writes them through the `SecretStore` protocol, and the `oauth.tokens.*` calls go through `SignInCalls` (core) with the calling session's extension, never one named in the call, so one extension never reads, sets or removes another's.
@@ -603,16 +607,18 @@ Extensions run in a separate Node.js process, the extension host.
       Any other `https` endpoint with a host and no user info takes the direct path while its switch is on (else the `off` refusal), for the Web, App and AppURI methods only.
       There no listener starts, nothing is pending for the fetch rewrite, the stored sign-in has no `relayProvider`, and the redirect is Raycast's for the method (`OAuthRedirectMethod.raycastRedirectURI`).
       Its ↵ opens any `https` URL on neither of those hosts whose `state` is the request's (`PreparedSignIn.isDirectURL`), since some extensions build the URL themselves.
-      The browser comes back through a `raycast://oauth` or `com.raycast:/oauth` link (`CFBundleURLTypes` in `App/Info.plist`, named `io.github.jakeobsen.fudge.sign-in`, with a get-URL Apple Event handler set in `applicationWillFinishLaunching`, so a link that launches Fudge isn't missed).
+      The browser comes back through a `raycast://oauth` or `com.raycast:/oauth` link, which Fudge Links hands on as a get-URL Apple Event, whose handler Fudge sets in `applicationWillFinishLaunching`, so a link that launches Fudge isn't missed.
+      Fudge.app itself declares no URL types (D-107).
       `RaycastReturn.read(link:state:)` (core) answers only those two shapes, reading the query as the loopback's is read (`OAuthCallback.read(query:state:)`, the state compared in constant time).
       Every other link, a link with another state, and any link while no direct sign-in waits is ignored: nothing happens, nothing is shown, and nothing logs it.
       `OAuthLinkWait` (app) is the direct sign-in's wait, in place of `OAuthLoopback`.
       **The paste** (Web only, `SignInPrompt.canPaste`): while it waits, the prompt says to copy the browser's address and press ⌘V, which reads the clipboard then and only then.
       `RaycastReturn.read(pasted:state:)` takes an `https` URL with any host or a `raycast://oauth` link, at most 16 KB; anything else shows "That address isn't from this sign-in." and the sign-in keeps waiting, and the text is never logged or kept.
       When Fudge doesn't open Raycast's links, the prompt says so in one line (`RaycastReturn.elsewhereHint`), pointing to Settings → Sign-in.
-      **Who opens Raycast's links** is read through `RaycastLinks` (core): `SystemRaycastLinks` (`NSWorkspace.urlForApplication(toOpen:)`, and `setDefaultApplication(at:toOpenURLsWithScheme:)` for Open with Fudge) in the app, and `FixedRaycastLinks` in tests and snapshot runs, so neither touches LaunchServices.
-      Only the user's click changes the handler, never a launch or anything in the background.
-      Snapshot runs take `--raycast-links fudge|<app name>` for who opens them, and `--own-app-sign-in` shows the switch on, in memory only.
+      **Who opens Raycast's links** is read through `RaycastLinks` (core): `SystemRaycastLinks` (`NSWorkspace.urlForApplication(toOpen:)` and `urlsForApplications(toOpen:)`; on a click, `LSRegisterURL` on Fudge Links and `setDefaultApplication(at:toOpenURLsWithScheme:)`) in the app, and `FixedRaycastLinks` in tests and snapshot runs, so neither touches LaunchServices.
+      Only the user's click registers Fudge Links or changes the handler, never a launch, a move, an update or anything in the background.
+      After a move or an update to a new path, Raycast's links go back to the other app that claims them until the user turns the switch on again.
+      Snapshot runs take `--raycast-links fudge|<app name>` for who opens them (`fudge` is Fudge Links, and `fudge,<app name>` has that app claim them too), and `--own-app-sign-in` shows the switch on, in memory only.
       **A sign-in stopped on purpose** (SPEC-095) names why in its refusal (`SignInRefusal.notice`: off, cancelled, timed out, or refused by the provider or the relay), and the error the command reports with that `notice` (`HostMessage.error`) shows as `SignInNotice` (core) in the command's place, drawn like the store's "off" notice, with no trace and nothing red:
       Like any failure that stands in for a command, the notice keeps the command's title in the bottom bar (`LauncherFooter`); one that belongs to no command, like the store's, says "Fudge".
       "Sign-in is off" with Open Extension Settings (↵, ⌘⇧,) and Open Sign-in Settings (⌘⌥,), or the others with Try Again (`RootAction.retryCommand`, as root search runs it).
@@ -667,7 +673,7 @@ Extensions run in a separate Node.js process, the extension host.
       The **Extension Store** step (after Currency) shows the store's consent sheet's own words (`ExtensionStore.Consent`), with **Turn On Extension Store**, which writes what the switch and its sheet write and also ticks the store's Enabled (`FudgeSettings.turnOnExtensionStore`), and **Not Now**, which is ↵.
       The **Sign-in** step is the Sign-in page's own choice (`SignInServerControls`, shared with the page, with `SignInServer.explanation`), whose consent sheets show on the onboarding window (`OnboardingModel.ask`; laid out off-screen in snapshot runs), with Continue as ↵, so Off stays Off.
       The **Raycast** step (after Sign-in, SPEC-132 §3.3, D-88, `RaycastStep`) says that Fudge runs extensions made for Raycast, that with Raycast on the same Mac the two can get in each other's way, and that signing in to some extensions ends with a Raycast link, which has to open Fudge.
-      It offers **Open Raycast Links with Fudge** while another app opens them (saying that Raycast's own links then open Fudge too), and **Turn On** for extensions with their own sign-in, with the switch's own line (`OnboardingStep.optIns` maps `ownAppSignIn` to it).
+      It offers **Open Raycast Links with Fudge**, which does what turning the Sign-in page's switch on does, while another app opens them (saying that Raycast's own links then open Fudge too), and **Turn On** for extensions with their own sign-in, with the switch's own line (`OnboardingStep.optIns` maps `ownAppSignIn` to it).
       Its Continue, or Not Now while it offers something, is ↵ and changes nothing (`RaycastStep.buttons`), so going through onboarding with ↵ leaves the switch and the links as they were.
       The **Clipboard history** step (after Raycast) shows the consent sheet's own words (`ClipboardHistory.consentMessage`, the one string both use) with **Keep Clipboard History**, which does what the switch and its sheet do (`SettingsModel.keepClipboardHistory`), and **Not Now**, which is ↵, so going through onboarding with ↵ never starts recording.
       When it's already on, the step says so and turning it off is left to Settings.
@@ -699,10 +705,14 @@ Extensions run in a separate Node.js process, the extension host.
       `NSApplication.activateFromUserAction(origin:)` is the one way an extension's call brings Fudge forward, and asserts that the origin it's passed is user-initiated; every caller passes it explicitly.
       Fudge's own windows use `NSApp.activate()`: onboarding at launch, and a FilePicker's Select… click.
   - `FudgeCLI` is the `fudge` command-line tool.
+  - `FudgeLinks` is `Fudge Links.app` in `Contents/Helpers`, the only part of Fudge that declares `raycast:` and `com.raycast:` (`App/Links/Info.plist`, SPEC-140, D-107).
+    It's an `LSUIElement` app that hands each such link to Fudge as a get-URL Apple Event (`NSWorkspace.open(_:withApplicationAt:configuration:)`, never activating): to every running Fudge, the one that holds it first, else to the one that holds it, launched in the background (`RaycastLinksHelper.targets`).
+    It drops any other link, logs nothing, and quits once its links are handed on, or 10 s after a launch with none.
+    Only the Sign-in page's switch, or onboarding's Open Raycast Links with Fudge, registers it with LaunchServices, so no build, launch, snapshot run, copy or Spotlight makes it, or Fudge, open Raycast's links.
   - `FudgeCore` is shared code, and the only target with tests.
 
   Put logic in `FudgeCore`, where it can be tested.
-  Keep the app and the tool thin.
+  Keep the app, the tool and Fudge Links thin.
 - **The extension host lives in `runtime/`.**
   It's written in TypeScript.
   Extensions trust the certificates the Mac trusts (SPEC-081, `NodeTrust`): the app starts the host with `--use-system-ca` when its Node has it (22.15+, 23.8+, 24 and later).
@@ -1028,6 +1038,7 @@ Extensions run in a separate Node.js process, the extension host.
 - **The Makefile assembles the app bundle** (`make app`):
   - the `FudgeApp` binary becomes `Contents/MacOS/Fudge`
   - the `fudge` tool and esbuild's native binary go into `Contents/Helpers/`, where `ExtensionBuilder.locateEsbuild` finds esbuild next to the tool
+  - `Fudge Links.app` goes into `Contents/Helpers/` too, the `FudgeLinks` binary with `App/Links/Info.plist` and Fudge's versions: a nested app there is registered by nothing but `LSRegisterURL` on it (one in `Contents/Library/LoginItems` is registered at every launch)
   - **Node.js** (SPEC-115): an official build from nodejs.org, `NODE_VERSION` in the `Makefile`, for the architecture the Mac builds for (arm64 or x64, never both: the app itself is built for one).
     Its tarball's SHA-256, copied from the release's `SHASUMS256.txt`, is pinned beside the version, and `make` checks it before unpacking anything; a tarball that doesn't match is deleted, and the build fails.
     It's downloaded once into `.cache/node` (ignored, and kept by `make clean`), and every Node step of the build runs it (`npm ci`, esbuild, the runtime's tests), since the `Makefile` puts it first on `PATH`.
@@ -1049,8 +1060,8 @@ Extensions run in a separate Node.js process, the extension host.
     Its `components` list is the one place they're named, and the repo's `THIRD-PARTY-NOTICES.md` is the same, written by `npm run generate`.
     Node.js's entry is the `LICENSE` of the Node.js the `Makefile` pins (`NODE_VERSION`), read from `.cache/node`: the same file `make app` copies to `Contents/Resources/node/LICENSE`.
     `npm run typecheck` fails while that file is stale, or when a bundle Fudge ships (the host, the worker, `compat-scan.js`, a bundled extension) takes in an npm package the list doesn't have; anything else the app ships, such as a binary in `Helpers/`, adds its entry by hand.
-  - with `CONFIG=release`, `strip -S -x` takes the debug and local symbols out of `Contents/MacOS/Fudge` and `Contents/Helpers/fudge`, which otherwise name the builder's folders (`/Users/…`, about 300 paths each) and double their size
-  - `scripts/sign-app.sh` signs it inside-out, each executable in `Contents/Helpers` (the `fudge` tool, esbuild and Node.js), then the app with `App/Fudge.entitlements`, all with the hardened runtime (FUD-44).
+  - with `CONFIG=release`, `strip -S -x` takes the debug and local symbols out of `Contents/MacOS/Fudge`, `Contents/Helpers/fudge` and Fudge Links' executable, which otherwise name the builder's folders (`/Users/…`, about 300 paths each) and double their size
+  - `scripts/sign-app.sh` signs it inside-out, each item in `Contents/Helpers` (the `fudge` tool, esbuild, Node.js and Fudge Links), then the app with `App/Fudge.entitlements`, all with the hardened runtime (FUD-44).
     A helper that needs entitlements of its own has them in `App/Helpers/<its file name>.entitlements`, so a release's signing with the Developer ID gives them too.
     Any other executable added to the bundle (a dylib, a `.node` addon) must be signed there too, or notarization refuses the release.
     The identity is `SIGN_IDENTITY`: from what `security find-identity -v -p codesigning` lists, the default is "fudge local signing", else the first `Apple Development:` identity, else ad hoc (see the README).
@@ -1108,6 +1119,9 @@ Extensions run in a separate Node.js process, the extension host.
 
 - **Names must differ by more than case.** macOS file systems are case-insensitive, so no two products or targets may differ only by case.
   The tool's product is `fudge`, which is why the app's product is `FudgeApp`.
+- **Fudge.app declares no URL schemes** (D-107).
+  Spotlight registers a new build in an indexed folder within seconds, and it then claims its schemes; any launch of it (`make run`, a snapshot run, a probe) makes it the app that opens them.
+  Raycast's schemes are declared only by Fudge Links, which only the user's click registers.
 - **Scripts that also run as a command guard it by their own file name** (`import.meta.url.endsWith(".ts")`), as `raycast-types.ts` and `raycast-utils.ts` do.
   Bundled into another script, `import.meta.url` and `process.argv[1]` are both the bundle's, so a guard on those alone would run the generator from inside `compat-scan.js`.
 - **Proxies must return frozen properties untouched.**

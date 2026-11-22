@@ -62,22 +62,20 @@ struct OwnAppSignInControls: View {
     }
 }
 
-/// Which app opens Raycast's links (SPEC-132 §3.3), with Open with Fudge while it's another one.
+/// **Fudge opens Raycast links** (SPEC-140, D-114): a switch that shows who opens them, read from LaunchServices, never
+/// stored. On registers Fudge Links and makes it the opener; off gives them back to the other app that claims them, and
+/// can't be switched off while there's none.
 struct RaycastLinksRow: View {
     @Bindable var model: SettingsModel
 
     var body: some View {
-        LabeledContent {
-            HStack(spacing: 10) {
-                Text(model.raycastLinksStatus.row).foregroundStyle(.secondary)
-                if !model.raycastLinksStatus.isFudge {
-                    Button("Open with Fudge") { model.openRaycastLinksWithFudge() }
-                }
-            }
-        } label: {
-            Text("Raycast links")
-            Text("Signing in to some extensions ends with one, which has to open Fudge.")
+        let toggle = model.raycastLinksToggle
+        Toggle(isOn: Binding(get: { toggle.isOn }, set: { model.setRaycastLinks($0) })) {
+            Text(RaycastLinksToggle.title)
+            Text(RaycastLinksToggle.explanation)
+            Text(toggle.note)
         }
+        .disabled(!toggle.canChange)
         if let problem = model.raycastLinksProblem {
             Text(problem).font(.system(size: 11)).foregroundStyle(.red)
         }

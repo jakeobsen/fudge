@@ -317,15 +317,25 @@ final class OAuthLinkWait: SignInWait {
     }
 }
 
-/// Which app opens Raycast's links, from LaunchServices (SPEC-132 §3.3). Only the user's click on Open Raycast Links
-/// with Fudge changes it, never a launch or anything in the background.
+/// Which app opens Raycast's links, from LaunchServices (SPEC-132 §3.3, SPEC-140). Only the user's click registers
+/// Fudge Links or changes the handler (Open Raycast Links with Fudge, or the Sign-in page's switch), never a launch or
+/// anything in the background.
 struct SystemRaycastLinks: RaycastLinks {
     func opener(of url: URL) -> URL? {
         NSWorkspace.shared.urlForApplication(toOpen: url)
     }
 
+    func claimants(of url: URL) -> [URL] {
+        NSWorkspace.shared.urlsForApplications(toOpen: url)
+    }
+
     func bundleIdentifier(of app: URL) -> String? {
         Bundle(url: app)?.bundleIdentifier
+    }
+
+    func register(_ app: URL) throws {
+        let status = LSRegisterURL(app as CFURL, true)
+        guard status == noErr else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
     }
 
     func open(scheme: String, with app: URL) async throws {

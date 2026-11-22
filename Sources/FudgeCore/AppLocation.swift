@@ -49,6 +49,12 @@ public enum AppLocation: Equatable, Sendable {
         offersMove ? "Move Fudge to Applications first, so it can open at login." : nil
     }
 
+    /// Why Fudge can't be made to open Raycast's links from here, or nil when it can: Fudge Links would be registered
+    /// on a volume that goes away, or in a temporary copy (SPEC-140 §3.2).
+    public var raycastLinksRefusal: String? {
+        offersMove ? "Move Fudge to Applications first, so it can open Raycast links." : nil
+    }
+
     /// Where the move puts the app: `/Applications/<name>.app`, or, for a user who can't add apps there (a standard
     /// account), the Applications folder in their home folder. Fudge never asks for an administrator's password.
     public static func destination(
