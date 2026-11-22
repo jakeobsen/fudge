@@ -47,13 +47,13 @@ extension ExtensionLayout {
         guard FileManager.default.fileExists(atPath: extensions.path, isDirectory: &isFolder), isFolder.boolValue else {
             return MoveReport()
         }
-        return try moveLocked(extensions: extensions, waitingAtMost: bound, every: interval)
+        return try moveLocked(extensions: extensions, waitingAtMost: bound, every: interval, rename: renameExclusively)
     }
 
     /// The move with the lock taken and given back around it; `rename` is the move's (`moveIntoRepositories`).
     static func moveLocked(
         extensions: URL, waitingAtMost bound: Duration, every interval: Duration = moveLockInterval,
-        rename: (String, String) -> Int32 = { renamex_np($0, $1, UInt32(RENAME_EXCL)) }
+        rename: (String, String) -> Int32
     ) throws(MoveLockFailure) -> MoveReport {
         let lock = try lockMove(in: extensions, waitingAtMost: bound, every: interval)
         defer { unlockMove(lock) }
@@ -96,15 +96,20 @@ extension ExtensionLayout {
         return nil
     }
 
-    /// The move itself, with the lock held. `rename` is `renamex_np` with `RENAME_EXCL` (0, or -1 with `errno` set); a
-    /// test passes one that fails on purpose.
+    /// The move's one way to file a folder: `renamex_np` with `RENAME_EXCL`, which never replaces what's there, and
+    /// returns 0, or -1 with `errno` set.
+    static func renameExclusively(_ from: String, _ to: String) -> Int32 {
+        renamex_np(from, to, UInt32(RENAME_EXCL))
+    }
+
+    /// The move itself, with the lock held. `rename` is `renameExclusively`; a test passes one that fails on purpose.
     ///
     /// Each top-level folder, not hidden and not a link, that holds `package.json` itself goes to
     /// `raycast/extensions/<manifest name>` by one rename, so it's whole in one place or the other and keeps its inode
-    /// and creation time. A folder whose manifest can't be read, or whose name isn't valid, stays; so does one whose
-    /// target is there already, which is never replaced. No store record is read.
+    /// and creation time. A folder whose manifest can't be read, or whose name isn't valid, stays, unless it's named
+    /// `raycast`; so does one whose target is there already, which is never replaced. No store record is read.
     static func moveIntoRepositories(
-        extensions: URL, rename: (String, String) -> Int32 = { renamex_np($0, $1, UInt32(RENAME_EXCL)) }
+        extensions: URL, rename: (String, String) -> Int32 = ExtensionLayout.renameExclusively
     ) -> MoveReport {
         var report = MoveReport()
         var raycastFolder: Result<URL, MoveFolderProblem>?
@@ -152,13 +157,18 @@ extension ExtensionLayout {
             return manifest.name
         }
 
+        /// The name a legacy install named `raycast` is filed under: its manifest's, or `raycast` when that can't be
+        /// read or isn't valid.
+        func raycastInstallName(at folder: URL) -> String {
+            (try? ExtensionManifest.load(from: folder.appendingPathComponent("package.json")))
+                .map(\.name).flatMap { ExtensionManifest.isValidName($0) ? $0 : nil } ?? "raycast"
+        }
+
         // First, a legacy install named `raycast` that a stop left under its hidden name.
         let waiting = extensions.appendingPathComponent(waitingRaycastName, isDirectory: true)
         var info = stat()
         if lstat(waiting.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR {
-            let name = (try? ExtensionManifest.load(from: waiting.appendingPathComponent("package.json")))
-                .map(\.name).flatMap { ExtensionManifest.isValidName($0) ? $0 : nil }
-            file(waiting, shown: waitingRaycastName, as: name ?? "raycast")
+            file(waiting, shown: waitingRaycastName, as: raycastInstallName(at: waiting))
         }
 
         let installs = ExtensionWalk.entries(of: extensions).filter {
@@ -166,11 +176,14 @@ extension ExtensionLayout {
         }.map(\.name)
         // Then a legacy install named `raycast` (in any letter case, since the Mac's disk usually ignores case), before
         // any other install makes `raycast/extensions/`, which would be inside it: it's renamed out of the way to
-        // `.move-raycast`, and filed from there.
+        // `.move-raycast`, and filed from there. One whose manifest can't be read, or names no valid extension, is
+        // filed as `raycast`, as one left under the hidden name is: left at the top, it would keep every other install
+        // there.
         let isRaycast = { (name: String) in ExtensionRepositoryFolder.lowercased(name) == "raycast" }
         for name in installs where isRaycast(name) {
-            guard let manifestName = manifestName(of: name) else { continue }
-            guard rename(extensions.appendingPathComponent(name, isDirectory: true).path, waiting.path) == 0 else {
+            let from = extensions.appendingPathComponent(name, isDirectory: true)
+            let manifestName = raycastInstallName(at: from)
+            guard rename(from.path, waiting.path) == 0 else {
                 let code = errno
                 report.left.append(
                     code == EEXIST || code == ENOTEMPTY

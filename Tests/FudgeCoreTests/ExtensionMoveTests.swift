@@ -129,6 +129,32 @@ private func inode(_ url: URL) -> UInt64? {
     #expect(try names(in: stopped.appendingPathComponent("raycast/extensions")) == ["raycast", "zeta"])
 }
 
+/// A legacy install named `raycast` whose manifest can't be read, or names no valid extension, is filed as `raycast`
+/// all the same: left at the top, it would keep `raycast/` from being Raycast's folder, and every other install with
+/// it.
+@Test func aLegacyRaycastInstallThatCantBeReadIsFiledAsRaycast() throws {
+    for unreadable in [true, false] {
+        let extensions = try Fixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: extensions) }
+        try Layout.install("alpha", at: "alpha", in: extensions)
+        // Either a package.json that isn't JSON, or one whose name isn't valid.
+        let legacy = try Layout.install("Bad Name", at: "raycast", in: extensions)
+        if unreadable { try Data("{".utf8).write(to: legacy.appendingPathComponent("package.json")) }
+        try Layout.install("zeta", at: "zeta", in: extensions)
+        let folderInode = inode(legacy)
+
+        let report = ExtensionLayout.moveIntoRepositories(extensions: extensions)
+        #expect(report == ExtensionLayout.MoveReport(moved: ["raycast", "alpha", "zeta"], left: []), "\(unreadable)")
+        #expect(try names(in: extensions) == ["raycast"])
+        #expect(try names(in: extensions.appendingPathComponent("raycast/extensions")) == ["alpha", "raycast", "zeta"])
+        #expect(inode(extensions.appendingPathComponent("raycast/extensions/raycast")) == folderInode)
+        #expect(
+            Layout.loaded(extensions) == [
+                "alpha raycast raycast/extensions/alpha", "zeta raycast raycast/extensions/zeta",
+            ])
+    }
+}
+
 @Test func legacyFudgeappAndDevelopmentInstallsMoveLikeAnyOther() throws {
     let extensions = try Fixtures.temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: extensions) }
@@ -145,7 +171,7 @@ private func inode(_ url: URL) -> UInt64? {
 }
 
 /// One rename, never a copy: the folder and what's in it keep their inodes, so the store's adoption, which reads the
-/// folder's creation time, works unchanged.
+/// folder's creation time, works unchanged. Through the move the app and `fudge build` run, lock and all.
 @Test func theMovedFolderAndItsFilesKeepTheirInodes() throws {
     let extensions = try Fixtures.temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: extensions) }
@@ -153,7 +179,9 @@ private func inode(_ url: URL) -> UInt64? {
     let file = folder.appendingPathComponent("package.json")
     let before = (inode(folder), inode(file))
     let created = try folder.resourceValues(forKeys: [.creationDateKey]).creationDate
-    #expect(ExtensionLayout.moveIntoRepositories(extensions: extensions).moved == ["github"])
+    #expect(
+        try ExtensionLayout.moveIntoRepositories(extensions: extensions, waitingAtMost: .seconds(5)).moved == ["github"]
+    )
     let moved = extensions.appendingPathComponent("raycast/extensions/github")
     #expect(inode(moved) == before.0 && inode(moved.appendingPathComponent("package.json")) == before.1)
     #expect(try moved.resourceValues(forKeys: [.creationDateKey]).creationDate == created)
@@ -271,6 +299,33 @@ private final class Overlap: @unchecked Sendable {
         try ExtensionLayout.moveIntoRepositories(extensions: extensions, waitingAtMost: .seconds(20))
     }
     #expect(report?.moved == ["github"])
+}
+
+/// The waits: 5 s for the app at launch, a minute for `fudge build`, each trying the lock every 100 ms.
+@Test func theMoveWaitsFiveSecondsAtLaunchAndAMinuteForABuild() {
+    #expect(ExtensionLayout.launchMoveWait == .seconds(5))
+    #expect(ExtensionLayout.buildMoveWait == .seconds(60))
+    #expect(ExtensionLayout.moveLockInterval == .milliseconds(100))
+    #expect(Fixtures.builder().moveLockWait == ExtensionLayout.buildMoveWait)
+}
+
+/// The app at launch, with its own bound: while another Fudge holds the lock, it waits the whole 5 s before it skips
+/// the move (only a lower bound, which load can't break; the limit is `Tool.noHang`).
+@Test func theAppWaitsItsWholeBoundAtLaunchBeforeItSkipsTheMove() async throws {
+    let extensions = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: extensions) }
+    try Layout.install("github", at: "github", in: extensions)
+    let held = try ExtensionLayout.lockMove(in: extensions, waitingAtMost: .zero, every: .milliseconds(100))
+    defer { ExtensionLayout.unlockMove(held) }
+    let outcome = try await OffThePool.run(within: Tool.noHang) { () -> (ExtensionLayout.MoveReport?, Duration) in
+        let clock = ContinuousClock()
+        let started = clock.now
+        let report = ExtensionLayout.moveAtLaunch(extensions: extensions) { _, _ in }
+        return (report, clock.now - started)
+    }
+    let (report, waited) = try #require(outcome, "the wait didn't end")
+    #expect(report == nil, "no move ran")
+    #expect(waited >= .seconds(5), "\(waited)")
 }
 
 /// The app at launch: past its bound it skips the move, writes one line and loads the extensions as they are.

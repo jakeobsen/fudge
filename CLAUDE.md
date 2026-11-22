@@ -1168,6 +1168,7 @@ Extensions run in a separate Node.js process, the extension host.
     The lock goes back with `LOCK_UN` and then `close`, as the build's does, and `fudge build` gives it back before it takes its own.
     Each install moves by one `renamex_np` with `RENAME_EXCL`, so it's whole in one place or the other and keeps its inode and creation time; a target that's there already is never replaced, and the old folder stays with a line in `Fudge.log`, as does one whose manifest can't be read.
     A legacy install named `raycast` would land inside itself, so it's renamed to `.move-raycast` and filed from there before any other install, whatever their names, since the first one filed makes `raycast/extensions/`; every move finishes a `.move-raycast` it finds before anything else.
+    One whose manifest can't be read is filed as `raycast`, since at the top it would keep `raycast/` from being Raycast's folder and every other install would stay.
     A move stopped halfway leaves both kinds, which both load, and the next launch moves the rest.
     `CommandOwner` (core) is a command id's owner, one of Fudge's groups (`BuiltInGroup`, the six `:` keys) or an `ExtensionID`, and `BundledCalls.mayCall` says whether a session's extension may make a call only one bundled extension makes, comparing whole ids.
     Command names are letters of either case, digits, `.`, `-` and `_`, starting with a letter or digit, as Raycast accepts them (`caffeinateWhile`, `search-projects.command`): `ExtensionManifest.isValidCommandName`, which the build and `compatibility.json` use.

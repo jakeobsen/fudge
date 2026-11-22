@@ -251,6 +251,20 @@ struct BuildIntoARepositoryTests {
     }
 }
 
+/// `fudge build` waits, with its own bound, for another Fudge's move that gives the lock back in time, then builds and
+/// installs.
+@Test(.enabled(if: Fixtures.canBuild, "needs esbuild and Fudge's Node.js: run `make test`"))
+func aBuildWaitsForAMoveThatEndsWithinItsBound() async throws {
+    let extensions = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: extensions) }
+    let held = try ExtensionLayout.lockMove(in: extensions, waitingAtMost: .zero, every: .milliseconds(100))
+    OffThePool.after(.milliseconds(300)) { ExtensionLayout.unlockMove(held) }
+    let builder = Fixtures.builder()
+    let outcome = try await BuildOutcome.of { try builder.build(source: Fixtures.greeter, into: extensions) }
+    #expect(outcome == .installed)
+    #expect(Layout.loaded(extensions) == ["fudgeapp+development+greeter development fudgeapp/development/greeter"])
+}
+
 /// `fudge build` waits for another Fudge's move at most its bound (60 s; here a seam's 300 ms), then stops with
 /// `cantLock`, before anything else.
 @Test func aBuildGivesUpWaitingForAMove() async throws {
