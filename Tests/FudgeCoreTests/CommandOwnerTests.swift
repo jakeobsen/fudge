@@ -27,7 +27,9 @@ import Testing
         #expect(CommandOwner(stored: key) == .extension(id), "\(key)")
         #expect(CommandOwner.extension(id).key == key)
     }
-    for key in [":general", ":nope", ":", "Bad Key", "raycast+extensions+github", "", "github/search"] {
+    for key in [
+        ":general", ":nope", ":", "Bad Key", "raycast+extensions+github", "", "github/search", "someone/tools+github",
+    ] {
         #expect(CommandOwner(stored: key) == nil, "\(key.debugDescription)")
     }
 }

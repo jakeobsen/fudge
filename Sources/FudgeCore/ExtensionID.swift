@@ -57,10 +57,11 @@ public struct ExtensionID: Hashable, Sendable, CustomStringConvertible {
     /// - a server's name, one to six path segments and a valid name: three to eight parts.
     ///
     /// The parts before the name are a repository folder that `ExtensionRepositoryFolder.isValid` accepts, so they're
-    /// lowercase. `raycast+extensions+<name>` is refused, since Raycast's installs keep their bare names.
+    /// lowercase. Each part is one folder segment, so an id never holds a `/`: keys split at their first `/`.
+    /// `raycast+extensions+<name>` is refused, since Raycast's installs keep their bare names.
     /// `runtime/test/fixtures/extension-ids.json` pins this and the runtime's `isValidExtensionId` to the same cases.
     public static func isValid(_ key: String) -> Bool {
-        guard key.utf8.count <= maxBytes else { return false }
+        guard key.utf8.count <= maxBytes, !key.utf8.contains(UInt8(ascii: "/")) else { return false }
         let parts = key.split(separator: Character(separator), omittingEmptySubsequences: false).map(String.init)
         guard let name = parts.last, ExtensionManifest.isValidName(name) else { return false }
         if parts.count == 1 { return true }

@@ -54,6 +54,10 @@
     "github ",
     "github\n",
     "someone+tools+github/search",
+    "someone/tools+github",
+    "git.example.org/team+extensions+github",
+    "git.example.org/team/extensions+github",
+    "git.example.org+team/sub+extensions+github",
     "ooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo+rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr+nnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnnn",
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "someone+tools+a+b"

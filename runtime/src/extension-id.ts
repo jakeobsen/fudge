@@ -134,10 +134,11 @@ export function isValidRepositoryFolder(folder: unknown): folder is string {
  * `ExtensionID.isValid`, at most 200 bytes, one of: a valid extension name; a GitHub owner, a repository and a valid
  * name (exactly three parts); a server's name, one to six path segments and a valid name (three to eight parts). The
  * parts before the name are a valid repository folder, and `raycast+extensions+<name>` is refused, since Raycast's
- * installs keep their bare names.
+ * installs keep their bare names. Each part is one folder segment, so an id never holds a `/`: keys split at their
+ * first `/`.
  */
 export function isValidExtensionId(id: unknown): id is string {
-    if (typeof id !== "string" || Buffer.byteLength(id, "utf8") > maxIdBytes) return false;
+    if (typeof id !== "string" || Buffer.byteLength(id, "utf8") > maxIdBytes || id.includes("/")) return false;
     const parts = id.split("+");
     if (!isValidName(parts.at(-1))) return false;
     if (parts.length === 1) return true;
