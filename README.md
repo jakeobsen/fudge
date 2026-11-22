@@ -173,7 +173,7 @@ In the **Extension Store** command, search the extensions, or pick a category in
 Some extensions sign in to a service, such as GitHub or Jira.
 Pick a sign-in server under **Settings… → Sign-in**: **Fudge's sign-in server**, or **Your own server…**.
 Fudge's sign-in server offers GitHub and Atlassian (Jira and Confluence).
-A company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth), which can also offer Linear, Slack, Asana, Google and Zoom.
+A company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth), which supports many more services.
 [fudge-oauth's README](https://github.com/jakeobsen/fudge-oauth#confirmed-integrations) lists the services confirmed so far.
 Extensions that sign in with an app of their own work too, once **Extensions with their own sign-in** is on under **Settings… → Sign-in**.
 Some of them come back through a Raycast link, which opens Fudge only while **Fudge opens Raycast links** is on, on the same page.
@@ -199,6 +199,8 @@ And this gives both back to Raycast (`com.raycast.macos`):
 ```sh
 osascript -l JavaScript -e 'ObjC.import("CoreServices"); ["raycast", "com.raycast"].forEach(s => $.LSSetDefaultHandlerForURLScheme($(s), $("com.raycast.macos")))'
 ```
+
+Run the first command again to check.
 
 ### Menu bar commands
 

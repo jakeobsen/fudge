@@ -2,10 +2,11 @@ import AppKit
 import FudgeCore
 
 // Fudge Links (SPEC-140, D-107): the only part of Fudge that declares `raycast:` and `com.raycast:`
-// (`App/Links/Info.plist`). It lives in Fudge.app's `Contents/Helpers`, where only the user's Open with Fudge
-// registers it, so no build, launch or copy of Fudge makes it the app that opens Raycast's links. macOS opens it with
-// such a link; it hands the link to Fudge as a get-URL Apple Event without bringing anything forward, then quits. It
-// shows nothing, and logs nothing: no link or query reaches stderr, the unified log or Fudge.log.
+// (`App/Links/Info.plist`). It lives in Fudge.app's `Contents/Helpers`, where only the user turning on
+// "Fudge opens Raycast links" (or onboarding's button) registers it, so no build, launch or copy of Fudge makes it the
+// app that opens Raycast's links. macOS opens it with such a link; it hands the link to Fudge as a get-URL Apple Event
+// without bringing anything forward, then quits. It shows nothing, and logs nothing: no link or query reaches stderr,
+// the unified log or Fudge.log.
 
 @MainActor
 final class LinksDelegate: NSObject, NSApplicationDelegate {
