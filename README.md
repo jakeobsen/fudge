@@ -176,6 +176,9 @@ Fudge's sign-in server offers GitHub and Atlassian (Jira and Confluence).
 A company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth), which can also offer Linear, Slack, Asana, Google and Zoom.
 [fudge-oauth's README](https://github.com/jakeobsen/fudge-oauth#confirmed-integrations) lists the services confirmed so far.
 Extensions that sign in with an app of their own work too, once **Extensions with their own sign-in** is on under **Settings… → Sign-in**.
+Some of them come back through a Raycast link, which opens Fudge only while **Fudge opens Raycast links** is on, on the same page.
+Turned on, Raycast's own links open Fudge too; turned off, they go back to Raycast.
+It can't be turned on while Fudge runs from its disk image: move Fudge to Applications first.
 When an extension needs to sign in, Fudge shows **Sign in to** the service, and ↵ continues in your browser.
 Sign-ins are kept in your Keychain, and the Sign-in page lists them, each with **Sign Out**.
 Changing the server signs you out of everything.
@@ -183,6 +186,19 @@ Changing the server signs you out of everything.
 Extensions trust the certificates your Mac trusts, so a server behind your company's own certificate works as it does in Safari.
 
 An extension that takes a token in its settings (⌘⇧,) works without signing in.
+
+When Fudge isn't there to turn **Fudge opens Raycast links** off, for example after you've deleted it, Terminal can do the same.
+This shows which app opens each kind of Raycast link, by its bundle identifier:
+
+```sh
+osascript -l JavaScript -e 'ObjC.import("CoreServices"); ["raycast", "com.raycast"].map(s => s + ": " + (ObjC.unwrap(ObjC.castRefToObject($.LSCopyDefaultHandlerForURLScheme($(s)))) || "none")).join("\n")'
+```
+
+And this gives both back to Raycast (`com.raycast.macos`):
+
+```sh
+osascript -l JavaScript -e 'ObjC.import("CoreServices"); ["raycast", "com.raycast"].forEach(s => $.LSSetDefaultHandlerForURLScheme($(s), $("com.raycast.macos")))'
+```
 
 ### Menu bar commands
 
@@ -481,7 +497,8 @@ The Node.js inside Fudge has two of its own, in `App/Helpers/node.entitlements`:
 - `Sources/FudgeApp`: the macOS app.
   It runs in the menu bar, without a Dock icon.
 - `Sources/FudgeCLI`: the [`fudge` command-line tool](#the-fudge-command-line-tool).
-- `Sources/FudgeCore`: code shared by the app and the tool.
+- `Sources/FudgeCore`: code shared by the app, the tool and Fudge Links.
+- `Sources/FudgeLinks`: Fudge Links, a small app inside Fudge that passes Raycast's links on to Fudge once you turn on **Fudge opens Raycast links** under **Settings… → Sign-in**.
 - `runtime/`: the extension host.
   This is the Node.js program that runs extensions.
   The app talks to it over stdin/stdout.
