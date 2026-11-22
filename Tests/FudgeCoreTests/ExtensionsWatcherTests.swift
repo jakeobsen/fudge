@@ -447,10 +447,10 @@ struct ExtensionsWatcherTests {
 }
 
 @Suite(
-    .enabled(if: Fixtures.esbuild != nil, "needs esbuild: run `make test`, which installs it"), .timeLimit(.minutes(2)))
+    .enabled(if: Fixtures.canBuild, "needs esbuild and Fudge's Node.js: run `make test`"), .timeLimit(.minutes(2)))
 @MainActor
 struct ExtensionsWatcherBuildTests {
-    let builder = ExtensionBuilder(esbuild: Fixtures.esbuild ?? URL(fileURLWithPath: "/missing"))
+    let builder = Fixtures.builder()
 
     /// Builds the greeter on a thread of its own, so its seconds of esbuild hold up neither the main actor nor the
     /// shared pool (a `Task.detached` would take a pool thread).

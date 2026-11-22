@@ -31,14 +31,14 @@ func buildRefusesBadArguments(arguments: [String], reason: String) {
     }
 }
 
-@Suite(.enabled(if: Fixtures.esbuild != nil, "needs esbuild: run `make test`, which installs it"))
+@Suite(.enabled(if: Fixtures.canBuild, "needs esbuild and Fudge's Node.js: run `make test`"))
 struct BuildIntoTests {
     @Test func buildIntoInstallsThereAndNowhereElse() throws {
         let into = try Fixtures.temporaryDirectory()
         let support = try Fixtures.temporaryDirectory()
         let defaultFolder = FudgePaths.standard(environment: ["FUDGE_SUPPORT_DIR": support.path]).extensionsDirectory
         let arguments = try BuildArguments.parse([Fixtures.greeter.path, "--into", into.path])
-        let builder = ExtensionBuilder(esbuild: Fixtures.esbuild ?? URL(fileURLWithPath: "/missing"))
+        let builder = Fixtures.builder()
         let installed = try builder.build(
             source: arguments.source, into: arguments.destination ?? defaultFolder)
         #expect(installed.directory.deletingLastPathComponent().standardizedFileURL == into.standardizedFileURL)

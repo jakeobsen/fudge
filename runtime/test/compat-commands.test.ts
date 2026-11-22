@@ -183,6 +183,27 @@ test("a command with an import that can't be followed counts as reaching the who
     );
 });
 
+test("a rust: import is followed as a package: its command keeps its own uses, and one using AI next to it is found", async () => {
+    // On a Mac the Rust part's module is written from its sources and holds nothing to follow (SPEC-144 §3).
+    const folder = extension(["calls-rust", "asks"], {
+        "src/calls-rust.tsx": view(`import { greet } from "rust:../rust";\ngreet("x");`),
+        "src/asks.tsx": view(`import { greet } from "rust:../rust";\nimport { ask } from "./other";\ngreet("x");\nask();`),
+        "src/other.ts": `import { AI } from "@raycast/api";\nexport const ask = () => AI.ask("x");\n`,
+        "rust/Cargo.toml": "[package]\nname = \"made-up\"\n",
+        "rust/src/main.rs": "#[raycast]\nfn greet(name: String) {}\n",
+    });
+    const result = await scanExtension(folder, options);
+    assert.deepEqual(
+        result.commands.map((command) => [command.name, command.unsupported, command.traced]),
+        [
+            ["calls-rust", [], true],
+            ["asks", ["AI"], true],
+        ],
+    );
+    assert.equal(packages([])("rust:../rust"), true);
+    assert.equal(packages([])("rust"), false, "only the rust: scheme, not a package named rust");
+});
+
 test("resolveImport tells the extension's own files from packages and data", async () => {
     const known = knownFiles(["src/a.ts", "src/lib/index.tsx", "src/b.tsx"]);
     const listed = packages(["@scope/package", "date-fns"]);

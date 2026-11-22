@@ -157,11 +157,11 @@ func anythingElseInDistLeavesTheInstallAsItIs(_ stray: String) throws {
 /// `${__dirname}/package.json`, as the store's amazon-aws extension does, and whose `plain` command reads nothing.
 @Suite(
     .enabled(
-        if: Fixtures.esbuild != nil && HostFixture.node != nil && HostFixture.runtimeInstalled,
+        if: Fixtures.canBuild && HostFixture.node != nil && HostFixture.runtimeInstalled,
         "needs esbuild and Fudge's Node.js: run `make test`"))
 struct OwnFilesTests {
     static let source = Fixtures.directory.appendingPathComponent("own-files", isDirectory: true)
-    let builder = ExtensionBuilder(esbuild: Fixtures.esbuild ?? URL(fileURLWithPath: "/missing"))
+    let builder = Fixtures.builder()
 
     /// Runs `command` of `installed` through the host, as the app launches it, with the Greeting preference set to
     /// "hi", and returns what it logged, or its error.

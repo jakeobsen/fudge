@@ -161,6 +161,9 @@ app: release-check build
 	@cp runtime/dist/host.js runtime/dist/worker.js '$(APP)/Contents/Resources/runtime/'
 	@# `fudge scan`'s scanner, and Raycast's types it reads, with their MIT notice.
 	@cp runtime/dist/compat-scan.js '$(APP)/Contents/Resources/runtime/'
+	@# `fudge build`'s compile step (ExtensionBuilder.locateBundler), with esbuild's JavaScript inside, before the
+	@# bundled extensions below are built through it.
+	@cp runtime/dist/bundle-extension.cjs '$(APP)/Contents/Resources/runtime/'
 	@cp runtime/vendor/raycast-api/index.d.ts '$(APP)/Contents/Resources/runtime/raycast-api.d.ts'
 	@cp runtime/vendor/raycast-api/LICENSE '$(APP)/Contents/Resources/runtime/raycast-api.LICENSE'
 	@# Fudge's own license, and the notices of the third-party code and data it ships, from their own license files.

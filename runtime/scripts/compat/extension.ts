@@ -280,13 +280,17 @@ export type Packages = (specifier: string) => boolean;
 
 /**
  * A bare import is a package's only when the manifest lists that package (in any of its dependency sections), it's
- * one of Node's built-ins, or the host provides it. Anything else, such as a tsconfig `paths` alias (`@lib/ai`) or an
- * import from its `baseUrl` (`lib/ai`), names a file of the extension's own the scan can't find.
+ * one of Node's built-ins, or the host provides it. A `rust:` import counts as one too: on a Mac its module is written
+ * from the Rust sources, as Raycast writes it, and holds nothing to follow (`scripts/compile/rust.ts`). Anything else,
+ * such as a tsconfig `paths` alias (`@lib/ai`) or an import from its `baseUrl` (`lib/ai`), names a file of the
+ * extension's own the scan can't find.
  */
 export function packages(dependencies: string[]): Packages {
     const listed = new Set(dependencies);
     return (specifier) => {
-        if (specifier.startsWith("node:") || providedModules.includes(specifier)) return true;
+        if (specifier.startsWith("node:") || specifier.startsWith("rust:") || providedModules.includes(specifier)) {
+            return true;
+        }
         const segments = specifier.split("/");
         const name = specifier.startsWith("@") ? segments.slice(0, 2).join("/") : segments[0]!;
         return listed.has(name) || builtinModules.includes(specifier) || builtinModules.includes(name);
