@@ -64,6 +64,15 @@ import {
     uninstallDevelopmentBuild,
     type DevelopmentBuild,
 } from "./development-builds.ts";
+import {
+    notUpdatedAccessory,
+    notUpdatedDetailMarkdown,
+    notUpdatedRowId,
+    notUpdatedRowsShown,
+    readNotUpdated,
+    uninstallNotUpdated,
+    type NotUpdatedInstall,
+} from "./not-updated.ts";
 import { RestingWork } from "./resting.ts";
 import { causeOf, cleanOutput, failureMarkdown, type FailureDetails } from "./failure.ts";
 import { FailureView, LoadFailure, NeedsGit } from "./failure-view.tsx";
@@ -134,6 +143,8 @@ type Shared = {
     withoutSwift: ReadonlySet<string>;
     /** The builds in `fudgeapp/development`, read with `installed.json` (SPEC-157 E.9). */
     development: DevelopmentBuild[];
+    /** The installs whose repository isn't on, read with `installed.json` (E.8). */
+    notUpdated: NotUpdatedInstall[];
 };
 /** The list: the rows of every copy read so far, and each copy's trees and commit by copy id (SPEC-157 D.1). */
 type Loaded = Shared & {
@@ -299,8 +310,11 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
     );
     const busyOf = (id: string) => presses.state(id) ?? others.busy(id);
 
-    /** The installs, the scans' cache and the development builds: at open, on ⌘R, and after each install and uninstall. */
-    const load = useCallback(async () => {
+    /**
+     * The installs, the scans' cache, the development builds and the installs whose repository isn't on: at open, on ⌘R
+     * (with the copies of the list just read, `on`), and after each install and uninstall (with the copies shown).
+     */
+    const load = useCallback(async (on?: StoreCopy[]) => {
         // The records of builds from another session, read with each load, apart from the copies.
         await others.check();
         const scanner = await scannerIdentity(cli);
@@ -310,7 +324,12 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             readDevelopmentBuilds(extensionsDir),
         ]);
         const withoutSwift = await installsWithoutSwift(extensionsDir, Object.keys(installed));
-        setShared({ installed, withoutSwift, development });
+        // None while the list of repositories hasn't been read, since which are on isn't known yet.
+        const copiesOn = on ?? copiesNow.current;
+        const notUpdated = copiesOn
+            ? await readNotUpdated(installed, new Set(copiesOn.map((copy) => copy.entry.folder)), extensionsDir)
+            : [];
+        setShared({ installed, withoutSwift, development, notUpdated });
         setChecked((current) => ({ scanner, results, failed: current.scanner === scanner ? current.failed : new Set() }));
     }, [cli, extensionsDir, others]);
     loadNow.current = load;
@@ -390,7 +409,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             let on: StoreCopy[] | undefined;
             try {
                 on = await readList();
-                await load();
+                await load(on);
                 if (on) await work(on);
             } finally {
                 setReading((count) => count - 1);
@@ -647,6 +666,23 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             }
         });
 
+    /** Uninstall on the row of an install whose repository isn't on (E.8): its folder to the Trash, and its record gone. */
+    const runUninstallNotUpdated = (install: NotUpdatedInstall) =>
+        oneAtATime(async () => {
+            try {
+                if (!(await uninstallNotUpdated(install, context))) return;
+                await load();
+                await showToast({ style: Toast.Style.Success, title: `Uninstalled ${install.title}` });
+            } catch (error) {
+                logFailure(`Couldn't uninstall ${install.title}`, error);
+                await showToast({
+                    style: Toast.Style.Failure,
+                    title: `Couldn't uninstall ${install.title}`,
+                    message: message(error),
+                });
+            }
+        });
+
     /** ⌘R on any row: a README that couldn't be fetched is tried again too, and the list and every copy are read again. */
     const refreshPressed = () => {
         readmeFetches.again();
@@ -838,6 +874,34 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             }
         />
     );
+    /** The row of an install whose repository isn't on (E.8): no icon, "Not updated", and only Uninstall and Copy Name. */
+    const notUpdatedItem = (install: NotUpdatedInstall) => (
+        <List.Item
+            key={notUpdatedRowId(install.id)}
+            id={notUpdatedRowId(install.id)}
+            title={install.title}
+            subtitle={showingDetail ? undefined : install.description}
+            keywords={[install.name]}
+            accessories={showingDetail ? undefined : [{ text: notUpdatedAccessory }]}
+            detail={showingDetail ? <List.Item.Detail markdown={notUpdatedDetailMarkdown(install)} /> : undefined}
+            actions={
+                <ActionPanel>
+                    <ActionPanel.Section>
+                        <Action
+                            title="Uninstall"
+                            icon={Icon.Trash}
+                            style={Action.Style.Destructive}
+                            shortcut={{ modifiers: ["ctrl"], key: "x" }}
+                            onAction={() => runUninstallNotUpdated(install)}
+                        />
+                    </ActionPanel.Section>
+                    <ActionPanel.Section>
+                        <Action.CopyToClipboard title="Copy Name" content={install.name} />
+                    </ActionPanel.Section>
+                </ActionPanel>
+            }
+        />
+    );
     /** A repository's problem row (C.6): Show Details, ⌘R Refresh and ⌘C Copy Error, git's output cleaned. */
     const problemItem = (row: ProblemRow) => {
         const id = `problem:${row.copyId}`;
@@ -896,12 +960,17 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
     // The dropdown's repositories (D.3), when more than one is on.
     const filteredRepositories = filterRepositories(copies ?? []);
 
-    // The Installed section: the store's installs and the development builds, by title.
+    // The Installed section: the store's installs, the development builds and the installs whose repository isn't on,
+    // by title.
     const installedItems = [
         ...installedRows.map((entry) => ({ title: entry.title, node: item(entry) })),
         ...(loaded && !loadFailureShown && developmentRowsShown(filter) ? loaded.development : []).map((build) => ({
             title: build.title,
             node: developmentItem(build),
+        })),
+        ...(loaded && !loadFailureShown && notUpdatedRowsShown(filter) ? loaded.notUpdated : []).map((install) => ({
+            title: install.title,
+            node: notUpdatedItem(install),
         })),
     ].sort((a, b) => a.title.localeCompare(b.title, "en", { sensitivity: "base" }));
 
