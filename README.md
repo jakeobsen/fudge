@@ -446,6 +446,17 @@ Fudge never downloads or installs anything by itself.
   It keeps the last 3.
   You can import one of those with **Import…**; it needs no password.
 
+## FAQ
+
+### Why doesn't Fudge limit what each extension can do?
+
+We tried.
+The firmest way macOS supports is to run an extension inside Apple's App Sandbox, the one App Store apps run in.
+A limited extension then can't control other apps with AppleScript, run tools installed with Homebrew, or read your files, so many extensions would stop working.
+Limited extensions also need a second extension runner, about 77 MB more memory, and keeping their data in place needs sandbox exceptions that Apple documents only in its old archive.
+So for now Fudge works as Raycast does: extensions run with your permissions, and one answer to macOS covers every extension.
+Install the extensions you trust.
+
 ## Building from source
 
 You need macOS 14 or later and Xcode 26 or later.
