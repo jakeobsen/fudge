@@ -3759,7 +3759,7 @@ test("a refresh waits outside the queue while another session's build runs, then
     await session.builds.check();
     const order = session.order;
     // ⌘R twice, and the day-old refresh on open.
-    const refresh = () => heldRefresh(session.builds, async () => void order.push("refresh"));
+    const refresh = () => heldRefresh(session.builds, "raycast", async () => void order.push("refresh"));
     const held = [refresh(), refresh(), refresh()];
     // A README fetch, a compatibility check, an install and an uninstall go on meanwhile.
     await within(oneAtATime(async () => void order.push("readme")), "a README fetch");
@@ -3778,6 +3778,47 @@ test("a refresh waits outside the queue while another session's build runs, then
     assert.deepEqual(order.at(-1), "refresh");
 });
 
+test("each copy's refresh is held under its own key: two copies each run once, the same copy twice runs once", async () => {
+    const record = otherRecord();
+    const session = await otherSession([record]);
+    session.fake.running(record);
+    await session.builds.check();
+    const order = session.order;
+    const refresh = (copyId: string) => heldRefresh(session.builds, copyId, async () => void order.push(copyId));
+    const held = [refresh("raycast"), refresh("0123456789abcdef"), refresh("raycast"), refresh("0123456789abcdef")];
+    await settle();
+    assert.deepEqual(order, [], "every copy's git waits while the build runs");
+    session.fake.processes.delete(record.pid);
+    await session.builds.check();
+    await within(Promise.all(held), "the held refreshes");
+    assert.deepEqual(order, ["settled", "raycast", "0123456789abcdef"], "one copy never stands in for another");
+});
+
+test("a copy that can't be read is cloned again under its own key, so another copy's reload doesn't stand in for it", async () => {
+    const record = otherRecord();
+    const session = await otherSession([record]);
+    session.fake.running(record);
+    const order = session.order;
+    const opening = (copyId: string) =>
+        openCopy(false, {
+            others: session.builds,
+            copyId,
+            exists: async () => true,
+            load: async () => {
+                throw new Error("the copy can't be read");
+            },
+            remove: async () => void order.push(`remove ${copyId}`),
+            refresh: () => heldRefresh(session.builds, copyId, async () => void order.push(`clone ${copyId}`)),
+            needsRefresh: async () => false,
+        });
+    const both = [opening("raycast"), opening("0123456789abcdef")];
+    await settle();
+    session.fake.processes.delete(record.pid);
+    await session.builds.check();
+    await within(Promise.all(both), "both copies cloned again");
+    assert.deepEqual(order.slice(1).sort(), ["clone 0123456789abcdef", "clone raycast", "remove 0123456789abcdef", "remove raycast"]);
+});
+
 test("a copy that can't be read: the records come first, so its removal waits for a running build", async () => {
     const record = otherRecord();
     const session = await otherSession([record]);
@@ -3785,13 +3826,14 @@ test("a copy that can't be read: the records come first, so its removal waits fo
     const order = session.order;
     const opening = openCopy(false, {
         others: session.builds,
+        copyId: "raycast",
         exists: async () => true,
         load: async () => {
             order.push("load failed");
             throw new Error("the copy can't be read");
         },
         remove: async () => void order.push("remove"),
-        refresh: () => heldRefresh(session.builds, async () => void order.push("refresh")),
+        refresh: () => heldRefresh(session.builds, "raycast", async () => void order.push("refresh")),
         needsRefresh: async () => false,
     });
     await waitFor(async () => assert.deepEqual(order, ["load failed"]));
@@ -3808,10 +3850,11 @@ test("a copy that can't be read: the records come first, so its removal waits fo
     await within(
         openCopy(false, {
             others: quiet.builds,
+            copyId: "raycast",
             exists: async () => true,
             load: async () => void quiet.order.push("loaded"),
             remove: async () => void quiet.order.push("remove"),
-            refresh: () => heldRefresh(quiet.builds, async () => void quiet.order.push("refresh")),
+            refresh: () => heldRefresh(quiet.builds, "raycast", async () => void quiet.order.push("refresh")),
             needsRefresh: async () => true,
         }),
         "an open with nothing pending",

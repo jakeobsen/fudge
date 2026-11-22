@@ -10,6 +10,7 @@ import {
     Toast,
     trash,
     useNavigation,
+    openExtensionPreferences,
     type LaunchProps,
 } from "@raycast/api";
 import path from "node:path";
@@ -28,9 +29,6 @@ import {
     installingTag,
     failedInstallTag,
     failedUpdateTag,
-    raycastCopy,
-    raycastCopyId,
-    readCatalog,
     namedRowId,
     rowActions,
     rowId,
@@ -78,8 +76,28 @@ import {
     type StoreContext,
 } from "./store.ts";
 import { systemProbe } from "./build-records.ts";
-import { heldRefresh, heldRefreshMessage, openCopy, OtherBuilds, settledNotice } from "./other-builds.ts";
-import { askForNotifications, commandLineToolsReady, installEnded, logToFudge, nextNotificationClick } from "fudge:app";
+import { heldRefreshMessage, OtherBuilds, settledNotice } from "./other-builds.ts";
+import { openCopies, refreshCopies, type CopySteps } from "./copy-turns.ts";
+import {
+    copyPath,
+    problemSentence,
+    raycastLoadFailure,
+    readCopy,
+    removeUnlistedCopies,
+    shownRows,
+    storeCopies,
+    type CopyState,
+    type StoreCopy,
+} from "./repositories.ts";
+import { RAYCAST_COPY } from "./repository-address.ts";
+import {
+    askForNotifications,
+    commandLineToolsReady,
+    extensionRepositories,
+    installEnded,
+    logToFudge,
+    nextNotificationClick,
+} from "fudge:app";
 import {
     followClicks,
     LaunchTarget,
@@ -101,16 +119,19 @@ const logFailure = (title: string, error: unknown) => void logToFudge("error", f
 /** A line of the store's own in `Fudge.log`, such as a build's record it couldn't write; never fails a step. */
 const logLine = (line: string) => void logToFudge("error", line).catch(() => {});
 
-/** `withoutSwift`: the installed extensions built without their part written in Swift (SPEC-145 §3). `trees` and
- * `commits` are each copy's, by copy id (SPEC-157 D.1). */
-type Loaded = {
-    entries: StoreEntry[];
+/** What each load reads besides the copies. `withoutSwift`: the installed extensions built without their part written
+ * in Swift (SPEC-145 §3). */
+type Shared = {
     installed: Installed;
-    trees: Map<string, Map<string, string>>;
-    commits: Map<string, string>;
     withoutSwift: ReadonlySet<string>;
     /** The builds in `fudgeapp/development`, read with `installed.json` (SPEC-157 E.9). */
     development: DevelopmentBuild[];
+};
+/** The list: the rows of every copy read so far, and each copy's trees and commit by copy id (SPEC-157 D.1). */
+type Loaded = Shared & {
+    entries: StoreEntry[];
+    trees: Map<string, Map<string, string>>;
+    commits: Map<string, string>;
 };
 /** The cached scans this Fudge's scanner wrote, by tree id, and the trees whose check failed in this run. */
 type Checked = { scanner: string; results: Map<string, Compatibility>; failed: Set<string> };
@@ -145,12 +166,29 @@ export default function Command(props: LaunchProps) {
 
 function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsDir: string; launchContext?: unknown }) {
     const { push } = useNavigation();
-    const repo = useMemo(() => new StoreRepository(path.join(environment.supportPath, "repo")), []);
-    // Each copy by its copy id: a row's README and check use its own copy, and a row of no copy here has none.
-    const copies = useMemo(() => new Map([[raycastCopyId, repo]]), [repo]);
-    const [loaded, setLoaded] = useState<Loaded>();
-    // Whether anything has loaded yet, for `refresh`, which mustn't change with every load.
-    const hasLoaded = useRef(false);
+    // Raycast's copy, which installs and checks use until each row's work takes its own copy.
+    const repo = useMemo(() => new StoreRepository(copyPath(environment.supportPath, RAYCAST_COPY.copyId)), []);
+    // A copy of each repository that's on, from the last read of the list (C.1), Raycast's first; none until it's read.
+    const [copies, setCopies] = useState<StoreCopy[]>();
+    const copiesNow = useRef(copies);
+    copiesNow.current = copies;
+    // Each copy's rows and problem, by copy id (C.6). The ref is the latest, for the end of an open or a ⌘R.
+    const [copyStates, setCopyStates] = useState<ReadonlyMap<string, CopyState>>(new Map());
+    const copyStatesNow = useRef<ReadonlyMap<string, CopyState>>(copyStates);
+    const changeCopyState = useCallback((copyId: string, change: (state: CopyState | undefined) => CopyState) => {
+        const next = new Map(copyStatesNow.current).set(copyId, change(copyStatesNow.current.get(copyId)));
+        copyStatesNow.current = next;
+        setCopyStates(next);
+    }, []);
+    // The installs, the scans' cache and the development builds, read with each load.
+    const [shared, setShared] = useState<Shared>();
+    // Opens and ⌘Rs still reading copies: the list shows as loading until the last copy is read (C.3).
+    const [reading, setReading] = useState(0);
+    // The rows of every copy read so far, once the installs are read.
+    const loaded = useMemo<Loaded | undefined>(
+        () => (shared ? { ...shared, ...shownRows(copies ?? [], copyStates) } : undefined),
+        [shared, copies, copyStates],
+    );
     const [noGit, setNoGit] = useState(false);
     // The list's download failing before anything has loaded: its title and what failed, for `LoadFailure`.
     const [loadError, setLoadError] = useState<{ title: string; details: FailureDetails }>();
@@ -235,63 +273,128 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
     );
     const busyOf = (id: string) => presses.state(id) ?? others.busy(id);
 
+    /** The installs, the scans' cache and the development builds: at open, on ⌘R, and after each install and uninstall. */
     const load = useCallback(async () => {
-        // The records of builds from another session, read with each load, apart from the copy.
+        // The records of builds from another session, read with each load, apart from the copies.
         await others.check();
         const scanner = await scannerIdentity(cli);
-        const [entries, installed, raycastTrees, raycastCommit, results, development] = await Promise.all([
-            readCatalog(repo.path, raycastCopy),
+        const [installed, results, development] = await Promise.all([
             readInstalled(environment.supportPath),
-            repo.trees(),
-            repo.commit(),
             readCompatibility(environment.supportPath, scanner),
             readDevelopmentBuilds(extensionsDir),
         ]);
-        const trees = new Map([[raycastCopyId, raycastTrees]]);
-        const commits = new Map([[raycastCopyId, raycastCommit]]);
         const withoutSwift = await installsWithoutSwift(extensionsDir, Object.keys(installed));
-        setLoaded({ entries, installed, trees, commits, withoutSwift, development });
+        setShared({ installed, withoutSwift, development });
         setChecked((current) => ({ scanner, results, failed: current.scanner === scanner ? current.failed : new Set() }));
-        hasLoaded.current = true;
-        setLoadError(undefined);
-    }, [repo, cli, extensionsDir, others]);
+    }, [cli, extensionsDir, others]);
     loadNow.current = load;
 
     /**
-     * Clones the first time, refreshes after that; the list stays usable meanwhile. Like every git operation of the
-     * store's, it waits its turn (`oneAtATime`), so it never runs during an install or a README fetch. While a build from
-     * another session runs, it waits before it enters the queue, and runs once that build has settled (SPEC-153 C.7). A
-     * failure before anything has loaded shows in the load-error view (`LoadFailure`: its cause and Copy Error), whose
-     * Refresh tries again; one after that is a toast over the list, which stays usable.
+     * A copy's turns (C.3, C.6): its rows shown as soon as it's read, so a copy read later adds its rows without moving
+     * the selection; its problem shown as a row; and a toast while it's fetched, which says what failed.
      */
-    const refresh = useCallback(
-        () =>
-            heldRefresh(others, async () => {
-                const first = !(await repo.exists());
-                const toast = await showToast({
+    const copySteps: CopySteps = useMemo(
+        () => ({
+            others,
+            now: () => new Date(),
+            read: async (copy) => {
+                const [trees, commit] = await Promise.all([copy.repo.trees(), copy.repo.commit()]);
+                const entries = await readCopy(copy.repo.path, copy.copy);
+                changeCopyState(copy.entry.copyId, () => ({ rows: { entries, trees, commit } }));
+                return entries.length;
+            },
+            problem: (copy, kind, error) =>
+                changeCopyState(copy.entry.copyId, (state) => ({ ...state, problem: { kind, error } })),
+            fetching: (copy, first) => {
+                const name = copy.entry.name;
+                const shown = showToast({
                     style: Toast.Style.Animated,
-                    title: first ? "Downloading the store's list…" : "Updating the store's list…",
+                    title: first ? `Downloading the list from ${name}…` : `Updating the list from ${name}…`,
                 });
-                try {
-                    if (first) await repo.clone();
-                    else await repo.refresh();
-                    await load();
-                    await toast.hide();
-                } catch (error) {
-                    const title = first ? "Couldn't download the store's list" : "Couldn't update the store's list";
-                    logFailure(title, error);
-                    toast.style = Toast.Style.Failure;
-                    toast.title = title;
-                    toast.message = message(error);
-                    if (!hasLoaded.current) setLoadError({ title, details: failureDetails(error) });
-                }
-            }),
-        [repo, load, others],
+                return (failure) =>
+                    void shown
+                        .then(async (toast) => {
+                            if (!failure) return toast.hide();
+                            const title = first
+                                ? `Couldn't download the list from ${name}`
+                                : `Couldn't update the list from ${name}`;
+                            logFailure(title, failure.error);
+                            toast.style = Toast.Style.Failure;
+                            toast.title = title;
+                            toast.message = problemSentence(failure.kind, copy.entry.branch);
+                        })
+                        .catch(() => {});
+            },
+        }),
+        [others, changeCopyState],
     );
 
     /**
-     * Opens the copy: clones it the first time, clones it again when it can't be read (a clone stopped halfway), and
-     * refreshes it when it's a day old, or always when `retry` (the load-error view's Refresh, or the needs-Git view's).
+     * Reads the list of repositories (C.1), before anything else at open and on ⌘R: a copy of each one that's on, the
+     * rows of copies no longer on gone, and the copies of repositories no longer listed deleted (C.5). Undefined when
+     * the app couldn't answer, which the load-error view says.
+     */
+    const readList = useCallback(async (): Promise<StoreCopy[] | undefined> => {
+        let answer: unknown;
+        try {
+            answer = await extensionRepositories();
+        } catch (error) {
+            const title = "Couldn't read the Extension Store's repositories";
+            logFailure(title, error);
+            setLoadError({ title, details: failureDetails(error) });
+            return undefined;
+        }
+        const { listed, copies: on } = storeCopies(answer, environment.supportPath);
+        setCopies(on);
+        const kept = new Map([...copyStatesNow.current].filter(([copyId]) => on.some((copy) => copy.entry.copyId === copyId)));
+        copyStatesNow.current = kept;
+        setCopyStates(kept);
+        void removeUnlistedCopies(environment.supportPath, listed, (key, step) => others.hold(key, () => oneAtATime(step)));
+        return on;
+    }, [others]);
+
+    /**
+     * Reads the list, the installs, then runs `work` on the copies, with the list showing as loading throughout (C.3).
+     * Raycast's load-error view shows afterwards only when no copy at all could be read (C.6); otherwise every problem
+     * is a row.
+     */
+    const readCopies = useCallback(
+        async (work: (copies: StoreCopy[]) => Promise<void>) => {
+            setReading((count) => count + 1);
+            let on: StoreCopy[] | undefined;
+            try {
+                on = await readList();
+                await load();
+                if (on) await work(on);
+            } finally {
+                setReading((count) => count - 1);
+            }
+            if (!on) return;
+            const failure = raycastLoadFailure(on, copyStatesNow.current);
+            setLoadError(
+                failure
+                    ? { title: "Couldn't download the list from Raycast", details: failureDetails(failure.error) }
+                    : undefined,
+            );
+        },
+        [readList, load],
+    );
+
+    /**
+     * ⌘R (C.1, C.3): the list read again, the installs read again, then every copy that's on fetched once, in the
+     * list's order, each in its own turn, one waiting for ⌘R included. Like every git operation of the store's, each
+     * turn waits its turn (`oneAtATime`), and while a build from another session runs, it waits before it enters the
+     * queue, and runs once that build has settled (SPEC-153 C.7). The list stays usable meanwhile.
+     */
+    const refresh = useCallback(
+        () => readCopies((on) => refreshCopies(on, copySteps)),
+        [readCopies, copySteps],
+    );
+
+    /**
+     * Opens the store: the list of repositories, the installs, then each copy that's on in its own turns (C.3): cloned
+     * the first time, cloned again when it can't be read, and refreshed when it's a day old, or always when `retry`
+     * (the load-error view's Refresh, or the needs-Git view's).
      */
     const open = useCallback(
         async (retry: boolean) => {
@@ -302,21 +405,14 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             }
             // Refresh after installing the Command Line Tools finds git now.
             setNoGit(false);
-            await openCopy(retry, {
-                others,
-                exists: () => repo.exists(),
-                load,
-                remove: () => repo.remove(),
-                refresh,
-                needsRefresh: () => repo.needsRefresh(new Date()),
-            });
+            await readCopies((on) => openCopies(on, retry, copySteps));
         },
-        [repo, load, refresh, others],
+        [readCopies, copySteps],
     );
 
     useEffect(() => {
         void open(false);
-        // Unloading the store (leaving it, or turning it off) ends its git, which mustn't go on writing into `repo/`.
+        // Unloading the store (leaving it, or turning it off) ends its git, which mustn't go on writing into a copy.
         return stopRunningGit;
     }, [open]);
 
@@ -331,9 +427,10 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                     oneAtATime(async () => {
                         if (cancelled()) return undefined;
                         const { copyId, dir } = readmeKeyParts(key);
-                        const copy = copies.get(copyId);
+                        // The row's own copy, as the list now has it.
+                        const copy = copiesNow.current?.find((candidate) => candidate.entry.copyId === copyId);
                         if (!copy) throw new Error("This repository is off or was removed.");
-                        return fetchReadme(copy, dir);
+                        return fetchReadme(copy.repo, dir);
                     }),
                 changed: (key, readme) => {
                     if (readme === "failed") setReadmeFailed((current) => new Set(current).add(key));
@@ -342,7 +439,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                 // A fetch on its way (⌘R, or the selection back on the row) shows as loading, not as the failure.
                 scheduled: (key) => setReadmeFailed((current) => refetching(current, key)),
             }),
-        [copies],
+        [],
     );
     useEffect(() => () => readmeFetches.stop(), [readmeFetches]);
 
@@ -712,7 +809,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
 
     return (
         <List
-            isLoading={!loaded && !loadError}
+            isLoading={(!loaded && !loadError) || reading > 0}
             isShowingDetail={showingDetail}
             searchBarPlaceholder="Search extensions"
             selectedItemId={selectOnce}
@@ -732,12 +829,28 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                 </List.Dropdown>
             }
         >
-            {loadError && !loaded ? (
+            {/* The load-error view while no copy has rows (C.6); a copy read since makes every problem a row. */}
+            {loadError && (loaded?.entries.length ?? 0) === 0 ? (
                 <LoadFailure
                     title={loadError.title}
                     details={loadError.details}
                     cli={cli}
                     refresh={() => void open(true)}
+                />
+            ) : copies?.length === 0 ? (
+                // No repository on (C.8): nothing is read, and Settings is where one is switched on.
+                <List.EmptyView
+                    icon={Icon.Box}
+                    title="No extension repositories are on."
+                    actions={
+                        <ActionPanel>
+                            <Action
+                                title="Open Extension Store Settings"
+                                icon={Icon.Gear}
+                                onAction={() => void openExtensionPreferences()}
+                            />
+                        </ActionPanel>
+                    }
                 />
             ) : (
                 <List.EmptyView icon={Icon.MagnifyingGlass} title="No extensions found" />

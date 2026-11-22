@@ -276,11 +276,17 @@ export class OtherBuilds {
 }
 
 /**
- * The store's refresh (⌘R, the day-old refresh on open, the clone again after a copy that can't be read): held by
+ * A copy's refresh (⌘R, the day-old refresh on open, the clone again after a copy that can't be read): held by
  * `others` before it enters the queue, never inside it, so a record settling in the queue can't wait behind it (C.7).
+ * Each copy is held under a key of its own, `refresh:<copyId>` (SPEC-157 C.3), so one copy's waiting refresh never
+ * stands in for another's.
  */
-export function heldRefresh(others: Pick<OtherBuilds, "hold">, work: () => Promise<void>): Promise<void> {
-    return others.hold("refresh", () => oneAtATime(work));
+export function heldRefresh(
+    others: Pick<OtherBuilds, "hold">,
+    copyId: string,
+    work: () => Promise<void>,
+): Promise<void> {
+    return others.hold(`refresh:${copyId}`, () => oneAtATime(work));
 }
 
 /** ⌘R's toast while a build from another session holds the refresh back. */
@@ -368,9 +374,11 @@ export async function settledNotice(outcome: Settled, steps: SettledSteps): Prom
     if (mark) steps.show(mark);
 }
 
-/** What `openCopy` works with: the store's copy and these builds. */
+/** What `openCopy` works with: one copy and these builds. */
 export type OpenSteps = {
     others: Pick<OtherBuilds, "check" | "hold">;
+    /** The copy's copy id, which keys its holds. */
+    copyId: string;
     exists: () => Promise<boolean>;
     load: () => Promise<void>;
     remove: () => Promise<void>;
@@ -379,9 +387,9 @@ export type OpenSteps = {
 };
 
 /**
- * The store's `open()` once git is found: the records of builds from another session first (C.2), so a `load()` that
+ * A copy's opening once git is found: the records of builds from another session first (C.2), so a `load()` that
  * throws on the copy still knows them, then the copy. A copy that can't be read is removed and cloned again, after those
- * builds have settled (C.7), as is the day-old refresh (`refresh` holds itself).
+ * builds have settled (C.7), held under `reload:<copyId>`, as is the day-old refresh (`refresh` holds itself).
  */
 export async function openCopy(retry: boolean, steps: OpenSteps): Promise<void> {
     await steps.others.check();
@@ -392,7 +400,7 @@ export async function openCopy(retry: boolean, steps: OpenSteps): Promise<void> 
     try {
         await steps.load();
     } catch {
-        await steps.others.hold("reload", async () => {
+        await steps.others.hold(`reload:${steps.copyId}`, async () => {
             await steps.remove();
             await steps.refresh();
         });

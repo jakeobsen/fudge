@@ -2,7 +2,7 @@
 // each copy and its status file are, what went wrong with a copy, and the copies of repositories no longer listed.
 import { lstat, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { catalogFolders, readCatalog, type RepositoryCopy, type StoreEntry } from "./catalog.ts";
+import { byTitle, catalogFolders, readCatalog, type RepositoryCopy, type StoreEntry } from "./catalog.ts";
 import { readRegularFile } from "./files.ts";
 import { GitError, NoBranch, NoPartialClone, StoreRepository, type Run } from "./git.ts";
 import { checkRepositoriesAnswer, isValidCopyId, RAYCAST_COPY, type RepositoryEntry } from "./repository-address.ts";
@@ -256,4 +256,44 @@ export async function removeUnlistedCopies(
             hold(`remove:${copyId}`, () => removeCopy(supportPath, copyId)).catch(() => undefined),
         ),
     );
+}
+
+/** A copy's rows as last read: its entries, each folder's tree id, and its commit. */
+export type CopyRows = { entries: StoreEntry[]; trees: Map<string, string>; commit: string };
+
+/** What the store shows for a copy: its rows from the last read, kept under a problem, and its problem (C.6). `error`
+ * is what failed, none for a problem its status file gave. */
+export type CopyState = { rows?: CopyRows; problem?: { kind: ProblemKind; error?: unknown } };
+
+/** The rows of every copy that's on, by title, with each copy's trees and commit by copy id (D.1); a copy with no rows
+ * yet adds none, and one no longer on adds none. */
+export function shownRows(
+    copies: readonly StoreCopy[],
+    states: ReadonlyMap<string, CopyState>,
+): { entries: StoreEntry[]; trees: Map<string, Map<string, string>>; commits: Map<string, string> } {
+    const entries: StoreEntry[] = [];
+    const trees = new Map<string, Map<string, string>>();
+    const commits = new Map<string, string>();
+    for (const copy of copies) {
+        const rows = states.get(copy.entry.copyId)?.rows;
+        if (!rows) continue;
+        entries.push(...rows.entries);
+        trees.set(copy.entry.copyId, rows.trees);
+        commits.set(copy.entry.copyId, rows.commit);
+    }
+    return { entries: entries.sort(byTitle), trees, commits };
+}
+
+/**
+ * What Raycast's load-error view shows (C.6): Raycast's copy's failure, but only when no copy that's on has rows, so
+ * any copy that could be read makes every problem a row instead. None when Raycast's is off or didn't fail.
+ */
+export function raycastLoadFailure(
+    copies: readonly StoreCopy[],
+    states: ReadonlyMap<string, CopyState>,
+): { error: unknown } | undefined {
+    if (copies.some((copy) => states.get(copy.entry.copyId)?.rows !== undefined)) return undefined;
+    const raycast = copies.find((copy) => copy.entry.copyId === RAYCAST_COPY.copyId);
+    const problem = raycast ? states.get(raycast.entry.copyId)?.problem : undefined;
+    return problem?.error === undefined ? undefined : { error: problem.error };
 }
