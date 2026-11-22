@@ -16,6 +16,8 @@ let package = Package(
         .executableTarget(name: "FudgeApp", dependencies: ["FudgeCore"]),
         .executableTarget(name: "FudgeCLI", dependencies: ["FudgeCore"]),
         .executableTarget(name: "FudgeLinks", dependencies: ["FudgeCore"]),
+        // `make dmg-image`'s tool, which lays out the disk image's Finder window; it isn't shipped.
+        .executableTarget(name: "FudgeDiskImage", dependencies: ["FudgeCore"]),
         .testTarget(name: "FudgeCoreTests", dependencies: ["FudgeCore"], exclude: ["Fixtures"]),
     ]
 )
