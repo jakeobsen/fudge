@@ -93,6 +93,18 @@ import {
     writeInstalled,
     type StoreContext,
 } from "../store-extension/src/store.ts";
+import {
+    askedForSwiftParts,
+    chooseSwiftPartsMessage,
+    installedWithoutSwift,
+    leaveOutLine,
+    swiftPartsActions,
+    swiftPartsFile,
+    swiftPartsMarkdown,
+    swiftPartsMessage,
+} from "../store-extension/src/swift-parts.ts";
+import { chooseSwiftParts } from "../scripts/compile/swift.ts";
+import { buildTimeout, swiftBuildTimeout } from "../store-extension/src/timeouts.ts";
 
 const temporaries: string[] = [];
 async function temporary(): Promise<string> {
@@ -838,6 +850,8 @@ async function storeContext(
         sources?: Record<string, string[]>;
         /** What the build writes as the install's `compatibility.json`; nothing when its own scan failed. */
         built?: unknown;
+        /** Answers a build itself, by its arguments, instead of `cliCode`. */
+        build?: (args: string[]) => { code: number; stderr?: string };
     } = {},
 ) {
     const root = await temporary();
@@ -886,6 +900,7 @@ async function storeContext(
     });
     const cli = fakeRun((_program, args) => {
         if (args[0] === "scan") return { code: 0, stdout: JSON.stringify(supportedScan), ...options.scan };
+        if (args[0] === "build" && options.build) return options.build(args);
         if (args[0] === "build" && options.built !== undefined && !options.cliCode) {
             const installed = path.join(args[3]!, path.basename(args[1]!));
             mkdirSync(installed, { recursive: true });
@@ -935,6 +950,165 @@ test("install fetches the source, checks it, asks, builds into FUDGE_EXTENSIONS_
     assert.deepEqual(await readInstalled(supportPath), {
         alpha: { tree: "aaa1", commit: "c0ffee1234", installedAt: "2026-11-20T12:00:00.000Z", dir: "alpha" },
     });
+});
+
+// MARK: - Parts written in Swift (SPEC-145 §3)
+
+/** A scan that found a `swift:` import. */
+const swiftScan = JSON.stringify({ ...supportedScan, swiftParts: ["swift:../swift"] });
+
+test("with the Command Line Tools set up, an extension with a Swift part installs as any other, building it (D-118)", async () => {
+    const { context, cli, asked, extensionsDir, repoPath } = await storeContext({ scan: { stdout: swiftScan } });
+    let readyAsked = 0;
+    const chosen: string[] = [];
+    context.commandLineToolsReady = async () => {
+        readyAsked++;
+        return true;
+    };
+    context.chooseSwiftParts = async (title) => {
+        chosen.push(title);
+        return "dont-install";
+    };
+    assert.deepEqual(await install(alphaEntry, context), {});
+    assert.deepEqual(chosen, [], "no view");
+    assert.equal(asked.length, 1, "only the install's own confirmation");
+    assert.equal(asked[0]!.message.includes("Swift"), false, "and nothing in it about Swift");
+    assert.deepEqual(cli.calls.at(-1)!.args, [
+        "build", path.join(repoPath, "extensions/alpha"), "--into", extensionsDir, "--swift-parts", "build",
+    ]);
+    assert.equal(cli.calls.at(-1)!.timeout, swiftBuildTimeout, "a first Swift build fetches and compiles its packages");
+    // Asked again at the next install, never cached: an extension without one gets build too, which changes nothing.
+    const plain = await storeContext();
+    plain.context.commandLineToolsReady = context.commandLineToolsReady;
+    assert.deepEqual(await install(alphaEntry, plain.context), {});
+    assert.deepEqual(plain.cli.calls.at(-1)!.args.slice(-2), ["--swift-parts", "build"]);
+    assert.equal(plain.cli.calls.at(-1)!.timeout, buildTimeout, "with no Swift part, the usual time");
+    assert.equal(readyAsked, 2);
+    // When the check didn't answer (install always scans, so that's a scan that failed), the build may have a Swift
+    // part, so it gets that time too.
+    for (const scan of [{ code: 1, stdout: "" }, { stdout: "not json" }, { stdout: "{}" }]) {
+        const unchecked = await storeContext({ scan });
+        unchecked.context.commandLineToolsReady = context.commandLineToolsReady;
+        assert.deepEqual(await install(alphaEntry, unchecked.context), {}, JSON.stringify(scan));
+        assert.deepEqual(unchecked.cli.calls.at(-1)!.args.slice(-2), ["--swift-parts", "build"], JSON.stringify(scan));
+        assert.equal(unchecked.cli.calls.at(-1)!.timeout, swiftBuildTimeout, JSON.stringify(scan));
+    }
+});
+
+test("without the tools, the view comes first, and its choice is what the build is told", async () => {
+    for (const [choice, flag] of [
+        ["dont-install", undefined],
+        ["leave-out", "leave-out"],
+        ["build", "build"],
+    ] as const) {
+        const { context, cli, asked } = await storeContext({ scan: { stdout: swiftScan } });
+        const order: string[] = [];
+        context.commandLineToolsReady = async () => false;
+        context.chooseSwiftParts = async (title) => {
+            order.push(`view: ${title}`);
+            return choice;
+        };
+        const confirm = context.confirm;
+        context.confirm = async (...args) => {
+            order.push("confirm");
+            return confirm(...args);
+        };
+        const done = await install(alphaEntry, context);
+        const builds = cli.calls.filter((call) => call.args[0] === "build");
+        if (flag === undefined) {
+            assert.equal(done, false, "Don't Install changes nothing");
+            assert.deepEqual(order, ["view: Alpha"]);
+            assert.deepEqual(builds, []);
+            assert.deepEqual(asked, []);
+        } else {
+            assert.deepEqual(done, {});
+            assert.deepEqual(order, ["view: Alpha", "confirm"], "before anything is installed");
+            assert.deepEqual(builds.map((call) => call.args.slice(-2)), [["--swift-parts", flag]]);
+        }
+    }
+});
+
+test("without the tools, an extension with no Swift part shows no view and the build is told nothing", async () => {
+    const { context, cli } = await storeContext();
+    context.commandLineToolsReady = async () => false;
+    context.chooseSwiftParts = async () => assert.fail("no view");
+    assert.deepEqual(await install(alphaEntry, context), {});
+    assert.equal(cli.calls.at(-1)!.args.includes("--swift-parts"), false);
+});
+
+test("a swift: import the check missed: without the tools, the build's question becomes the view", async () => {
+    for (const choice of ["dont-install", "leave-out"] as const) {
+        const { context, cli } = await storeContext({
+            build: (args) =>
+                args.includes("--swift-parts")
+                    ? { code: 0 }
+                    : { code: 1, stderr: `✘ [ERROR] ${chooseSwiftPartsMessage} [plugin swift]\n\n    src/index.ts:1:20:` },
+        });
+        context.commandLineToolsReady = async () => false;
+        const views: string[] = [];
+        context.chooseSwiftParts = async (title) => {
+            views.push(title);
+            return choice;
+        };
+        const done = await install(alphaEntry, context);
+        const builds = cli.calls.filter((call) => call.args[0] === "build").map((call) => call.args.slice(4));
+        assert.deepEqual(views, ["Alpha"]);
+        if (choice === "dont-install") {
+            assert.equal(done, false);
+            assert.deepEqual(builds, [[]]);
+        } else {
+            assert.deepEqual(done, {});
+            assert.deepEqual(builds, [[], ["--swift-parts", "leave-out"]]);
+        }
+    }
+    // Any other failure is still a failure.
+    const { context } = await storeContext({ build: () => ({ code: 1, stderr: "error: esbuild failed" }) });
+    context.commandLineToolsReady = async () => false;
+    context.chooseSwiftParts = async () => assert.fail("no view");
+    await assert.rejects(install(alphaEntry, context), /esbuild failed|didn't/);
+});
+
+test("the store's no-flag message is the bundling script's, word for word", () => {
+    assert.equal(chooseSwiftPartsMessage, chooseSwiftParts);
+    assert.equal(askedForSwiftParts(`✘ [ERROR] ${chooseSwiftParts} [plugin swift]`), true);
+    assert.equal(askedForSwiftParts("✘ [ERROR] Could not resolve"), false);
+});
+
+test("the view: its words, its three actions in order, the line beside the second", () => {
+    assert.equal(
+        swiftPartsMessage("Say"),
+        "Say has a part written in Swift, and building it needs Apple's Command Line Tools, which aren't set up. " +
+            "To install it with that part, set them up in Settings → Development.",
+    );
+    assert.deepEqual(Object.values(swiftPartsActions), [
+        "Don't Install",
+        "Install Without the Swift Part",
+        "Install with Command Line Tools",
+    ]);
+    assert.equal(leaveOutLine, "Some commands might not work, or the extension may crash.");
+    assert.equal(
+        swiftPartsMarkdown("Say"),
+        `${swiftPartsMessage("Say")}\n\n- **Don't Install**\n- **Install Without the Swift Part**: ${leaveOutLine}\n- **Install with Command Line Tools**`,
+    );
+});
+
+test("an extension installed without its Swift part says so on its detail page, and no other does", async () => {
+    const folder = await temporary();
+    assert.equal(await installedWithoutSwift(folder), false, "no record");
+    await writeFile(path.join(folder, swiftPartsFile), JSON.stringify({ swiftParts: "build" }));
+    assert.equal(await installedWithoutSwift(folder), false);
+    await writeFile(path.join(folder, swiftPartsFile), JSON.stringify({ swiftParts: "leave-out" }));
+    assert.equal(await installedWithoutSwift(folder), true);
+    await writeFile(path.join(folder, swiftPartsFile), "not json");
+    assert.equal(await installedWithoutSwift(folder), false);
+    const markdown = detailMarkdown(alphaEntry, "c0ffee1234", "", undefined, true);
+    assert.ok(markdown.includes("Installed without its part written in Swift."), markdown);
+    assert.equal(detailMarkdown(alphaEntry, "c0ffee1234", "", undefined).includes("Swift"), false);
+});
+
+test("a scan's swift: imports become the store's swiftPart, kept in the cache", () => {
+    assert.equal((fromReport(JSON.parse(swiftScan)) as { swiftPart?: boolean }).swiftPart, true);
+    assert.equal("swiftPart" in fromReport(supportedScan), false, "none, from a scanner that names none too");
 });
 
 test("a folder whose manifest has another name installs from the folder, under the name, and records both", async () => {

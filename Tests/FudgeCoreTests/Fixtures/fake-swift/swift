@@ -1,0 +1,61 @@
+#!/bin/sh
+# A made-up `swift` for fudge's tests (SPEC-145): it answers as SwiftPM does, so nothing is fetched or compiled.
+# Copy this folder to <tools>/usr/bin. Each run appends its folder and arguments to runs.log beside it, and its
+# environment to environment.log.
+#   --version                      the real first line's format, whose first number is the driver's
+#   package dump-package           $FAKE_SWIFT_DUMP, else one executable target named after the package's folder
+#   build … --show-bin-path        where the build put the program
+#   build -c release --product T … the program (a copy of `program`) and raycast.js where SwiftPM writes them;
+#                                  $FAKE_SWIFT_FAIL (or a file named fail beside it) fails it, $FAKE_SWIFT_SLEEP
+#                                  waits (writing its pid there),
+#                                  $FAKE_SWIFT_NO_JS writes no raycast.js; $FAKE_SWIFT_JOBS (a folder) acts as
+#                                  SwiftPM does when stopped: `swift` runs the build as a child in its own process
+#                                  group, which starts a job in a process group of its own; SIGTERM is ignored, and
+#                                  only SIGINT to the group makes the build cancel the job, which takes a moment;
+#                                  swift.pid and job.pid go in that folder
+here=$(cd "$(dirname "$0")" && pwd)
+echo "$PWD $*" >> "$here/runs.log"
+env >> "$here/environment.log"
+target=$(basename "$PWD")
+case "$1" in
+--version)
+  echo 'swift-driver version: 1.148.6 Apple Swift version 6.3.3 (swiftlang-6.3.3.1.3 clang-2100.1.1.101)'
+  echo 'Target: arm64-apple-macosx26.0'
+  exit 0 ;;
+package)
+  if [ -n "$FAKE_SWIFT_DUMP" ]; then printf '%s' "$FAKE_SWIFT_DUMP"; exit 0; fi
+  printf '{"name":"%s","targets":[{"name":"%s","type":"executable"},{"name":"Library","type":"regular"}]}' "$target" "$target"
+  exit 0 ;;
+esac
+for argument in "$@"; do
+  if [ "$argument" = "--show-bin-path" ]; then echo "$PWD/.build/arm64-apple-macosx/release"; exit 0; fi
+done
+if [ -n "$FAKE_SWIFT_SLEEP" ]; then echo $$ > "$FAKE_SWIFT_SLEEP"; exec sleep 60; fi
+if [ -n "$FAKE_SWIFT_JOBS" ]; then
+  # The build is Perl, since sh ignores SIGINT in a background job and can't trap it there.
+  /usr/bin/perl -e '
+    my $job = fork() // die "fork: $!";
+    if ($job == 0) { setpgrp(0, 0); exec("sleep", "60"); }
+    $SIG{TERM} = "IGNORE";
+    $SIG{INT} = sub { kill("KILL", -$job, $job); select(undef, undef, undef, 0.2); exit(130); };
+    open(my $file, ">", "$ENV{FAKE_SWIFT_JOBS}/job.pid") or die; print $file "$job\n"; close($file);
+    waitpid($job, 0);
+  ' &
+  build=$!
+  trap '' TERM INT
+  echo $$ > "$FAKE_SWIFT_JOBS/swift.pid"
+  while kill -0 "$build" 2>/dev/null; do wait "$build"; done
+  exit 0
+fi
+if [ -n "$FAKE_SWIFT_FAIL" ] || [ -e "$here/fail" ]; then echo "Sources/X/Y.swift:1:1: error: cannot find 'x' in scope" >&2; exit 1; fi
+product=$5
+mkdir -p .build/arm64-apple-macosx/release
+cp "$here/program" ".build/arm64-apple-macosx/release/$product"
+chmod 700 ".build/arm64-apple-macosx/release/$product"
+if [ -z "$FAKE_SWIFT_NO_JS" ]; then
+  identity=$(echo "$target" | tr '[:upper:]' '[:lower:]')
+  out=".build/plugins/outputs/$identity/$product/destination/RaycastTypeScriptPlugin"
+  mkdir -p "$out"
+  cp "$here/raycast.js" "$out/raycast.js"
+fi
+echo "Build of product '$product' complete!"

@@ -221,6 +221,7 @@ import Testing
         "calendarHidden": "which calendars My Schedule shows; it asks for access when first run",
         "calendarDaysAhead": "a detail of My Schedule",
         "offByDefault": "worked out from the installed extensions at each load, never saved (SPEC-109)",
+        "commandLineTools": "a folder, found by itself until chosen; asked about only when an extension needs it",
     ]
     let defaults = FudgeSettings()
     let properties = Mirror(reflecting: defaults).children.compactMap { child in child.label.map { ($0, child.value) } }

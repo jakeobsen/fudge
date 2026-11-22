@@ -1,0 +1,8 @@
+#!/bin/sh
+# What the made-up Swift part's program does, as Say's does: JSON in, JSON out, a failure on stderr.
+case "$1" in
+greet) name=$(printf '%s' "$2" | tr -d '"'); printf '"Hello, %s"\n' "$name" ;;
+fail) echo "the Swift part failed" >&2; exit 1 ;;
+nothing) exit 0 ;;
+*) echo "Not enough Command-Line arguments"; exit 1 ;;
+esac

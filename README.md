@@ -65,6 +65,7 @@ Both read the `@raycast/api` features the extension's code uses, without running
   Fudge checks each command on its own, following the files it imports, and installs a command that uses either turned off.
   The store marks an extension with some such commands **Partly compatible**, and one with only such commands **Not compatible**.
 - **Parts written in Rust** are for Windows, so Fudge leaves them out, as Raycast does on a Mac.
+- **Parts written in Swift** are built on your Mac once Apple's Command Line Tools are set up in **Settings… → Development**, and the first build takes a few minutes.
 - **A feature Fudge doesn't have yet** makes the command that uses it stop with a message naming it.
 - **Signing in:** extensions that sign in to a service with OAuth go through a sign-in server, which you pick under **Settings… → Sign-in** (see [Signing in](#signing-in)).
   Fudge's sign-in server offers GitHub and Atlassian (Jira and Confluence), and a company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth).

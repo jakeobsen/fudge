@@ -93,9 +93,27 @@ export async function logToFudge(level: "error" | "warning" | "info", message: s
     await callApp("fudge.log", { level, message });
 }
 
+// The Extension Store's calls about extensions with a part written in Swift (SPEC-145 §3). Only the store may make
+// them; the app refuses any other extension.
+
+/**
+ * Whether Apple's Command Line Tools are set up, found exactly as Settings → Development and `fudge build` find them,
+ * so the store and the build never disagree.
+ */
+export async function commandLineToolsReady(): Promise<boolean> {
+    return (await callApp("commandLineTools.ready")) === true;
+}
+
+/** Opens Settings → Development. Only from the user's own action in the store: a background call is refused. */
+export async function openDevelopmentSettings(): Promise<void> {
+    await callApp("commandLineTools.openSettings");
+}
+
 export function createFudgeAppModule() {
     return Object.freeze({
         logToFudge,
+        commandLineToolsReady,
+        openDevelopmentSettings,
         searchFiles,
         listClipboardHistory,
         clipboardImage,

@@ -20,6 +20,7 @@ final class SettingsModel {
     static let windowManagementPage = ":window-management"
     static let signInPage = ":sign-in"
     static let calendarPage = ":calendar"
+    static let developmentPage = ":development"
     /// Every installed extension, for the Commands page.
     private(set) var allExtensions: [InstalledExtension] = []
     /// `settings.json`, as the Commands page edits it.
@@ -82,7 +83,7 @@ final class SettingsModel {
         if selected != Self.generalPage, selected != Self.commandsPage, selected != Self.permissionsPage,
             selected != Self.quicklinksPage, selected != Self.snippetsPage, selected != Self.signInPage,
             selected != Self.colorPickerPage, selected != Self.windowManagementPage, selected != Self.calendarPage,
-            !extensions.contains(where: { $0.manifest.name == selected })
+            selected != Self.developmentPage, !extensions.contains(where: { $0.manifest.name == selected })
         {
             select(Self.generalPage)
         }
@@ -424,6 +425,54 @@ final class SettingsModel {
     func setCalendarDaysAhead(_ days: Int) {
         guard days != calendarDaysAhead, change({ $0.calendarDaysAhead = days }) else { return }
         calendarChanged()
+    }
+
+    // MARK: - Development (SPEC-145)
+
+    /// Finds the Command Line Tools for a `commandLineTools` setting (`CommandLineTools.resolve`). Snapshot runs set a
+    /// fixed answer (`--command-line-tools`), so they never ask the Mac.
+    @ObservationIgnored var resolveCommandLineTools: @Sendable (String?) -> CommandLineTools.Status = {
+        CommandLineTools.resolve(setting: $0)
+    }
+    /// What the Development page shows; nil until the first read lands.
+    private(set) var commandLineTools: CommandLineTools.Status?
+    /// What Install… couldn't start, shown under the row until the next try.
+    private(set) var commandLineToolsInstallProblem: String?
+    /// The folder chosen on the page (`commandLineTools` in `settings.json`), or nil when Fudge finds it by itself.
+    var commandLineToolsSetting: String? { fudgeSettings.commandLineTools }
+
+    /// The folder the row names: the chosen one, else the one found by itself, else none.
+    var commandLineToolsFolder: String? {
+        commandLineToolsSetting ?? commandLineTools?.tools?.folder.path
+    }
+
+    /// Reads the status again, off the main thread, since it runs the folder's `swift --version`. An answer
+    /// for a setting changed meanwhile is dropped.
+    func loadCommandLineTools() {
+        let setting = fudgeSettings.commandLineTools
+        let resolve = resolveCommandLineTools
+        Task {
+            let status = await Task.detached(priority: .userInitiated) { resolve(setting) }.value
+            guard setting == fudgeSettings.commandLineTools, status != commandLineTools else { return }
+            commandLineTools = status
+        }
+    }
+
+    /// Choose… (a folder) and Use Default (nil).
+    func setCommandLineTools(_ folder: String?) {
+        guard folder != commandLineToolsSetting, change({ $0.commandLineTools = folder }) else { return }
+        commandLineTools = nil
+        commandLineToolsInstallProblem = nil
+        loadCommandLineTools()
+    }
+
+    /// Install…: Apple's own download prompt for the tools (`xcode-select --install`).
+    func installCommandLineTools() {
+        commandLineToolsInstallProblem = nil
+        Task {
+            let problem = await Task.detached(priority: .userInitiated) { CommandLineTools.requestInstall() }.value
+            commandLineToolsInstallProblem = problem
+        }
     }
 
     // MARK: - Snippets
@@ -1403,6 +1452,7 @@ struct SettingsView: View {
                 Label("Sign-in", systemImage: "person.badge.key").tag(SettingsModel.signInPage)
                 Label("Color Picker", systemImage: "eyedropper").tag(SettingsModel.colorPickerPage)
                 Label("Calendar", systemImage: "calendar").tag(SettingsModel.calendarPage)
+                Label("Development", systemImage: "hammer").tag(SettingsModel.developmentPage)
                 Section("Extensions") {
                     ForEach(model.extensions, id: \.manifest.name) { installed in
                         Text(installed.manifest.title).tag(installed.manifest.name)
@@ -1433,6 +1483,8 @@ struct SettingsView: View {
                     ColorPickerPage(model: model)
                 } else if model.selected == SettingsModel.calendarPage {
                     CalendarPage(model: model)
+                } else if model.selected == SettingsModel.developmentPage {
+                    DevelopmentPage(model: model)
                 } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {
                     ExtensionPreferencesForm(model: model, installed: installed)
                 } else {

@@ -54,12 +54,21 @@ import {
     uninstall,
     type StoreContext,
 } from "./store.ts";
-import { logToFudge } from "fudge:app";
+import { commandLineToolsReady, logToFudge } from "fudge:app";
+import { installedWithoutSwift, type SwiftPartsChoice } from "./swift-parts.ts";
+import { SwiftPartsView } from "./swift-parts-view.tsx";
 
 /** A failure the store had goes into `Fudge.log` too, with its output (SPEC-124); writing it never fails a step. */
 const logFailure = (title: string, error: unknown) => void logToFudge("error", failureLog(title, failureDetails(error))).catch(() => {});
 
-type Loaded = { entries: StoreEntry[]; installed: Installed; trees: Map<string, string>; commit: string };
+/** `withoutSwift`: the installed extensions built without their part written in Swift (SPEC-145 §3). */
+type Loaded = {
+    entries: StoreEntry[];
+    installed: Installed;
+    trees: Map<string, string>;
+    commit: string;
+    withoutSwift: ReadonlySet<string>;
+};
 /** The cached scans this Fudge's scanner wrote, by tree id, and the trees whose check failed in this run. */
 type Checked = { scanner: string; results: Map<string, Compatibility>; failed: Set<string> };
 
@@ -125,11 +134,15 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
             repo.commit(),
             readCompatibility(environment.supportPath, scanner),
         ]);
-        setLoaded({ entries, installed, trees, commit });
+        const withoutSwift = new Set<string>();
+        for (const name of Object.keys(installed)) {
+            if (await installedWithoutSwift(path.join(extensionsDir, name))) withoutSwift.add(name);
+        }
+        setLoaded({ entries, installed, trees, commit, withoutSwift });
         setChecked((current) => ({ scanner, results, failed: current.scanner === scanner ? current.failed : new Set() }));
         hasLoaded.current = true;
         setLoadError(undefined);
-    }, [repo, cli]);
+    }, [repo, cli, extensionsDir]);
 
     /**
      * Clones the first time, refreshes after that; the list stays usable meanwhile. Like every git operation of the
@@ -225,8 +238,12 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
             extensionsDir,
             confirm: (title, text, primary) => confirmAlert({ title, message: text, primaryAction: { title: primary } }),
             trash: (target) => trash(target),
+            // Asked each time an install needs it, never cached, so tools set up meanwhile count (SPEC-145 §3).
+            commandLineToolsReady: () => commandLineToolsReady().catch(() => false),
+            chooseSwiftParts: (title) =>
+                new Promise<SwiftPartsChoice>((resolve) => push(<SwiftPartsView title={title} choose={resolve} />)),
         }),
-        [repo, cli, extensionsDir],
+        [repo, cli, extensionsDir, push],
     );
 
     // The detail's Compatibility line: the selected row is scanned once the selection rests on it, in the git queue,
@@ -370,6 +387,7 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                                 loaded?.commit ?? "",
                                 tree === undefined ? undefined : shownReadme(tree, readmes, readmeFailed),
                                 compatibilityFor(entry, tree),
+                                state !== "available" && loaded?.withoutSwift.has(entry.name) === true,
                             )}
                         />
                     ) : undefined

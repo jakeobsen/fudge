@@ -5,9 +5,11 @@ let usage = """
     Usage: fudge <command>
 
     Commands:
-      build <folder> [--into <extensions folder>]
+      build <folder> [--into <extensions folder>] [--swift-parts build|leave-out]
                       Compile the Raycast extension in <folder> and install it, in the
                       default extensions folder or, with --into, in that one.
+                      An extension with a part written in Swift needs --swift-parts:
+                      build it with Apple's Command Line Tools, or leave it out.
       scan <folder> [--json]
                       Say what the extension in <folder> uses that Fudge doesn't have
                       yet. Nothing is built or run.
@@ -38,6 +40,12 @@ func build(_ arguments: BuildArguments) {
         }
     } else {
         print("  can't find the compatibility scanner or node, so every command is enabled")
+    }
+    // A part written in Swift (SPEC-145 §2): built with the Command Line Tools that Settings → Development finds.
+    builder.swiftParts = arguments.swiftParts
+    builder.commandLineTools = {
+        CommandLineTools.resolve(setting: FudgeSettings.load(from: FudgePaths.standard().settingsFile).commandLineTools)
+            .tools
     }
     do {
         let installed = try builder.build(

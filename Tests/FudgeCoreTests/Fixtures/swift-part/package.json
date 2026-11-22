@@ -1,0 +1,9 @@
+{
+  "name": "swift-part",
+  "title": "Swift Part",
+  "description": "A made-up fixture extension with a part written in Swift, for fudge's builder tests.",
+  "commands": [
+    { "name": "greet", "title": "Greet", "mode": "no-view" },
+    { "name": "plain", "title": "Plain", "mode": "no-view" }
+  ]
+}
