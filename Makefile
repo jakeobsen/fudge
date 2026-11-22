@@ -67,7 +67,7 @@ help:
 	@printf '  help           Show this help (default).\n'
 	@printf '  app            Build %s (CONFIG=debug|release, now: %s). Signs with SIGN_IDENTITY: by default\n' '$(APP)' '$(CONFIG)'
 	@printf '                 "fudge local signing", else an Apple Development identity, else ad hoc (-). See README.md.\n'
-	@printf '  dmg            Build the app, then %s: the app and a link to Applications (RELEASE_TAG=<tag> for a release).\n' '$(DMG)'
+	@printf '  dmg            Build the app, then %s: the app and a link to Applications in a laid-out window (RELEASE_TAG=<tag> for a release).\n' '$(DMG)'
 	@printf '  dmg-image      Make %s from the app as it is, without building it.\n' '$(DMG)'
 	@printf '  release        Build %s signed with Developer ID, notarized and stapled, after secret env apple.\n' '$(DMG)'
 	@printf '  run            Build the app and open it, quitting a running copy first.\n'
@@ -201,20 +201,20 @@ USER_FUDGE_PIDS = for pid in $$(pgrep -x Fudge); do \
 			&& echo $$pid; \
 	done; true
 
-# A release's disk image: the app as `make app` built it, and a link to /Applications to drag it onto, compressed
-# (UDZO), with the volume name Fudge. The staging folder is gone afterwards.
+# A release's disk image: the app as `make app` built it, and a link to /Applications to drag it onto, in a Finder
+# window with a picture behind them (SPEC-150), compressed (UDZO), with the volume name Fudge.
 dmg: app
 	@$(MAKE) --no-print-directory dmg-image
 
 # The disk image of the app as it is, without building it again: the release script notarizes and staples the app
-# before packing it.
+# before packing it. Only FudgeDiskImage, the tool that lays out the window, is built here, and it never touches the
+# app; scripts/disk-image.sh does the rest, with every mount out of sight. The window's picture is
+# App/DiskImage/background.tiff, which `FudgeDiskImage background <file>` draws.
 dmg-image:
 	@test -d '$(APP)' || { printf 'make dmg-image: there is no %s; run make app first\n' '$(APP)'; exit 1; }
-	@rm -rf build/dmg '$(DMG)' && mkdir -p build/dmg
-	@ditto '$(APP)' build/dmg/Fudge.app && ln -s /Applications build/dmg/Applications
-	@hdiutil create -volname Fudge -srcfolder build/dmg -format UDZO -ov '$(DMG)' >/dev/null \
-		|| { echo 'make dmg-image: hdiutil could not create $(DMG)'; rm -rf build/dmg; exit 1; }
-	@rm -rf build/dmg
+	@out=$$(swift build -c $(CONFIG) --product FudgeDiskImage 2>&1) \
+		|| { printf '%s\nmake dmg-image: building FudgeDiskImage failed\n' "$$out"; exit 1; }
+	@scripts/disk-image.sh '$(APP)' App/DiskImage/background.tiff '$(SWIFT_BIN)/FudgeDiskImage' '$(DMG)'
 	@printf '→ built %s\n' '$(DMG)'
 
 # A release's disk image signed with the Developer ID identity, notarized and stapled, with the variables

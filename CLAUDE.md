@@ -11,7 +11,7 @@ Extensions run in a separate Node.js process, the extension host.
 
 ## Architecture
 
-- **One Swift package, four targets.**
+- **One Swift package, five targets.**
   - `FudgeApp` is the app: an accessory app with a menu bar item and no Dock icon.
     The item's glyph is `MenuBarIcon`, a fudge cube drawn in code as a template image.
     Its autosave name is `fudge` (`AppDelegate.statusItemName`), because macOS keeps whether a status item is shown in the app's preferences under that name, and an unnamed item's `Item-0` was once saved as hidden.
@@ -730,10 +730,11 @@ Extensions run in a separate Node.js process, the extension host.
     It's an `LSUIElement` app that hands each such link to Fudge as a get-URL Apple Event (`NSWorkspace.open(_:withApplicationAt:configuration:)`, never activating): to every running Fudge, the one that holds it first, else to the one that holds it, launched in the background (`RaycastLinksHelper.targets`).
     It drops any other link, logs nothing, and quits once its links are handed on, or 10 s after a launch with none.
     Only the Sign-in page's switch, or onboarding's Open Raycast Links with Fudge, registers it with LaunchServices, so no build, launch, snapshot run, copy or Spotlight makes it, or Fudge, open Raycast's links.
+  - `FudgeDiskImage` is `make dmg-image`'s tool, which lays out the disk image's Finder window (see `make dmg`); it's built, never shipped.
   - `FudgeCore` is shared code, and the only target with tests.
 
   Put logic in `FudgeCore`, where it can be tested.
-  Keep the app, the tool and Fudge Links thin.
+  Keep the app, the tools and Fudge Links thin.
 - **The extension host lives in `runtime/`.**
   It's written in TypeScript.
   Extensions trust the certificates the Mac trusts (SPEC-081, `NodeTrust`): the app starts the host with `--use-system-ca` when its Node has it (22.15+, 23.8+, 24 and later).
@@ -1370,5 +1371,14 @@ Extensions run in a separate Node.js process, the extension host.
   `make release RELEASE_TAG=<tag>` builds that tag's release (`--tag`), and without it the version is `git describe`'s (`--version`).
   It's for a build by hand: a published release always comes from the release workflow.
 - **Dev builds** still sign with the Apple Development identity (or "fudge local signing", or ad hoc; see `make app`), so only a release has the Developer ID, and switching between the two asks for permissions again.
-- **`make dmg`** builds the app, then `build/Fudge-<version>.dmg` (the version without its `v`) with `make dmg-image`, which packs the app as it is: the app and a link to `/Applications`, UDZO, volume name Fudge, made with `hdiutil` from a staging folder that's removed afterwards.
+- **`make dmg`** builds the app, then `build/Fudge-<version>.dmg` (the version without its `v`) with `make dmg-image`, which packs the app as it is: the app and a link to `/Applications`, UDZO, volume name Fudge.
+  `make dmg-image` builds only `FudgeDiskImage`, never the app, and runs `scripts/disk-image.sh`, so the notarized and stapled app the release script hands it goes in untouched.
+  **The Finder window** (SPEC-150): 600 × 400 points of content, icon view with no toolbar, sidebar or status bar, Fudge on the left and Applications on the right at 128 points, over a light picture with an arrow between them.
+  It's all in the volume's `.DS_Store`, which `FudgeDiskImage layout` writes (`DiskImageLayout`, `DSStore`, `AliasRecord` in core), so nothing scripts Finder, and a build machine with no one logged in makes the same image.
+  The script makes a writable HFS+ image from a staging folder, mounts it `-nobrowse -noautoopen` at `build/dmg/mount`, so no Finder window opens, lets the tool write the layout, detaches it (tried 5 times, then forced) and compresses it; a trap detaches and deletes the scratch image however it ends.
+  HFS+ rather than APFS is Apple's advice for a disk image whose window has a background picture, which older macOS doesn't show from APFS.
+  The picture is `.background/background.tiff` on the volume, a TIFF with the 1× and 2× images (`App/DiskImage/background.tiff`, which `FudgeDiskImage background <file>` draws from `DiskImageBackground`); Finder finds it through an alias record in the icon view's settings.
+  That alias is written by `AliasRecord` itself, from the volume's name and the path on it: one from `FSNewAliasFromPath`, or a bookmark from `URL.bookmarkData` (the `pBBk` record Finder adds on a writable volume), names the disk image file it was made in, so a published image would carry the build folder's path.
+  `WindowBounds` sets the window's whole frame, title bar included (32 points on macOS 26, 28 before), from the bottom left of the screen.
+  Finder draws the names under the icons dark over a background picture, in dark mode too, which is why the picture is light.
 - **Linting the workflows:** actionlint isn't in CI; run it by hand after changing one: `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml`.
