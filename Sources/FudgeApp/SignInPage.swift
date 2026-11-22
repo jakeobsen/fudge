@@ -85,12 +85,14 @@ struct RaycastLinksRow: View {
 /// The sign-in server's choice: Off, Fudge's sign-in server, or Your own server… with its address, saved on ↵ when
 /// it's valid, and why it wasn't. The Sign-in page's and onboarding's Sign-in step's, so both choose through the same
 /// code and the same consent sheet; `ask` puts the sheets on onboarding's window instead of the Settings window.
+/// The line under it names the services the server on screen offers, once it answers (SPEC-149).
 struct SignInServerControls: View {
     @Bindable var model: SettingsModel
     var ask: ((LauncherModel.AlertRequest) async -> Bool)? = nil
     /// "Your own server…" was picked, and its address isn't saved yet.
     @State private var editingAddress = false
     @State private var address = ""
+    @State private var services = SignInServicesLine()
 
     private enum Choice: Hashable { case off, fudge, own }
 
@@ -103,6 +105,11 @@ struct SignInServerControls: View {
         }
     }
 
+    /// The server the line is for: none while an address of your own is typed and not saved.
+    private var serverOnScreen: SignInServer? {
+        SignInServices.serverOnScreen(saved: model.signInServer, ownChosen: choice == .own, typedAddress: address)
+    }
+
     var body: some View {
         Picker(selection: Binding(get: { choice }, set: { pick($0) })) {
             Text("Off").tag(Choice.off)
@@ -110,7 +117,11 @@ struct SignInServerControls: View {
             Text("Your own server…").tag(Choice.own)
         } label: {
             Text("Sign-in server")
-            Text(SignInServer.explanation)
+            Text(services.text)
+        }
+        // Asks on appearing and on every change of the server on screen; a change cancels the request before it.
+        .task(id: serverOnScreen) {
+            await services.load(serverOnScreen, using: model.signInServicesFetcher)
         }
         .onAppear {
             if case .custom(let url) = model.signInServer { address = url.absoluteString }

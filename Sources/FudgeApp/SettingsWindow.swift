@@ -749,6 +749,9 @@ final class SettingsModel {
     private(set) var signInProblem: String?
     /// Where sign-ins are kept: the Keychain, set by the app delegate; memory in snapshot runs.
     @ObservationIgnored var tokenSecrets: any SecretStore = MemorySecretStore()
+    /// Where the line under the server choice asks for the server's services (SPEC-149): the server, set once by the
+    /// app delegate at launch; a snapshot run's fixed answer, which never uses the network, as this default doesn't.
+    @ObservationIgnored var signInServicesFetcher: any SignInServicesFetching = FixedSignInServices(ids: nil)
 
     private var tokenStore: OAuthTokenStore { OAuthTokenStore(secrets: tokenSecrets) }
 
