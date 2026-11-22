@@ -5,7 +5,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 import { createApiModule } from "../src/api/module.ts";
-import { providersFromEnvironment, providersVariable, raycastDomainsVariable } from "../src/api/oauth-table.ts";
+import {
+    isRaycastDomainHost,
+    providersFromEnvironment,
+    providersVariable,
+    raycastDomainsVariable,
+} from "../src/api/oauth-table.ts";
 import { scanExtension, type SignIn } from "../scripts/compat/extension.ts";
 import { resolveString } from "../scripts/compat/scan.ts";
 import { raycastDeclarations, vendoredTypes } from "../scripts/raycast-types.ts";
@@ -210,6 +215,29 @@ test("signsInThroughRaycast: Web and a URL neither the table's nor on Raycast's 
     assert.equal(signsInThroughRaycast({ methods: ["App", "AppURI"], authorizeURLs: [], unresolved: true }, table), false);
     for (const bad of [undefined, null, "Web", { methods: "Web", authorizeURLs: [], unresolved: true }, { methods: ["Web"], unresolved: true }]) {
         assert.equal(signsInThroughRaycast(bad, table), false, JSON.stringify(bad));
+    }
+});
+
+test("signsInThroughRaycast: a table URL with its path or host in another case isn't the table's, as oauth.prepare matches it", () => {
+    const web = (url: string) => ({ methods: ["Web"], authorizeURLs: [url], unresolved: false });
+    // On Raycast's hosts every URL is Raycast's, table or not, so only the entries off them can tell.
+    const ownHosts = table.authorizeURLs.filter((url) => !isRaycastDomainHost(new URL(url).hostname, table.raycastDomains));
+    assert.ok(ownHosts.includes(googleTableURL));
+    for (const url of ownHosts) {
+        const path = new URL(url);
+        path.pathname = path.pathname.toUpperCase();
+        const { host } = new URL(url);
+        assert.equal(signsInThroughRaycast(web(url), table), false, `${url} is the table's`);
+        for (const changed of [path.href, url.replace(`//${host}/`, `//${host.toUpperCase()}/`)]) {
+            assert.notEqual(changed, url, `${url} has letters to change`);
+            assert.equal(changed.toLowerCase(), url.toLowerCase(), "only the letters' case differs");
+            assert.equal(
+                signsInThroughRaycast(web(changed), table),
+                true,
+                `${changed} isn't the table's URL: the match is exact. ` +
+                    "It's on the table's own host, which oauth.prepare refuses and which still gets the sentence, kept for later",
+            );
+        }
     }
 });
 
