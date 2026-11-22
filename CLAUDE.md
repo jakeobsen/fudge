@@ -1245,8 +1245,12 @@ Extensions run in a separate Node.js process, the extension host.
   CI has no identity and stays ad hoc; a release is signed again with the Developer ID identity (see Branches, CI and releases).
   No certificate, key, name or team ID ever goes into the repo.
 - **The hardened runtime refuses a protected resource without its entitlement**, with no prompt, whatever the user allowed.
-  `App/Fudge.entitlements` has the two Fudge uses, each with a comment: Apple Events (Finder, System Events and the login window) and Calendars (My Schedule's EventKit).
-  A feature that starts using the camera, the microphone, location, contacts, photos, calendars or Apple Events adds its entitlement there in the same change.
+  `App/Fudge.entitlements` has what Fudge and its extensions may use, each with a comment: Apple Events (Finder, System Events, the login window and extensions' AppleScript), Calendars (My Schedule's EventKit, and extensions' events and reminders), and, for extensions only, Contacts, location, Photos, the camera and the microphone (SPEC-151).
+  Fudge starts extensions' processes and never disclaims them, so macOS counts their requests as Fudge's, and one answer for Fudge covers every extension.
+  Each has the text macOS asks with in `App/Info.plist`; Bluetooth has no hardened-runtime entitlement, only its text (`NSBluetoothAlwaysUsageDescription`).
+  Nothing asks for them at launch: macOS asks when an extension first uses one, and My Schedule asks for Calendars.
+  `AppPermissionsTests` pins both files' keys and texts, so changing either means changing the test too.
+  A feature that starts using another protected resource adds its entitlement and its text in the same change.
   Accessibility, Input Monitoring, Screen Recording and Full Disk Access are permissions the user grants, with no entitlement.
 - **The local-network check reads the URL, not DNS.**
   A public name that resolves to a private address isn't caught. https mostly covers it, since a LAN device rarely has a certificate for a public name.

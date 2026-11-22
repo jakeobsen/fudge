@@ -78,6 +78,8 @@ Esc goes back, then hides the window.
 
 Extensions run with your permissions, and while they run they can reach each other's data, as in Raycast.
 Install the ones you trust.
+An extension may ask to use your contacts, location, photos, calendars, reminders, camera, microphone or Bluetooth, and macOS asks you first.
+macOS keeps one answer for Fudge, so a yes covers every extension, and you can change it under **System Settings → Privacy & Security**.
 
 When you open Fudge again within 90 seconds, it's as you left it.
 After longer, it starts over on an empty root search.
@@ -494,7 +496,8 @@ Releases are signed with Fudge's Developer ID, so their permissions carry over f
 A release and a build you made yourself have different signatures, so switching between them asks for the permissions again.
 
 Every build has the hardened runtime, which notarizing needs.
-It refuses a protected resource unless the app has its entitlement, so `App/Fudge.entitlements` lists the ones Fudge uses: Apple Events and Calendars.
+It refuses a protected resource unless the app has its entitlement, so `App/Fudge.entitlements` lists the ones Fudge and its extensions may use: Apple Events, Calendars, Contacts, location, Photos, the camera and the microphone.
+Bluetooth has no entitlement, only the text macOS asks with, in `App/Info.plist` with the others.
 The Node.js inside Fudge has two of its own, in `App/Helpers/node.entitlements`: one to compile JavaScript as it runs, and one to load extensions' native addons, which others have signed.
 
 ## What's here
