@@ -126,6 +126,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 settingsModel.windowPositions.first { $0.name == editing }.map(PositionDraft.init(editing:))
                 ?? PositionDraft()
         }
+        if Snapshot(arguments: CommandLine.arguments)?.signInServicesList == true {
+            settingsModel.snapshotServicesList = []
+        }
         // One calendar source for both, so the Calendar and Permissions pages say what My Schedule reads.
         settingsModel.calendarSource = model.calendarSource
         settingsModel.loadCalendars()
@@ -880,7 +883,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// steps from `onboarding.json`; with a step id, on every step from the start, at that one.
 /// `--own-app-sign-in` shows **Extensions with their own sign-in** as on, and `--raycast-links fudge|<app name>` says
 /// who opens Raycast's links (`fudge,<app name>`: Fudge Links does, and that app claims them too), on the Sign-in page
-/// and onboarding's Raycast step; neither touches LaunchServices.
+/// and onboarding's Raycast step; neither touches LaunchServices. `--sign-in-services "<id>|…"` is the sign-in server's
+/// answer, and `--sign-in-services-list` with `--settings :sign-in` draws Show All's list over the page, in place of
+/// its popover.
 /// `--command-line-tools found|old|missing` is what Settings → Development and the Extension Store take Apple's Command
 /// Line Tools to be (missing by default); no snapshot run asks the Mac.
 /// `--update-available <version>` shows that version as found by an update check, wherever Fudge shows one (the
@@ -919,8 +924,12 @@ struct Snapshot {
     /// `--sign-ins <extension>/<providerId>=<Provider>,…`: sign-ins the Sign-in page lists, kept in memory.
     let signIns: MemorySecretStore
     /// `--sign-in-services "<id>|<id>|…"`: what the chosen sign-in server answers it offers (`FixedSignInServices`),
-    /// so the line under the choice names those services. Without it there's no answer and the line is the plain one.
+    /// so the line under the choice names up to five of those services, or gives their number with Show All. Without
+    /// it there's no answer and the line is the plain one.
     let signInServices: String?
+    /// `--sign-in-services-list`: the Sign-in page draws Show All's list in place, over the page, since a snapshot
+    /// run never opens a popover; nothing while the line names five services or fewer.
+    let signInServicesList: Bool
     /// `--sign-in-consent`: picks Fudge's sign-in server on the Sign-in page and saves its consent sheet instead. It
     /// implies `--settings`, as `--clipboard-consent` does.
     let signInConsent: Bool
@@ -995,6 +1004,7 @@ struct Snapshot {
             try? signIns.write(JSONEncoder().encode(tokens), account: parts[0])
         }
         signInServices = value("--sign-in-services")
+        signInServicesList = arguments.contains("--sign-in-services-list")
         signInConsent = arguments.contains("--sign-in-consent")
         clipboardConsent = arguments.contains("--clipboard-consent")
         ownAppSignIn = arguments.contains("--own-app-sign-in")
