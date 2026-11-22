@@ -145,5 +145,33 @@
         "name": "Figma",
         "refreshURL": "https://oauth.raycast.com/v1/refresh-token/qJfyXOqhjDouaj06_54vl2O3NoIfY36R_-OOExXZNAS073Bih0aeNaHLO9xEpW6lbooqWCpT6zO7zLvbTx1MtXF2dU5d4B_of5d05Yxh27JIAPHG0uBw7fINhej_ViQ-sbE",
         "tokenURL": "https://oauth.raycast.com/v1/token/rsuQtsavqnjuxmA3vCYSGa3E-D8_ruhzY4OqJIOA7aB4_wGaFh2WE0mQc_uMZ7E5Nk8-pAeW3JXE3WlUfgqu_-zNiM4yWU7i_z2-u0pO8HJFh7_H6ohVBh8fcDpk64nT"
+    },
+    {
+        "authorizeURL": "https://oauth.raycast.com/v1/authorize/MnlQFVxIGQ4k6vhqj0q7FUyjXQs7FbP504oq2kWvU0DQ7ydArhDDZo_0RZLytPp3cBI4XAAi6JhEM4dq3POHTarPLiM-OJScM_6D1S3WCTynD_ArEsOIIihJC7KQvZL3X5vaDaKBygzemteTqVfTT3mxFpHXRwDMaMwKrSBimszqxqSJre9Cm_rkaA4ovOKh9A",
+        "id": "intra42",
+        "name": "42",
+        "refreshURL": "https://oauth.raycast.com/v1/refresh-token/3M-j9Q4RZaZelFapmWrXeGPyaVV2zce7OIBsa7_8yMZ-Z-wH0UnsPVvGlNwo3n8IBZs-dEyVDLVusP6hjYD4seIut6Jv24LtdvogyEDNcuRpOmyb6DEX-hnvnT56MH47XJ-aNiCWAJC4SIn3WeMA7T-wdlbsuxWvHA1Aw7IyA5jNLwTyALavTOnrY69W",
+        "tokenURL": "https://oauth.raycast.com/v1/token/CQ8Acmd1GJ7WXGwXJ0BdBOtMhyiGcdZMPpq7pnM74LNkLiB6gRMSJ33oMtJ0bGkKFlG3IitUPqnW89BL8_VQ6t6Vex1Znps-pAd0itvAr1q0VaawTwfopc43vp-soOvKY9A1U8dfeKGOh9iDyGWrN-_NsDEO-UcJTazwwIBaPo1hRX4kdlHWRueDTrXS"
+    },
+    {
+        "authorizeURL": "https://oauth.raycast.com/v1/authorize/mgIpKnxTo3jdnE1IUETN_zw4tSRTSnH6DffToE_gh1deVyanGQ53X1ZN8QrZtl8XgYkARnurl9iQVFtuOvNYPMmaEtZoY05ZV7KmAF4GE2NNmlJScX8Hd3_RRm054E_hRus",
+        "id": "ticktick",
+        "name": "TickTick",
+        "refreshURL": "https://oauth.raycast.com/v1/refresh-token/sZgB0AoTB26kqAhJ7pKwC-c0Csk7iMGAQ3OwBADMcZd0ntppCz-q3tTb4VRgutPDL-JiXn4JbkrkCggRXIlO5mQp7VJvLO7XuPxJ2oqLO7dJPEziEKzsKHEeMRgfGw",
+        "tokenURL": "https://oauth.raycast.com/v1/token/SXhT3SrBQS_UHzaHXdkI28IHvtPy1y79lN5b7WoFnWn6gbvztRZkAL906CUce9e4DbOLgWxhVLCG_Bxi0Ur3d4H7bBprZDsofulVmBBdNJgrF1mH-b2iJRDck9uLWA"
+    },
+    {
+        "authorizeURL": "https://oauth.raycast.com/v1/authorize/L56YnDJ7Pyv-SZlWPCgVlUHSVMI4Eo71Yzox2S9xDRtI83vegut87tcNRpoby4W-_L3m6rYKozB71tAb1THv3G00VX-9rvnQ5klOYengXzr7E8GE6pEIFP9rCqF2KCHqAV_yVzzjYYgt7ztx3FS1",
+        "id": "zoho",
+        "name": "Zoho",
+        "refreshURL": "https://oauth.raycast.com/v1/refresh-token/PkgYXNFbQinA8SK-3Wvcl8xdP7Hq-kaX6ur_sct3_qk_ATrFgb8uneFkkpkwlACWOjsnG_TIvW75N7SdQ9Afd-ZfeKxtqdHj2yYEfg5Y0oueBi8zBwGoRWc-sglHUgecZaF2PQfuzqKZ0JoXL2JP4w",
+        "tokenURL": "https://oauth.raycast.com/v1/token/IzJ2IgubKiVDyntspLduHwp2fbqLnidriix9jaZCAzZbj2wdsPWfJpv3TUtpQCRyopHNO1YPx0HgWOiQlaIaDiJu8zCrnvxFsp9beqRPVE1w5acImQsJ3BHoVq36OD3mAS6BV0FlkgzkPWjcqjMvzg"
+    },
+    {
+        "authorizeURL": "https://oauth.raycast.com/v1/authorize/SpqHimJblCsEsHMaOX6bSCGCatuNIU9D8vHt3qn0eGhM9Dhqs-K2TDWF2KFer-G-LizUGpxKDwkTBA-oGVs9yAJzI-GsWPkS3UTCbil0P5rY5VxHVic2kuBzEaQan7HBhfvFHLwOYnbd69mx0blWKqXxgWW7sZ3FqagkphxttM0n",
+        "id": "webflow",
+        "name": "Webflow",
+        "refreshURL": "https://oauth.raycast.com/v1/refresh-token/OUvaPcCuUx4pAsmO9NlL0SjzRIsj1iquQtVbDxZlJHw5AxRqpEykQrSAKVa13YZNyTulfh8hUtGnOsmNEdMCyvflcIegE6MhbCr5BYS9Zdznb95mcJiXhduhwmXr9OXV6srwF4DmOUEnVwMzH7Pv8i8KmFxRRjbmm9rku70X_yNeVIxu9bzKzg",
+        "tokenURL": "https://oauth.raycast.com/v1/token/q4QKZun0V_mQeHqwiKbrv-G8fdDGM1-an2xu3vMO5AqrmUHnzIC4pjEpHf_I2XWtpR3uMK42EtKQiqNljaEE3rtacJnOHrip0_2B4K7Ci3WClmnjzv9gwmyYtmaGl4qIeU10j2RTDWVRq_jeUwc5Ze2_RCwYWdikkqKsfiLkJWZVahPvI0-RaA"
     }
 ]

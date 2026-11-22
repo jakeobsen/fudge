@@ -229,8 +229,9 @@ test("a token request through https goes to the relay, body and headers intact",
     assert.deepEqual(relaySeen.map((seen) => [seen.path, seen.body]), [["/base/github/refresh-token", refresh]]);
 });
 
-// `trek`, `gumroad`, `moneybird` and `freeagent` declare @raycast/utils 1.x, which posts its token requests through
-// https.request (FUD-166): their shared-proxy addresses go to the relay that way too.
+// `trek`, `gumroad`, `moneybird`, `freeagent`, `42-api`, `ticktick-plus` and `webflow-sites` declare @raycast/utils
+// 1.x, which posts its token requests through https.request (FUD-166): their shared-proxy addresses go to the relay that
+// way too.
 test("1.x token and refresh requests to the shared proxy's addresses go to the relay", async () => {
     answer = { server: `${base(relay)}/base/`, signedIn: false };
     relaySeen.length = 0;
@@ -239,6 +240,9 @@ test("1.x token and refresh requests to the shared proxy's addresses go to the r
     await exchange(() => https.request("https://oauth.raycast.com/v1/refresh-token/-8K39Rwy5HY5-DzNTOVLTMvKH6EQVd5E50z9mvLJ4bahXJu2susPq_DcGFFUYrhctLgTTXZLhmYRvlBnpIaGuxPDB7QTscbBrsz63tOA4RvPXoqJYh4JKtyUgQMAheFWBKh6gvNI08Q", { method: "POST" }), refresh);
     await exchange(() => https.request("https://oauth.raycast.com/v1/token/csqaHeGaTfTpistIum6eBy7DDrJjcz7Z-FmW_HuU4Dsa3r-AhgMCGcEWYUCLR3k-5-PirrX1ilceu4WfRqUQlyCSEiYqzkZkIIKyx5n7khRbIe99FHiEBtENFXUZRz8", post), codeGrant);
     await exchange(() => https.request("https://oauth.raycast.com/v1/refresh-token/wg1eYlPV441y6BfHcmZi19x61W2tqw045Dup4C6M8VgERbxtFByj1J97OeYVaiPHbYWoLz3nNnZ3nzXoMnZbqP6EhVYkT8eJefM79ey5sQLcdRL9vGnlBsLMqaB_Ylg", { method: "POST" }), refresh);
+    await exchange(() => https.request("https://oauth.raycast.com/v1/token/CQ8Acmd1GJ7WXGwXJ0BdBOtMhyiGcdZMPpq7pnM74LNkLiB6gRMSJ33oMtJ0bGkKFlG3IitUPqnW89BL8_VQ6t6Vex1Znps-pAd0itvAr1q0VaawTwfopc43vp-soOvKY9A1U8dfeKGOh9iDyGWrN-_NsDEO-UcJTazwwIBaPo1hRX4kdlHWRueDTrXS", post), codeGrant);
+    await exchange(() => https.request("https://oauth.raycast.com/v1/refresh-token/sZgB0AoTB26kqAhJ7pKwC-c0Csk7iMGAQ3OwBADMcZd0ntppCz-q3tTb4VRgutPDL-JiXn4JbkrkCggRXIlO5mQp7VJvLO7XuPxJ2oqLO7dJPEziEKzsKHEeMRgfGw", { method: "POST" }), refresh);
+    await exchange(() => https.request("https://oauth.raycast.com/v1/token/q4QKZun0V_mQeHqwiKbrv-G8fdDGM1-an2xu3vMO5AqrmUHnzIC4pjEpHf_I2XWtpR3uMK42EtKQiqNljaEE3rtacJnOHrip0_2B4K7Ci3WClmnjzv9gwmyYtmaGl4qIeU10j2RTDWVRq_jeUwc5Ze2_RCwYWdikkqKsfiLkJWZVahPvI0-RaA", post), codeGrant);
     assert.deepEqual(
         relaySeen.map((seen) => [seen.path, seen.body]),
         [
@@ -246,6 +250,9 @@ test("1.x token and refresh requests to the shared proxy's addresses go to the r
             ["/base/gumroad/refresh-token", refresh],
             ["/base/freeagent/token", codeGrant],
             ["/base/freeagent/refresh-token", refresh],
+            ["/base/intra42/token", codeGrant],
+            ["/base/ticktick/refresh-token", refresh],
+            ["/base/webflow/token", codeGrant],
         ],
     );
 });
