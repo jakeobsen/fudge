@@ -707,6 +707,13 @@ test("every git operation of the store's waits its turn", async () => {
 
 // MARK: - Git
 
+/** A git call's arguments after the `-c` pairs the store puts before `clone` and `fetch` (SPEC-157 C.4). */
+function gitArgs(args: string[]): string[] {
+    let rest = args;
+    while (rest[0] === "-c") rest = rest.slice(2);
+    return rest;
+}
+
 /** A fake runner: records each call and answers from `reply`. */
 function fakeRun(reply: (program: string, args: string[]) => Partial<GitResult> = () => ({})) {
     const calls: {
@@ -717,6 +724,8 @@ function fakeRun(reply: (program: string, args: string[]) => Partial<GitResult> 
         stoppable?: boolean;
         input?: string;
         env?: NodeJS.ProcessEnv;
+        signal?: AbortSignal;
+        stopOn?: string;
     }[] = [];
     const run: Run = async (program, args, options) => {
         calls.push({ program, args, ...options });
@@ -760,11 +769,11 @@ test("the exact git calls: clone, refresh keeping only what it reaches, add, com
     assert.deepEqual(
         calls.map((call) => call.args),
         [
-            ["clone", "--depth", "1", "--filter=blob:none", "--sparse", "--no-checkout", "https://example.invalid/repo.git", repoPath],
+            ["-c", "credential.helper=", "clone", "--depth", "1", "--filter=blob:none", "--sparse", "--no-checkout", "--", "https://example.invalid/repo.git", repoPath],
             ["sparse-checkout", "set", "--no-cone", "/extensions/*/package.json"],
             ["checkout"],
             ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-            ["fetch", "--depth", "1", "--filter=blob:none", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"],
+            ["-c", "credential.helper=", "fetch", "--depth", "1", "--filter=blob:none", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"],
             ["checkout", "--quiet", "-B", "main", "refs/remotes/origin/main", "--"],
             ["for-each-ref", "--format=%(refname)"],
             ["update-ref", "--no-deref", "-d", "refs/tags/v1"],
@@ -796,6 +805,25 @@ test("the exact git calls: clone, refresh keeping only what it reaches, add, com
     );
     assert.ok(!(await repo.needsRefresh(new Date())), "just refreshed");
     assert.ok(await repo.needsRefresh(new Date(Date.now() + 25 * 60 * 60 * 1000)), "a day later");
+    // Every git reaches only https and never asks (SPEC-157 C.4); the clone and the fetch stop on the filter warning,
+    // in English, in a group of their own (C.7).
+    for (const call of calls) {
+        assert.equal(call.env?.GIT_ALLOW_PROTOCOL, "https", call.args.join(" "));
+        assert.equal(call.env?.GIT_ASKPASS, "", call.args.join(" "));
+    }
+    const downloads = calls.filter((call) => ["clone", "fetch"].includes(gitArgs(call.args)[0]!));
+    assert.equal(downloads.length, 2);
+    for (const call of downloads) {
+        assert.deepEqual(call.args.slice(0, 2), ["-c", "credential.helper="]);
+        assert.equal(call.stopOn, "filtering not recognized by server");
+        assert.equal(call.env?.LC_ALL, "C");
+        assert.ok(call.signal && !call.signal.aborted, "in a group of its own");
+    }
+    for (const call of calls.filter((call) => !downloads.includes(call))) {
+        assert.equal(call.stopOn, undefined, call.args.join(" "));
+        assert.equal(call.env?.LC_ALL, undefined, call.args.join(" "));
+        assert.notEqual(call.args[0], "-c", call.args.join(" "));
+    }
 });
 
 test("git ignores the user's own configuration and never prompts", () => {
@@ -805,6 +833,21 @@ test("git ignores the user's own configuration and never prompts", () => {
     assert.equal(environment.GIT_CONFIG_GLOBAL, "/dev/null", "an insteadOf rule can't redirect the clone");
     assert.equal(environment.HOME, "/Users/someone");
     assert.equal(environment.PATH, "/usr/bin");
+    // Configuration handed down in the environment goes too (SPEC-157 C.4): no credential helper, no URL rewrite.
+    const handedDown = storeEnvironment({
+        PATH: "/usr/bin",
+        GIT_CONFIG_COUNT: "2",
+        GIT_CONFIG_KEY_0: "credential.helper",
+        GIT_CONFIG_VALUE_0: "!/tmp/helper",
+        GIT_CONFIG_KEY_1: "url.https://evil.example/.insteadOf",
+        GIT_CONFIG_VALUE_1: "https://github.com/",
+        GIT_CONFIG_PARAMETERS: "'credential.helper'='!/tmp/helper'",
+    });
+    for (const name of ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1", "GIT_CONFIG_PARAMETERS"]) {
+        assert.equal(Object.hasOwn(handedDown, name), false, name);
+    }
+    assert.equal(handedDown.PATH, "/usr/bin");
+    assert.equal(handedDown.GIT_CONFIG_GLOBAL, "/dev/null", "the store's own configuration variables stay");
 });
 
 test("unloading the store stops its running git, and only that", async () => {
@@ -935,7 +978,7 @@ async function storeContext(
             parsedFolder = folderOf(args.at(-1)) ?? parsedFolder;
             return { stdout: "c0ffee1234\n" };
         }
-        if (args[0] === "fetch") fetched.add(parsedFolder);
+        if (gitArgs(args)[0] === "fetch") fetched.add(parsedFolder);
         if (args[0] === "rev-list" && args.includes("--missing=print")) {
             const dir = folderOf(args.at(-1))!;
             if (fetched.has(dir)) return {};
@@ -972,7 +1015,7 @@ async function storeContext(
     const asked: { title: string; message: string; primary: string }[] = [];
     const trashed: string[] = [];
     const context: StoreContext = {
-        repo: new StoreRepository(repoPath, { run: git.run }),
+        repo: new StoreRepository(repoPath, { allowProtocols: "file", run: git.run }),
         supportPath,
         cli: "/Applications/Fudge.app/Contents/Helpers/fudge",
         extensionsDir,
@@ -1679,6 +1722,8 @@ test("a detail scan fetches the folder's src/ with a per-file cap, checks out it
             ["rev-list", "--objects", "--missing=print", "HEAD:extensions/alpha/src"],
             ["rev-parse", "--verify", "HEAD:extensions/alpha/src"],
             [
+                "-c",
+                "credential.helper=",
                 "fetch",
                 "--refetch",
                 "--no-write-fetch-head",
@@ -1695,7 +1740,7 @@ test("a detail scan fetches the folder's src/ with a per-file cap, checks out it
             ["sparse-checkout", "set", "--no-cone", "--stdin"],
         ],
     );
-    assert.deepEqual(git.calls[5]!.env, { GIT_NO_LAZY_FETCH: "1" }, "the checkout never downloads");
+    assert.equal(git.calls[5]!.env?.GIT_NO_LAZY_FETCH, "1", "the checkout never downloads");
     assert.deepEqual(scanPatterns("alpha"), [
         "/extensions/alpha/src/**/*.tsx",
         "/extensions/alpha/src/**/*.ts",
@@ -1745,13 +1790,13 @@ test("past the caps a row isn't checked: too many source files, or files under s
         const reply = left.git.run;
         let fetched = false;
         const withMissing: Run = async (program, args, options) => {
-            if (args[0] === "fetch") fetched = true;
+            if (gitArgs(args)[0] === "fetch") fetched = true;
             if (args[0] !== "rev-list") return reply(program, args, options);
             const missing = fetched ? [still] : files;
             const lines = missing.map((file) => `?${String(files.indexOf(file)).padStart(40, "0")}\n`);
             return { code: 0, stdout: `abc1 extensions/alpha/src\n${lines.join("")}`, stderr: "" };
         };
-        const overCap = { ...left.context, repo: new StoreRepository(left.repoPath, { run: withMissing }) };
+        const overCap = { ...left.context, repo: new StoreRepository(left.repoPath, { allowProtocols: "file", run: withMissing }) };
         assert.deepEqual(await checkFolder("alpha", overCap, () => false), expected, `${still} over the per-file cap`);
         assert.ok(fetched, `${still}: fetched`);
         const checkedOut = left.git.calls.some((call) => call.args[0] === "sparse-checkout" && call.args[1] === "add");
@@ -1928,7 +1973,7 @@ test("a README git couldn't fetch isn't kept as missing: selecting it again wait
             ? { code: 128, stderr: "fatal: unable to access 'https://github.com/raycast/extensions/': Could not resolve host" }
             : {},
     );
-    const repo = new StoreRepository(context.repo.path, { run: failing.run });
+    const repo = new StoreRepository(context.repo.path, { allowProtocols: "file", run: failing.run });
     await writeFile(path.join(repo.path, "extensions/alpha/README.md"), "# Alpha\n");
     await assert.rejects(fetchReadme(repo, "alpha"), /Could not resolve host/, "a failed fetch throws");
     gitFails = false;
@@ -1990,7 +2035,7 @@ test("a README fetch on its way shows as loading, a failed one says so, and none
             ? { code: 128, stderr: "fatal: unable to access 'https://github.com/raycast/extensions/': Could not resolve host" }
             : {},
     );
-    const repo = new StoreRepository(context.repo.path, { run: failing.run });
+    const repo = new StoreRepository(context.repo.path, { allowProtocols: "file", run: failing.run });
     await writeFile(path.join(repo.path, "extensions/alpha/README.md"), "# Alpha\n");
     const entry = parseManifest("alpha", manifest("alpha"))!;
     const clock = manualTimers();
@@ -2164,7 +2209,7 @@ test("clone, list, fetch a README on demand, and see an update after a refresh",
     await sh(bare, "config", "uploadpack.allowFilter", "true");
     await sh(bare, "config", "uploadpack.allowAnySHA1InWant", "true");
 
-    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}` });
+    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}`, allowProtocols: "file" });
     await repo.clone();
     assert.deepEqual(
         (await readCatalog(repo.path)).map((entry) => entry.name),
@@ -2211,7 +2256,7 @@ test("a detail scan's patterns fetch the source files alone, from the trees' lis
     await sh(bare, "config", "uploadpack.allowFilter", "true");
     await sh(bare, "config", "uploadpack.allowAnySHA1InWant", "true");
 
-    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}` });
+    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}`, allowProtocols: "file" });
     await repo.clone();
     /** The paths under extensions/alpha whose contents aren't downloaded, asked without downloading them. */
     const missing = async () => {
@@ -2285,7 +2330,7 @@ async function partialClone(files: Record<string, string | Buffer>) {
     await sh(root, "clone", "--quiet", "--bare", source, bare);
     // Filters only: protocol v2 takes a tree's id in a `want` with no setting, so a fall back to v0 would fail here.
     await sh(bare, "config", "uploadpack.allowFilter", "true");
-    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}` });
+    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}`, allowProtocols: "file" });
     await repo.clone();
     const { context, cli } = await storeContext();
     return { repo, context: { ...context, repo }, cli, root, bare };
@@ -2336,8 +2381,9 @@ test("a check downloads no source file over the cap: that folder isn't checked, 
     // Checked again (a new build of Fudge, say): the source is here already, so nothing is fetched.
     const calls: string[] = [];
     const recording = new StoreRepository(repo.path, {
+        allowProtocols: "file",
         run: (program, args, options) => {
-            calls.push(args[0]!);
+            calls.push(gitArgs(args)[0]!);
             return spawnProgram(program, args, options);
         },
     });
@@ -2405,7 +2451,8 @@ function recording(around: Run = spawnProgram) {
         calls.push({ args, env: options.env, code: result.code, stderr: result.stderr });
         return result;
     };
-    const steps = () => calls.map((call) => `${call.args.slice(0, 2).join(" ")}${call.env ? " (no lazy fetch)" : ""}`);
+    const steps = () =>
+        calls.map((call) => `${gitArgs(call.args).slice(0, 2).join(" ")}${call.env?.GIT_NO_LAZY_FETCH ? " (no lazy fetch)" : ""}`);
     return { run, calls, steps };
 }
 
@@ -2420,10 +2467,10 @@ test("a server that refuses the folder's tree gets the fetch as before: each sou
     await sh(refusing.repo.path, "config", "protocol.version", "0");
     const v0 = recording();
     await assert.rejects(
-        checkFolder("small", { ...refusing.context, repo: new StoreRepository(refusing.repo.path, { run: v0.run }) }, () => false),
+        checkFolder("small", { ...refusing.context, repo: new StoreRepository(refusing.repo.path, { allowProtocols: "file", run: v0.run }) }, () => false),
         /not our ref/,
     );
-    const fetch = v0.calls.find((call) => call.args[0] === "fetch")!;
+    const fetch = v0.calls.find((call) => gitArgs(call.args)[0] === "fetch")!;
     assert.match(fetch.stderr, /not our ref/, "git's own refusal");
     assert.deepEqual(
         v0.steps().filter((step) => step.startsWith("fetch") || step.startsWith("sparse-checkout")),
@@ -2442,12 +2489,12 @@ test("a server that refuses the folder's tree gets the fetch as before: each sou
         "extensions/huge/src/generated.ts": big,
     });
     const refuseTrees: Run = async (program, args, options) => {
-        if (args[0] !== "fetch" || !args.includes("--refetch")) return spawnProgram(program, args, options);
+        if (gitArgs(args)[0] !== "fetch" || !args.includes("--refetch")) return spawnProgram(program, args, options);
         const tree = args.at(-1)!;
         return { code: 128, stdout: "", stderr: `error: git upload-pack: not our ref ${tree}\nfatal: remote error: upload-pack: not our ref ${tree}` };
     };
     const v2 = recording(refuseTrees);
-    const refused = { ...context, repo: new StoreRepository(repo.path, { run: v2.run }) };
+    const refused = { ...context, repo: new StoreRepository(repo.path, { allowProtocols: "file", run: v2.run }) };
     assert.deepEqual(await checkFolder("art", refused, () => false), fromReport(supportedScan));
     assert.deepEqual(await notDownloaded(repo.path, "art"), ["src/logo.png"], "only the source file came, not the asset");
     assert.ok(v2.steps().includes("sparse-checkout add"), "with the lazy fetch on");
@@ -2485,11 +2532,11 @@ test("any other failure of the tree fetch fails the check: no fetch as before, n
     // A timeout: a remote that takes 30 s to answer, and a fetch given half a second.
     await sh(repo.path, "config", "remote.origin.uploadpack", "sleep 30; git-upload-pack");
     const slow = recording((program, args, options) =>
-        spawnProgram(program, args, args[0] === "fetch" ? { ...options, timeout: 500 } : options),
+        spawnProgram(program, args, gitArgs(args)[0] === "fetch" ? { ...options, timeout: 500 } : options),
     );
     const started = Date.now();
     await assert.rejects(
-        checkFolder("small", { ...context, repo: new StoreRepository(repo.path, { run: slow.run }) }, () => false, new AbortController().signal),
+        checkFolder("small", { ...context, repo: new StoreRepository(repo.path, { allowProtocols: "file", run: slow.run }) }, () => false, new AbortController().signal),
         /git stopped after 0\.5 s/,
     );
     assert.ok(Date.now() - started < 10_000, `the check ended with the fetch (${Date.now() - started} ms)`);
@@ -2500,7 +2547,7 @@ test("any other failure of the tree fetch fails the check: no fetch as before, n
     await sh(repo.path, "config", "remote.origin.url", `file://${path.join(root, "nowhere.git")}`);
     const unreachable = recording();
     await assert.rejects(
-        checkFolder("small", { ...context, repo: new StoreRepository(repo.path, { run: unreachable.run }) }, () => false),
+        checkFolder("small", { ...context, repo: new StoreRepository(repo.path, { allowProtocols: "file", run: unreachable.run }) }, () => false),
         /Could not read from remote repository/,
     );
     await unchanged("an unreachable remote", unreachable);
@@ -2563,7 +2610,7 @@ test("cancelling a check at each step ends only the download, leaves no lock, an
             exits.push({ command, code: result.code });
             return result;
         };
-        const stepped = new StoreRepository(repo.path, { run });
+        const stepped = new StoreRepository(repo.path, { allowProtocols: "file", run });
         assert.deepEqual(
             await checkFolder("small", { ...context, repo: stepped }, () => controller.signal.aborted, controller.signal),
             expected,
@@ -2613,7 +2660,7 @@ test("a default branch name is used only when it's a plain branch name", async (
         assert.ok(!isValidBranch(name), JSON.stringify(name));
     }
     const { run, calls } = fakeRun((_program, args) => (args[0] === "symbolic-ref" ? { stdout: "origin/--upload-pack=x\n" } : {}));
-    const repo = new StoreRepository(await temporary(), { run });
+    const repo = new StoreRepository(await temporary(), { allowProtocols: "file", run });
     await assert.rejects(repo.refresh(), /default branch it can't use: "--upload-pack=x"/);
     assert.deepEqual(
         calls.map((call) => call.args[0]),
@@ -2637,7 +2684,7 @@ test("refreshing many times keeps the copy one commit deep: only the newest comm
     await sh(bare, "config", "uploadpack.allowFilter", "true");
     await sh(bare, "config", "uploadpack.allowAnySHA1InWant", "true");
 
-    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}` });
+    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}`, allowProtocols: "file" });
     await repo.clone();
     const commits = [(await sh(source, "rev-parse", "HEAD")).trim()];
     for (const round of [2, 3, 4]) {

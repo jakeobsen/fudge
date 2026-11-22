@@ -9,7 +9,8 @@ export const repositoryURL = "https://github.com/raycast/extensions.git";
 /** The copy is refreshed when the store opens and it's older than this. */
 export const refreshAge = 24 * 60 * 60 * 1000;
 
-export type GitResult = { code: number; stdout: string; stderr: string };
+/** `stopped` is there when a run given `stopOn` saw its text, whether or not the signal ended it. */
+export type GitResult = { code: number; stdout: string; stderr: string; stopped?: true };
 /** How long a cancelled program has to end after SIGTERM before it gets SIGKILL. */
 export const cancelGrace = 1000;
 /**
@@ -22,6 +23,8 @@ export const cancelGrace = 1000;
  * starts, and never for a program that couldn't start; it must not throw (the store records `fudge build` with it).
  * With `output` (two paths), the program's stdout and stderr are those files instead of pipes (SPEC-156 A.1): a program
  * that outlives the store's worker then never gets SIGPIPE, and its whole output stays.
+ * With `stopOn` (SPEC-157 C.7), the program ends as an abort ends it, its group with it, as soon as that text is in the
+ * stderr kept so far, so a text split across two reads still counts; it needs a `signal` for its group, and pipes.
  */
 export type Run = (
     program: string,
@@ -35,6 +38,7 @@ export type Run = (
         signal?: AbortSignal;
         started?: (pid: number) => void;
         output?: ProgramOutput;
+        stopOn?: string;
     },
 ) => Promise<GitResult>;
 
@@ -95,13 +99,25 @@ export function stopRunningGit(): void {
     for (const child of running) child.kill("SIGTERM");
 }
 
+/** Whether an inherited variable adds git configuration: `GIT_CONFIG_COUNT`, its keys and values, and `-c`'s own. */
+function addsGitConfig(name: string): boolean {
+    return (
+        name === "GIT_CONFIG_COUNT" ||
+        name === "GIT_CONFIG_PARAMETERS" ||
+        name.startsWith("GIT_CONFIG_KEY_") ||
+        name.startsWith("GIT_CONFIG_VALUE_")
+    );
+}
+
 /**
  * The environment every program the store runs gets: git never asks for a password (`GIT_TERMINAL_PROMPT=0`), and
- * ignores the user's own git configuration, so it clones the repository's address exactly as given.
+ * ignores the user's own git configuration, so it clones the repository's address exactly as given. Configuration
+ * passed down in the environment goes too (SPEC-157 C.4), so nothing adds a credential helper or a URL rewrite.
  */
 export function storeEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+    const kept = Object.fromEntries(Object.entries(base).filter(([name]) => !addsGitConfig(name)));
     return {
-        ...base,
+        ...kept,
         // The Mac's proxy, where none is set (SPEC-116 §3); `fudge build` passes it on to npm.
         ...proxyVariables(base),
         GIT_TERMINAL_PROMPT: "0",
@@ -116,6 +132,10 @@ export function storeEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.
  */
 export const spawnProgram: Run = async (program, args, options) => {
     if (options.signal?.aborted) return { code: -1, stdout: "", stderr: `${path.basename(program)} cancelled` };
+    // Stopping on a text ends the program's group, so it needs a group of its own, and reads stderr as it comes.
+    if (options.stopOn !== undefined && (options.signal === undefined || options.output !== undefined)) {
+        return { code: -1, stdout: "", stderr: `${path.basename(program)} wasn't started: stopOn needs a signal and pipes` };
+    }
     // Files that can't be made fall back to pipes: the output files never stop a build (SPEC-153's rule for records).
     const files = options.output ? await openOutput(options.output) : undefined;
     try {
@@ -128,7 +148,7 @@ export const spawnProgram: Run = async (program, args, options) => {
 function spawnWith(
     program: string,
     args: string[],
-    { cwd, timeout, stoppable, input, env, signal, started }: Parameters<Run>[2],
+    { cwd, timeout, stoppable, input, env, signal, started, stopOn }: Parameters<Run>[2],
     files: [FileHandle, FileHandle] | undefined,
 ): Promise<GitResult> {
     return new Promise((resolve) => {
@@ -163,7 +183,10 @@ function spawnWith(
         }, timeout);
         if (stoppable) running.add(child);
         let killTimer: NodeJS.Timeout | undefined;
+        let cancelled = false;
         const cancel = () => {
+            if (cancelled) return;
+            cancelled = true;
             group("SIGTERM");
             killTimer = setTimeout(() => group("SIGKILL"), cancelGrace);
         };
@@ -181,8 +204,15 @@ function spawnWith(
         }
         let stdout = "";
         let stderr = "";
+        // Where the next search for `stopOn` starts: the text may begin in what came before this chunk.
+        let searched = 0;
         child.stdout?.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
-        child.stderr?.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+        child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+            stderr += chunk;
+            if (stopOn === undefined || cancelled) return;
+            if (stderr.includes(stopOn, searched)) cancel();
+            else searched = Math.max(0, stderr.length - stopOn.length + 1);
+        });
         child.on("error", (error) => {
             finished();
             resolve({ code: -1, stdout, stderr: error.message });
@@ -193,9 +223,11 @@ function spawnWith(
                 stdout = await readOutputTail(files[0]).catch(() => "");
                 stderr = await readOutputTail(files[1]).catch(() => "");
             }
+            // Seen at any point, even when the program ended by itself before the signal landed.
+            const stopped = stopOn !== undefined && stderr.includes(stopOn);
             if (timedOut) stderr += `\n${path.basename(program)} stopped after ${timeout / 1000} s`;
             else if (code === null) stderr += `\n${path.basename(program)} stopped (${signal ?? "killed"})`;
-            resolve({ code: code ?? -1, stdout, stderr });
+            resolve({ code: code ?? -1, stdout, stderr, ...(stopped ? { stopped: true as const } : {}) });
         });
     });
 }
@@ -206,6 +238,24 @@ export class GitError extends Error {
     constructor(message: string, command?: string) {
         super(message);
         this.command = command;
+    }
+}
+
+/**
+ * What git prints, in English under `LC_ALL=C`, when the server doesn't do partial clones and it's about to download
+ * every file of the commit (SPEC-157 C.7).
+ */
+export const partialCloneWarning = "filtering not recognized by server";
+
+/** The server ignored the filter, so the clone or fetch was stopped before it downloaded everything (`noPartialClone`). */
+export class NoPartialClone extends GitError {}
+
+/** The branch the list names isn't on the remote (`noBranch`). */
+export class NoBranch extends GitError {
+    readonly branch: string;
+    constructor(message: string, branch: string, command?: string) {
+        super(message, command);
+        this.branch = branch;
     }
 }
 
@@ -257,18 +307,36 @@ export async function installCommandLineTools(run: Run = spawnProgram): Promise<
     return (result.stderr || result.stdout).trim() || `xcode-select exited with ${result.code}`;
 }
 
-/** The clone in `<supportPath>/repo`. Every path or pattern built from an extension's name is checked by the caller. */
+/** Before `clone` and `fetch`: no credential helper at all, a second guard beside `storeEnvironment` (SPEC-157 C.4). */
+const noCredentialHelper = ["-c", "credential.helper="];
+
+/**
+ * A repository's copy: Raycast's in `<supportPath>/repo`. Every path or pattern built from an extension's name is
+ * checked by the caller. Its git reaches only https remotes and never asks for a password (SPEC-157 C.4): tests reach
+ * local repositories through `allowProtocols`, which the app never sets. With `branch`, the copy follows that branch
+ * instead of the remote's default.
+ */
 export class StoreRepository {
     readonly path: string;
+    readonly branch: string | undefined;
     readonly #run: Run;
     readonly #git: string;
     readonly #url: string;
+    readonly #allowProtocols: string;
 
-    constructor(repoPath: string, options: { run?: Run; git?: string; url?: string } = {}) {
+    constructor(
+        repoPath: string,
+        options: { run?: Run; git?: string; url?: string; branch?: string; allowProtocols?: string } = {},
+    ) {
+        if (options.branch !== undefined && !isValidBranch(options.branch)) {
+            throw new GitError(`Not a branch name: ${JSON.stringify(options.branch)}`);
+        }
         this.path = repoPath;
+        this.branch = options.branch;
         this.#run = options.run ?? spawnProgram;
         this.#git = options.git ?? "/usr/bin/git";
         this.#url = options.url ?? repositoryURL;
+        this.#allowProtocols = options.allowProtocols ?? "https";
     }
 
     /** Where the time of the last clone or refresh is kept; inside `.git`, so it goes when the copy is deleted. */
@@ -281,13 +349,40 @@ export class StoreRepository {
         timeout = shortTimeout,
         cwd = this.path,
         input?: string,
-        extra: { env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
+        extra: { env?: NodeJS.ProcessEnv; signal?: AbortSignal; stopOn?: string } = {},
     ): Promise<string> {
-        const result = await this.#run(this.#git, args, { cwd, timeout, stoppable: true, input, ...extra });
-        if (result.code !== 0) {
-            throw new GitError(result.stderr.trim() || `git ${args[0]} failed`, ["git", ...args].join(" "));
-        }
+        const env = { GIT_ALLOW_PROTOCOL: this.#allowProtocols, GIT_ASKPASS: "", ...extra.env };
+        const result = await this.#run(this.#git, args, { cwd, timeout, stoppable: true, input, ...extra, env });
+        const command = ["git", ...args].join(" ");
+        if (result.stopped) throw new NoPartialClone(result.stderr.trim(), command);
+        if (result.code !== 0) throw new GitError(result.stderr.trim() || `git ${args[0]} failed`, command);
         return result.stdout;
+    }
+
+    /**
+     * A clone or fetch that may download the commit's files: in English (`LC_ALL=C`), so the server's warning that it
+     * ignores the filter is known, and stopped the moment it shows, in a group of its own (SPEC-157 C.7). A missing
+     * branch the list names is `NoBranch`.
+     */
+    async #download(args: string[], cwd: string): Promise<void> {
+        const stopping = new AbortController();
+        try {
+            await this.#exec([...noCredentialHelper, ...args], longTimeout, cwd, undefined, {
+                env: { LC_ALL: "C" },
+                signal: stopping.signal,
+                stopOn: partialCloneWarning,
+            });
+        } catch (error) {
+            if (
+                this.branch !== undefined &&
+                error instanceof GitError &&
+                !(error instanceof NoPartialClone) &&
+                /Remote branch .* not found|couldn't find remote ref/.test(error.message)
+            ) {
+                throw new NoBranch(error.message, this.branch, error.command);
+            }
+            throw error;
+        }
     }
 
     /** Deletes the copy, to clone it again when it can't be read (a clone stopped halfway, say). */
@@ -302,14 +397,22 @@ export class StoreRepository {
         );
     }
 
-    /** Clones with only `extensions/*\/package.json` checked out; blobs come on demand. */
+    /**
+     * Clones with only `extensions/*\/package.json` checked out; blobs come on demand. A clone stopped because the server
+     * ignores the filter leaves no copy (`NoPartialClone`).
+     */
     async clone(): Promise<void> {
         await mkdir(path.dirname(this.path), { recursive: true });
-        await this.#exec(
-            ["clone", "--depth", "1", "--filter=blob:none", "--sparse", "--no-checkout", this.#url, this.path],
-            longTimeout,
-            path.dirname(this.path),
-        );
+        const branch = this.branch === undefined ? [] : ["--branch", this.branch];
+        try {
+            await this.#download(
+                ["clone", "--depth", "1", "--filter=blob:none", "--sparse", "--no-checkout", ...branch, "--", this.#url, this.path],
+                path.dirname(this.path),
+            );
+        } catch (error) {
+            if (error instanceof NoPartialClone) await this.remove();
+            throw error;
+        }
         await this.#exec(["sparse-checkout", "set", "--no-cone", "/extensions/*/package.json"]);
         // Fetches every extension's package.json.
         await this.#exec(["checkout"], longTimeout);
@@ -317,17 +420,18 @@ export class StoreRepository {
     }
 
     /**
-     * Fetches the default branch's newest commit into its remote-tracking ref, moves the branch there and checks it
-     * out, then drops every other ref, the reflogs, and every object they no longer reach (`#keepOnlyReachable`).
-     * `.git/shallow` then names only the new commit: the copy stays one commit deep however often it's refreshed.
+     * Fetches the branch's newest commit into its remote-tracking ref (the list's branch, else the default one), moves
+     * the branch there and checks it out, then drops every other ref, the reflogs, and every object they no longer reach
+     * (`#keepOnlyReachable`). `.git/shallow` then names only the new commit: the copy stays one commit deep however
+     * often it's refreshed. A fetch stopped because the server ignores the filter leaves the copy as it was.
      */
     async refresh(): Promise<void> {
-        const branch = await this.defaultBranch();
+        const branch = this.branch ?? (await this.defaultBranch());
         const local = `refs/heads/${branch}`;
         const tracking = `refs/remotes/origin/${branch}`;
-        await this.#exec(
+        await this.#download(
             ["fetch", "--depth", "1", "--filter=blob:none", "--no-tags", "origin", `+${local}:${tracking}`],
-            longTimeout,
+            this.path,
         );
         // Fetches the manifests that changed.
         await this.#exec(["checkout", "--quiet", "-B", branch, tracking, "--"], longTimeout);
@@ -407,6 +511,7 @@ export class StoreRepository {
         const tree = (await this.#exec(["rev-parse", "--verify", `HEAD:extensions/${dir}/src`])).trim();
         await this.#exec(
             [
+                ...noCredentialHelper,
                 "fetch",
                 "--refetch",
                 "--no-write-fetch-head",
