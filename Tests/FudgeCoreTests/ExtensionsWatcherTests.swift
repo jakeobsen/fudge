@@ -525,8 +525,21 @@ struct ExtensionsWatcherBuildTests {
         _ = try await OffThePool.run { try builder.build(source: Fixtures.greeter, into: extensions) }
     }
 
+    /// Into a development folder that's there already, as after the first build, an install is one reload.
     @Test func installingWithTheBuilderReloadsOnce() async throws {
-        expectOnce(try await reloads { extensions in try await build(into: extensions) })
+        expectOnce(
+            try await reloads(preparing: { extensions in
+                try FileManager.default.createDirectory(
+                    at: Development.folder(in: extensions), withIntermediateDirectories: true)
+            }) { extensions in try await build(into: extensions) })
+    }
+
+    /// The first build into an empty extensions folder makes `fudgeapp/development` before it compiles, which can be a
+    /// reload of its own when the compile outlasts the debounce; then the install is one more. Never more than two.
+    @Test func theFirstBuildIntoANewRepositoryFolderReloadsAtMostTwice() async throws {
+        let times = try await reloads { extensions in try await build(into: extensions) }
+        #expect((1...2).contains(times.count), "reloads: \(times)")
+        #expect(times.last.map { $0 >= .zero } == true, "the last one comes once the install has landed: \(times)")
     }
 
     @Test func rebuildingWithTheBuilderReloadsOnce() async throws {
