@@ -1010,6 +1010,16 @@ Extensions run in a separate Node.js process, the extension host.
     So a command's `__dirname` is the extension's folder, and `${__dirname}/assets/…` and `${__dirname}/package.json` are its own, as extensions such as the store's amazon-aws expect.
     esbuild writes into a folder of its own inside the staging folder, and only the commands' files move up, so anything else it writes (a stylesheet an import pulls in) never reaches the install.
     The modules the host provides (`ExtensionBuilder.providedModules`) stay external.
+  - **The compile step** (SPEC-144) is esbuild's JavaScript API rather than its command line, which can't take plugins: `runtime/scripts/compile/bundle.ts`, which `npm run build` bundles with esbuild's JavaScript inside (`scripts/compile/make-bundler.ts`) into `dist/bundle-extension.cjs`, and `make app` ships as `Contents/Resources/runtime/bundle-extension.cjs`.
+    The tool finds it there beside itself, or at `$FUDGE_BUNDLER` (`ExtensionBuilder.locateBundler`), and runs it with Fudge's own Node.js in the source folder, driving the esbuild program it found (`ESBUILD_BINARY_PATH`).
+    esbuild's options go to it in a JSON file in the build's scratch folder (`ExtensionBuilder.BundleOptions`), one for one the flags the tool passed the command line before, so an extension without `rust:` or `swift:` imports compiles to the same bytes, and esbuild prints its warnings and errors as the command line did.
+    That includes the command line's default `logLimit` of 6, which the JavaScript API doesn't share: a build shows at most 6 errors or warnings, then how many there were.
+    So every build needs Fudge's Node.js and the script: a `fudge` without them beside it, as outside Fudge.app, stops with `BuildError.noBundler`.
+    A `rust:` import is handled as Raycast handles it on a Mac (`scripts/compile/rust.ts`, from `@raycast/api`'s `rust-files.js` and `rust-parser.js`): Rust parts are for Windows, so nothing is compiled, and the module written in the package's place exports each `#[raycast]` function, the same functions as its default export, and `RustError`.
+    Every call rejects with Raycast's own `Rust functions are not supported on macOS`.
+    The functions are found with Raycast's own patterns, in the `.rs` files under the package's `src/`, reading only regular files and following no link.
+    The package's folder must hold a `Cargo.toml` and be inside the extension's folder, links resolved, both checked at the import, and nothing of it goes into the install.
+    A `swift:` import stops the build at the import, saying Fudge can't build a part written in Swift yet.
     Extension names are lowercase letters, digits, `-` and `_`, starting with a letter or digit, as Raycast's rule allows (`notion_researcher`): `ExtensionManifest.isValidName` is the one extension name rule, which every check of an extension's name uses (the build, backups and their paths, settings keys, built-in group names) and the store's `catalog.ts` mirrors.
     Command names are letters of either case, digits, `.`, `-` and `_`, starting with a letter or digit, as Raycast accepts them (`caffeinateWhile`, `search-projects.command`): `ExtensionManifest.isValidCommandName`, which the build and `compatibility.json` use.
     The compatibility scan and the store share it as `isCommandName` (`scripts/compat/source-files.ts`), and `runtime/test/fixtures/command-names.json` pins both.
@@ -1026,7 +1036,7 @@ Extensions run in a separate Node.js process, the extension host.
   - Before the swap it scans the source (`ExtensionBuilder.scanCommands`: the CLI runs `fudge scan --json` through `CompatScanner.commands`, reading its stdout alone) and writes which commands use Raycast AI or the Browser Extension into the install as `compatibility.json`.
     A scan that can't run or fails leaves it out, and every command is on.
   - It never writes into the source folder.
-    When the source has no `node_modules`, it installs the dependencies into a temporary folder (`npm ci --ignore-scripts`; under `$TMPDIR` when it's set, which Foundation's `temporaryDirectory` ignores) and points esbuild at it with `NODE_PATH`.
+    When the source has no `node_modules`, it installs the dependencies into a temporary folder (`npm ci --ignore-scripts`; under `$TMPDIR` when it's set, which Foundation's `temporaryDirectory` ignores) and points esbuild at it with `nodePaths`, which stands for the command line's `NODE_PATH`.
   - **Ending the tool ends what it started.**
     `fudge build` and `fudge scan` run every program (esbuild, npm, node) through `ChildProcesses` (core): `posix_spawn` in a process group of its own, with default signals and only stdin, stdout and stderr passed on.
     On SIGTERM, SIGINT or SIGHUP the tool signals each child's whole group, so npm's and node's own children go too, waits up to a second, kills what's left, deletes `fudge build`'s staging and scratch folders, which `defer` would miss (`ChildProcesses.deleteOnSignal`; not a staging folder already being moved into place), and exits with 128 + the signal (`ChildProcesses.endChildrenOnSignals`).
@@ -1043,6 +1053,7 @@ Extensions run in a separate Node.js process, the extension host.
 - **The Makefile assembles the app bundle** (`make app`):
   - the `FudgeApp` binary becomes `Contents/MacOS/Fudge`
   - the `fudge` tool and esbuild's native binary go into `Contents/Helpers/`, where `ExtensionBuilder.locateEsbuild` finds esbuild next to the tool
+  - `fudge build`'s compile step (`runtime/dist/bundle-extension.cjs`) goes into `Contents/Resources/runtime/`, before the bundled extensions are built through it
   - `Fudge Links.app` goes into `Contents/Helpers/` too, the `FudgeLinks` binary with `App/Links/Info.plist` and Fudge's versions: a nested app there is registered by nothing but `LSRegisterURL` on it (one in `Contents/Library/LoginItems` is registered at every launch)
   - **Node.js** (SPEC-115): an official build from nodejs.org, `NODE_VERSION` in the `Makefile`, for the architecture the Mac builds for (arm64 or x64, never both: the app itself is built for one).
     Its tarball's SHA-256, copied from the release's `SHASUMS256.txt`, is pinned beside the version, and `make` checks it before unpacking anything; a tarball that doesn't match is deleted, and the build fails.
@@ -1105,6 +1116,7 @@ Extensions run in a separate Node.js process, the extension host.
     It's a pattern search, so an extension that picks its URL in a way the scan doesn't read could be missed.
     A command is traced from its entry (`src/<name>.{tsx,ts,jsx,js}`, as the build finds it) through every import esbuild leaves, re-exports, `import()` and `require` included (`imports`), resolved among the files the scan read, ignoring case as APFS does (`resolveImport`): relative paths, `@/…` and `~/…` as `src/…`, and TypeScript's `./x.js` for `x.ts`.
     A bare import is a package's only when the manifest lists that package in any of its dependency sections, it's one of Node's built-ins, or the host provides it (`packages`), and a data file (`.json`, `.css`, an image) can't reach the API.
+    A `rust:` import counts as a package's too, with nothing to follow, since the build writes its module from the Rust sources (SPEC-144).
     A command with an import that can't be followed (outside `src/`, an unreadable file, any other bare import, such as a tsconfig `paths` alias or a `baseUrl` import, or an `import()` or `require()` of a computed path, `hasComputedImport`) counts as reaching the whole extension.
     So does every command when a file that uses Raycast AI or the Browser Extension is reached by no entry, a command's or a tool's (`src/tools/<name>`), since something the scan can't see reaches it.
     A barrel's re-exports are followed whole, so a command can be counted for a module of the barrel it doesn't use; in the store that decides 3 of 224 commands.
@@ -1205,8 +1217,8 @@ Extensions run in a separate Node.js process, the extension host.
 - **AppKit draws nothing inside an SVG `<a>` element**, so `RemoteImageDecoder.svgForDrawing` unwraps links before `NSImage(data:)` sees the SVG.
 - **Tests must not touch the user's system.**
   Never trash, open, copy, read the selection, post key events or send Apple Events for real in a test, and smoke-run extensions with a throwaway `HOME`: commands do what they say.
-- **Swift tests that build extensions need esbuild** from `runtime/node_modules`.
-  `make test` installs it; without it, `swift test` skips those tests.
+- **Swift tests that build extensions need esbuild** from `runtime/node_modules`, and Fudge's Node.js (`FUDGE_TEST_NODE`), with which they make the compile step once, as it ships (`Fixtures.bundler`).
+  `make test` gives both; without them, `swift test` skips those tests.
 - **npm may block install scripts.** esbuild works without its postinstall step, so don't approve it just to silence the warning.
 
 ## Commands

@@ -60,6 +60,17 @@ test("fudge scan reports a supported extension and one with gaps", () => {
     assert.deepEqual(scan(script, path.join(fixtures, "gaps")), withGaps);
 });
 
+test("fudge scan reads an extension with a Rust part, and finds each command's uses (SPEC-144 §3)", () => {
+    const rustPart = path.join(runtime, "../Tests/FudgeCoreTests/Fixtures/rust-part");
+    const report = scan(path.join(runtime, "scripts/compat/fudge-scan.ts"), rustPart) as Report;
+    assert.equal(report.supported, true);
+    assert.deepEqual(report.unreadable, []);
+    assert.deepEqual(report.commands, [
+        { name: "on-windows", unsupported: [], traced: true },
+        { name: "direct", unsupported: [], traced: true },
+    ]);
+});
+
 test("without --json, fudge scan lists the gaps for a person, saying Fudge", () => {
     const script = path.join(runtime, "scripts/compat/fudge-scan.ts");
     const run = (folder: string) =>

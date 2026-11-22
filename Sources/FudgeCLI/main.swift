@@ -27,9 +27,10 @@ func build(_ arguments: BuildArguments) {
     guard let esbuild = ExtensionBuilder.locateEsbuild() else {
         fail("can't find esbuild: set FUDGE_ESBUILD to its path, or use the fudge tool inside Fudge.app")
     }
-    // Node.js is needed only for an extension's dependencies; one without them builds without it.
+    // Every build runs Fudge's own Node.js and its bundling script, both in the app; without them it stops, saying so.
     let node = Runtime.locateNode(helpers: helpers)
-    var builder = ExtensionBuilder(esbuild: esbuild, node: node, log: { print("  \($0)") })
+    var builder = ExtensionBuilder(
+        esbuild: esbuild, node: node, bundler: ExtensionBuilder.locateBundler(), log: { print("  \($0)") })
     // Which commands use Raycast AI or the Browser Extension, so they're installed not enabled (SPEC-109).
     if let script = CompatScanner.locateScript(), let node = node?.node {
         builder.scanCommands = { source in

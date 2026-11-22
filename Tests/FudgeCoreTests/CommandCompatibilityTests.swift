@@ -177,7 +177,7 @@ private func installed(_ commands: [String], using: [String: [CommandCompatibili
     #expect(reloaded.isEnabled(commandID: emojis))
 }
 
-@Suite(.enabled(if: Fixtures.esbuild != nil, "needs esbuild: run `make test`, which installs it"))
+@Suite(.enabled(if: Fixtures.canBuild, "needs esbuild and Fudge's Node.js: run `make test`"))
 struct BuildRecordsCommandCompatibility {
     @Test func theBuildWritesWhatTheScanFoundIntoTheInstall() throws {
         let source = try Fixtures.greeterCopy()
@@ -186,9 +186,7 @@ struct BuildRecordsCommandCompatibility {
             try? FileManager.default.removeItem(at: source.deletingLastPathComponent())
             try? FileManager.default.removeItem(at: extensions)
         }
-        let builder = ExtensionBuilder(
-            esbuild: try #require(Fixtures.esbuild),
-            scanCommands: { _ in CommandCompatibility(commands: ["quiet": [.ai]]) })
+        let builder = Fixtures.builder(scanCommands: { _ in CommandCompatibility(commands: ["quiet": [.ai]]) })
         let installed = try builder.build(source: source, into: extensions)
         #expect(installed.compatibility.commands == ["quiet": [.ai]])
         #expect(try InstalledExtension.load(from: installed.directory).compatibility.commands == ["quiet": [.ai]])
@@ -204,7 +202,7 @@ struct BuildRecordsCommandCompatibility {
             try? FileManager.default.removeItem(at: source.deletingLastPathComponent())
             try? FileManager.default.removeItem(at: extensions)
         }
-        let builder = ExtensionBuilder(esbuild: try #require(Fixtures.esbuild), scanCommands: { _ in throw Failed() })
+        let builder = Fixtures.builder(scanCommands: { _ in throw Failed() })
         let installed = try builder.build(source: source, into: extensions)
         #expect(installed.compatibility == CommandCompatibility())
         #expect(
@@ -213,7 +211,7 @@ struct BuildRecordsCommandCompatibility {
     }
 }
 
-@Suite(.enabled(if: Fixtures.esbuild != nil && Tool.node != nil, "needs esbuild and node: run `make test`"))
+@Suite(.enabled(if: Fixtures.canBuild && Tool.node != nil, "needs esbuild and node: run `make test`"))
 struct BuildScansEndToEnd {
     /// `fudge build` through the real tool and the real scanner: only the command that reaches AI is listed.
     @Test func fudgeBuildListsTheCommandThatUsesRaycastAI() async throws {
@@ -260,7 +258,7 @@ struct BuildScansEndToEnd {
         process.arguments = ["build", source.path, "--into", extensions.path]
         process.environment = [
             "HOME": folder.path, "PATH": "/usr/bin:/bin", "TMPDIR": folder.path + "/",
-            "FUDGE_ESBUILD": try #require(Fixtures.esbuild).path,
+            "FUDGE_ESBUILD": try #require(Fixtures.esbuild).path, "FUDGE_BUNDLER": try #require(Fixtures.bundler).path,
             "FUDGE_COMPAT_SCAN": Fixtures.repository.appendingPathComponent("runtime/scripts/compat/fudge-scan.ts")
                 .path,
         ]

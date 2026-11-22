@@ -7,6 +7,8 @@ enum Fixtures {
     static let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent(
         "Fixtures")
     static let greeter = directory.appendingPathComponent("greeter", isDirectory: true)
+    /// Made up: an extension with a part written in Rust, as 12 of the store's have (SPEC-144).
+    static let rustPart = directory.appendingPathComponent("rust-part", isDirectory: true)
     /// Made up: a camel-case command and a dotted one, as Raycast accepts them.
     static let commandNames = directory.appendingPathComponent("command-names", isDirectory: true)
     static let repository = URL(fileURLWithPath: #filePath)
@@ -26,6 +28,43 @@ enum Fixtures {
     static let node: URL? = ProcessInfo.processInfo.environment["FUDGE_TEST_NODE"]
         .map(URL.init(fileURLWithPath:))
         .flatMap { FileManager.default.isExecutableFile(atPath: $0.path) ? $0 : nil }
+
+    /// That Node.js with npm from its own distribution, as Fudge.app bundles them (`Runtime.locateNode`).
+    static let bundledNode: BundledNode? = node.map {
+        BundledNode(
+            node: $0,
+            npm: $0.deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("lib/node_modules/npm/bin/npm-cli.js"))
+    }
+
+    /// `fudge build`'s compile step as Fudge.app ships it (`bundle-extension.cjs`), made once for the run from
+    /// `runtime/scripts/compile/` as `npm run build` makes it, so the tests build through the shipped file. Nil without
+    /// Node.js or esbuild; a failure to make it is `bundlerProblem`, which a test reports.
+    static let bundlerMade: (url: URL?, problem: String?) = {
+        guard let node, esbuild != nil else { return (nil, nil) }
+        do {
+            let script = try temporaryDirectory().appendingPathComponent("bundle-extension.cjs")
+            let maker = repository.appendingPathComponent("runtime/scripts/compile/make-bundler.ts")
+            try Shell.run(node, [maker.path, script.path], in: repository.appendingPathComponent("runtime"))
+            return (script, nil)
+        } catch {
+            return (nil, "\(error)")
+        }
+    }()
+    static var bundler: URL? { bundlerMade.url }
+
+    /// Whether extensions can be built here: esbuild, Fudge's Node.js and the compile step, which `make test` gives.
+    static var canBuild: Bool { esbuild != nil && bundledNode != nil && bundler != nil }
+
+    /// A builder as the `fudge` tool inside Fudge.app makes one.
+    static func builder(
+        log: @escaping @Sendable (String) -> Void = { _ in },
+        scanCommands: (@Sendable (URL) throws -> CommandCompatibility)? = nil
+    ) -> ExtensionBuilder {
+        ExtensionBuilder(
+            esbuild: esbuild ?? URL(fileURLWithPath: "/missing"), node: bundledNode, bundler: bundler, log: log,
+            scanCommands: scanCommands)
+    }
 
     static func temporaryDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("fudge-tests-\(UUID().uuidString)")
@@ -53,6 +92,24 @@ enum Fixtures {
         return written && FileManager.default.fileExists(atPath: folder.appendingPathComponent("case").path)
     }()
 
+    /// What `fudge build` ran before SPEC-144: esbuild's command line with these flags, in the source folder, with
+    /// installed dependencies in `NODE_PATH`. The compile step must write the same bytes.
+    static func commandLine(entries: [URL], source: URL, output: URL) -> [String] {
+        entries.map(\.path) + [
+            "--bundle",
+            "--platform=node",
+            "--format=cjs",
+            "--target=node22",
+            "--jsx=automatic",
+            "--outdir=\(output.path)",
+            "--outbase=\(source.appendingPathComponent("src").path)",
+            "--out-extension:.js=.cjs",
+            "--define:process.env.NODE_ENV=\"production\"",
+            "--legal-comments=none",
+            "--log-level=warning",
+        ] + ExtensionBuilder.providedModules.map { "--external:\($0)" }
+    }
+
     /// Replaces the `"commands"` of the manifest in `source` with these, each a no-view command titled by its name.
     static func setCommands(_ names: [String], in source: URL) throws {
         let file = source.appendingPathComponent("package.json")
@@ -63,9 +120,9 @@ enum Fixtures {
     }
 }
 
-@Suite(.enabled(if: Fixtures.esbuild != nil, "needs esbuild: run `make test`, which installs it"))
+@Suite(.enabled(if: Fixtures.canBuild, "needs esbuild and Fudge's Node.js: run `make test`"))
 struct ExtensionBuilderTests {
-    let builder = ExtensionBuilder(esbuild: Fixtures.esbuild ?? URL(fileURLWithPath: "/missing"))
+    let builder = Fixtures.builder()
 
     @Test func compilesEveryCommandAndInstallsManifestAndAssets() throws {
         let extensions = try Fixtures.temporaryDirectory()
@@ -216,6 +273,160 @@ struct ExtensionBuilderTests {
                 == "the command name \"a b\" may use only letters, digits, ., - and _, starting with a letter or digit")
     }
 
+    /// SPEC-144 §1: for an extension without `rust:` or `swift:` imports, the compile step writes what esbuild's
+    /// command line wrote, byte for byte: the fixtures and the extensions Fudge.app bundles.
+    @Test(
+        arguments: [Fixtures.greeter, Fixtures.commandNames, Fixtures.directory.appendingPathComponent("own-files")]
+            + BundledExtensions.folders.map { Fixtures.repository.appendingPathComponent("runtime/\($0)") })
+    func compilesWhatTheCommandLineCompiled(source: URL) throws {
+        let manifest = try ExtensionManifest.load(from: source.appendingPathComponent("package.json"))
+        let installed = try builder.build(source: source, into: try Fixtures.temporaryDirectory())
+        let output = try Fixtures.temporaryDirectory()
+        let entries = try manifest.commands.map { try ExtensionBuilder.entry(for: $0.name, in: source) }
+        try Shell.run(
+            try #require(Fixtures.esbuild), Fixtures.commandLine(entries: entries, source: source, output: output),
+            in: source)
+        for command in manifest.commands {
+            let file = ExtensionLayout.file(for: command.name)
+            let built = try Data(contentsOf: installed.directory.appendingPathComponent(file))
+            #expect(built == (try Data(contentsOf: output.appendingPathComponent(file))), "\(manifest.name)/\(file)")
+        }
+    }
+
+    /// SPEC-144 R2: the dependencies a build installs reach esbuild through `nodePaths`, as they reached its command
+    /// line through `NODE_PATH`; its JavaScript API doesn't read the variable. The dependency is made up and reachable
+    /// only through that folder, and npm installs it from a folder of its own (`file:`), offline.
+    @Test func installedDependenciesAreFoundAsTheCommandLineFoundThem() throws {
+        let files = FileManager.default
+        let scratch = try Fixtures.temporaryDirectory()
+        defer { try? files.removeItem(at: scratch) }
+        let dependency = scratch.appendingPathComponent("made-up-dependency", isDirectory: true)
+        try files.createDirectory(at: dependency, withIntermediateDirectories: true)
+        try #"{"name":"made-up-dependency","version":"1.0.0","main":"index.js"}"#.write(
+            to: dependency.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
+        try "exports.shout = (text) => `${text.toUpperCase()}!`;\n".write(
+            to: dependency.appendingPathComponent("index.js"), atomically: true, encoding: .utf8)
+
+        let source = try Fixtures.greeterCopy()
+        defer { try? files.removeItem(at: source.deletingLastPathComponent()) }
+        let manifest = source.appendingPathComponent("package.json")
+        var object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: manifest)) as? [String: Any])
+        object["dependencies"] = ["made-up-dependency": "file:\(dependency.path)"]
+        try JSONSerialization.data(withJSONObject: object).write(to: manifest)
+        // npm reads the source's .npmrc (`installDependencies` copies it): no network, and a link to the folder.
+        try "offline=true\nupdate-notifier=false\ninstall-links=false\n".write(
+            to: source.appendingPathComponent(".npmrc"), atomically: true, encoding: .utf8)
+        try "import { shout } from \"made-up-dependency\";\nexport default async () => console.log(shout(\"hi\"));\n"
+            .write(to: source.appendingPathComponent("src/quiet.ts"), atomically: true, encoding: .utf8)
+
+        let installed = try builder.build(source: source, into: scratch.appendingPathComponent("extensions"))
+        let built = try Data(contentsOf: installed.entry(for: "quiet"))
+        #expect(String(decoding: built, as: UTF8.self).contains("toUpperCase"), "the dependency is bundled in")
+
+        // The command line, with the folder npm makes in `NODE_PATH`.
+        let modules = scratch.appendingPathComponent("dependencies/node_modules", isDirectory: true)
+        try files.createDirectory(at: modules, withIntermediateDirectories: true)
+        try files.createSymbolicLink(
+            at: modules.appendingPathComponent("made-up-dependency"), withDestinationURL: dependency)
+        let output = scratch.appendingPathComponent("command-line", isDirectory: true)
+        let entries = try ["greet", "quiet"].map { try ExtensionBuilder.entry(for: $0, in: source) }
+        try Shell.run(
+            try #require(Fixtures.esbuild), Fixtures.commandLine(entries: entries, source: source, output: output),
+            in: source, environment: ["NODE_PATH": modules.path])
+        #expect(built == (try Data(contentsOf: output.appendingPathComponent("quiet.cjs"))))
+    }
+
+    /// SPEC-144 N5: a failed compile says exactly what esbuild's command line said, and nothing on top of it. With
+    /// more than 6 errors, that's the first 6 and how many there were (the command line's `--log-limit=6`).
+    @Test(arguments: [1, 10])
+    func aFailedCompileSaysWhatTheCommandLineSaid(errors: Int) throws {
+        let source = try Fixtures.greeterCopy()
+        defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+        let imports = (0..<errors).map { "import { missing\($0) } from \"./nowhere\($0 == 0 ? "" : "-\($0)")\";\n" }
+        let uses = (0..<errors).map { "missing\($0)" }.joined(separator: ", ")
+        try (imports.joined() + "export default function Command() { return [\(uses)]; }\n").write(
+            to: source.appendingPathComponent("src/greet.tsx"), atomically: true, encoding: .utf8)
+        func failure(_ run: () throws -> Void) -> String? {
+            do {
+                try run()
+                return nil
+            } catch let error as ShellError {
+                return error.output
+            } catch {
+                return "\(error)"
+            }
+        }
+        let fromBuild = failure { try builder.build(source: source, into: try Fixtures.temporaryDirectory()) }
+        let entries = try ["greet", "quiet"].map { try ExtensionBuilder.entry(for: $0, in: source) }
+        let output = try Fixtures.temporaryDirectory()
+        let fromCommandLine = failure {
+            try Shell.run(
+                try #require(Fixtures.esbuild), Fixtures.commandLine(entries: entries, source: source, output: output),
+                in: source)
+        }
+        #expect(fromBuild?.contains("✘ [ERROR] Could not resolve \"./nowhere\"") == true, "\(fromBuild ?? "built")")
+        #expect(fromBuild?.contains("6 of \(errors) errors shown") == (errors > 6), "\(fromBuild ?? "built")")
+        #expect(fromBuild == fromCommandLine)
+    }
+
+    /// SPEC-144 §1: a build's warnings are the ones esbuild's command line printed, at most 6 and how many there were.
+    @Test(arguments: [1, 9])
+    func aBuildWarnsAsTheCommandLineWarned(warnings: Int) throws {
+        let source = try Fixtures.greeterCopy()
+        defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+        // esbuild warns about each duplicate key in an object literal, and builds anyway.
+        let objects = (0..<warnings).map { "  { key\($0): 1, key\($0): 2 },\n" }.joined()
+        try "export default function Command() {\n  return [\n\(objects)  ];\n}\n".write(
+            to: source.appendingPathComponent("src/greet.tsx"), atomically: true, encoding: .utf8)
+        let log = BuildLog()
+        let builder = Fixtures.builder(log: { log.append($0) })
+        try builder.build(source: source, into: try Fixtures.temporaryDirectory())
+        let entries = try ["greet", "quiet"].map { try ExtensionBuilder.entry(for: $0, in: source) }
+        let fromCommandLine = try Shell.run(
+            try #require(Fixtures.esbuild),
+            Fixtures.commandLine(entries: entries, source: source, output: try Fixtures.temporaryDirectory()),
+            in: source
+        ).output.trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(fromCommandLine.contains("▲ [WARNING] Duplicate key \"key0\" in object literal"), "\(fromCommandLine)")
+        #expect(fromCommandLine.contains("6 of \(warnings) warnings shown") == (warnings > 6), "\(fromCommandLine)")
+        #expect(log.lines.contains(fromCommandLine), "\(log.lines)")
+    }
+
+    /// SPEC-144: an extension with a Rust part installs as Raycast installs it on a Mac. Nothing of the Rust part goes
+    /// into the install, and its functions refuse every call with Raycast's message (run in the runtime's tests).
+    @Test func installsAnExtensionWithARustPart() throws {
+        let extensions = try Fixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: extensions) }
+        let installed = try builder.build(source: Fixtures.rustPart, into: extensions)
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: installed.directory.path).sorted() == [
+                "direct.cjs", "on-windows.cjs", "package.json",
+            ])
+        for command in ["direct", "on-windows"] {
+            let built = try String(contentsOf: installed.entry(for: command), encoding: .utf8)
+            #expect(built.contains("Rust functions are not supported on macOS"), "\(command)")
+            #expect(!built.contains("require(\"rust:"), "\(command)")
+        }
+    }
+
+    /// SPEC-144 §4: a Swift part stops the build with Fudge's own words, at the import.
+    @Test func aSwiftPartStopsTheBuildSayingSo() throws {
+        let source = try Fixtures.greeterCopy()
+        defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+        try "import { run } from \"swift:../swift\";\nexport default function Command() { return run; }\n".write(
+            to: source.appendingPathComponent("src/greet.tsx"), atomically: true, encoding: .utf8)
+        do {
+            try builder.build(source: source, into: try Fixtures.temporaryDirectory())
+            Issue.record("a Swift part built")
+        } catch let error as ShellError {
+            #expect(
+                error.output.contains(
+                    "✘ [ERROR] this extension has a part written in Swift, which Fudge can't build yet "
+                        + "(\"swift:../swift\") [plugin swift]"), "\(error.output)")
+            #expect(error.output.contains("src/greet.tsx:1:20:"), "at the import")
+        }
+    }
+
     @Test func reportsCompileErrors() throws {
         let source = try Fixtures.greeterCopy()
         try "export default function Command( {".write(
@@ -254,6 +465,53 @@ struct ExtensionBuilderTests {
     #expect(ExtensionBuilder.temporaryDirectory(environment: ["TMPDIR": "relative/tmp"]) == usual)
 }
 
+/// The tests build through the compile step as shipped, made once for the run: making it mustn't fail.
+@Test func theCompileStepIsMadeForTheTests() {
+    #expect(Fixtures.bundlerMade.problem == nil, "\(Fixtures.bundlerMade.problem ?? "")")
+}
+
+@Test func locatesTheCompileStepFromTheEnvironmentOrInTheApp() throws {
+    #expect(
+        ExtensionBuilder.locateBundler(environment: ["FUDGE_BUNDLER": "/opt/bundle.cjs"], executable: nil)?.path
+            == "/opt/bundle.cjs")
+    let app = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: app) }
+    let fudge = app.appendingPathComponent("Contents/Helpers/fudge")
+    try FileManager.default.createDirectory(at: fudge.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try "#!/bin/sh\n".write(to: fudge, atomically: true, encoding: .utf8)
+    #expect(ExtensionBuilder.locateBundler(environment: [:], executable: fudge) == nil, "not in the app")
+    let script = app.appendingPathComponent("Contents/Resources/runtime/bundle-extension.cjs")
+    try FileManager.default.createDirectory(at: script.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try "\n".write(to: script, atomically: true, encoding: .utf8)
+    #expect(
+        ExtensionBuilder.locateBundler(environment: [:], executable: fudge)?.path
+            == script.resolvingSymlinksInPath().path)
+    #expect(ExtensionBuilder.locateBundler(environment: [:], executable: nil) == nil)
+}
+
+/// SPEC-144 N3: every build runs Fudge's own Node.js and the compile step, so without either nothing is built, even
+/// for an extension with no dependencies, and nothing is made in the extensions folder.
+@Test func compilingWithoutFudgesNodeOrTheCompileStepIsAClearError() throws {
+    let source = try Fixtures.greeterCopy()
+    defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+    let extensions = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: extensions) }
+    let missing = URL(fileURLWithPath: "/missing")
+    let node = BundledNode(node: missing.appendingPathComponent("node"), npm: missing.appendingPathComponent("npm"))
+    for builder in [
+        ExtensionBuilder(esbuild: missing, node: nil, bundler: nil),
+        ExtensionBuilder(esbuild: missing, node: node, bundler: nil),
+        ExtensionBuilder(esbuild: missing, node: nil, bundler: missing.appendingPathComponent("bundle-extension.cjs")),
+    ] {
+        #expect(throws: BuildError.noBundler) { try builder.build(source: source, into: extensions) }
+    }
+    #expect(try FileManager.default.contentsOfDirectory(atPath: extensions.path) == [])
+    #expect(
+        BuildError.noBundler.description
+            == "compiling needs Fudge's own Node.js and its bundling script, which aren't beside this fudge tool; "
+            + "use the fudge inside Fudge.app")
+}
+
 @Test func dependenciesWithoutFudgesNodeAreAClearError() throws {
     // npm is Fudge's own, beside the tool; with none there, an extension with dependencies can't build.
     let source = try Fixtures.greeterCopy()
@@ -267,4 +525,13 @@ struct ExtensionBuilderTests {
     let builder = ExtensionBuilder(esbuild: URL(fileURLWithPath: "/missing"), node: nil)
     #expect(throws: BuildError.noNode) { try builder.build(source: source, into: extensions) }
     #expect("\(BuildError.noNode)".contains("use the fudge inside Fudge.app"))
+}
+
+/// The lines a build logs, from whichever thread logs them.
+private final class BuildLog: @unchecked Sendable {
+    // @unchecked: `stored` is behind `lock`.
+    private let lock = NSLock()
+    private var stored: [String] = []
+    var lines: [String] { lock.withLock { stored } }
+    func append(_ line: String) { lock.withLock { stored.append(line) } }
 }

@@ -263,15 +263,22 @@ private func endingATool(then: String, running: Bool) async throws -> (Int32, [I
     #expect(!FileManager.default.fileExists(atPath: ran.path), "the other Node.js never ran")
 }
 
-@Test(.enabled(if: Fixtures.esbuild != nil, "needs esbuild: run `make test`"))
+@Test(.enabled(if: Fixtures.canBuild, "needs esbuild and Fudge's Node.js: run `make test`"))
 func buildInstallsDependenciesWithTheBundledNpm() async throws {
     let folder = try Fixtures.temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: folder) }
-    // A stand-in for Node.js that writes down how it was run, and installs nothing.
+    // A stand-in for Node.js that writes down how npm was run, and installs nothing; the compile step gets the real one.
     let node = folder.appendingPathComponent("node")
     let ran = folder.appendingPathComponent("ran")
-    try "#!/bin/sh\nprintf '%s\\n' \"$PATH\" \"$@\" > '\(ran.path)'\n".write(
-        to: node, atomically: true, encoding: .utf8)
+    let realNode = try #require(Fixtures.node).path
+    try """
+    #!/bin/sh
+    case "$1" in
+    */npm-cli.js) printf '%s\\n' "$PATH" "$@" > '\(ran.path)' ;;
+    *) exec '\(realNode)' "$@" ;;
+    esac
+
+    """.write(to: node, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
     let tool = try Tool.bundled(in: folder.appendingPathComponent("app"), node: node)
 
@@ -291,7 +298,7 @@ func buildInstallsDependenciesWithTheBundledNpm() async throws {
         tool, ["build", source.path, "--into", extensions.path],
         environment: [
             "HOME": folder.path, "PATH": "/usr/bin:/bin", "FUDGE_ESBUILD": try #require(Fixtures.esbuild).path,
-            "TMPDIR": temporary.path + "/",
+            "FUDGE_BUNDLER": try #require(Fixtures.bundler).path, "TMPDIR": temporary.path + "/",
         ])
     #expect(status == 0, "\(err)")
     let lines = try String(contentsOf: ran, encoding: .utf8).split(separator: "\n").map(String.init)
@@ -302,12 +309,39 @@ func buildInstallsDependenciesWithTheBundledNpm() async throws {
         Array(lines.dropFirst(2)) == ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"])
 }
 
-@Test func terminatingFudgeBuildEndsEsbuildAndEverythingItStarted() async throws {
+/// Every build runs Fudge's own Node.js and the bundling script (SPEC-144): a `fudge` without them beside it, as outside
+/// Fudge.app, stops before anything is made, even for an extension with no dependencies.
+@Test func aFudgeWithoutItsNodeOrBundlingScriptStopsClearly() async throws {
     let folder = try Fixtures.temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: folder) }
-    let esbuild = folder.appendingPathComponent("esbuild")
+    let source = try Fixtures.greeterCopy()
+    defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+    let extensions = folder.appendingPathComponent("extensions")
+    try FileManager.default.createDirectory(at: extensions, withIntermediateDirectories: true)
+    for (index, node) in ([nil] + (Tool.node.map { [$0] } ?? [])).enumerated() {
+        let tool = try Tool.bundled(in: folder.appendingPathComponent("app-\(index)"), node: node)
+        let (status, _, err) = try await Tool.run(
+            tool, ["build", source.path, "--into", extensions.path],
+            environment: [
+                "HOME": folder.path, "PATH": "/usr/bin:/bin", "FUDGE_ESBUILD": "/nonexistent/esbuild",
+                "TMPDIR": folder.path + "/",
+            ])
+        #expect(status == 1, "node: \(node?.path ?? "none")")
+        #expect(
+            err == "fudge: compiling needs Fudge's own Node.js and its bundling script, which aren't beside this fudge "
+                + "tool; use the fudge inside Fudge.app\n")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: extensions.path) == [])
+    }
+}
+
+@Test func terminatingFudgeBuildEndsTheCompileStepAndEverythingItStarted() async throws {
+    let folder = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    // The compile step is Fudge's own Node.js running the bundling script, which drives esbuild: here a stand-in.
+    let node = folder.appendingPathComponent("node")
     let pids = folder.appendingPathComponent("pids")
-    try Tool.neverExiting(at: esbuild, pids: pids)
+    try Tool.neverExiting(at: node, pids: pids)
+    let tool = try Tool.bundled(in: folder.appendingPathComponent("app"), node: node)
     let source = try Fixtures.greeterCopy()
     defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
     let extensions = folder.appendingPathComponent("extensions")
@@ -318,11 +352,12 @@ func buildInstallsDependenciesWithTheBundledNpm() async throws {
     try await Tool.expectTerminationEndsEverything(
         ["build", source.path, "--into", extensions.path],
         environment: [
-            "HOME": folder.path, "PATH": "/usr/bin:/bin", "FUDGE_ESBUILD": esbuild.path, "TMPDIR": temporary.path + "/",
+            "HOME": folder.path, "PATH": "/usr/bin:/bin", "FUDGE_ESBUILD": "/nonexistent/esbuild",
+            "FUDGE_BUNDLER": "/nonexistent/bundle-extension.cjs", "TMPDIR": temporary.path + "/",
         ],
-        pids: pids)
+        pids: pids, tool: tool)
     #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("extensions/greeter").path))
-    // esbuild runs once both folders exist, so a terminated build has both to delete.
+    // The compile step runs once both folders exist, so a terminated build has both to delete.
     #expect(try FileManager.default.contentsOfDirectory(atPath: extensions.path) == [], "no .staging-* is left")
     #expect(try FileManager.default.contentsOfDirectory(atPath: temporary.path) == [], "no fudge-build-* is left")
 }

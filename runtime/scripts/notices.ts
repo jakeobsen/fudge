@@ -10,6 +10,7 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
+import { bundlerOptions } from "./compile/make-bundler.ts";
 
 const runtime = (path: string) => fileURLToPath(new URL(`../${path}`, import.meta.url));
 const repo = (path: string) => fileURLToPath(new URL(`../../${path}`, import.meta.url));
@@ -70,7 +71,7 @@ export const components: Component[] = [
     {
         name: "esbuild",
         package: "esbuild",
-        where: "The `esbuild` program in `Contents/Helpers`, which `fudge build` compiles extensions with.",
+        where: "The `esbuild` program in `Contents/Helpers`, which `fudge build` compiles extensions with, and esbuild's JavaScript API, bundled into `fudge build`'s compile step (`runtime/bundle-extension.cjs`), which drives it.",
     },
     {
         name: "Unicode emoji data and CLDR annotations",
@@ -179,8 +180,9 @@ export function plainText(entries: Resolved[]): string {
     return `${parts.join("\n")}\n`;
 }
 
-/** The npm packages each bundle Fudge ships takes in: the host, the worker, `fudge scan`'s script, and the bundled
- *  extensions' commands, built as `npm run build` and `fudge build` build them, without writing anything. */
+/** The npm packages each bundle Fudge ships takes in: the host, the worker, `fudge scan`'s script, `fudge build`'s
+ *  compile step, and the bundled extensions' commands, built as `npm run build` and `fudge build` build them, without
+ *  writing anything. */
 export async function bundledPackages(): Promise<Set<string>> {
     const common = {
         bundle: true,
@@ -205,6 +207,7 @@ export async function bundledPackages(): Promise<Set<string>> {
             outdir: "out",
             external: ["esbuild"],
         }),
+        await esbuild.build({ ...common, ...bundlerOptions, logLevel: "silent", outfile: "out/bundle-extension.cjs" }),
     ];
     for (const folder of readdirSync(runtime("."))) {
         if (!folder.endsWith("-extension") || !existsSync(runtime(`${folder}/package.json`))) continue;

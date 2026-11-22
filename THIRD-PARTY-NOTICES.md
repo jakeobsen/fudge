@@ -3021,7 +3021,7 @@ The externally maintained libraries used by Node.js are:
 
 ## esbuild 0.28.2
 
-The `esbuild` program in `Contents/Helpers`, which `fudge build` compiles extensions with. License: MIT.
+The `esbuild` program in `Contents/Helpers`, which `fudge build` compiles extensions with, and esbuild's JavaScript API, bundled into `fudge build`'s compile step (`runtime/bundle-extension.cjs`), which drives it. License: MIT.
 
 ```text
 MIT License
