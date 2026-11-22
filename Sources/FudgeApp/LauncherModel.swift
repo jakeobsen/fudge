@@ -1534,6 +1534,15 @@ final class LauncherModel {
         return ActionPanelReader.filter(sections, query: actionPanel.query)
     }
 
+    /// The key the open action panel shows on `entry` (`ActionPanelReader.shownKey`): in a command's view, the primary
+    /// and secondary keys on its first two actions, which they run.
+    func shownKey(of entry: ActionEntry) -> KeyShortcut? {
+        let inCommand = command.map { $0.failure == nil } ?? false
+        return ActionPanelReader.shownKey(
+            of: entry, in: currentActions, primaryKey: inCommand ? primaryKey : nil,
+            secondaryKey: inCommand ? secondaryKey : nil, inSubmenu: actionPanel?.path.isEmpty == false)
+    }
+
     var actionPanelQuery: String {
         get { actionPanel?.query ?? "" }
         set {

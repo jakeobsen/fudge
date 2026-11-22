@@ -425,6 +425,8 @@ Extensions run in a separate Node.js process, the extension host.
       A `Form.Checkbox` is `.focusable(true, interactions: .edit)`, as the pickers are, since with macOS's Keyboard navigation off (the default) asking for a plain `Toggle` gives the keyboard to the first text field instead; Space toggles it.
     - **Actions.**
       `ActionPanelReader` (core) turns an `ActionPanel` node into sections of `ActionEntry`. ↵ runs the first entry and ⌘↵ the second; in a Form, where ↵ belongs to the fields, ⌘↵ and ⌘⇧↵. ⌘K opens the action panel overlay, with search, sections and submenus (opening one calls its `onOpen`).
+      Its rows show those keys on the first and second entries, counted across sections, in place of their own shortcuts, which still run them, as Raycast does (`ActionPanelReader.shownKey`, FUD-186); every other entry, and every entry in a submenu or in root search, shows its own.
+      Entries are matched against the whole panel, so a search in the panel keeps each key on its action.
       An `Action.PickDate` (an `Action` with a `pickDate` prop and an `onChange`, `ActionEntry.pickDate`) opens a picker there in place of the list, as a submenu does; run with ↵, ⌘↵ or its shortcut, the overlay opens straight to it.
       `DatePick` (core) holds it: Form.DatePicker's calendar (`DateCalendar`, drawn by the shared `MonthView`) and a `DateTime`'s time, which Tab moves to. ↵, Space or a click on a day picks and calls `onChange` once with `FormDates`' value, ⌫ calls it with null, and Esc goes back to the list it came from, or closes the overlay, calling nothing.
       Closing the overlay any other way calls nothing either.

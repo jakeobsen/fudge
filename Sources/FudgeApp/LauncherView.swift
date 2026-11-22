@@ -788,9 +788,12 @@ private struct ActionPanelView: View {
                                 Divider().padding(.vertical, 4)
                             }
                             ForEach(section.entries) { entry in
-                                ActionRow(entry: entry, selected: entry.id == model.actionPanel?.selected)
-                                    .id(entry.id)
-                                    .onTapGesture { model.run(entry) }
+                                ActionRow(
+                                    entry: entry, shortcut: model.shownKey(of: entry),
+                                    selected: entry.id == model.actionPanel?.selected
+                                )
+                                .id(entry.id)
+                                .onTapGesture { model.run(entry) }
                             }
                         }
                         if model.actionPanelSections.isEmpty {
@@ -964,6 +967,8 @@ final class LinkPointer {
 
 private struct ActionRow: View {
     let entry: ActionEntry
+    /// The key it shows: its own shortcut, or the primary or secondary key (`LauncherModel.shownKey`).
+    let shortcut: KeyShortcut?
     let selected: Bool
 
     var body: some View {
@@ -975,7 +980,7 @@ private struct ActionRow: View {
             if entry.isLoading {
                 ProgressView().controlSize(.mini)
             }
-            if let shortcut = entry.shortcut {
+            if let shortcut {
                 KeyCap(shortcut.description)
             }
             if entry.isSubmenu {
