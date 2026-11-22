@@ -13,9 +13,13 @@ import {
     gaps,
     hasComputedImport,
     imports,
+    redirectMethods,
+    resolveString,
+    signInSites,
     toJavaScript,
     uses,
     type Gap,
+    type SignInSites,
     type Transform,
     type Uses,
 } from "./scan.ts";
@@ -63,6 +67,18 @@ export interface CommandResult {
     traced: boolean;
 }
 
+/**
+ * Where the extension's own code signs in (SPEC-132 §7): the `OAuth.RedirectMethod`s it names, the authorize URLs it
+ * gives an OAuth client that the scan could resolve (string constants across its files, a template or a sum of
+ * those), sorted and each once, and whether any authorize URL was left unresolved (a preference, a parameter, a
+ * call). It's a pattern search: an extension that picks its URL in a way the scan doesn't read could be missed.
+ */
+export interface SignIn {
+    methods: string[];
+    authorizeURLs: string[];
+    unresolved: boolean;
+}
+
 export interface Result {
     gaps: Gap[];
     notRaycast: string[];
@@ -71,6 +87,7 @@ export interface Result {
     unreadable: string[];
     /** Each command in the manifest, in its order; none when the manifest can't be read. */
     commands: CommandResult[];
+    signIn: SignIn;
 }
 
 export interface ScanOptions {
@@ -155,6 +172,7 @@ export async function scanExtension(folder: string, options: ScanOptions): Promi
                 uses: uses(code),
                 imports: imports(code),
                 computed: hasComputedImport(code),
+                signIn: signInSites(code),
             });
         } catch {
             unreadable.push(relative(folder, file));
@@ -188,7 +206,21 @@ export async function scanExtension(folder: string, options: ScanOptions): Promi
         utils: [...found.utils].sort(),
         unreadable,
         commands,
+        signIn: signIn(found, [...scanned.values()].map((module) => module.signIn)),
     };
+}
+
+/** Where the extension signs in (`SignIn`), from what it uses and each file's `SignInSites`. */
+function signIn(found: Uses, sites: SignInSites[]): SignIn {
+    const constants = new Map<string, string[]>();
+    for (const site of sites) {
+        for (const [name, values] of site.constants) constants.set(name, [...(constants.get(name) ?? []), ...values]);
+    }
+    const resolved = sites.flatMap((site) =>
+        site.urls.map((url) => (url === undefined ? undefined : resolveString(url, constants))),
+    );
+    const authorizeURLs = [...new Set(resolved.filter((url) => url !== undefined))].sort();
+    return { methods: redirectMethods(found), authorizeURLs, unresolved: resolved.includes(undefined) };
 }
 
 /** The categories Fudge doesn't support at all, in `unsupported`'s order. */
@@ -203,11 +235,13 @@ function union(all: Uses[]): Uses {
     return found;
 }
 
-/** What one source file holds for tracing: what it uses, what it imports, and whether it imports a computed path. */
+/** What one source file holds for tracing: what it uses, what it imports, and whether it imports a computed path; and
+ * where it signs in. */
 interface Module {
     uses: Uses;
     imports: string[];
     computed: boolean;
+    signIn: SignInSites;
 }
 
 /**
@@ -359,6 +393,8 @@ export interface Report {
     unreadable: string[];
     /** Each command and what it reaches that Fudge doesn't support (`CommandResult`). */
     commands: CommandResult[];
+    /** Where its own code signs in (`SignIn`). */
+    signIn: SignIn;
 }
 
 /** The report for one scanned extension, named by its manifest's `name` (else its folder's). */
@@ -381,6 +417,7 @@ export function report(folder: string, result: Result): Report {
         }),
         unreadable: result.unreadable,
         commands: result.commands,
+        signIn: result.signIn,
     };
 }
 

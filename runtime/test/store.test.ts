@@ -1196,6 +1196,7 @@ test("some commands using Raycast AI is Partly compatible, orange; every command
         notSupported: ["AI"],
         missing: [],
         signsIn: false,
+        signsInThroughRaycast: false,
         unreadable: false,
     });
     assert.equal(compatibilityTag(partly), "Partly compatible");
@@ -1252,10 +1253,11 @@ test("a cached result keeps its commands, and one with a bad commands entry is d
     const partly = fromReport(slackLike);
     await writeCompatibility(supportPath, "scanner-1", new Map([[treeOf(1), partly]]));
     assert.deepEqual((await readCompatibility(supportPath, "scanner-1")).get(treeOf(1)), partly);
-    const bad = (byCommand: unknown) => ({ notSupported: ["AI"], missing: [], signsIn: false, unreadable: false, byCommand });
+    const bad = (byCommand: unknown) => ({ notSupported: ["AI"], missing: [], signsIn: false, signsInThroughRaycast: false, unreadable: false, byCommand });
     await writeFile(
         compatibilityFile(supportPath),
         JSON.stringify({
+            version: 2,
             scanner: "scanner-1",
             trees: {
                 [treeOf(2)]: bad({ count: 2, using: ["a", "b", "c"] }),
@@ -1289,7 +1291,7 @@ test("install's confirmation carries the scan's gaps, and a failed scan doesn't 
 // MARK: - Compatibility: the cache, the detail's scan, and install
 
 const treeOf = (n: number) => n.toString(16).padStart(40, "0");
-const aiOnly: Compatibility = { notSupported: ["AI"], missing: [], signsIn: false, unreadable: false };
+const aiOnly: Compatibility = { notSupported: ["AI"], missing: [], signsIn: false, signsInThroughRaycast: false, unreadable: false };
 
 test("results are cached by tree id, for the scanner that wrote them only", async () => {
     const support = await temporary();
@@ -1317,6 +1319,7 @@ test("results are cached by tree id, for the scanner that wrote them only", asyn
 test("the cache lets in only valid entries, and keeps the newest", async () => {
     const support = await temporary();
     await writeJSON(compatibilityFile(support), {
+        version: 2,
         scanner: "s",
         trees: {
             [treeOf(1)]: aiOnly,
@@ -1325,7 +1328,7 @@ test("the cache lets in only valid entries, and keeps the newest", async () => {
             [treeOf(3)]: { ...aiOnly, notSupported: ["Telepathy"] },
             [treeOf(4)]: { notSupported: [], missing: [] },
             [treeOf(5)]: "Compatible",
-            [treeOf(6)]: { notSupported: [], missing: ["Clipboard.read"], signsIn: true, unreadable: false },
+            [treeOf(6)]: { notSupported: [], missing: ["Clipboard.read"], signsIn: true, signsInThroughRaycast: false, unreadable: false },
         },
     });
     assert.deepEqual(
@@ -1517,7 +1520,7 @@ test("moving through 20 rows quickly fetches nothing; the row the selection rest
     assert.equal(git.calls.length, 0, "not before half a second of rest");
     checks.select(`row7`, treeOf(7));
     clock.advance(1);
-    assert.deepEqual(await done, ["row7", { notSupported: [], missing: [], signsIn: false, unreadable: false }]);
+    assert.deepEqual(await done, ["row7", { notSupported: [], missing: [], signsIn: false, signsInThroughRaycast: false, unreadable: false }]);
     assert.equal(cli.calls.length, 1);
     assert.equal(git.calls.filter((call) => call.args[1] === "add").length, 1);
 
@@ -1791,7 +1794,7 @@ test("install uses this version's cached result instead of scanning, and caches 
     assert.deepEqual(await install(alphaEntry, fresh.context), {});
     assert.deepEqual(
         (await readCompatibility(fresh.supportPath, await scannerIdentity(fresh.context.cli))).get(tree),
-        { notSupported: [], missing: [], signsIn: false, unreadable: false },
+        { notSupported: [], missing: [], signsIn: false, signsInThroughRaycast: false, unreadable: false },
         "the list and the detail get the install's scan",
     );
 });
@@ -2441,6 +2444,7 @@ test("installNote names what's really on and off, in each case", () => {
         notSupported: ["AI"],
         missing: [],
         signsIn: false,
+        signsInThroughRaycast: false,
         unreadable: false,
         byCommand: { count: 3, using },
     });
@@ -2459,7 +2463,7 @@ test("installNote names what's really on and off, in each case", () => {
         "Fudge couldn't check which of its commands use Raycast AI, so every command is on.",
     );
     // A result from before per-command scans names no command, so whatever the build turned off is named.
-    const whole: Compatibility = { notSupported: ["AI"], missing: [], signsIn: false, unreadable: false };
+    const whole: Compatibility = { notSupported: ["AI"], missing: [], signsIn: false, signsInThroughRaycast: false, unreadable: false };
     assert.equal(
         installNote(whole, { ask: ["AI"] }, titles),
         "Turned off: Ask, which uses Raycast AI. You can turn it on in Settings → Commands.",
