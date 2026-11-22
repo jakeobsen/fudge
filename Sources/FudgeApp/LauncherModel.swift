@@ -1674,7 +1674,7 @@ final class LauncherModel {
         let clipboard = QuicklinkTemplate(quicklink.link).usesClipboard ? templateClipboard() : nil
         let failed = { [weak self] (message: String) in
             if fromHotkey {
-                self?.showHUD("Can't open \(quicklink.name) — \(message)")
+                self?.showHUD(MessageText.joined("Can't open \(quicklink.name)", message))
             } else {
                 self?.showFailureToast("Can't open \(quicklink.name)", message: message)
             }
@@ -4206,7 +4206,9 @@ final class LauncherModel {
             if var quiet = quietSessions[session] {
                 // A background launch: the panel stays as it is, and the failure shows in the HUD, once.
                 let alreadySaid = quiet.unasked.contains { message.contains($0) }
-                if !quiet.failed, !alreadySaid { showHUD(signIn?.hud ?? "\(quiet.title) failed — \(message)") }
+                if !quiet.failed, !alreadySaid {
+                    showHUD(signIn?.hud ?? MessageText.joined("\(quiet.title) failed", message))
+                }
                 quiet.failed = true
                 quietSessions[session] = quiet
             } else if case .command(var command) = screen, command.session == session {
@@ -4447,7 +4449,7 @@ final class LauncherModel {
                 expireToast(toast)
             } else if toast.style != "ANIMATED" {
                 // With the window closed, a finished toast still deserves to be seen.
-                showHUD([toast.title, toast.message].compactMap { $0 }.joined(separator: " — "))
+                showHUD(MessageText.joined(toast.title, toast.message))
             }
         case "toast.hide":
             if case .number(let id) = values["id"], toast?.id == Int(id), toast?.session == session { toast = nil }

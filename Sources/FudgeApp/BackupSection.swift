@@ -309,7 +309,7 @@ struct ImportSummaryStep: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Changed since this backup:")
                 ForEach(changed, id: \.name) { change in
-                    (Text(change.title).bold() + Text(" — ") + Text(change.text).foregroundStyle(.secondary))
+                    (Text(change.title).bold() + Text(": ") + Text(change.text).foregroundStyle(.secondary))
                         .lineLimit(2)
                 }
             }
