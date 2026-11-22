@@ -292,7 +292,9 @@ test("the outcome and record readers read the shared fixtures as the app does", 
     for (const item of records.valid) {
         const parsed = parseBuildRecord(item.file, item.text);
         assert.ok(parsed, item.file);
-        for (const key of ["name", "dir", "title", "updating", "startedAt"] as const) assert.equal(parsed[key], item[key], key);
+        for (const key of ["name", "dir", "id", "repository", "title", "updating", "startedAt"] as const) {
+            assert.equal(parsed[key], item[key], `${key} in ${item.text}`);
+        }
     }
     for (const item of records.invalid) assert.equal(parseBuildRecord(item.file, item.text), undefined, item.why);
 });
