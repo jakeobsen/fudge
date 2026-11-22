@@ -76,6 +76,11 @@ test("the table reads from the app's variable, and a bad one is empty", () => {
             "ticktick",
             "zoho",
             "webflow",
+            "bangumi",
+            "wave",
+            "whoop",
+            "miro",
+            "tesla",
         ],
     );
     assert.deepEqual(providersFromEnvironment("not json"), []);
@@ -146,6 +151,18 @@ test("exactly the table's token and refresh requests go to the relay", async () 
         ["https://oauth.raycast.com/v1/refresh-token/PkgYXNFbQinA8SK-3Wvcl8xdP7Hq-kaX6ur_sct3_qk_ATrFgb8uneFkkpkwlACWOjsnG_TIvW75N7SdQ9Afd-ZfeKxtqdHj2yYEfg5Y0oueBi8zBwGoRWc-sglHUgecZaF2PQfuzqKZ0JoXL2JP4w", "zoho/refresh-token", "refresh_token"],
         ["https://oauth.raycast.com/v1/token/q4QKZun0V_mQeHqwiKbrv-G8fdDGM1-an2xu3vMO5AqrmUHnzIC4pjEpHf_I2XWtpR3uMK42EtKQiqNljaEE3rtacJnOHrip0_2B4K7Ci3WClmnjzv9gwmyYtmaGl4qIeU10j2RTDWVRq_jeUwc5Ze2_RCwYWdikkqKsfiLkJWZVahPvI0-RaA", "webflow/token", "authorization_code"],
         ["https://oauth.raycast.com/v1/refresh-token/OUvaPcCuUx4pAsmO9NlL0SjzRIsj1iquQtVbDxZlJHw5AxRqpEykQrSAKVa13YZNyTulfh8hUtGnOsmNEdMCyvflcIegE6MhbCr5BYS9Zdznb95mcJiXhduhwmXr9OXV6srwF4DmOUEnVwMzH7Pv8i8KmFxRRjbmm9rku70X_yNeVIxu9bzKzg", "webflow/refresh-token", "refresh_token"],
+        // `bangumi` refreshes at its token URL: the grant decides.
+        ["https://oauth.raycast.com/v1/token/7CSgIYGNn4jFuD6fTG5ov64wsfsi3iegonKLu0FCzW4pWL1T1jgXa4Bxa4f5w-bZOModMtBbrKFPsx1bGT4LUL_pmFzC1O3PkRp4Al1FToLwL_OPG4wVCAnQBQv6d2A", "bangumi/token", "authorization_code"],
+        ["https://oauth.raycast.com/v1/token/7CSgIYGNn4jFuD6fTG5ov64wsfsi3iegonKLu0FCzW4pWL1T1jgXa4Bxa4f5w-bZOModMtBbrKFPsx1bGT4LUL_pmFzC1O3PkRp4Al1FToLwL_OPG4wVCAnQBQv6d2A", "bangumi/refresh-token", "refresh_token"],
+        ["https://oauth.raycast.com/v1/token/_wJ5kXg1rLhO75Pr62ge83y20RUwQ7SITWBOL86St6DKEY-FK1p9yWdFqDhcFE_SgHgaYril7-RoS3JfDNs5lVX8xQ2iEX2LAXmDQV8armzVls1lWJYKHVSw123e6h9d-C3JUkDzhYfBiWY6HaMrn2E03dhqiuiBN5SOLAfCqZKTgq1ULnvfJ7Nexi82FN54jsrn2gyHDspcz6d89jWStRIPvFSeVt3C3EEPmdnWbm7mKZNmxhuoFrOZ1B8N-KOObts8Bg", "wave/token", "authorization_code"],
+        ["https://oauth.raycast.com/v1/refresh-token/TQsitwYgPmfM2Tm6ZC5NMaBiOIztfOmzALSrh4UM0o4SdlSqRCvGuJ3i56HXpOkkuiwOc0TtKfxtfBKDy96nmDKMfewczvXkpNnH1afTexQYGUDTQOpUYBE8Cxo9XMRdqdJKC2OIUitHjCXZHEAQDLaGNo5AXMeWKO4Kkg6MLooZuy2Zuh16neM6-DCwJ8Qs1ZLPHdF6ps8vZRd-viNgscOto3NwUXa4iOVWLXsn8xrVD3tOcCcDvC3R-JOIzn-5ipsSZQ", "wave/refresh-token", "refresh_token"],
+        ["https://oauth.raycast.com/v1/token/p7q14_mMGdFpROFDg19bzNg2blC7PT5i4a6ngcQP9vOfa6PV5udRzR_zvXopGW1U1u9IVw-BweEiW1oOV7L9yOd8buGsNoPdJMf4wyhZ2A6fStxe1I66z_FOpZwt4Q", "tesla/token", "authorization_code"],
+        ["https://oauth.raycast.com/v1/refresh-token/xG23f3tmUA9zNOewrzh164GX_4cZ1FzUAmVD1kt9YLigM2OcdKeMPh78YwDZKuXNPM3ipD-BDuQXC_6mo7qPe7MPpX4u701JXxhPoAjx9yjLxf-_3IStAzrpwVHSzA", "tesla/refresh-token", "refresh_token"],
+        // Raycast's WHOOP and Miro proxies, as the store's WHOOP and Miro extensions set them.
+        ["https://whoop.oauth.raycast.com/token", "whoop/token", "authorization_code"],
+        ["https://whoop.oauth.raycast.com/refresh-token", "whoop/refresh-token", "refresh_token"],
+        ["https://miro.oauth.raycast.com/token", "miro/token", "authorization_code"],
+        ["https://miro.oauth.raycast.com/refresh-token", "miro/refresh-token", "refresh_token"],
     ];
     for (const [url, target, grant] of expected) {
         const init = post(grant, { code: "c" });
@@ -173,9 +190,11 @@ test("anything else at a provider's own token URL is left alone", async () => {
         ["https://github.com/login/oauth/access_token", post("authorization_code")],
         ["https://oauth2.googleapis.com/tokeninfo", post("authorization_code")],
         ["https://relay.example/base/github/token", post("authorization_code")],
-        // Lookalikes of Raycast's Jira and Zoom proxies are other hosts.
+        // Lookalikes of Raycast's Jira, Zoom, WHOOP and Miro proxies are other hosts.
         ["https://jira.oauth.raycast.com.evil.test/token", post("authorization_code")],
         ["https://zoom.oauth.raycast.com.evil.test/refresh-token", post("refresh_token")],
+        ["https://whoop.oauth.raycast.com.evil.test/token", post("authorization_code")],
+        ["https://miro.oauth.raycast.com.evil.test/refresh-token", post("refresh_token")],
     ];
     for (const [url, init] of untouched) {
         await wrapped(url, init);
@@ -201,6 +220,8 @@ test("a provider's own URL goes to the relay only for an extension with a relay 
     assert.equal(sent.at(-1)!.url, "https://relay.example/base/figma/token", "nor does the shared proxy");
     await wrapped("https://oauth.raycast.com/v1/token/SXhT3SrBQS_UHzaHXdkI28IHvtPy1y79lN5b7WoFnWn6gbvztRZkAL906CUce9e4DbOLgWxhVLCG_Bxi0Ur3d4H7bBprZDsofulVmBBdNJgrF1mH-b2iJRDck9uLWA", post("authorization_code", { code: "c" }));
     assert.equal(sent.at(-1)!.url, "https://relay.example/base/ticktick/token");
+    await wrapped("https://oauth.raycast.com/v1/token/p7q14_mMGdFpROFDg19bzNg2blC7PT5i4a6ngcQP9vOfa6PV5udRzR_zvXopGW1U1u9IVw-BweEiW1oOV7L9yOd8buGsNoPdJMf4wyhZ2A6fStxe1I66z_FOpZwt4Q", post("authorization_code", { code: "c" }));
+    assert.equal(sent.at(-1)!.url, "https://relay.example/base/tesla/token");
 });
 
 test("a URL object or a Request is rewritten the same way", async () => {
@@ -258,12 +279,16 @@ for (const [state, answer] of [
             ["https://oauth.raycast.com/v1/token/IzJ2IgubKiVDyntspLduHwp2fbqLnidriix9jaZCAzZbj2wdsPWfJpv3TUtpQCRyopHNO1YPx0HgWOiQlaIaDiJu8zCrnvxFsp9beqRPVE1w5acImQsJ3BHoVq36OD3mAS6BV0FlkgzkPWjcqjMvzg/x", post("authorization_code")],
             ["http://oauth.raycast.com/v1/token/CQ8Acmd1GJ7WXGwXJ0BdBOtMhyiGcdZMPpq7pnM74LNkLiB6gRMSJ33oMtJ0bGkKFlG3IitUPqnW89BL8_VQ6t6Vex1Znps-pAd0itvAr1q0VaawTwfopc43vp-soOvKY9A1U8dfeKGOh9iDyGWrN-_NsDEO-UcJTazwwIBaPo1hRX4kdlHWRueDTrXS", post("authorization_code")],
             ["https://oauth.raycast.com/v1/refresh-token/OUvaPcCuUx4pAsmO9NlL0SjzRIsj1iquQtVbDxZlJHw5AxRqpEykQrSAKVa13YZNyTulfh8hUtGnOsmNEdMCyvflcIegE6MhbCr5BYS9Zdznb95mcJiXhduhwmXr9OXV6srwF4DmOUEnVwMzH7Pv8i8KmFxRRjbmm9rku70X_yNeVIxu9bzKzA", post("refresh_token")],
-            // Only the Jira and Zoom proxies' exact token and refresh URLs, over https, go to the relay.
+            ["https://oauth.raycast.com/v1/token/7CSgIYGNn4jFuD6fTG5ov64wsfsi3iegonKLu0FCzW4pWL1T1jgXa4Bxa4f5w-bZOModMtBbrKFPsx1bGT4LUL_pmFzC1O3PkRp4Al1FToLwL_OPG4wVCAnQBQv6d2A/x", post("authorization_code")],
+            ["http://oauth.raycast.com/v1/refresh-token/xG23f3tmUA9zNOewrzh164GX_4cZ1FzUAmVD1kt9YLigM2OcdKeMPh78YwDZKuXNPM3ipD-BDuQXC_6mo7qPe7MPpX4u701JXxhPoAjx9yjLxf-_3IStAzrpwVHSzA", post("refresh_token")],
+            // Only the Jira, Zoom, WHOOP and Miro proxies' exact token and refresh URLs, over https, go to the relay.
             ["https://jira.oauth.raycast.com/token/x", post("authorization_code")],
             ["http://jira.oauth.raycast.com/token", post("authorization_code")],
             ["https://jira.oauth.raycast.com/authorize", undefined],
             ["https://zoom.oauth.raycast.com/token/x", post("authorization_code")],
             ["http://zoom.oauth.raycast.com/refresh-token", post("refresh_token")],
+            ["https://miro.oauth.raycast.com/token/x", post("authorization_code")],
+            ["http://whoop.oauth.raycast.com/token", post("authorization_code")],
             ["https://oauth.raycast.com/", undefined],
             // DNS ignores a trailing dot, so these are the same hosts.
             ["https://github.oauth.raycast.com./token", post("authorization_code")],
