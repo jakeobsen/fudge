@@ -185,7 +185,7 @@ public struct ExtensionBuilder: Sendable {
         // anything. The kernel drops the lock when this process ends, however it ends.
         try files.createDirectory(at: extensionsDirectory, withIntermediateDirectories: true)
         let lock = try Self.lockBuild(of: manifest.name, in: extensionsDirectory)
-        defer { close(lock) }
+        defer { Self.unlockBuild(lock) }
         try Self.checkDestination(extensionsDirectory.appendingPathComponent(manifest.name), source: source)
         // Every build runs Fudge's own Node.js: the bundling script compiles, and its npm installs the dependencies.
         let installsDependencies =
@@ -475,8 +475,9 @@ public struct ExtensionBuilder: Sendable {
     }
 
     /// Takes the exclusive lock of the builds of `name` into `extensionsDirectory`, without waiting, and returns its
-    /// descriptor, which the caller closes. Another build holding it throws `alreadyBuilding`. The lock belongs to this
-    /// open of the file, so a second open in this process conflicts too, and the kernel drops it when the process ends.
+    /// descriptor, which the caller gives back with `unlockBuild`. Another build holding it throws `alreadyBuilding`.
+    /// The lock belongs to this open of the file, so a second open in this process conflicts too, and the kernel drops
+    /// it when the process ends.
     /// `O_CLOEXEC` keeps it out of any program the build starts, on top of `ChildProcesses.spawn`'s
     /// `POSIX_SPAWN_CLOEXEC_DEFAULT`, so a child left running never holds it.
     static func lockBuild(of name: String, in extensionsDirectory: URL) throws -> Int32 {
@@ -492,6 +493,17 @@ public struct ExtensionBuilder: Sendable {
             throw BuildError.cantLock(path: file.path, reason: String(cString: strerror(error)))
         }
         return descriptor
+    }
+
+    /// Releases the lock `lockBuild` took, then closes its descriptor. The lock belongs to the open file description,
+    /// and `close` alone releases it only when no other process shares that description. A program another thread is
+    /// starting holds a copy of every descriptor from `posix_spawn`'s copy of the table until its exec drops the
+    /// close-on-exec ones (`O_CLOEXEC` and `POSIX_SPAWN_CLOEXEC_DEFAULT` act only then), so for that moment it would
+    /// keep the lock, and the next build of the name in this process would be refused. `LOCK_UN` releases it on the
+    /// description itself, whoever holds a copy.
+    static func unlockBuild(_ descriptor: Int32) {
+        flock(descriptor, LOCK_UN)
+        close(descriptor)
     }
 
     /// Moves `staging` to `destination`, replacing what's there.

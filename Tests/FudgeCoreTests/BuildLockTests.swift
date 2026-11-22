@@ -254,3 +254,62 @@ struct BuildLockTests {
     #expect(try names(in: extensions) == [".build-greeter.lock"], "no .staging-* folder")
     #expect(try names(in: temporary) == [], "no fudge-build-* folder")
 }
+
+/// Whether the spawning threads of `theLockIsFreeAgainAtOnceWhileOtherThreadsStartPrograms` should stop.
+private final class StopFlag: @unchecked Sendable {
+    // @unchecked: `stopped` is behind `lock`.
+    private let lock = NSLock()
+    private var stopped = false
+    var isSet: Bool { lock.withLock { stopped } }
+    func set() { lock.withLock { stopped = true } }
+}
+
+/// A build's lock, given back, is free again at once, while other threads of the process start programs. A program
+/// being started holds a copy of every descriptor from `posix_spawn`'s copy of the table until its exec drops the
+/// close-on-exec ones, so with `close` alone the lock stayed with that copy for a moment, and a build of the same
+/// name right after was refused (`unlockBuild` releases it with `LOCK_UN` first). Four threads start `/usr/bin/true`
+/// over and over, with `POSIX_SPAWN_CLOEXEC_DEFAULT`, which doesn't help here, while the lock is taken and given back
+/// 20,000 times; not one take may be refused.
+@Test func theLockIsFreeAgainAtOnceWhileOtherThreadsStartPrograms() async throws {
+    let extensions = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: extensions) }
+    let stop = StopFlag()
+    let spawners = DispatchGroup()
+    for _ in 0..<4 {
+        spawners.enter()
+        Thread {
+            defer { spawners.leave() }
+            var attributes: posix_spawnattr_t?
+            posix_spawnattr_init(&attributes)
+            defer { posix_spawnattr_destroy(&attributes) }
+            posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
+            let program = strdup("/usr/bin/true")
+            defer { free(program) }
+            let argv: [UnsafeMutablePointer<CChar>?] = [program, nil]
+            let envp: [UnsafeMutablePointer<CChar>?] = [nil]
+            while !stop.isSet {
+                var pid: pid_t = 0
+                guard posix_spawn(&pid, "/usr/bin/true", nil, &attributes, argv, envp) == 0 else { continue }
+                var status: Int32 = 0
+                while waitpid(pid, &status, 0) == -1, errno == EINTR {}
+            }
+        }.start()
+    }
+    let refused = try await OffThePool.run(within: Tool.noHang) { () -> Int in
+        defer {
+            stop.set()
+            spawners.wait()
+        }
+        var refused = 0
+        for _ in 0..<20_000 {
+            do {
+                ExtensionBuilder.unlockBuild(try ExtensionBuilder.lockBuild(of: "greeter", in: extensions))
+            } catch BuildError.alreadyBuilding {
+                refused += 1
+            }
+        }
+        return refused
+    }
+    let count = try #require(refused, "the takes hung")
+    #expect(count == 0, "takes refused while the lock was free")
+}
