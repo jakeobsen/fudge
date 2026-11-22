@@ -4,7 +4,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { extensionId, raycastFolder } from "../../src/extension-id.ts";
+import { extensionId, isValidRepositoryFolder, raycastFolder } from "../../src/extension-id.ts";
 import { isValidFolder, isValidName } from "./catalog.ts";
 import type { FailureDetails } from "./failure.ts";
 
@@ -13,6 +13,8 @@ export type InstallEndReport = {
     build?: { pid: number; startedAt: string };
     name: string;
     dir: string;
+    /** The folder of the repository it's from (SPEC-157); none is Raycast's. */
+    repository?: string;
     title: string;
     updating: boolean;
     outcome: "installed" | "failed";
@@ -187,7 +189,8 @@ export function noticeTarget(value: unknown): NoticeTarget | undefined {
     if (typeof value !== "object" || value === null) return undefined;
     const { name, dir, failed, repository } = value as Record<string, unknown>;
     if (!isValidName(name) || !isValidFolder(dir) || typeof failed !== "boolean") return undefined;
-    if (repository !== undefined && typeof repository !== "string") return undefined;
+    // A repository's folder, checked with the folder rule (SPEC-157); a missing one is Raycast's.
+    if (repository !== undefined && !isValidRepositoryFolder(repository)) return undefined;
     return typeof repository === "string" ? { name, dir, failed, repository } : { name, dir, failed };
 }
 
@@ -197,9 +200,14 @@ export function launchTarget(launchContext: unknown): NoticeTarget | undefined {
     return noticeTarget((launchContext as Record<string, unknown>).storeNotification);
 }
 
+/** A row's place for its mark: its repository's folder (Raycast's when none is named) and its folder there. */
+function rowKey(dir: string, repository: string | undefined): string {
+    return `${repository ?? raycastFolder}\0${dir}`;
+}
+
 /**
- * The failed rows of this store session (D.3), by folder, in memory only, so the next session doesn't show them again.
- * A mark goes when that name installs or updates, or with the session.
+ * The failed rows of this store session (D.3), by repository and folder (SPEC-157), in memory only, so the next session
+ * doesn't show them again. A mark goes when that name from that repository installs or updates, or with the session.
  */
 export class RowMarks {
     private readonly marks = new Map<string, FailureMark>();
@@ -209,21 +217,22 @@ export class RowMarks {
         this.changed = changed;
     }
 
-    get(dir: string): FailureMark | undefined {
-        return this.marks.get(dir);
+    /** The mark of the row of `dir` in `repository`'s folder, Raycast's when none is named. */
+    get(dir: string, repository?: string): FailureMark | undefined {
+        return this.marks.get(rowKey(dir, repository));
     }
 
     mark(failure: FailureMark): void {
-        this.marks.set(failure.dir, failure);
+        this.marks.set(rowKey(failure.dir, failure.repository), failure);
         this.changed();
     }
 
-    /** That name installed or updated: its mark goes. */
-    clear(name: string): void {
+    /** That name from that repository (Raycast's when none is named) installed or updated: its mark goes. */
+    clear(name: string, repository?: string): void {
         let removed = false;
-        for (const [dir, mark] of this.marks) {
-            if (mark.name === name) {
-                this.marks.delete(dir);
+        for (const [key, mark] of this.marks) {
+            if (mark.name === name && (mark.repository ?? raycastFolder) === (repository ?? raycastFolder)) {
+                this.marks.delete(key);
                 removed = true;
             }
         }
@@ -289,7 +298,7 @@ export async function openNoticeTarget(target: NoticeTarget, steps: TargetSteps)
     steps.select(target.dir);
     if (!target.failed) return;
     // The target's own row's failure: by its folder, since two folders can hold one name.
-    const held = steps.marks.get(target.dir);
+    const held = steps.marks.get(target.dir, target.repository);
     const saved = held?.name === target.name ? undefined : await readSavedFailure(steps.supportPath, target);
     const mark = held?.name === target.name ? held : saved?.dir === target.dir ? saved : undefined;
     if (!mark) return;

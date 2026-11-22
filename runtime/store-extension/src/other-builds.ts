@@ -340,6 +340,7 @@ export async function settledNotice(outcome: Settled, steps: SettledSteps): Prom
             updating: record.updating,
             failedAt: (steps.now?.() ?? new Date()).toISOString(),
             details: failure,
+            ...(record.repository === undefined ? {} : { repository: record.repository }),
         };
         steps.marks.mark(mark);
     }
@@ -350,6 +351,7 @@ export async function settledNotice(outcome: Settled, steps: SettledSteps): Prom
         build: { pid: record.pid, startedAt: record.startedAt },
         name: record.name,
         dir: record.dir,
+        ...(record.repository === undefined ? {} : { repository: record.repository }),
         title: record.title,
         updating: record.updating,
         outcome: mark ? "failed" : "installed",

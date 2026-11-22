@@ -117,6 +117,8 @@ export type InstallEndReport = {
     build?: { pid: number; startedAt: string };
     name: string;
     dir: string;
+    /** The folder of the repository it's from; none is Raycast's. */
+    repository?: string;
     title: string;
     updating: boolean;
     outcome: "installed" | "failed";

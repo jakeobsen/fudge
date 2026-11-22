@@ -3952,9 +3952,15 @@ test("a click's target and the launch context are checked; anything off is ignor
     const good = { name: "alpha", dir: "alpha", failed: true };
     assert.deepEqual(launchTarget({ storeNotification: good }), good);
     assert.deepEqual(noticeTarget({ ...good, repository: "raycast/extensions" }), { ...good, repository: "raycast/extensions" });
+    // A repository's folder by the folder rule (SPEC-157); a missing one is Raycast's.
+    for (const repository of ["someone/tools", "git.example.org_8443/team/extensions", "fudgeapp/development"]) {
+        assert.deepEqual(noticeTarget({ ...good, repository }), { ...good, repository });
+    }
     for (const bad of [
         { ...good, name: "Al pha" }, { ...good, dir: "../alpha" }, { ...good, dir: "a/b" }, { ...good, failed: "yes" },
         { name: "alpha", dir: "alpha" }, { ...good, repository: 3 }, null, "alpha",
+        { ...good, repository: "Someone/Tools" }, { ...good, repository: "someone/../tools" }, { ...good, repository: "raycast" },
+        { ...good, repository: "" }, { ...good, repository: "/someone/tools" }, { ...good, repository: "github.com/someone/tools" },
     ]) {
         assert.equal(noticeTarget(bad), undefined, JSON.stringify(bad));
         assert.equal(launchTarget({ storeNotification: bad }), undefined);
@@ -3974,6 +3980,24 @@ test("row marks are per folder, gone when the name installs", () => {
     marks.clear("alpha");
     assert.equal(marks.get("alpha-dir"), undefined);
     assert.equal(changes, 2);
+});
+
+test("row marks are per repository and folder: one name from two repositories keeps two marks", () => {
+    const marks = new RowMarks();
+    const base = { name: "github", dir: "github", title: "GitHub", updating: false, failedAt: "t", details: { output: "" } };
+    const raycast: FailureMark = { ...base, details: { output: "raycast's" } };
+    const added: FailureMark = { ...base, details: { output: "added" }, repository: "someone/tools" };
+    marks.mark(raycast);
+    marks.mark(added);
+    assert.equal(marks.get("github"), raycast);
+    assert.equal(marks.get("github", "raycast/extensions"), raycast, "Raycast's folder named is Raycast's");
+    assert.equal(marks.get("github", "someone/tools"), added);
+    assert.equal(marks.get("github", "someone/other"), undefined);
+    marks.clear("github");
+    assert.equal(marks.get("github"), undefined);
+    assert.equal(marks.get("github", "someone/tools"), added, "the other repository's mark stays");
+    marks.clear("github", "someone/tools");
+    assert.equal(marks.get("github", "someone/tools"), undefined);
 });
 
 /**
@@ -4357,8 +4381,9 @@ test("clicks in a loaded store: each answer opened, the call made again after ea
 async function settledNoticeRun(
     outcome: { seen: boolean; adopted?: boolean; failure?: { output: string; code?: number } },
     answer: InstallAnswer = { onScreen: false, notified: false },
+    overrides: Partial<BuildRecord> = {},
 ) {
-    const record = otherRecord();
+    const record = otherRecord(overrides);
     const logged: { title: string; output: string }[] = [];
     const marked: FailureMark[] = [];
     const reports: InstallEndReport[] = [];
@@ -4379,6 +4404,37 @@ async function settledNoticeRun(
     await settledNotice({ record, adopted: outcome.adopted ?? false, seen: outcome.seen, ...(outcome.failure ? { failure: outcome.failure } : {}) }, steps);
     return { record, logged, marked, reports, selected, saved, toasts, shown };
 }
+
+test("a settled record of an added repository's build reports, marks and saves its repository", async () => {
+    const added = { id: "someone+tools+alpha", repository: "someone/tools" };
+    const failed = await settledNoticeRun({ seen: true, failure: { output: "error", code: 1 } }, { onScreen: false, notified: true }, added);
+    assert.equal(failed.reports[0]?.repository, "someone/tools");
+    assert.equal(failed.marked[0]?.repository, "someone/tools");
+    assert.equal(failed.saved[0]?.repository, "someone/tools");
+    const installed = await settledNoticeRun({ seen: true, adopted: true }, { onScreen: true, notified: true }, added);
+    assert.equal(installed.reports[0]?.repository, "someone/tools");
+    // Raycast's names none, as before.
+    const raycast = await settledNoticeRun({ seen: true, failure: { output: "error", code: 1 } }, { onScreen: false, notified: true });
+    assert.equal(Object.hasOwn(raycast.reports[0]!, "repository"), false);
+    assert.equal(Object.hasOwn(raycast.marked[0]!, "repository"), false);
+});
+
+test("a target opens its own repository's failure: the mark of that repository and folder, else that one's saved file", async () => {
+    const support = await temporary();
+    const marks = new RowMarks();
+    const base = { name: "github", dir: "github", title: "GitHub", updating: false, failedAt: "2026-11-22T10:00:00.000Z" };
+    marks.mark({ ...base, details: { output: "raycast's" } });
+    const added = targetSteps(support, marks);
+    await openNoticeTarget({ name: "github", dir: "github", failed: true, repository: "someone/tools" }, added.steps);
+    assert.deepEqual(added.shown, [], "Raycast's mark isn't the added repository's");
+    await saveFailure(support, { ...base, details: { output: "added" }, repository: "someone/tools" });
+    const fromFile = targetSteps(support, marks);
+    await openNoticeTarget({ name: "github", dir: "github", failed: true, repository: "someone/tools" }, fromFile.steps);
+    assert.equal(fromFile.shown[0]?.details.output, "added");
+    const raycast = targetSteps(support, marks);
+    await openNoticeTarget({ name: "github", dir: "github", failed: true }, raycast.steps);
+    assert.equal(raycast.shown[0]?.details.output, "raycast's");
+});
 
 test("a settled record's failure is logged and marked whenever it ended; one found ended at open reports nothing", async () => {
     const found = await settledNoticeRun({ seen: false, failure: { output: "error: esbuild failed", code: 1 } });
