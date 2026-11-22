@@ -6,21 +6,41 @@ struct FormScreen: View {
     let model: LauncherModel
     let form: FormContent
     @FocusState private var focused: Int?
+    /// The DateTime field whose time box has the keyboard, if any: a Tab stop of its own, after the field's date.
+    @FocusState private var timeBox: Int?
     @State private var lastFocused: Int?
 
     var body: some View {
-        ScrollView {
-            Grid(alignment: .topLeading, horizontalSpacing: 14, verticalSpacing: 14) {
-                ForEach(form.fields) { field in
-                    row(field)
+        ScrollViewReader { scroller in
+            ScrollView {
+                Grid(alignment: .topLeading, horizontalSpacing: 14, verticalSpacing: 14) {
+                    ForEach(form.fields) { field in
+                        row(field)
+                    }
                 }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 20)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            // Tab and ⇧Tab, which the launcher takes for every field and turns into the place to go
+            // (`LauncherModel.moveInForm`). The field is scrolled into view too, since giving it the keyboard here
+            // doesn't scroll as AppKit's key view loop would.
+            .onChange(of: model.formMove) { _, move in
+                guard let place = move.to else { return }
+                give(place)
+                scroller.scrollTo(place.field)
+            }
         }
         .font(.system(size: 13))
-        .onAppear { focusFirstField() }
+        // Through `refocus`: the launcher swaps its search field for the form's title in the same update, and the
+        // search field going away would take the keyboard from a field given it at once (FUD-185).
+        .onAppear {
+            if let field = KeyboardFocus.formFieldOnAppear(
+                editable: editableIDs, first: form.autoFocusID, overlayOpen: overlayHoldsKeyboard)
+            {
+                refocus(field)
+            }
+        }
         // Fields that arrive after the form (loaded text, a remounted field) take focus if nothing has it, unless an
         // overlay holds the keyboard: then they take it when the overlay closes.
         .onChange(of: editableIDs) { _, ids in
@@ -30,19 +50,24 @@ struct FormScreen: View {
                 focused = field
             }
         }
+        // The model hears every move, nowhere included, so Tab goes on from where the keyboard is now.
         .onChange(of: focused) { _, field in
+            model.formKeyboardMoved(to: place)
             if let field {
                 lastFocused = field
-                model.formFieldFocused(field)
                 // Another field took the keyboard: a DatePicker's calendar closes.
                 if let open = model.datePanel?.node, open != field { model.closeDatePanel() }
             }
         }
-        // Each showing of the panel puts the keyboard back in the field the model names (the last one, or the
-        // first). Through nil, since setting what `focused` already says does nothing.
+        .onChange(of: timeBox) { _, _ in model.formKeyboardMoved(to: place) }
+        // Each showing of the panel puts the keyboard back in the place the model names (the last one, or the first
+        // field). Through nil, since setting what `focused` already says does nothing.
         .onChange(of: model.keyboardRequests) { _, _ in
-            guard case .formField(let field) = model.keyboardTarget else { return }
-            refocus(field)
+            switch model.keyboardTarget {
+            case .formField(let field): give(.field(field))
+            case .formTimeBox(let field): give(.timeBox(field))
+            default: break
+            }
         }
         // The action panel takes the keyboard; give it back to the field after.
         .onChange(of: model.actionPanel == nil) { _, closed in
@@ -62,16 +87,28 @@ struct FormScreen: View {
         }
     }
 
-    private var editableIDs: [Int] { form.fields.filter(\.isEditable).map(\.id) }
+    private var editableIDs: [Int] { form.editableIDs }
 
     /// The field the form starts in: the first with `autoFocus`, else the first.
     private var firstField: Int? {
-        let editable = form.fields.filter(\.isEditable)
-        return (editable.first(where: \.autoFocus) ?? editable.first)?.id
+        KeyboardFocus.formFieldOnAppear(editable: editableIDs, first: form.autoFocusID, overlayOpen: false)
     }
 
-    private func focusFirstField() {
-        focused = firstField
+    /// Where the keyboard is now: a field, a DateTime field's time box, or nowhere.
+    private var place: KeyboardFocus.FormStop? {
+        timeBox.map(KeyboardFocus.FormStop.timeBox) ?? focused.map(KeyboardFocus.FormStop.field)
+    }
+
+    /// Gives `place` the keyboard, as `refocus` does.
+    private func give(_ place: KeyboardFocus.FormStop) {
+        switch place {
+        case .field(let field): refocus(field)
+        case .timeBox(let field):
+            timeBox = nil
+            DispatchQueue.main.async {
+                if !overlayHoldsKeyboard { timeBox = field }
+            }
+        }
     }
 
     /// The action panel (with or without an Action.PickDate picker in it) or a dropdown's panel has the keyboard: no
@@ -118,6 +155,7 @@ struct FormScreen: View {
                         Text(error).font(.system(size: 11)).foregroundStyle(.red)
                     }
                 }
+                .id(field.id)
             }
         }
     }
@@ -162,9 +200,16 @@ struct FormScreen: View {
                 }
                 .focused($focused, equals: field.id)
         case .checkbox:
+            // Focusable for editing, as the pickers are, so it can take the keyboard with macOS's Keyboard navigation
+            // off (the default): asked for without it, the keyboard lands in the first text field instead.
             Toggle(field.text ?? "", isOn: bool(field))
                 .toggleStyle(.checkbox)
+                .focusable(true, interactions: .edit)
                 .focused($focused, equals: field.id)
+                .onKeyPress(.space) {
+                    bool(field).wrappedValue.toggle()
+                    return .handled
+                }
         case .dropdown:
             FormDropdownField(model: model, field: field, isFocused: focused == field.id)
                 .focusable(true, interactions: .edit)
@@ -213,7 +258,7 @@ struct FormScreen: View {
                 }
                 .anchorPreference(key: FormFieldBounds.self, value: .bounds) { [field.id: $0] }
         case .datePicker:
-            FormDateField(model: model, field: field, focused: $focused)
+            FormDateField(model: model, field: field, focused: $focused, timeBox: $timeBox)
         case .filePicker:
             FilePickerField(model: model, field: field, isFocused: focused == field.id)
                 .focusable(true, interactions: .edit)
@@ -348,7 +393,7 @@ private struct FormDateField: View {
     let model: LauncherModel
     let field: FormContent.Field
     var focused: FocusState<Int?>.Binding
-    @FocusState private var timeFocused: Bool
+    var timeBox: FocusState<Int?>.Binding
 
     var body: some View {
         let options = field.dates ?? DatePickerOptions()
@@ -384,7 +429,7 @@ private struct FormDateField: View {
                 if isOpen { model.closeDatePanel() } else { model.openDatePanel(field.id) }
             }
             .anchorPreference(key: FormFieldBounds.self, value: .bounds) { [field.id: $0] }
-            if let date, options.type == .dateTime {
+            if let date, field.showsTimeBox(value: model.fieldValue(field.id)) {
                 DatePicker(
                     "",
                     selection: Binding(get: { date }, set: { model.pickDate($0, for: field.id) }),
@@ -394,9 +439,9 @@ private struct FormDateField: View {
                 .labelsHidden()
                 .datePickerStyle(.stepperField)
                 .fixedSize()
-                .focused($timeFocused)
+                .focused(timeBox, equals: field.id)
                 // The time box takes the keys from here, so the calendar closes.
-                .onChange(of: timeFocused) { _, now in
+                .onChange(of: timeBox.wrappedValue == field.id) { _, now in
                     if now, isOpen { model.closeDatePanel() }
                 }
             }

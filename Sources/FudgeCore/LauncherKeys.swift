@@ -21,6 +21,19 @@ public enum LauncherKeys {
         KeyShortcut(key: "return", modifiers: form ? ["cmd", "shift"] : ["cmd"])
     }
 
+    /// In a Form, Tab and ⇧Tab move between the fields through the launcher's own key handling, whatever field has
+    /// the keyboard, a text area included, as Raycast's manual says ("Tab: Move to the next field."). The answer is
+    /// whether the move goes backwards (⇧Tab); nil for any other key. ⌥Tab is nil too, so it goes to the field and a
+    /// text area types a tab.
+    public static func formTab(_ pressed: KeyShortcut) -> Bool? {
+        guard pressed.key == "tab" else { return nil }
+        switch pressed.modifiers {
+        case []: return false
+        case ["shift"]: return true
+        default: return nil
+        }
+    }
+
     /// What the launcher shows, as far as its keys go.
     public struct State: Sendable, Equatable {
         public enum Place: Sendable, Equatable {
@@ -70,12 +83,16 @@ public enum LauncherKeys {
         case run(ActionEntry)
         /// Waits for the selected item's actions, which the key belongs to (`HeldKey`).
         case wait(HeldKey.Key)
+        /// Moves the keyboard to a Form's next field, or its previous one `backwards` (`KeyboardFocus.formFieldAfterTab`).
+        case moveInForm(backwards: Bool)
     }
 
     /// The action `pressed` runs, or waits for, in `state`; nil when it runs none.
     /// - With the action panel open (§0), a key with a modifier runs the view's action with that shortcut, as with the
     ///   panel shut, submenus included; plain keys go to "Search for actions…".
     /// - With a picker, a dropdown's panel or the sign-in prompt open, no action runs.
+    /// - In a Form, Tab and ⇧Tab move between the fields (`formTab`), before any action's shortcut is matched, as
+    ///   Raycast's manual says Tab moves; an open overlay keeps its own Tab (above).
     /// - Otherwise a key with a modifier runs the action with that shortcut. In a command, ⌘↵ (⌘⇧↵ in a Form) runs
     ///   the secondary action, and in a Detail or a Form the primary key runs the primary action; a key that belongs
     ///   to the selected item's actions before they've come waits for them.
@@ -95,6 +112,7 @@ public enum LauncherKeys {
         case .root, .failure:
             return shortcut(pressed, in: state.actions)
         case .command(let hasSearchField, let isForm):
+            if isForm, let backwards = formTab(pressed) { return .moveInForm(backwards: backwards) }
             if pressed == secondaryKey(form: isForm) {
                 if state.pendingShortcuts != nil { return .wait(.secondary) }
                 return ActionPanelReader.secondary(state.actions).map(Outcome.run)

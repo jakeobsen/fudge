@@ -159,7 +159,7 @@ struct LauncherView: View {
             }
             (field, text) = (.actions, model.actionPanelQuery)
         case .dropdownPanel: (field, text) = (.dropdown, model.dropdownPanelQuery)
-        case .formField, .none: return
+        case .formField, .formTimeBox, .none: return
         }
         if focus == field, let editor = launcherPanel?.firstResponder as? NSTextView, editor.string == text { return }
         focus = nil

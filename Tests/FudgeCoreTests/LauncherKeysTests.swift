@@ -229,3 +229,48 @@ private func press(
     // A key the layout types nothing for is no key press, so no action takes it.
     #expect(KeyShortcut(hotkey: hotkey("cmd+d"), layout: { _ in nil }) == nil)
 }
+
+// Tab and ⇧Tab move between a Form's fields through the launcher; ⌥Tab goes to the field (FUD-185).
+
+@Test func tabAndShiftTabAreAFormsMovesAndOptionTabIsTheFields() {
+    #expect(LauncherKeys.formTab(KeyShortcut(key: "tab", modifiers: [])) == false)
+    #expect(LauncherKeys.formTab(KeyShortcut(key: "tab", modifiers: ["shift"])) == true)
+    #expect(LauncherKeys.formTab(KeyShortcut(key: "tab", modifiers: ["opt"])) == nil, "a text area types a tab")
+    #expect(LauncherKeys.formTab(KeyShortcut(key: "tab", modifiers: ["opt", "shift"])) == nil)
+    #expect(LauncherKeys.formTab(KeyShortcut(key: "tab", modifiers: ["ctrl"])) == nil)
+    #expect(LauncherKeys.formTab(KeyShortcut(key: "tab", modifiers: ["cmd"])) == nil)
+    #expect(LauncherKeys.formTab(KeyShortcut(key: "return", modifiers: [])) == nil)
+    #expect(
+        LauncherKeys.formTab(KeyShortcut(keyCode: 48, characters: "\t", modifiers: ["shift"])!) == true, "as pressed")
+}
+
+private let tab = KeyShortcut(key: "tab", modifiers: [])
+private let shiftTab = KeyShortcut(key: "tab", modifiers: ["shift"])
+private let inForm = LauncherKeys.State.Place.command(hasSearchField: false, isForm: true)
+
+@Test func inAFormTabAndShiftTabMoveBetweenFieldsBeforeAnyActionsShortcut() {
+    // An action on ⇧Tab: a bare key never runs an action (plain keys are typing), so ⇧Tab is the one to try.
+    let actions = sections(entry(1, "Submit"), entry(2, "Previous Page", shiftTab), entry(3, "Bare Tab", tab))
+    let form = LauncherKeys.State(place: inForm, actions: actions)
+    #expect(LauncherKeys.outcome(of: tab, in: form) == .moveInForm(backwards: false))
+    #expect(LauncherKeys.outcome(of: shiftTab, in: form) == .moveInForm(backwards: true), "not Previous Page")
+    #expect(
+        LauncherKeys.outcome(of: KeyShortcut(key: "tab", modifiers: ["opt"]), in: form) == nil,
+        "⌥Tab goes to the field")
+    let list = LauncherKeys.State(place: inList, actions: actions)
+    #expect(
+        LauncherKeys.outcome(of: shiftTab, in: list) == .run(entry(2, "Previous Page", shiftTab)),
+        "outside a Form, the action's ⇧Tab still runs it")
+    #expect(LauncherKeys.outcome(of: tab, in: list) == nil, "and a bare Tab is typing")
+    let detail = LauncherKeys.State(place: .command(hasSearchField: false, isForm: false), actions: actions)
+    #expect(LauncherKeys.outcome(of: tab, in: detail) == nil, "a Detail has no fields to move between")
+}
+
+@Test func anOpenOverlayKeepsItsOwnTabInAForm() {
+    let actions = sections(entry(1, "Submit"), entry(2, "Previous Page", shiftTab))
+    for overlay in [LauncherKeys.State.Overlay.actionPanel, .datePick, .dropdown, .signIn] {
+        let state = LauncherKeys.State(place: inForm, overlay: overlay, actions: actions)
+        #expect(LauncherKeys.outcome(of: tab, in: state) == nil, "\(overlay)")
+        #expect(LauncherKeys.outcome(of: shiftTab, in: state) != .moveInForm(backwards: true), "\(overlay)")
+    }
+}

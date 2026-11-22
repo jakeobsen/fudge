@@ -78,8 +78,8 @@ final class LauncherModel {
         var storedFormValues: [String: JSONValue]?
         /// Stored values still waiting for their fields' items, by node id (`FormContent.Field.start`).
         var pendingStoredValues: [Int: JSONValue] = [:]
-        /// The Form field that had the keyboard last, by node id.
-        var lastFormField: Int?
+        /// Where the Form's keyboard is now, and the field that had it last, by node id (`FormKeyboard`).
+        var formKeyboard = FormKeyboard()
     }
 
     struct DropdownState: Equatable {
@@ -657,26 +657,57 @@ final class LauncherModel {
             guard let form = command.form else { return .noField }
             let editable = form.fields.filter(\.isEditable)
             let first = (editable.first(where: \.autoFocus) ?? editable.first)?.id
-            let last = command.lastFormField.flatMap { id in editable.contains { $0.id == id } ? id : nil }
-            return .form(lastField: last, firstField: first)
+            let last = command.formKeyboard.last.flatMap { place in
+                editable.contains { $0.id == place.field } ? place : nil
+            }
+            var lastInTimeBox = false
+            if case .timeBox = last { lastInTimeBox = true }
+            return .form(lastField: last?.field, firstField: first, lastInTimeBox: lastInTimeBox)
         }
     }
 
-    /// A Form field took the keyboard: the one that had it hears `onBlur`, this one `onFocus`. Moments without a
-    /// field (the keyboard going back through nil, the action panel) don't count, so each fires once per change.
-    func formFieldFocused(_ node: Int) {
-        guard var command, command.lastFormField != node else { return }
-        let previous = command.lastFormField
-        command.lastFormField = node
-        screen = .command(command)
-        if let previous, let field = formField(previous), field.hasOnBlur {
+    /// The Form's keyboard moved: into a field, a field's time box, or nowhere (nil), as FormScreen sees it. Tab goes
+    /// on from there (`moveInForm`). When it went into another field, the one that had it hears `onBlur` and this one
+    /// `onFocus`; moments without a field (the keyboard going back through nil, the action panel) don't count, so each
+    /// fires once per change (`FormKeyboard.moved`).
+    func formKeyboardMoved(to place: KeyboardFocus.FormStop?) {
+        guard var command else { return }
+        let before = command.formKeyboard
+        let change = command.formKeyboard.moved(to: place)
+        if command.formKeyboard != before { screen = .command(command) }
+        guard let change else { return }
+        if let previous = change.left, let field = formField(previous), field.hasOnBlur {
             let event = field.focusEvent("blur", value: fieldValue(previous) ?? .null)
             send(.event(session: command.session, node: previous, path: ["onBlur"], args: [event]))
         }
-        if let field = formField(node), field.hasOnFocus {
-            let event = field.focusEvent("focus", value: fieldValue(node) ?? .null)
-            send(.event(session: command.session, node: node, path: ["onFocus"], args: [event]))
+        if let field = formField(change.entered), field.hasOnFocus {
+            let event = field.focusEvent("focus", value: fieldValue(change.entered) ?? .null)
+            send(.event(session: command.session, node: change.entered, path: ["onFocus"], args: [event]))
         }
+    }
+
+    /// A move the launcher asked of the Form's view (Tab or ⇧Tab): the place to give the keyboard to. The view
+    /// answers each one.
+    struct FormMove: Equatable {
+        /// Counts them, so the same place twice is a change.
+        var count = 0
+        var to: KeyboardFocus.FormStop?
+    }
+
+    private(set) var formMove = FormMove()
+
+    /// Tab or ⇧Tab in a Form (`LauncherKeys.Outcome.moveInForm`): the next or previous place from where the keyboard
+    /// is now (`KeyboardFocus.formFieldAfterTab`), which the form's view gives the keyboard to. A form with no
+    /// editable field takes the key and does nothing.
+    private func moveInForm(backwards: Bool) {
+        guard var command, let form = command.form else { return }
+        guard
+            let place = KeyboardFocus.formFieldAfterTab(
+                now: command.formKeyboard.tabFrom, fields: form.tabFields { fieldValue($0) }, backwards: backwards)
+        else { return }
+        command.formKeyboard.ask(for: place)
+        screen = .command(command)
+        formMove = FormMove(count: formMove.count + 1, to: place)
     }
 
     // MARK: - Arguments
@@ -1260,7 +1291,7 @@ final class LauncherModel {
     /// False when there's none.
     func openFirstFormPicker(_ kind: FormContent.Kind) -> Bool {
         guard let field = command?.form?.fields.first(where: { $0.kind == kind }) else { return false }
-        formFieldFocused(field.id)
+        formKeyboardMoved(to: .field(field.id))
         switch kind {
         case .tagPicker: openTagPicker(field.id)
         case .datePicker: openDatePanel(field.id)
@@ -2757,6 +2788,11 @@ final class LauncherModel {
             return true
         case .wait(let key):
             _ = waitForActions(key)
+            return true
+        // In a Form, Tab and ⇧Tab move between the fields here, whichever has the keyboard, since AppKit's key view
+        // loop doesn't reach them in the launcher's panel. A calendar open under a field closed above, as for any key.
+        case .moveInForm(let backwards):
+            moveInForm(backwards: backwards)
             return true
         case nil:
             break
