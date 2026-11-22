@@ -134,8 +134,8 @@ app: release-check build
 	@mkdir -p '$(APP)/Contents/MacOS' '$(APP)/Contents/Helpers' '$(APP)/Contents/Resources/runtime'
 	@cp '$(SWIFT_BIN)/FudgeApp' '$(APP)/Contents/MacOS/Fudge'
 	@cp '$(SWIFT_BIN)/fudge' '$(ESBUILD)' '$(APP)/Contents/Helpers/'
-	@# Fudge Links: a nested app here, since nothing but Open with Fudge's LSRegisterURL on it registers it
-	@# (Contents/Library/LoginItems is registered at every launch).
+	@# Fudge Links: a nested app here, since nothing but turning on "Fudge opens Raycast links" (or onboarding's button)
+	@# registers it, by LSRegisterURL on it (Contents/Library/LoginItems is registered at every launch).
 	@mkdir -p '$(LINKS_APP)/Contents/MacOS' && cp '$(SWIFT_BIN)/FudgeLinks' '$(LINKS_APP)/Contents/MacOS/FudgeLinks' \
 		&& cp App/Links/Info.plist '$(LINKS_APP)/Contents/Info.plist'
 	@# Fudge's own Node.js (SPEC-115): the binary beside the helpers, npm from its distribution, and its license,

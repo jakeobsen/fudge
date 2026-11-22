@@ -134,9 +134,10 @@ public struct RaycastLinksToggle: Equatable, Sendable {
 }
 
 /// **Fudge Links** (SPEC-140, D-107): the small app inside Fudge.app, the only part of Fudge that declares Raycast's
-/// schemes. Only the user's Open with Fudge registers it with LaunchServices, so no build, launch, snapshot run, copy or
-/// Spotlight makes Fudge open Raycast's links. macOS opens it with a link; it hands the link to Fudge as a get-URL Apple
-/// Event and quits. Its decisions are here, so they're tested.
+/// schemes. Only the user turning on "Fudge opens Raycast links" (or onboarding's button) registers it with
+/// LaunchServices, so no build, launch, snapshot run, copy or Spotlight makes Fudge open Raycast's links. macOS opens
+/// it with a link; it hands the link to Fudge as a get-URL Apple Event and quits. Its decisions are here, so they're
+/// tested.
 public enum RaycastLinksHelper {
     /// Its own bundle identifier, under Fudge's: macOS saves the user's choice by bundle identifier, not path.
     public static let bundleIdentifier = FudgeVersion.bundleIdentifier + ".links"
