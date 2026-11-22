@@ -14,7 +14,7 @@ private func created(_ folder: URL) throws -> Date? {
 }
 
 /// The real `fudge build`, laid out as in Fudge.app, with its support folder and the extensions folder in it.
-private struct RealTool {
+struct RealTool {
     let folder: URL
     let tool: URL
     var support: URL { folder.appendingPathComponent("support", isDirectory: true) }

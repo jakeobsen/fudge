@@ -13,6 +13,13 @@ private struct ThreeGitHubs {
 
     struct NotMade: Error {}
 
+    /// Three the walk found, such as three real builds' (`threeRealBuildsOfGitHubKeepEveryPlaceApart`).
+    init(raycast: InstalledExtension, added: InstalledExtension, development: InstalledExtension) {
+        self.raycast = raycast
+        self.added = added
+        self.development = development
+    }
+
     /// `versions` gives a manifest version by repository folder; the others have none.
     init(in extensions: URL, owner: String = "someone", versions: [String: String] = [:]) throws {
         func make(_ folder: String) throws -> InstalledExtension {
@@ -39,13 +46,19 @@ private struct ThreeGitHubs {
 private func id(_ key: String) throws -> ExtensionID { try #require(ExtensionID(stored: key)) }
 
 @Test func theThreeGitHubsHaveTheirOwnIDs() throws {
-    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    try theThreeGitHubsHaveTheirOwnIDs(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+private func theThreeGitHubsHaveTheirOwnIDs(_ three: ThreeGitHubs) throws {
     #expect(three.all.map(\.id.key) == ["github", "someone+tools+github", "fudgeapp+development+github"])
     #expect(InstalledExtension.index(three.all).count == 3)
 }
 
 @Test func eachGitHubHasItsOwnFoldersAndSeesItsOwnName() throws {
-    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    try eachGitHubHasItsOwnFoldersAndSeesItsOwnName(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+private func eachGitHubHasItsOwnFoldersAndSeesItsOwnName(_ three: ThreeGitHubs) throws {
     let paths = FudgePaths(supportDirectory: try Fixtures.temporaryDirectory())
     let command = try #require(three.raycast.manifest.commands.first)
     var seen: Set<String> = []
@@ -62,7 +75,10 @@ private func id(_ key: String) throws -> ExtensionID { try #require(ExtensionID(
 }
 
 @Test func aPreferenceSetForOneGitHubIsntReadByTheOthers() throws {
-    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    try aPreferenceSetForOneGitHubIsntReadByTheOthers(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+private func aPreferenceSetForOneGitHubIsntReadByTheOthers(_ three: ThreeGitHubs) throws {
     let store = PreferenceStore(directory: try Fixtures.temporaryDirectory())
     for installed in three.all {
         var preferences = StoredPreferences()
@@ -76,7 +92,10 @@ private func id(_ key: String) throws -> ExtensionID { try #require(ExtensionID(
 }
 
 @Test func formValuesAndDropdownValuesAreKeptPerGitHub() throws {
-    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    try formValuesAndDropdownValuesAreKeptPerGitHub(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+private func formValuesAndDropdownValuesAreKeptPerGitHub(_ three: ThreeGitHubs) throws {
     let forms = FormValueStore(directory: try Fixtures.temporaryDirectory())
     try forms.save(["query": .string("added")], extension: three.added.id, command: "search")
     #expect(forms.load(extension: three.added.id, command: "search") == ["query": .string("added")])
@@ -107,7 +126,10 @@ private func id(_ key: String) throws -> ExtensionID { try #require(ExtensionID(
 }
 
 @Test func twoGitHubsKeepTheirOwnHotkeysAliasesAndEnabled() throws {
-    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    try twoGitHubsKeepTheirOwnHotkeysAliasesAndEnabled(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+private func twoGitHubsKeepTheirOwnHotkeysAliasesAndEnabled(_ three: ThreeGitHubs) throws {
     let file = try Fixtures.temporaryDirectory().appendingPathComponent("settings.json")
     var settings = FudgeSettings()
     for (index, installed) in three.all.enumerated() {
@@ -129,7 +151,11 @@ private func id(_ key: String) throws -> ExtensionID { try #require(ExtensionID(
 }
 
 @Test func rootSearchListsEachGitHubUnderItsOwnIDAndSaysWhereItsFrom() throws {
-    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    try rootSearchListsEachGitHubUnderItsOwnIDAndSaysWhereItsFrom(
+        try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+private func rootSearchListsEachGitHubUnderItsOwnIDAndSaysWhereItsFrom(_ three: ThreeGitHubs) throws {
     var metadata = CommandMetadata()
     metadata.setSubtitle("Mine", extension: three.added.id, command: "search")
     let items = three.all.flatMap { RootItem.commands(of: $0, metadata: metadata) }.filter { $0.title == "Search" }
@@ -149,7 +175,10 @@ private func id(_ key: String) throws -> ExtensionID { try #require(ExtensionID(
 }
 
 @Test func signInsArePerGitHubAndSigningOutOfOneLeavesTheOthers() throws {
-    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    try signInsArePerGitHubAndSigningOutOfOneLeavesTheOthers(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+private func signInsArePerGitHubAndSigningOutOfOneLeavesTheOthers(_ three: ThreeGitHubs) throws {
     let secrets = MemorySecretStore()
     let store = OAuthTokenStore(secrets: secrets)
     for installed in three.all {
@@ -186,7 +215,10 @@ private func id(_ key: String) throws -> ExtensionID { try #require(ExtensionID(
 }
 
 @Test func installLinesNameTheRepository() throws {
-    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    try installLinesNameTheRepository(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+private func installLinesNameTheRepository(_ three: ThreeGitHubs) throws {
     let stamps = InstallStamp.of(three.all, bundled: nil)
     #expect(stamps.count == 3)
     #expect(
@@ -314,7 +346,11 @@ private func id(_ key: String) throws -> ExtensionID { try #require(ExtensionID(
 }
 
 @Test func todaysMenuBarDropdownAndHistoryFilesAreFoundUnderTheSameKeys() throws {
-    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    try todaysMenuBarDropdownAndHistoryFilesAreFoundUnderTheSameKeys(
+        try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+private func todaysMenuBarDropdownAndHistoryFilesAreFoundUnderTheSameKeys(_ three: ThreeGitHubs) throws {
     let folder = try Fixtures.temporaryDirectory()
     let menuBar = folder.appendingPathComponent("menu-bar.json")
     try Data(#"{"active":["github/bar"]}"#.utf8).write(to: menuBar)
@@ -347,7 +383,10 @@ private func request(_ name: String = "github", owner: String = "someone") -> La
 }
 
 @Test func launchCommandPicksTheCallerItselfFirst() throws {
-    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    try launchCommandPicksTheCallerItselfFirst(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+private func launchCommandPicksTheCallerItselfFirst(_ three: ThreeGitHubs) throws {
     for caller in three.all {
         let target = try CommandLocator.locate(request(), caller: caller, in: three.all)
         #expect(target.installed.id == caller.id && !target.isOtherExtension)
@@ -367,7 +406,11 @@ private func caller(in folder: String) throws -> InstalledExtension {
 }
 
 @Test func launchCommandPicksTheCallersRepositoryThenRaycastsThenTheDevelopmentBuild() throws {
-    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    try launchCommandPicksTheCallersRepositoryThenRaycastsThenTheDevelopmentBuild(
+        try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+private func launchCommandPicksTheCallersRepositoryThenRaycastsThenTheDevelopmentBuild(_ three: ThreeGitHubs) throws {
     // A caller from `someone/tools` gets its own repository's `github`.
     let fromTools = try caller(in: "someone/tools")
     let target = try CommandLocator.locate(request(), caller: fromTools, in: three.all + [fromTools])
@@ -387,7 +430,10 @@ private func caller(in folder: String) throws -> InstalledExtension {
 }
 
 @Test func launchCommandRefusesTwoAddedOnesItCantTellApart() throws {
-    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    try launchCommandRefusesTwoAddedOnesItCantTellApart(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+private func launchCommandRefusesTwoAddedOnesItCantTellApart(_ three: ThreeGitHubs) throws {
     let others = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
     let otherTools = InstalledExtension(
         manifest: others.added.manifest, directory: others.added.directory, id: try id("other+tools+github"),
@@ -402,7 +448,10 @@ private func caller(in folder: String) throws -> InstalledExtension {
 }
 
 @Test func launchCommandTellsInstallsOfOneNameApartByID() throws {
-    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    try launchCommandTellsInstallsOfOneNameApartByID(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+private func launchCommandTellsInstallsOfOneNameApartByID(_ three: ThreeGitHubs) throws {
     // The caller's own command, named without an extension, is the caller's, never another `github`'s.
     let own = try CommandLocator.locate(
         LaunchRequest(name: "search", type: .userInitiated), caller: three.development, in: three.all)
@@ -415,7 +464,10 @@ private func caller(in folder: String) throws -> InstalledExtension {
 }
 
 @Test func aLaunchPermissionIsKeptByID() throws {
-    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    try aLaunchPermissionIsKeptByID(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+private func aLaunchPermissionIsKeptByID(_ three: ThreeGitHubs) throws {
     var permissions = LaunchPermissions()
     permissions.record(true, caller: three.development.id, target: three.raycast.id)
     #expect(permissions.answer(caller: three.development.id, target: three.raycast.id) == true)
@@ -438,7 +490,10 @@ private func caller(in folder: String) throws -> InstalledExtension {
 }
 
 @Test func aBackupListsEachGitHubWithWhereItsFrom() throws {
-    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    try aBackupListsEachGitHubWithWhereItsFrom(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+private func aBackupListsEachGitHubWithWhereItsFrom(_ three: ThreeGitHubs) throws {
     let paths = FudgePaths(supportDirectory: try Fixtures.temporaryDirectory())
     let listed = Backup.listed(three.all, paths: paths)
     #expect(listed.map(\.key) == ["fudgeapp+development+github", "github", "someone+tools+github"])
@@ -504,7 +559,10 @@ private func versions(newer: String? = nil) -> [String: String] {
 }
 
 @Test func anImportListsTheGitHubThatIsntInstalledByItsID() throws {
-    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    try anImportListsTheGitHubThatIsntInstalledByItsID(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+private func anImportListsTheGitHubThatIsntInstalledByItsID(_ three: ThreeGitHubs) throws {
     let paths = FudgePaths(supportDirectory: try Fixtures.temporaryDirectory())
     let backup = backupListing(Backup.listed(three.all, paths: paths))
     let result = try Backup.apply(
@@ -524,5 +582,82 @@ private func versions(newer: String? = nil) -> [String: String] {
     #expect(try Backup.contents(of: manifest(id: "someone+tools+github")).manifest.extensions.count == 1)
     for bad in ["raycast+extensions+github", "Bad Key", "someone/tools+github"] {
         #expect(throws: BackupError.refused(.extensionName(bad))) { try Backup.contents(of: manifest(id: bad)) }
+    }
+}
+
+/// A made-up `github` with the commands the checks above use, whose `search` says `text`, so each build's code is its
+/// own.
+private func githubSource(saying text: String) throws -> URL {
+    let source = try Fixtures.greeterCopy()
+    let manifest = """
+        {"name":"github","title":"GitHub","author":"someone","icon":"icon.png","commands":[
+        {"name":"search","title":"Search","mode":"view"},{"name":"bar","title":"Bar","mode":"menu-bar"}]}
+        """
+    try Data(manifest.utf8).write(to: source.appendingPathComponent("package.json"))
+    let src = source.appendingPathComponent("src", isDirectory: true)
+    let greet = try String(contentsOf: src.appendingPathComponent("greet.tsx"), encoding: .utf8)
+    try (greet + "\nexport const said = \(String(reflecting: text));\n").write(
+        to: src.appendingPathComponent("search.tsx"), atomically: true, encoding: .utf8)
+    try "export default function Command() {\n    return null;\n}\n".write(
+        to: src.appendingPathComponent("bar.tsx"), atomically: true, encoding: .utf8)
+    return source
+}
+
+/// Side by side, end to end (FUD-183): the real `fudge build` of `github` three times into one extensions folder, into
+/// Raycast's folder, `someone/tools` and the development folder, each from its own source. The walk finds all three
+/// with their own ids, every place above keeps them apart, and each build's lock is its id's.
+@Suite(.enabled(if: Fixtures.canBuild, "needs esbuild and Fudge's Node.js: run `make test`"))
+struct SideBySideEndToEndTests {
+    @Test func threeRealBuildsOfGitHubKeepEveryPlaceApart() async throws {
+        let run = try RealTool()
+        defer { run.remove() }
+        for (arguments, text) in [
+            (["--repository", "raycast/extensions"], "raycast"), (["--repository", "someone/tools"], "added"),
+            ([], "development"),
+        ] {
+            let ran = try await run.build(try githubSource(saying: text), arguments)
+            #expect(ran.status == 0, "\(ran.err)")
+        }
+        let found = InstalledExtension.load(walking: run.extensions).installed
+        #expect(found.map(\.id.key).sorted() == ["fudgeapp+development+github", "github", "someone+tools+github"])
+        let byKey = Dictionary(found.map { ($0.id.key, $0) }, uniquingKeysWith: { first, _ in first })
+        let three = ThreeGitHubs(
+            raycast: try #require(byKey["github"]), added: try #require(byKey["someone+tools+github"]),
+            development: try #require(byKey["fudgeapp+development+github"]))
+        for (installed, text) in zip(three.all, ["raycast", "added", "development"]) {
+            let code = try String(contentsOf: installed.directory.appendingPathComponent("search.cjs"), encoding: .utf8)
+            #expect(code.contains(text), "\(installed.id.key) runs its own build")
+        }
+        try theThreeGitHubsHaveTheirOwnIDs(three)
+        try eachGitHubHasItsOwnFoldersAndSeesItsOwnName(three)
+        try aPreferenceSetForOneGitHubIsntReadByTheOthers(three)
+        try formValuesAndDropdownValuesAreKeptPerGitHub(three)
+        try twoGitHubsKeepTheirOwnHotkeysAliasesAndEnabled(three)
+        try rootSearchListsEachGitHubUnderItsOwnIDAndSaysWhereItsFrom(three)
+        try signInsArePerGitHubAndSigningOutOfOneLeavesTheOthers(three)
+        try installLinesNameTheRepository(three)
+        try todaysMenuBarDropdownAndHistoryFilesAreFoundUnderTheSameKeys(three)
+        try launchCommandPicksTheCallerItselfFirst(three)
+        try launchCommandPicksTheCallersRepositoryThenRaycastsThenTheDevelopmentBuild(three)
+        try launchCommandRefusesTwoAddedOnesItCantTellApart(three)
+        try launchCommandTellsInstallsOfOneNameApartByID(three)
+        try aLaunchPermissionIsKeptByID(three)
+        try aBackupListsEachGitHubWithWhereItsFrom(three)
+        try anImportListsTheGitHubThatIsntInstalledByItsID(three)
+
+        // The lock by id: each build left its own lock file, and holding one id's lock leaves the others' free.
+        for installed in three.all {
+            let file = ExtensionBuilder.lockFile(of: installed.id, in: run.extensions)
+            #expect(FileManager.default.fileExists(atPath: file.path), "\(file.lastPathComponent)")
+        }
+        let held = try ExtensionBuilder.lockBuild(of: three.development.id, in: run.extensions)
+        defer { ExtensionBuilder.unlockBuild(held) }
+        #expect(throws: BuildError.self) {
+            try ExtensionBuilder.lockBuild(of: three.development.id, in: run.extensions)
+        }
+        for installed in [three.raycast, three.added] {
+            let other = try ExtensionBuilder.lockBuild(of: installed.id, in: run.extensions)
+            ExtensionBuilder.unlockBuild(other)
+        }
     }
 }
