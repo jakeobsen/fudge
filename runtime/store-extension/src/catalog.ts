@@ -1,17 +1,11 @@
 // The store's list: one entry per extension in the repository copy, with what's installed and what can be updated.
 import { readdir } from "node:fs/promises";
 import path from "node:path";
+import { isValidName } from "../../src/extension-id.ts";
 import { maxManifestBytes, readRegularFile } from "./files.ts";
 
-/**
- * `ExtensionManifest.isValidName`, the one extension name rule: lowercase letters, digits, `-` and `_`, starting with a
- * letter or digit. `runtime/test/fixtures/extension-names.json` pins this and the Swift rule to the same cases.
- */
-const namePattern = /^[a-z0-9][a-z0-9_-]*$/;
-
-export function isValidName(name: unknown): name is string {
-    return typeof name === "string" && namePattern.test(name);
-}
+// `ExtensionManifest.isValidName`, the one extension name rule, kept beside the id rule that builds on it.
+export { isValidName };
 
 /**
  * A folder in Raycast's repository, under `extensions/`: one path segment of letters, digits, `.`, `_` and `-`,

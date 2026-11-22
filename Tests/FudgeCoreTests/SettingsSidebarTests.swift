@@ -7,7 +7,7 @@ import Testing
 private func page(_ name: String, _ title: String) throws -> InstalledExtension {
     let json = #"{ "name": "\#(name)", "title": "\#(title)", "preferences": [], "commands": [] }"#
     let manifest = try JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8))
-    return InstalledExtension(manifest: manifest, directory: URL(fileURLWithPath: "/nonexistent/\(name)"))
+    return InstalledExtension.topLevel(manifest: manifest, directory: URL(fileURLWithPath: "/nonexistent/\(name)"))
 }
 
 @Test func theTopListIsFudgesCorePagesInOrder() {

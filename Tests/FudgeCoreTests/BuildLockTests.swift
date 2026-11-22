@@ -166,7 +166,7 @@ struct BuildLockTests {
         #expect(try await firstBuild.value == .installed)
 
         #expect(try names(in: extensions) == [".build-greeter.lock", "greeter"], "no .staging-* or .old-* is left")
-        let installed = try InstalledExtension.load(from: extensions.appendingPathComponent("greeter"))
+        let installed = try InstalledExtension.topLevel(from: extensions.appendingPathComponent("greeter"))
         #expect(
             try names(in: installed.directory) == ["assets", "greet.cjs", "package.json", "quiet.cjs"],
             "one whole build")

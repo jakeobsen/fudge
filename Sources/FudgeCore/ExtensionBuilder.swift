@@ -4,13 +4,72 @@ import Foundation
 public struct InstalledExtension: Sendable, Equatable {
     public var manifest: ExtensionManifest
     public var directory: URL
+    /// Its key (FUD-183), from where it's installed, never from its manifest.
+    public let id: ExtensionID
+    /// The repository it's from, by the folder it's installed in.
+    public let repository: Repository
     /// Its commands that use something Fudge doesn't support (`compatibility.json`, SPEC-109).
     public var compatibility: CommandCompatibility
 
-    public init(manifest: ExtensionManifest, directory: URL, compatibility: CommandCompatibility = .init()) {
+    /// Where an install is from (FUD-183), by the repository folder it's in.
+    public enum Repository: Hashable, Sendable {
+        /// Raycast's official repository, `raycast/extensions`: the Extension Store's installs.
+        case raycast
+        /// The development folder, `fudgeapp/development`: built here without a repository.
+        case development
+        /// A repository added to the Extension Store, by its folder (`someone/tools`).
+        case added(String)
+        /// One of the extensions in the app's resources.
+        case bundled
+
+        /// The repository whose installs are in `folder`, when that's a repository folder.
+        public init?(folder: String) {
+            switch folder {
+            case ExtensionRepositoryFolder.raycast: self = .raycast
+            case ExtensionRepositoryFolder.development: self = .development
+            default:
+                guard ExtensionRepositoryFolder.isValid(folder) else { return nil }
+                self = .added(folder)
+            }
+        }
+
+        /// Its folder in the extensions folder; nil for the bundled extensions, which aren't there.
+        public var folder: String? {
+            switch self {
+            case .raycast: ExtensionRepositoryFolder.raycast
+            case .development: ExtensionRepositoryFolder.development
+            case .added(let folder): folder
+            case .bundled: nil
+            }
+        }
+    }
+
+    /// `id` and `repository` come from where the install was found (the loader, a build or the bundled extensions),
+    /// so nothing turns a manifest into an id.
+    public init(
+        manifest: ExtensionManifest, directory: URL, id: ExtensionID, repository: Repository,
+        compatibility: CommandCompatibility = .init()
+    ) {
         self.manifest = manifest
         self.directory = directory
+        self.id = id
+        self.repository = repository
         self.compatibility = compatibility
+    }
+
+    /// Its title as Fudge shows it: the manifest's, then " (development)" for a development build and the repository's
+    /// folder for one from an added repository, so two installs of one name read apart.
+    public var displayTitle: String {
+        switch repository {
+        case .raycast, .bundled: manifest.title
+        case .development: "\(manifest.title) (development)"
+        case .added(let folder): "\(manifest.title) (\(folder))"
+        }
+    }
+
+    /// The installs by id. Ids are unique where the loader finds them; should one come twice, the first is kept.
+    public static func index(_ installed: [InstalledExtension]) -> [ExtensionID: InstalledExtension] {
+        Dictionary(installed.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
     /// The compiled command, a CommonJS file the extension host can load: `<command>.cjs` beside `package.json`, as
@@ -28,15 +87,20 @@ public struct InstalledExtension: Sendable, Equatable {
         directory.appendingPathComponent("assets", isDirectory: true)
     }
 
-    public static func load(from directory: URL) throws -> InstalledExtension {
+    public static func load(from directory: URL, id: ExtensionID, repository: Repository) throws -> InstalledExtension {
         InstalledExtension(
             manifest: try ExtensionManifest.load(from: directory.appendingPathComponent("package.json")),
             directory: directory,
+            id: id,
+            repository: repository,
             compatibility: CommandCompatibility.load(from: directory)
         )
     }
 
     /// Every installed extension, sorted by title. Folders that fail to load are skipped.
+    ///
+    /// Only the top level is read for now, and each install there is Raycast's, with its manifest name as its id: the
+    /// key it has always had, and the one it keeps when it's filed in `raycast/extensions`.
     public static func all(in extensionsDirectory: URL) -> [InstalledExtension] {
         let folders =
             (try? FileManager.default.contentsOfDirectory(
@@ -46,8 +110,18 @@ public struct InstalledExtension: Sendable, Equatable {
             )) ?? []
         return
             folders
-            .compactMap { try? load(from: $0) }
+            .compactMap { try? loadUnmoved(from: $0) }
             .sorted { $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending }
+    }
+
+    /// An install at the extensions folder's top level: Raycast's, keyed by its manifest name as before, or nil when
+    /// that name isn't one the id rule accepts.
+    static func loadUnmoved(from directory: URL) throws -> InstalledExtension? {
+        let manifest = try ExtensionManifest.load(from: directory.appendingPathComponent("package.json"))
+        guard let id = ExtensionID(stored: manifest.name) else { return nil }
+        return InstalledExtension(
+            manifest: manifest, directory: directory, id: id, repository: .raycast,
+            compatibility: CommandCompatibility.load(from: directory))
     }
 }
 
@@ -269,7 +343,11 @@ public struct ExtensionBuilder: Sendable {
         children.forget(staging)
         beforeReplace?()
         try Self.replace(destination, with: staging)
-        return InstalledExtension(manifest: manifest, directory: destination, compatibility: compatibility)
+        // An install at the top level is Raycast's, keyed by its name (`InstalledExtension.all(in:)`); the name is
+        // valid, checked above.
+        guard let id = ExtensionID(stored: manifest.name) else { throw BuildError.invalidName(manifest.name) }
+        return InstalledExtension(
+            manifest: manifest, directory: destination, id: id, repository: .raycast, compatibility: compatibility)
     }
 
     /// Refuses a command name that isn't valid (`ExtensionManifest.isValidCommandName`), and two that differ only in

@@ -144,7 +144,13 @@ struct ExtensionBuilderTests {
         #expect(FileManager.default.fileExists(atPath: installed.entry(for: "quiet").path))
         #expect(
             FileManager.default.fileExists(atPath: installed.assetsDirectory.appendingPathComponent("icon.png").path))
-        #expect(try InstalledExtension.load(from: installed.directory) == installed)
+        #expect(
+            try InstalledExtension.load(from: installed.directory, id: installed.id, repository: installed.repository)
+                == installed)
+        // Built at the top level, it's Raycast's under its name, as the loader finds it there.
+        #expect(installed.id.key == "greeter" && installed.repository == .raycast)
+        let found = InstalledExtension.all(in: installed.directory.deletingLastPathComponent())
+        #expect(found.map(\.id) == [installed.id] && found.map(\.repository) == [.raycast])
     }
 
     @Test func neverWritesIntoTheSourceFolder() throws {
@@ -218,7 +224,9 @@ struct ExtensionBuilderTests {
         #expect(installed.entry(for: "stayAwake") == installed.directory.appendingPathComponent("stayAwake.cjs"))
         let detail = try String(contentsOf: installed.entry(for: "show-recent.command"), encoding: .utf8)
         #expect(detail.contains("recent"))
-        #expect(try InstalledExtension.load(from: installed.directory) == installed)
+        #expect(
+            try InstalledExtension.load(from: installed.directory, id: installed.id, repository: installed.repository)
+                == installed)
 
         // A second build replaces the install (`holdsOnlyABuild` knows the files by the names).
         let again = try builder.build(source: Fixtures.commandNames, into: extensions)
