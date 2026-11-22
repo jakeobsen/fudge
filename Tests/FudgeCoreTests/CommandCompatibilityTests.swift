@@ -64,6 +64,16 @@ private func installed(_ commands: [String], using: [String: [CommandCompatibili
     #expect(CommandCompatibility.load(from: folder.appendingPathComponent("missing")) == CommandCompatibility())
 }
 
+/// SPEC-143: command names as Raycast accepts them (`caffeinateWhile`, dots) are kept, in their own case.
+@Test func compatibilityJSONKeepsCommandNamesAsRaycastAcceptsThem() throws {
+    let folder = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let written = CommandCompatibility(commands: ["caffeinateWhile": [.ai], "show-recent.command": [.browserExtension]])
+    try written.write(to: folder)
+    #expect(CommandCompatibility.load(from: folder) == written)
+    #expect(CommandCompatibility.load(from: folder).commands["caffeinatewhile"] == nil, "the name keeps its case")
+}
+
 @Test func settingsSayWhyACommandIsOff() {
     let compatibility = CommandCompatibility(commands: ["ask": [.ai], "tabs": [.ai, .browserExtension]])
     #expect(compatibility.reason(for: "ask") == "Uses Raycast AI, which Fudge doesn't support.")
@@ -207,6 +217,22 @@ struct BuildRecordsCommandCompatibility {
 struct BuildScansEndToEnd {
     /// `fudge build` through the real tool and the real scanner: only the command that reaches AI is listed.
     @Test func fudgeBuildListsTheCommandThatUsesRaycastAI() async throws {
+        let installed = try await fudgeBuild(ask: "ask", plain: "plain")
+        #expect(installed.compatibility.commands == ["ask": [.ai]])
+        #expect(InstalledExtension.offByDefault([installed]) == ["made-up/ask"])
+    }
+
+    /// SPEC-143: a command named as Raycast accepts it (`caffeinateWhile`) is scanned too, so one that uses AI is
+    /// still off by default.
+    @Test func fudgeBuildListsACamelCaseCommandThatUsesRaycastAI() async throws {
+        let installed = try await fudgeBuild(ask: "askAway", plain: "plain.command")
+        #expect(installed.compatibility.commands == ["askAway": [.ai]])
+        #expect(InstalledExtension.offByDefault([installed]) == ["made-up/askAway"])
+    }
+
+    /// Builds a made-up extension with the real `fudge build`: a command named `ask` that reaches Raycast AI through
+    /// a module of its own, and one named `plain` that doesn't.
+    private func fudgeBuild(ask: String, plain: String) async throws -> InstalledExtension {
         let folder = try Fixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: folder) }
         let source = folder.appendingPathComponent("made-up")
@@ -214,13 +240,15 @@ struct BuildScansEndToEnd {
             at: source.appendingPathComponent("src/lib"), withIntermediateDirectories: true)
         let manifest = #"""
             {"name":"made-up","title":"Made Up","commands":[
-              {"name":"ask","title":"Ask","mode":"no-view"},{"name":"plain","title":"Plain","mode":"no-view"}]}
+              {"name":"\#(ask)","title":"Ask","mode":"no-view"},
+              {"name":"\#(plain)","title":"Plain","mode":"no-view"}]}
             """#
         let files = [
             "package.json": manifest,
-            "src/ask.ts": "import { ask } from \"./lib/ai\";\nexport default async () => { await ask(); };\n",
+            "src/\(ask).ts": "import { ask } from \"./lib/ai\";\nexport default async () => { await ask(); };\n",
             "src/lib/ai.ts": "import { AI } from \"@raycast/api\";\nexport const ask = () => AI.ask(\"hi\");\n",
-            "src/plain.ts": "import { showHUD } from \"@raycast/api\";\nexport default async () => showHUD(\"hi\");\n",
+            "src/\(plain).ts":
+                "import { showHUD } from \"@raycast/api\";\nexport default async () => showHUD(\"hi\");\n",
         ]
         for (path, text) in files {
             try text.write(to: source.appendingPathComponent(path), atomically: true, encoding: .utf8)
@@ -246,9 +274,7 @@ struct BuildScansEndToEnd {
         }
         if exited != true { process.terminate() }
         try #require(exited == true, "fudge build exited")
-        #expect(process.terminationStatus == 0)
-        let installed = try InstalledExtension.load(from: extensions.appendingPathComponent("made-up"))
-        #expect(installed.compatibility.commands == ["ask": [.ai]])
-        #expect(InstalledExtension.offByDefault([installed]) == ["made-up/ask"])
+        try #require(process.terminationStatus == 0)
+        return try InstalledExtension.load(from: extensions.appendingPathComponent("made-up"))
     }
 }

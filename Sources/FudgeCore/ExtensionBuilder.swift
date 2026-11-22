@@ -54,6 +54,9 @@ public struct InstalledExtension: Sendable, Equatable {
 public enum BuildError: Error, Equatable, CustomStringConvertible {
     case invalidName(String)
     case invalidCommandName(String)
+    /// Two commands' names differ only in case. The Mac's disk ignores case by default, so their built files would
+    /// overwrite each other.
+    case commandNamesDifferOnlyInCase(String, String)
     case noCommands
     case missingEntry(command: String, searched: [String])
     /// The source folder is where the build would go, or one holds the other.
@@ -68,7 +71,9 @@ public enum BuildError: Error, Equatable, CustomStringConvertible {
         case .invalidName(let name):
             "the extension name \"\(name)\" may use only a-z, 0-9, - and _, starting with a letter or digit"
         case .invalidCommandName(let name):
-            "the command name \"\(name)\" may use only a-z, 0-9, - and _, starting with a letter or digit"
+            "the command name \"\(name)\" may use only letters, digits, ., - and _, starting with a letter or digit"
+        case .commandNamesDifferOnlyInCase(let one, let other):
+            "the command names \"\(one)\" and \"\(other)\" differ only in case, so their built files would be one file"
         case .noCommands:
             "the extension declares no commands"
         case .missingEntry(let command, let searched):
@@ -124,12 +129,8 @@ public struct ExtensionBuilder: Sendable {
         let manifest = try ExtensionManifest.load(from: source.appendingPathComponent("package.json"))
         guard ExtensionManifest.isValidName(manifest.name) else { throw BuildError.invalidName(manifest.name) }
         guard !manifest.commands.isEmpty else { throw BuildError.noCommands }
-        let entries = try manifest.commands.map { command in
-            guard ExtensionManifest.isValidName(command.name) else {
-                throw BuildError.invalidCommandName(command.name)
-            }
-            return try Self.entry(for: command.name, in: source)
-        }
+        try Self.checkCommandNames(manifest.commands.map(\.name))
+        let entries = try manifest.commands.map { try Self.entry(for: $0.name, in: source) }
         try Self.checkDestination(extensionsDirectory.appendingPathComponent(manifest.name), source: source)
 
         // A signal that ends `fudge build` skips every `defer`, so the two folders are named to the signal's handler
@@ -204,6 +205,19 @@ public struct ExtensionBuilder: Sendable {
         children.forget(staging)
         try Self.replace(destination, with: staging)
         return InstalledExtension(manifest: manifest, directory: destination, compatibility: compatibility)
+    }
+
+    /// Refuses a command name that isn't valid (`ExtensionManifest.isValidCommandName`), and two that differ only in
+    /// case, since the disk usually ignores case and their `<command>.cjs` files would be one file.
+    static func checkCommandNames(_ names: [String]) throws {
+        var seen: [String: String] = [:]
+        for name in names {
+            guard ExtensionManifest.isValidCommandName(name) else { throw BuildError.invalidCommandName(name) }
+            if let other = seen[name.lowercased()], other != name {
+                throw BuildError.commandNamesDifferOnlyInCase(other, name)
+            }
+            seen[name.lowercased()] = name
+        }
     }
 
     static func entry(for command: String, in source: URL) throws -> URL {

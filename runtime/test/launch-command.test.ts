@@ -78,6 +78,19 @@ test("launchCommand sends command.launch with stringified arguments, null meanin
     });
 });
 
+test("launchCommand sends a command's name as written, as Raycast accepts it (caffeinateWhile)", async () => {
+    const sent: RpcRequest[] = [];
+    connect((request) => sent.push(request));
+    for (const name of ["caffeinateWhile", "show-recent.command"]) {
+        const launched = launchCommand({ name, type: LaunchType.Background });
+        const request = sent.at(-1)!;
+        assert.equal(request.method, "command.launch");
+        assert.deepEqual(request.params, { name, type: "background", arguments: {} });
+        settle(request.id, null);
+        assert.equal(await launched, undefined);
+    }
+});
+
 test("an error from the app rejects launchCommand with its message", async () => {
     const sent: RpcRequest[] = [];
     connect((request) => sent.push(request));

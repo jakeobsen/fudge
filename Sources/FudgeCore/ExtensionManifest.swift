@@ -111,12 +111,22 @@ public struct ExtensionManifest: Sendable, Equatable, Decodable {
         }
     }
 
-    /// Extension and command names become folder and file names, so they're lowercase letters, digits, `-` and `_`,
-    /// starting with a letter or a digit. Raycast allows `_` too (`notion_researcher`). This is the one name rule:
-    /// every check of an extension's name uses it, and the Extension Store's `catalog.ts` mirrors it, both pinned by
-    /// `runtime/test/fixtures/extension-names.json`.
+    /// Extension names become folder and file names, so they're lowercase letters, digits, `-` and `_`, starting with
+    /// a letter or a digit. Raycast allows `_` too (`notion_researcher`). This is the one extension name rule: every
+    /// check of an extension's name uses it, and the Extension Store's `catalog.ts` mirrors it, both pinned by
+    /// `runtime/test/fixtures/extension-names.json`. Command names have their own rule (`isValidCommandName`).
     public static func isValidName(_ name: String) -> Bool {
         name.range(of: #"^[a-z0-9][a-z0-9_-]*$"#, options: .regularExpression) != nil
+    }
+
+    /// Command names are letters of either case, digits, `.`, `-` and `_`, starting with a letter or a digit, as
+    /// Raycast accepts them (`caffeinateWhile`, `search-projects.command`). A name becomes `src/<name>.<ext>` and
+    /// the built `<name>.cjs`, and with no `/`, `\`, `:`, space or leading `.` it can't reach outside `src/` or the
+    /// install, or take a built-in group's key. The compatibility scan and the Extension Store mirror it
+    /// (`isCommandName` in `runtime/scripts/compat/source-files.ts`), both pinned by
+    /// `runtime/test/fixtures/command-names.json`.
+    public static func isValidCommandName(_ name: String) -> Bool {
+        name.range(of: #"^[A-Za-z0-9][A-Za-z0-9._-]*$"#, options: .regularExpression) != nil
     }
 }
 

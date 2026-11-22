@@ -7,6 +7,8 @@ enum Fixtures {
     static let directory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent(
         "Fixtures")
     static let greeter = directory.appendingPathComponent("greeter", isDirectory: true)
+    /// Made up: a camel-case command and a dotted one, as Raycast accepts them.
+    static let commandNames = directory.appendingPathComponent("command-names", isDirectory: true)
     static let repository = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
 
@@ -33,9 +35,31 @@ enum Fixtures {
 
     /// A copy of the greeter fixture that a test may change.
     static func greeterCopy() throws -> URL {
-        let copy = try temporaryDirectory().appendingPathComponent("greeter")
-        try FileManager.default.copyItem(at: greeter, to: copy)
+        try copy(of: greeter)
+    }
+
+    /// A copy of a fixture that a test may change.
+    static func copy(of fixture: URL) throws -> URL {
+        let copy = try temporaryDirectory().appendingPathComponent(fixture.lastPathComponent)
+        try FileManager.default.copyItem(at: fixture, to: copy)
         return copy
+    }
+
+    /// Whether the temporary folder's disk ignores case, as the Mac's does by default.
+    static let temporaryDiskIgnoresCase: Bool = {
+        guard let folder = try? temporaryDirectory() else { return false }
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let written = FileManager.default.createFile(atPath: folder.appendingPathComponent("Case").path, contents: nil)
+        return written && FileManager.default.fileExists(atPath: folder.appendingPathComponent("case").path)
+    }()
+
+    /// Replaces the `"commands"` of the manifest in `source` with these, each a no-view command titled by its name.
+    static func setCommands(_ names: [String], in source: URL) throws {
+        let file = source.appendingPathComponent("package.json")
+        var manifest = try #require(
+            try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        manifest["commands"] = names.map { ["name": $0, "title": $0, "mode": "no-view"] }
+        try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys]).write(to: file)
     }
 }
 
@@ -119,6 +143,77 @@ struct ExtensionBuilderTests {
         #expect(throws: BuildError.invalidName("../greeter")) {
             try builder.build(source: source, into: try Fixtures.temporaryDirectory())
         }
+    }
+
+    /// SPEC-143: Raycast accepts command names with capitals and dots (`caffeinateWhile`), and each built file keeps
+    /// the name's case.
+    @Test func buildsCommandsNamedAsRaycastAcceptsThem() throws {
+        let extensions = try Fixtures.temporaryDirectory()
+        let installed = try builder.build(source: Fixtures.commandNames, into: extensions)
+
+        #expect(installed.manifest.commands.map(\.name) == ["stayAwake", "show-recent.command"])
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: installed.directory.path).sorted() == [
+                "package.json", "show-recent.command.cjs", "stayAwake.cjs",
+            ])
+        #expect(installed.entry(for: "stayAwake") == installed.directory.appendingPathComponent("stayAwake.cjs"))
+        let detail = try String(contentsOf: installed.entry(for: "show-recent.command"), encoding: .utf8)
+        #expect(detail.contains("recent"))
+        #expect(try InstalledExtension.load(from: installed.directory) == installed)
+
+        // A second build replaces the install (`holdsOnlyABuild` knows the files by the names).
+        let again = try builder.build(source: Fixtures.commandNames, into: extensions)
+        #expect(again.directory == installed.directory)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: extensions.path) == ["command-names"])
+    }
+
+    /// The entry file is found as the disk finds it, so on the Mac's usual disk `fooBar`'s may be `src/FooBar.ts`, as
+    /// some store extensions have it, and the built file still has the name's case.
+    @Test(.enabled(if: Fixtures.temporaryDiskIgnoresCase, "needs a disk that ignores case"))
+    func aCommandsFileMayDifferFromItsNameInCase() throws {
+        let source = try Fixtures.copy(of: Fixtures.commandNames)
+        try Fixtures.setCommands(["fooBar"], in: source)
+        try "export default async function Command() {}\n".write(
+            to: source.appendingPathComponent("src/FooBar.ts"), atomically: true, encoding: .utf8)
+        let extensions = try Fixtures.temporaryDirectory()
+
+        let installed = try builder.build(source: source, into: extensions)
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: installed.directory.path).sorted() == [
+                "fooBar.cjs", "package.json",
+            ])
+        let again = try builder.build(source: source, into: extensions)
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: again.directory.path).sorted() == [
+                "fooBar.cjs", "package.json",
+            ])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: extensions.path) == ["command-names"])
+    }
+
+    /// Their built files would be one file on a disk that ignores case.
+    @Test func refusesCommandNamesThatDifferOnlyInCase() throws {
+        let source = try Fixtures.copy(of: Fixtures.commandNames)
+        try Fixtures.setCommands(["stayAwake", "show-recent.command", "StayAwake"], in: source)
+        #expect(throws: BuildError.commandNamesDifferOnlyInCase("stayAwake", "StayAwake")) {
+            try builder.build(source: source, into: try Fixtures.temporaryDirectory())
+        }
+        #expect(
+            BuildError.commandNamesDifferOnlyInCase("stayAwake", "StayAwake").description
+                == "the command names \"stayAwake\" and \"StayAwake\" differ only in case, so their built files "
+                + "would be one file")
+    }
+
+    @Test func refusesACommandNameThatCouldReachOutsideItsFolder() throws {
+        for name in ["../stayAwake", ".hidden", "a b", "stay/awake", ":group"] {
+            let source = try Fixtures.copy(of: Fixtures.commandNames)
+            try Fixtures.setCommands([name], in: source)
+            #expect(throws: BuildError.invalidCommandName(name), "\(name)") {
+                try builder.build(source: source, into: try Fixtures.temporaryDirectory())
+            }
+        }
+        #expect(
+            BuildError.invalidCommandName("a b").description
+                == "the command name \"a b\" may use only letters, digits, ., - and _, starting with a letter or digit")
     }
 
     @Test func reportsCompileErrors() throws {

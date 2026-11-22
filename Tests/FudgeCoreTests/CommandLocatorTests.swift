@@ -96,6 +96,36 @@ private func request(_ params: String) throws -> LaunchRequest {
     #expect(target.missingArgument == nil)
 }
 
+/// SPEC-143: a command named as Raycast accepts it is found by its name exactly as written, its case included.
+@Test func findsACamelCaseCommandByItsExactName() throws {
+    let camel = try installed(
+        #"""
+        {"name":"made-up","title":"Made Up","author":"me","commands":[
+          {"name":"caffeinateWhile","title":"Stay Awake","mode":"no-view"},
+          {"name":"show-recent.command","title":"Show Recent","mode":"view"}]}
+        """#)
+    var settings = FudgeSettings()
+    settings.commands["made-up/caffeinateWhile"] = .init(hotkey: "option+w")
+    let target = try CommandLocator.locate(
+        try request(#"{"name":"caffeinateWhile","type":"background"}"#), caller: "made-up", in: [camel],
+        settings: settings)
+    #expect(target.command.name == "caffeinateWhile")
+    #expect(target.rootItemID == "command:made-up/caffeinateWhile")
+    let dotted = try CommandLocator.locate(
+        LaunchRequest(name: "show-recent.command", type: .userInitiated), caller: "made-up", in: [camel])
+    #expect(dotted.command.name == "show-recent.command")
+    #expect(throws: LaunchCommandError.commandNotFound(command: "caffeinatewhile", extension: "made-up")) {
+        try CommandLocator.locate(
+            LaunchRequest(name: "caffeinatewhile", type: .background), caller: "made-up", in: [camel])
+    }
+    settings.setEnabled(false, commandID: "made-up/caffeinateWhile")
+    #expect(throws: LaunchCommandError.disabled(command: "caffeinateWhile")) {
+        try CommandLocator.locate(
+            LaunchRequest(name: "caffeinateWhile", type: .background), caller: "made-up", in: [camel],
+            settings: settings)
+    }
+}
+
 @Test func findsAnotherExtensionsCommandByOwnerOrElseAuthor() throws {
     let byOwner = try CommandLocator.locate(
         LaunchRequest(name: "show", type: .userInitiated, extensionName: "other", ownerOrAuthorName: "acme"),

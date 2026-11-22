@@ -8,7 +8,7 @@ import { basename, join, posix, relative, sep } from "node:path";
 import { maxManifestBytes, maxSourceBytes, readRegularFile } from "./files.ts";
 import { RAYCAST_UTILS_PATHS } from "./raycast-utils.generated.ts";
 import { unsupported } from "../../src/api/stubs.ts";
-import { isExtensionSource, sourceExtensions } from "./source-files.ts";
+import { isCommandName, isExtensionSource, sourceExtensions } from "./source-files.ts";
 import {
     gaps,
     hasComputedImport,
@@ -261,7 +261,7 @@ function entries(folder: string): { commands: string[]; tools: string[]; depende
         Array.isArray(list)
             ? list.flatMap((entry: unknown) => {
                   const name = (entry as { name?: unknown } | null)?.name;
-                  return typeof name === "string" && /^[a-z0-9][a-z0-9_-]*$/.test(name) ? [name] : [];
+                  return isCommandName(name) ? [name] : [];
               })
             : [];
     const sections = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];

@@ -63,7 +63,7 @@ public struct CommandCompatibility: Sendable, Equatable {
             let commands = object["commands"] as? [String: Any]
         else { return CommandCompatibility() }
         var found: [String: [Unsupported]] = [:]
-        for (name, value) in commands where ExtensionManifest.isValidName(name) {
+        for (name, value) in commands where ExtensionManifest.isValidCommandName(name) {
             found[name] = ((value as? [Any]) ?? []).compactMap { ($0 as? String).flatMap(Unsupported.init(rawValue:)) }
         }
         return CommandCompatibility(commands: found)

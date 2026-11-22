@@ -82,6 +82,32 @@ test("AI used only in a tool counts for the tool, not for any command", async ()
     assert.ok(result.gaps.some((gap) => gap.api.startsWith("AI")), "the whole scan still sees it");
 });
 
+test("commands and tools named as Raycast accepts them (caffeinateWhile, dots) are scanned like any other", async () => {
+    const folder = extension(
+        ["askAway", "show-recent.command", "fooBar"],
+        {
+            "src/askAway.tsx": view(`import { AI } from "@raycast/api";\nAI.ask("a");`),
+            "src/show-recent.command.tsx": view(),
+            // Found as the build finds it, ignoring case.
+            "src/FooBar.tsx": view(),
+            "src/tools/getVaults.ts": `import { AI } from "@raycast/api";\nexport default () => AI.ask("vaults");\n`,
+        },
+        ["getVaults"],
+    );
+    const result = await scanExtension(folder, options);
+    // The tool's entry reaches its AI file, so the commands are traced, not all counted by the backstop.
+    assert.deepEqual(
+        result.commands.map((command) => [command.name, command.unsupported, command.traced]),
+        [
+            ["askAway", ["AI"], true],
+            ["show-recent.command", [], true],
+            ["fooBar", [], true],
+        ],
+    );
+    const compatibility = fromReport(report(folder, result));
+    assert.deepEqual("byCommand" in compatibility && compatibility.byCommand, { count: 3, using: ["askAway"] });
+});
+
 test("an extension with no AI has no command that uses it, and one where every command does has all", async () => {
     const none = extension(["a", "b"], { "src/a.tsx": view(), "src/b.tsx": view() });
     assert.deepEqual(await unsupportedByCommand(none), { a: [], b: [] });
