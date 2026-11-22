@@ -15,10 +15,11 @@ public enum Backup {
     /// `settings.json` keys an import never takes from a backup: the Extension Store's switch and its consent
     /// (D-52), the sign-in server and its consent, and the switch for extensions with their own sign-in and its
     /// consent, whose sign-ins are in this Mac's Keychain, and clipboard history's switch and consent, whose history
-    /// and key are this Mac's only. This Mac's stay as they are.
+    /// and key are this Mac's only. Also the Command Line Tools' folder, a path on this Mac (SPEC-145 §1). This Mac's
+    /// stay as they are.
     public static let consentKeys = [
         "extensionStore", "extensionStoreConsentAt", "signInServer", "signInServerConsentAt", "ownAppSignIn",
-        "ownAppSignInConsentAt", "clipboardHistory", "clipboardHistoryConsentAt",
+        "ownAppSignInConsentAt", "clipboardHistory", "clipboardHistoryConsentAt", "commandLineTools",
     ]
     /// The consents themselves never go into a backup. The switch does, so an import can say the store was on.
     static let exportStrippedKeys = [

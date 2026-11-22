@@ -11,9 +11,8 @@ import * as esbuild from "esbuild";
 import { makeBundler } from "../scripts/compile/make-bundler.ts";
 import { isInsideExtension, packageFunctions, parseFunctions, removeComments } from "../scripts/compile/rust.ts";
 
-/** Raycast's own words for a Rust function called on a Mac, and SPEC-144 §4's for a Swift part, pinned here. */
+/** Raycast's own words for a Rust function called on a Mac, pinned here. */
 const notSupportedOnMacOS = "Rust functions are not supported on macOS";
-const swiftNotYet = "this extension has a part written in Swift, which Fudge can't build yet";
 
 const runtime = fileURLToPath(new URL("..", import.meta.url));
 const hostPath = path.join(runtime, "src/host.ts");
@@ -225,16 +224,6 @@ test("a rust: import is refused when its folder has no Cargo.toml or is outside 
     result = compile(linked, options(linked, ["src/linked.ts"]));
     assert.equal(result.status, 1);
     assert.match(result.stderr, /\[ERROR\] the Rust package "rust:\.\.\/linked" is outside the extension's folder/);
-});
-
-test("a swift: import stops the build, saying Fudge can't build it yet, and esbuild's messages aren't repeated", () => {
-    const extension = rustPartCopy({ "src/swift.ts": 'import { run } from "swift:../swift";\nvoid run;\n' });
-    const result = compile(extension, options(extension, ["src/swift.ts"]));
-    assert.equal(result.status, 1);
-    assert.match(result.stderr, new RegExp(`✘ \\[ERROR\\] ${swiftNotYet} \\("swift:\\.\\./swift"\\) \\[plugin swift\\]`));
-    assert.match(result.stderr, /src\/swift\.ts:1:20:/);
-    assert.equal(result.stderr.match(/\[ERROR\]/g)?.length, 1);
-    assert.doesNotMatch(result.stderr, /Build failed/);
 });
 
 test("a request the compile step can't read is an error it prints", () => {

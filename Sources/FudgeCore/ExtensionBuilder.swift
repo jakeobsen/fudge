@@ -130,6 +130,15 @@ public struct ExtensionBuilder: Sendable {
     /// so every command is enabled, as before SPEC-109.
     public var scanCommands: (@Sendable (URL) throws -> CommandCompatibility)?
 
+    /// What to do with the extension's parts written in Swift (`--swift-parts`, SPEC-145 §2); nil when it wasn't said,
+    /// which stops the build of an extension that has one.
+    public var swiftParts: BuildArguments.SwiftParts?
+    /// Apple's Command Line Tools for `--swift-parts build`, found as Settings → Development finds them
+    /// (`CommandLineTools.resolve`), or nil when they aren't set up. Asked only when a build may need them.
+    public var commandLineTools: @Sendable () -> CommandLineTools.Tools? = { nil }
+    /// SwiftPM's shared cache (`FudgePaths.swiftPackageCache`).
+    public var swiftPackageCache = FudgePaths.swiftPackageCache()
+
     public init(
         esbuild: URL, node: BundledNode? = nil, bundler: URL? = nil,
         log: @escaping @Sendable (String) -> Void = { _ in },
@@ -188,11 +197,17 @@ public struct ExtensionBuilder: Sendable {
         // (`ExtensionLayout`): anything else it writes, such as a stylesheet an import pulled in, no command loads, and
         // at the root it would make the next build refuse to replace the install (`holdsOnlyABuild`).
         let output = staging.appendingPathComponent(".compiled", isDirectory: true)
+        // A part written in Swift is built, or left out, by the bundling script's `swift:` plugin, in the scratch
+        // folder; the tools are looked for only when they may be needed.
+        let tools = swiftParts == .build ? commandLineTools() : nil
+        let swift = SwiftRequest(mode: swiftParts, tools: tools, cache: swiftPackageCache, scratch: scratch)
         let compiled = try Self.compile(
             BundleRequest(
                 extensionFolder: source.path,
-                options: BundleOptions(entries: entries, source: source, output: output, nodePaths: nodePaths)),
-            in: source, scratch: scratch, esbuild: esbuild, node: node.node, bundler: bundler)
+                options: BundleOptions(entries: entries, source: source, output: output, nodePaths: nodePaths),
+                swift: swift),
+            in: source, scratch: scratch, esbuild: esbuild, node: node.node, bundler: bundler,
+            environment: tools.map { ["DEVELOPER_DIR": $0.folder.path] } ?? [:])
         let warnings = compiled.output.trimmingCharacters(in: .whitespacesAndNewlines)
         if !warnings.isEmpty { log(warnings) }
         for command in manifest.commands {
@@ -221,6 +236,7 @@ public struct ExtensionBuilder: Sendable {
         if files.fileExists(atPath: assets.path) {
             try files.copyItem(at: assets, to: staging.appendingPathComponent("assets"))
         }
+        try Self.installSwiftParts(swift, into: staging)
 
         let destination = extensionsDirectory.appendingPathComponent(manifest.name, isDirectory: true)
         // From here the staging folder is the install: a signal no longer deletes it.
@@ -286,18 +302,66 @@ public struct ExtensionBuilder: Sendable {
     struct BundleRequest: Encodable, Equatable {
         var extensionFolder: String
         var options: BundleOptions
+        var swift: SwiftRequest
 
         enum CodingKeys: String, CodingKey {
             case extensionFolder = "extension"
             case options
+            case swift
+        }
+    }
+
+    /// What the `swift:` plugin is told (`SwiftRequest` in `scripts/compile/swift.ts`): the mode, the tools' `swift`,
+    /// SwiftPM's cache, where it builds, where the programs go, and where it says which mode each package got.
+    struct SwiftRequest: Encodable, Equatable {
+        var mode: String?
+        var swift: String?
+        var cache: String
+        var scratch: String
+        var binaries: String
+        var report: String
+
+        init(mode: BuildArguments.SwiftParts?, tools: CommandLineTools.Tools?, cache: URL, scratch: URL) {
+            self.mode = mode?.rawValue
+            swift = tools?.swift.path
+            self.cache = cache.path
+            self.scratch = scratch.appendingPathComponent("swift", isDirectory: true).path
+            binaries = scratch.appendingPathComponent("swift-programs", isDirectory: true).path
+            report = scratch.appendingPathComponent("swift-parts-report.json").path
+        }
+    }
+
+    /// Where Raycast's JavaScript runs a Swift part's program: `assets/compiled_raycast_swift/<package folder name>`.
+    static let swiftProgramsFolder = "assets/compiled_raycast_swift"
+
+    /// Puts the programs the `swift:` plugin built (mode 755) into the install, over any of the same name the
+    /// extension's own `assets` held, and records what was done with its Swift parts (`SwiftPartsRecord`).
+    static func installSwiftParts(_ swift: SwiftRequest, into staging: URL) throws {
+        let files = FileManager.default
+        let programs = URL(fileURLWithPath: swift.binaries, isDirectory: true)
+        let names = (try? files.contentsOfDirectory(atPath: programs.path)) ?? []
+        if !names.isEmpty {
+            let folder = staging.appendingPathComponent(swiftProgramsFolder, isDirectory: true)
+            try files.createDirectory(at: folder, withIntermediateDirectories: true)
+            for name in names {
+                let destination = folder.appendingPathComponent(name)
+                if files.fileExists(atPath: destination.path) { try files.removeItem(at: destination) }
+                // The plugin made it mode 755, which the copy keeps.
+                try files.copyItem(at: programs.appendingPathComponent(name), to: destination)
+            }
+        }
+        if let record = SwiftPartsRecord(report: URL(fileURLWithPath: swift.report)) {
+            try record.write(to: staging)
         }
     }
 
     /// Runs the bundling script on `request`, written into `scratch`, with Fudge's own Node.js in the extension's
-    /// folder, driving `esbuild` (`ESBUILD_BINARY_PATH`). esbuild prints its warnings and errors as its command line
-    /// does, and a failure is `BuildError.compileFailed` holding them.
+    /// folder, driving `esbuild` (`ESBUILD_BINARY_PATH`), with `environment` added to the one `fudge build` has
+    /// (`DEVELOPER_DIR` for a part written in Swift), nothing else added and nothing taken away. esbuild prints its
+    /// warnings and errors as its command line does, and a failure is `BuildError.compileFailed` holding them.
     static func compile(
-        _ request: BundleRequest, in source: URL, scratch: URL, esbuild: URL, node: URL, bundler: URL
+        _ request: BundleRequest, in source: URL, scratch: URL, esbuild: URL, node: URL, bundler: URL,
+        environment: [String: String] = [:]
     ) throws -> ShellResult {
         let file = scratch.appendingPathComponent("bundle-request.json")
         let encoder = JSONEncoder()
@@ -305,7 +369,8 @@ public struct ExtensionBuilder: Sendable {
         try encoder.encode(request).write(to: file)
         do {
             return try Shell.run(
-                node, [bundler.path, file.path], in: source, environment: ["ESBUILD_BINARY_PATH": esbuild.path])
+                node, [bundler.path, file.path], in: source,
+                environment: environment.merging(["ESBUILD_BINARY_PATH": esbuild.path]) { _, new in new })
         } catch let failure as ShellError {
             throw BuildError.compileFailed(status: failure.status, output: failure.output)
         }
@@ -335,7 +400,7 @@ public struct ExtensionBuilder: Sendable {
     /// What an install folder holds besides its commands' `<command>.cjs` files (`holdsOnlyABuild`). `dist` is where
     /// builds from before SPEC-123 put the commands, so a rebuild still replaces such an install.
     static let installedItems: Set<String> = [
-        "package.json", ExtensionLayout.oldFolder, "assets", CommandCompatibility.fileName,
+        "package.json", ExtensionLayout.oldFolder, "assets", CommandCompatibility.fileName, SwiftPartsRecord.fileName,
     ]
 
     /// Whether `directory` holds only what a build writes, hidden files aside: `installedItems`, and `<command>.cjs` for

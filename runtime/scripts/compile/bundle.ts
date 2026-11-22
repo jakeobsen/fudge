@@ -2,7 +2,8 @@
 // `rust:` and `swift:` plugins, which esbuild's command line can't take. Shipped as `bundle-extension.cjs`, with esbuild's
 // JavaScript inside; it drives the esbuild program named by `ESBUILD_BINARY_PATH`.
 //
-//   node bundle-extension.cjs <request.json>     the request: { "extension": <folder>, "options": <esbuild's options> }
+//   node bundle-extension.cjs <request.json>     the request: { "extension": <folder>, "options": <esbuild's options>,
+//                                                "swift": <what to do with parts written in Swift> }
 //
 // esbuild prints its own warnings and errors, as its command line does, so a failed build adds nothing to them and
 // exits 1. Anything else that goes wrong is printed.
@@ -10,12 +11,15 @@
 import { readFileSync } from "node:fs";
 import * as esbuild from "esbuild";
 import { rustPlugin } from "./rust.ts";
-import { swiftPlugin } from "./swift.ts";
+import { swiftPlugin, type SwiftRequest } from "./swift.ts";
 
-export type BundleRequest = { extension: string; options: esbuild.BuildOptions };
+export type BundleRequest = { extension: string; options: esbuild.BuildOptions; swift?: SwiftRequest };
 
 export async function bundle(request: BundleRequest): Promise<void> {
-    await esbuild.build({ ...request.options, plugins: [rustPlugin(request.extension), swiftPlugin()] });
+    await esbuild.build({
+        ...request.options,
+        plugins: [rustPlugin(request.extension), swiftPlugin(request.extension, request.swift)],
+    });
 }
 
 /** Whether `error` is esbuild's report of a failed build, whose messages esbuild has already printed. */

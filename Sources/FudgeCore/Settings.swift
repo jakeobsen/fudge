@@ -77,6 +77,10 @@ public struct FudgeSettings: Sendable, Equatable {
     /// My Schedule's **Days Ahead** (`calendarDaysAhead`): one of `Schedule.daysAheadChoices`; anything else reads
     /// as the default.
     public var calendarDaysAhead = Schedule.defaultDaysAhead
+    /// The folder of Apple's Command Line Tools that builds extensions' parts written in Swift (`commandLineTools`,
+    /// SPEC-145 §1), chosen on the Development page; unset, Fudge finds them by itself (`CommandLineTools.resolve`).
+    /// Anything but an absolute path reads as unset.
+    public var commandLineTools: String?
 
     public struct CommandSettings: Sendable, Equatable {
         /// In `HotKeySpec` text form.
@@ -268,6 +272,9 @@ public struct FudgeSettings: Sendable, Equatable {
         if let days = object["calendarDaysAhead"] as? Int, Schedule.daysAheadChoices.contains(days) {
             settings.calendarDaysAhead = days
         }
+        if let folder = object["commandLineTools"] as? String, CommandLineTools.folder(setting: folder) != nil {
+            settings.commandLineTools = folder
+        }
         for case (let id, let entry as [String: Any]) in object["commands"] as? [String: Any] ?? [:] {
             settings.commands[id] = CommandSettings(
                 hotkey: entry["hotkey"] as? String, alias: entry["alias"] as? String, enabled: entry["enabled"] as? Bool
@@ -309,6 +316,7 @@ public struct FudgeSettings: Sendable, Equatable {
         object["colorFormat"] = colorFormat == .default ? nil : colorFormat.rawValue
         object["calendarHidden"] = calendarHidden.isEmpty ? nil : calendarHidden
         object["calendarDaysAhead"] = calendarDaysAhead == Schedule.defaultDaysAhead ? nil : calendarDaysAhead
+        object["commandLineTools"] = commandLineTools
 
         var commandObjects = object["commands"] as? [String: Any] ?? [:]
         let commandIDs = Set(commandObjects.keys).union(commands.keys)

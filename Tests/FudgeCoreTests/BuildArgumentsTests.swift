@@ -15,8 +15,21 @@ import Testing
     #expect(try BuildArguments.parse(["--into", "/tmp/ext", "src/greeter"], isDirectory: exists) == into, "any order")
 }
 
+@Test func buildTakesWhatToDoWithSwiftParts() throws {
+    let exists = { $0 == "/tmp/ext" }
+    #expect(try BuildArguments.parse(["src/greeter"], isDirectory: exists).swiftParts == nil)
+    let build = try BuildArguments.parse(["src/greeter", "--swift-parts", "build"], isDirectory: exists)
+    #expect(build.swiftParts == .build)
+    let leaveOut = try BuildArguments.parse(
+        ["--swift-parts", "leave-out", "src/greeter", "--into", "/tmp/ext"], isDirectory: exists)
+    #expect(leaveOut.swiftParts == .leaveOut && leaveOut.destination?.path == "/tmp/ext")
+}
+
 @Test(arguments: [
     ([], "usage"),
+    (["src", "--swift-parts"], "--swift-parts takes build or leave-out"),
+    (["src", "--swift-parts", "compile"], "--swift-parts takes build or leave-out"),
+    (["src", "--swift-parts", "--into"], "--swift-parts takes build or leave-out"),
     (["a", "b"], "usage"),
     (["src", "--into"], "usage"),
     (["src", "--into", "relative/ext"], "absolute path"),

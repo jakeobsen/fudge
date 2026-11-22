@@ -150,6 +150,11 @@ final class LauncherModel {
     /// delegate.
     /// Opens Settings for a call from `origin`; only a user-initiated one opens it (SPEC-045).
     @ObservationIgnored var openSettings: (String?, CallOrigin) -> Void = { _, _ in }
+    /// Finds the Command Line Tools for a `commandLineTools` setting, for the Extension Store's `commandLineTools.ready`
+    /// (`CommandLineTools.resolve`). Snapshot runs set a fixed answer (`--command-line-tools`).
+    @ObservationIgnored var resolveCommandLineTools: @Sendable (String?) -> CommandLineTools.Status = {
+        CommandLineTools.resolve(setting: $0)
+    }
     /// Shows a FilePicker's open panel and returns the chosen paths, or nil when cancelled; set by the app delegate.
     @ObservationIgnored var openPanel: (FilePickerOptions) async -> [String]? = { _ in nil }
     /// Downloads the exchange rates again at once (↵ on the "Couldn't download exchange rates" card).
@@ -4317,6 +4322,34 @@ final class LauncherModel {
                     if case .string(let name) = values["level"] { LogLevel(rawValue: name) ?? .error } else { .error }
                 FudgeLog.write(level, "Extension Store: \(message)")
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
+            case "commandLineTools.ready", "commandLineTools.openSettings":
+                // The Extension Store's questions about extensions with a part written in Swift (SPEC-145 §3), refused
+                // for any other extension.
+                guard sessionExtensions[session] == ExtensionStore.extensionName else {
+                    send(
+                        .rpcResult(
+                            session: session, id: id, result: nil,
+                            error: "Only the Extension Store asks about the Command Line Tools"))
+                    break
+                }
+                if method == "commandLineTools.openSettings" {
+                    // Settings comes to the front, so only from the user's own action (SPEC-045).
+                    let origin = origin(of: session)
+                    guard origin.mayComeForward else {
+                        send(.rpcResult(session: session, id: id, result: nil, error: Self.backgroundSettingsError))
+                        break
+                    }
+                    openSettings(SettingsModel.developmentPage, origin)
+                    send(.rpcResult(session: session, id: id, result: .null, error: nil))
+                    break
+                }
+                // Found as Settings → Development and `fudge build` find them, with the setting read now.
+                let setting = FudgeSettings.load(from: paths.settingsFile).commandLineTools
+                let resolve = resolveCommandLineTools
+                Task {
+                    let status = await Task.detached(priority: .userInitiated) { resolve(setting) }.value
+                    send(.rpcResult(session: session, id: id, result: .bool(status.tools != nil), error: nil))
+                }
             case "files.search":
                 // Search Files (SPEC-069): its own preferences say where, read now so a change applies at once.
                 let caller = sessionExtensions[session]

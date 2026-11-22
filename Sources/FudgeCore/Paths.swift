@@ -32,6 +32,20 @@ public struct FudgePaths: Sendable, Equatable {
         return library.appendingPathComponent("Logs/Fudge", isDirectory: true)
     }
 
+    /// SwiftPM's shared cache for extensions' parts written in Swift (SPEC-145 §2), so a later build doesn't fetch
+    /// their packages again: `~/Library/Caches/Fudge/SwiftPM`, or `$FUDGE_SUPPORT_DIR/Caches/SwiftPM` when that is set,
+    /// so a throwaway run never writes into the user's caches.
+    public static func swiftPackageCache(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        if let override = environment["FUDGE_SUPPORT_DIR"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+                .appendingPathComponent("Caches/SwiftPM", isDirectory: true)
+        }
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        return caches.appendingPathComponent("Fudge/SwiftPM", isDirectory: true)
+    }
+
     /// fudge's own settings.
     /// The certificates the Mac trusts, for a Node without `--use-system-ca` (`NodeTrust`).
     public var trustRootsFile: URL {

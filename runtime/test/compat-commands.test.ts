@@ -204,6 +204,32 @@ test("a rust: import is followed as a package: its command keeps its own uses, a
     assert.equal(packages([])("rust"), false, "only the rust: scheme, not a package named rust");
 });
 
+test("a swift: import is followed as a package: its command keeps its own uses, one using AI next to it is found", async () => {
+    // SPEC-145 §3: the Swift part's module runs a program or refuses, and holds nothing to follow. Unfollowed, every
+    // command reaching it would count as reaching the whole extension, and install switched off.
+    const folder = extension(["calls-swift", "asks", "plain"], {
+        "src/calls-swift.tsx": view(`import { greet } from "swift:../swift";\ngreet("x");`),
+        "src/asks.tsx": view(`import { greet } from "swift:../swift";\nimport { ask } from "./other";\ngreet("x");\nask();`),
+        "src/plain.tsx": view(),
+        "src/other.ts": `import { AI } from "@raycast/api";\nimport { more } from "swift:../more";\nexport const ask = () => AI.ask(more());\n`,
+        "swift/Package.swift": "// swift-tools-version: 6.0\n",
+        "swift/Sources/Main/Main.swift": "@raycast func greet(name: String) {}\n",
+    });
+    const result = await scanExtension(folder, options);
+    assert.deepEqual(
+        result.commands.map((command) => [command.name, command.unsupported, command.traced]),
+        [
+            ["calls-swift", [], true],
+            ["asks", ["AI"], true],
+            ["plain", [], true],
+        ],
+    );
+    assert.deepEqual(result.swiftParts, ["swift:../more", "swift:../swift"], "each once, sorted");
+    assert.deepEqual((await scanExtension(extension(["plain"], { "src/plain.tsx": view() }), options)).swiftParts, []);
+    assert.equal(packages([])("swift:../swift"), true);
+    assert.equal(packages([])("swift"), false, "only the swift: scheme, not a package named swift");
+});
+
 test("resolveImport tells the extension's own files from packages and data", async () => {
     const known = knownFiles(["src/a.ts", "src/lib/index.tsx", "src/b.tsx"]);
     const listed = packages(["@scope/package", "date-fns"]);

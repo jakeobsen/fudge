@@ -26,7 +26,8 @@ import type { FailureDetails } from "./failure.ts";
 import { maxManifestBytes, readRegularFile } from "./files.ts";
 import { GitError, spawnProgram, type Run, type StoreRepository } from "./git.ts";
 import { sourceProblem } from "./sources.ts";
-import { buildTimeout } from "./timeouts.ts";
+import { askedForSwiftParts, decideSwiftParts, type SwiftParts, type SwiftPartsChoice } from "./swift-parts.ts";
+import { buildTimeout, swiftBuildTimeout } from "./timeouts.ts";
 
 /** A step that refused or failed; its message is shown in a failure toast. */
 export class StoreError extends Error {}
@@ -55,6 +56,13 @@ export type StoreContext = {
     confirm: (title: string, message: string, primary: string) => Promise<boolean>;
     /** Moves a path to the Trash; `trash` in the store. */
     trash: (target: string) => Promise<void>;
+    /** Whether Apple's Command Line Tools are set up (`commandLineToolsReady` in `fudge:app`), asked again each time;
+     * none means they aren't. */
+    commandLineToolsReady?: () => Promise<boolean>;
+    /** Shows the view for an extension with a part written in Swift while the tools aren't set up, and resolves with
+     * the user's choice (SPEC-145 §3); none means Don't Install. Its third action resolves `build` only once the tools
+     * are set up, and opens Settings → Development until then. */
+    chooseSwiftParts?: (title: string) => Promise<SwiftPartsChoice>;
     run?: Run;
     now?: () => Date;
 };
@@ -97,9 +105,10 @@ export async function writeInstalled(supportPath: string, installed: Installed):
     await rename(temporary, file);
 }
 
-/** The CLI's arguments for installing the extension in `source` into `extensionsDir`, and nowhere else. */
-export function buildArguments(source: string, extensionsDir: string): string[] {
-    return ["build", source, "--into", extensionsDir];
+/** The CLI's arguments for installing the extension in `source` into `extensionsDir`, and nowhere else, with what to do
+ * with a part written in Swift when it has one. */
+export function buildArguments(source: string, extensionsDir: string, swiftParts?: SwiftParts): string[] {
+    return ["build", source, "--into", extensionsDir, ...(swiftParts ? ["--swift-parts", swiftParts] : [])];
 }
 
 function checkedName(name: string): string {
@@ -176,6 +185,12 @@ export async function install(entry: StoreEntry, context: StoreContext): Promise
 
     const tree = (await context.repo.trees()).get(dir);
     const checked = await compatibilityOf(source, tree, context);
+    // A part written in Swift (SPEC-145 §3): built whenever the tools are set up, with nothing more said (D-118);
+    // without them, the view's choice, before anything is installed.
+    const choose = () => context.chooseSwiftParts?.(entry.title) ?? Promise.resolve<SwiftPartsChoice>("dont-install");
+    const hasSwiftPart = checked !== undefined && !checked.notChecked && checked.swiftPart === true;
+    const swift = await decideSwiftParts(hasSwiftPart, context.commandLineToolsReady ?? (async () => false), choose);
+    if (!swift) return false;
     const compatibility = compatibilityLine(checked, commandTitles(entry));
     const commit = await context.repo.commit();
     const confirmed = await context.confirm(
@@ -186,8 +201,18 @@ export async function install(entry: StoreEntry, context: StoreContext): Promise
     if (!confirmed) return false;
 
     const run = context.run ?? spawnProgram;
-    const args = buildArguments(source, context.extensionsDir);
-    const result = await run(context.cli, args, { timeout: buildTimeout });
+    // Building a part written in Swift fetches and compiles SwiftPM's packages the first time (`swiftBuildTimeout`).
+    const timeout = (parts?: SwiftParts) => (parts === "build" && hasSwiftPart ? swiftBuildTimeout : buildTimeout);
+    let args = buildArguments(source, context.extensionsDir, swift.swiftParts);
+    let result = await run(context.cli, args, { timeout: timeout(swift.swiftParts) });
+    // A `swift:` import the check missed, without the tools: the build stopped at it, asking what to do, so the view
+    // asks the user instead of showing that as an error.
+    if (result.code !== 0 && swift.swiftParts === undefined && askedForSwiftParts(`${result.stdout}\n${result.stderr}`)) {
+        const choice = await choose();
+        if (choice === "dont-install") return false;
+        args = buildArguments(source, context.extensionsDir, choice);
+        result = await run(context.cli, args, { timeout: choice === "build" ? swiftBuildTimeout : buildTimeout });
+    }
     if (result.code !== 0) {
         const output = [result.stdout, result.stderr].filter((part) => part.trim().length > 0).join("\n");
         throw new BuildFailed(output, ["fudge", ...args].join(" "), result.code);

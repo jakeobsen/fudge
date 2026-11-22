@@ -12,11 +12,13 @@ import { connect, settle, type RpcRequest } from "../src/bridge.ts";
 import {
     clearClipboardHistory,
     clipboardImage,
+    commandLineToolsReady,
     copyClipboardEntry,
     createFudgeAppModule,
     deleteClipboardEntry,
     listClipboardHistory,
     logToFudge,
+    openDevelopmentSettings,
     pasteClipboardEntry,
     pinClipboardEntry,
     searchFiles,
@@ -171,6 +173,8 @@ test("the fudge:app module is frozen and holds every call", () => {
     assert.ok(Object.isFrozen(module));
     assert.deepEqual(module, {
         logToFudge,
+        commandLineToolsReady,
+        openDevelopmentSettings,
         searchFiles,
         listClipboardHistory,
         clipboardImage,

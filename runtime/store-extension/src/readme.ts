@@ -3,6 +3,7 @@ import path from "node:path";
 import { folderURL, rawURL, type StoreEntry } from "./catalog.ts";
 import { maxReadmeBytes, readRegularFile } from "./files.ts";
 import type { StoreRepository } from "./git.ts";
+import { installedWithoutSwiftLine } from "./swift-parts.ts";
 
 /**
  * The README of the checked folder `dir`: its `README.md`, fetched into the copy, as a regular file of at most
@@ -131,6 +132,7 @@ const modeNames: Record<string, string> = { view: "view", "no-view": "no-view", 
 
 /**
  * The detail pane: the manifest's facts, with the Compatibility line first when there is one (`compatibilityText`),
+ * after `installedWithoutSwiftLine` for an install built without its part written in Swift (`withoutSwift`),
  * each command with its mode, then the README: loading while it's `undefined` (a fetch waiting or running), its text
  * once fetched, nothing when the folder has none (""), or a line saying it couldn't be fetched (`readmeNotFetched`).
  * Everything in it, the manifest's own text included, goes through `filterImages`.
@@ -140,6 +142,7 @@ export function detailMarkdown(
     commit: string,
     readme: string | typeof readmeNotFetched | undefined,
     compatibility?: string,
+    withoutSwift = false,
 ): string {
     const commands = entry.commands
         .map((command) => {
@@ -149,6 +152,8 @@ export function detailMarkdown(
         })
         .join("\n");
     const facts = [
+        // An install built without its part written in Swift says so (SPEC-145 §3); any other says nothing about it.
+        withoutSwift && installedWithoutSwiftLine,
         compatibility && `**Compatibility:** ${compatibility}`,
         entry.author && `**Author:** ${entry.author}`,
         entry.categories.length > 0 && `**Categories:** ${entry.categories.join(", ")}`,

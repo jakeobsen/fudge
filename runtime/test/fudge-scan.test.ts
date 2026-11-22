@@ -41,6 +41,7 @@ const supported = {
     unreadable: [],
     commands: [{ name: "index", unsupported: [], traced: true }],
     signIn: noSignIn,
+    swiftParts: [],
 };
 const withGaps = {
     extension: "scan-gaps",
@@ -52,6 +53,7 @@ const withGaps = {
     unreadable: [],
     commands: [{ name: "index", unsupported: ["AI"], traced: true }],
     signIn: noSignIn,
+    swiftParts: [],
 };
 
 test("fudge scan reports a supported extension and one with gaps", () => {
@@ -68,6 +70,17 @@ test("fudge scan reads an extension with a Rust part, and finds each command's u
     assert.deepEqual(report.commands, [
         { name: "on-windows", unsupported: [], traced: true },
         { name: "direct", unsupported: [], traced: true },
+    ]);
+});
+
+test("fudge scan reads an extension with a Swift part, names its swift: imports, and finds each command's uses", () => {
+    const swiftPart = path.join(runtime, "../Tests/FudgeCoreTests/Fixtures/swift-part");
+    const report = scan(path.join(runtime, "scripts/compat/fudge-scan.ts"), swiftPart) as Report;
+    assert.equal(report.supported, true);
+    assert.deepEqual(report.swiftParts, ["swift:../swift"]);
+    assert.deepEqual(report.commands, [
+        { name: "greet", unsupported: [], traced: true },
+        { name: "plain", unsupported: [], traced: true },
     ]);
 });
 
@@ -101,6 +114,7 @@ test("without --json, fudge scan lists the gaps for a person, saying Fudge", () 
         unreadable: ["src/broken.ts"],
         commands: [],
         signIn: noSignIn,
+        swiftParts: [],
     };
     assert.equal(
         describe(other),
@@ -127,6 +141,7 @@ test("without --json, fudge scan lists the gaps for a person, saying Fudge", () 
             { name: "models", unsupported: [], traced: true },
         ],
         signIn: noSignIn,
+        swiftParts: [],
     };
     assert.equal(
         describe(onlyByDesign),
@@ -145,6 +160,7 @@ test("without --json, fudge scan lists the gaps for a person, saying Fudge", () 
         unreadable: [],
         commands: [],
         signIn: noSignIn,
+        swiftParts: [],
     };
     assert.equal(
         describe(browser),
@@ -196,6 +212,7 @@ test("a source esbuild can't read is unreadable, and the extension isn't called 
         unreadable: ["src/index.ts"],
         commands: [{ name: "index", unsupported: [], traced: false }],
         signIn: noSignIn,
+        swiftParts: [],
     });
 });
 

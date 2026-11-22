@@ -19,13 +19,15 @@ import { scanTimeout } from "./timeouts.ts";
  * one Fudge doesn't support (AI, Browser Extension), or signing in (OAuth). `commands` says, for each command of the
  * manifest, which of those it reaches from its own entry (SPEC-109); a scanner from before it has none. `signIn` says
  * where the extension's own code signs in: the `OAuth.RedirectMethod`s it names, the authorize URLs it resolves, and
- * whether one was left unresolved (SPEC-132 §7). */
+ * whether one was left unresolved (SPEC-132 §7). `swiftParts` names the `swift:` imports its code makes (SPEC-145); a
+ * scanner from before it has none. */
 export type ScanReport = {
     supported: boolean;
     gaps: { api: string; byDesign?: string }[];
     unreadable: string[];
     commands?: { name: string; unsupported: string[] }[];
     signIn?: { methods: string[]; authorizeURLs: string[]; unresolved: boolean };
+    swiftParts?: string[];
 };
 
 /** Runs `$FUDGE_CLI scan <source> --json`. Undefined when it fails or says something unexpected. */
@@ -63,7 +65,8 @@ export type ByCommand = { count: number; using: string[] };
 
 /** One scan's outcome, as the store keeps it. `notChecked`: the source was over the caps, so it wasn't scanned.
  * `byCommand` is there when the scan said what each command reaches. `signsInThroughRaycast`: signing in comes back
- * through raycast.com, as the function of that name judges it. */
+ * through raycast.com, as the function of that name judges it. `swiftPart`: it imports a part written in Swift, which
+ * the install builds or leaves out (SPEC-145 §3); absent is none. */
 export type Compatibility =
     | { notChecked: true }
     | {
@@ -74,6 +77,7 @@ export type Compatibility =
           signsInThroughRaycast: boolean;
           unreadable: boolean;
           byCommand?: ByCommand;
+          swiftPart?: boolean;
       };
 
 /**
@@ -169,6 +173,7 @@ export function fromReport(report: ScanReport, table: SignInTable = signInTableF
         signsIn: categories.has(signInCategory),
         signsInThroughRaycast: signsInThroughRaycast(report.signIn, table),
         unreadable: report.unreadable.length > 0,
+        ...(Array.isArray(report.swiftParts) && report.swiftParts.length > 0 ? { swiftPart: true } : {}),
     };
 }
 
@@ -359,7 +364,9 @@ export function compatibilityFile(supportPath: string): string {
 export const maxCachedResults = 4000;
 const maxCacheBytes = 4 * 1024 * 1024;
 const isTree = (key: string) => /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(key);
-/** The file's format: it went up with `signsInThroughRaycast` (SPEC-132 §7), so no result from before is used. */
+/** The file's format: it went up with `signsInThroughRaycast` (SPEC-132 §7), so no result from before is used.
+ * `swiftPart` (SPEC-145) needed no new format: results are kept per scanner (`scannerIdentity`), and a scanner from
+ * before it, which names no `swift:` imports, never reads the results of one after. */
 const cacheVersion = 2;
 const isAPI = (name: unknown) => typeof name === "string" && /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(name);
 
@@ -380,19 +387,21 @@ function validResult(value: unknown): Compatibility | undefined {
     if (typeof value !== "object" || value === null) return undefined;
     const record = value as Record<string, unknown>;
     if (record.notChecked === true) return { notChecked: true };
-    const { notSupported, missing, signsIn, signsInThroughRaycast, unreadable } = record;
+    const { notSupported, missing, signsIn, signsInThroughRaycast, unreadable, swiftPart } = record;
     const known = (category: unknown) => typeof category === "string" && category in notSupportedNames;
     if (!Array.isArray(notSupported) || !notSupported.every(known)) return undefined;
     if (!Array.isArray(missing) || missing.length > 500 || !missing.every(isAPI)) return undefined;
     if (typeof signsIn !== "boolean" || typeof signsInThroughRaycast !== "boolean" || typeof unreadable !== "boolean") {
         return undefined;
     }
+    if (swiftPart !== undefined && typeof swiftPart !== "boolean") return undefined;
     const result = {
         notSupported: notSupported as string[],
         missing: missing as string[],
         signsIn,
         signsInThroughRaycast,
         unreadable,
+        ...(swiftPart === true ? { swiftPart } : {}),
     };
     if (record.byCommand === undefined) return result;
     const { count, using } = (record.byCommand ?? {}) as Record<string, unknown>;

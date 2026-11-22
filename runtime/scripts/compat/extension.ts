@@ -88,6 +88,9 @@ export interface Result {
     /** Each command in the manifest, in its order; none when the manifest can't be read. */
     commands: CommandResult[];
     signIn: SignIn;
+    /** The `swift:` imports its source makes, each once, sorted (SPEC-145 §3): the store builds or leaves those parts
+     * out. */
+    swiftParts: string[];
 }
 
 export interface ScanOptions {
@@ -207,8 +210,14 @@ export async function scanExtension(folder: string, options: ScanOptions): Promi
         unreadable,
         commands,
         signIn: signIn(found, [...scanned.values()].map((module) => module.signIn)),
+        swiftParts: [
+            ...new Set([...scanned.values()].flatMap((module) => module.imports.filter(isSwiftPart))),
+        ].sort(),
     };
 }
+
+/** A `swift:` import: a part written in Swift (SPEC-145). */
+const isSwiftPart = (specifier: string) => specifier.startsWith("swift:");
 
 /** Where the extension signs in (`SignIn`), from what it uses and each file's `SignInSites`. */
 function signIn(found: Uses, sites: SignInSites[]): SignIn {
@@ -281,14 +290,21 @@ export type Packages = (specifier: string) => boolean;
 /**
  * A bare import is a package's only when the manifest lists that package (in any of its dependency sections), it's
  * one of Node's built-ins, or the host provides it. A `rust:` import counts as one too: on a Mac its module is written
- * from the Rust sources, as Raycast writes it, and holds nothing to follow (`scripts/compile/rust.ts`). Anything else,
+ * from the Rust sources, as Raycast writes it, and holds nothing to follow (`scripts/compile/rust.ts`). So does a
+ * `swift:` import (SPEC-145 §3): its module runs a program or refuses, and holds no JavaScript of the extension's to
+ * follow (`scripts/compile/swift.ts`). Anything else,
  * such as a tsconfig `paths` alias (`@lib/ai`) or an import from its `baseUrl` (`lib/ai`), names a file of the
  * extension's own the scan can't find.
  */
 export function packages(dependencies: string[]): Packages {
     const listed = new Set(dependencies);
     return (specifier) => {
-        if (specifier.startsWith("node:") || specifier.startsWith("rust:") || providedModules.includes(specifier)) {
+        if (
+            specifier.startsWith("node:") ||
+            specifier.startsWith("rust:") ||
+            isSwiftPart(specifier) ||
+            providedModules.includes(specifier)
+        ) {
             return true;
         }
         const segments = specifier.split("/");
@@ -399,6 +415,8 @@ export interface Report {
     commands: CommandResult[];
     /** Where its own code signs in (`SignIn`). */
     signIn: SignIn;
+    /** Its `swift:` imports (`Result.swiftParts`). */
+    swiftParts: string[];
 }
 
 /** The report for one scanned extension, named by its manifest's `name` (else its folder's). */
@@ -422,6 +440,7 @@ export function report(folder: string, result: Result): Report {
         unreadable: result.unreadable,
         commands: result.commands,
         signIn: result.signIn,
+        swiftParts: result.swiftParts,
     };
 }
 

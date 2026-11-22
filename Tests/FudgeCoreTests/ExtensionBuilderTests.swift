@@ -428,17 +428,22 @@ struct ExtensionBuilderTests {
         }
     }
 
-    /// SPEC-144 §4: a Swift part stops the build with Fudge's own words, at the import.
-    @Test func aSwiftPartStopsTheBuildSayingSo() throws {
+    /// SPEC-145 §2 (SPEC-144 §4 before it): a Swift part with no `--swift-parts` stops the build at the import, asking
+    /// for one.
+    @Test func aSwiftPartWithNoChoiceStopsTheBuildAtTheImport() throws {
         let source = try Fixtures.greeterCopy()
         defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
         try "import { run } from \"swift:../swift\";\nexport default function Command() { return run; }\n".write(
             to: source.appendingPathComponent("src/greet.tsx"), atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(
+            at: source.appendingPathComponent("swift"), withIntermediateDirectories: true)
+        try "// swift-tools-version: 6.0\n".write(
+            to: source.appendingPathComponent("swift/Package.swift"), atomically: true, encoding: .utf8)
         let failure = try #require(try compileFailure(of: source))
         #expect(
             failure.output.contains(
-                "✘ [ERROR] this extension has a part written in Swift, which Fudge can't build yet "
-                    + "(\"swift:../swift\") [plugin swift]"), "\(failure.output)")
+                "✘ [ERROR] this extension has a part written in Swift: choose --swift-parts build or "
+                    + "--swift-parts leave-out [plugin swift]"), "\(failure.output)")
         #expect(failure.output.contains("src/greet.tsx:1:20:"), "at the import")
     }
 

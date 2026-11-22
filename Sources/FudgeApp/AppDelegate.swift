@@ -208,6 +208,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Snapshots get a fixed Input Monitoring answer, and no keyboard tap.
             let allowed = Snapshot(arguments: CommandLine.arguments)?.inputMonitoring ?? false
             settingsModel.inputMonitoring = InputMonitoringStatus(read: { allowed })
+            // …and a fixed answer about the Command Line Tools, so no run asks the Mac.
+            let tools = CommandLineTools.fixedStatus(Snapshot(arguments: CommandLine.arguments)?.commandLineTools)
+            settingsModel.resolveCommandLineTools = { _ in tools }
+            model.resolveCommandLineTools = { _ in tools }
         } else {
             let expansion = SnippetExpansion(paths: paths)
             // Typing into the launcher (a non-activating panel) or a Fudge window never expands.
@@ -871,6 +875,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// `--own-app-sign-in` shows **Extensions with their own sign-in** as on, and `--raycast-links fudge|<app name>` says
 /// who opens Raycast's links (`fudge,<app name>`: Fudge Links does, and that app claims them too), on the Sign-in page
 /// and onboarding's Raycast step; neither touches LaunchServices.
+/// `--command-line-tools found|old|missing` is what Settings → Development and the Extension Store take Apple's Command
+/// Line Tools to be (missing by default); no snapshot run asks the Mac.
 /// `--update-available <version>` shows that version as found by an update check, wherever Fudge shows one (the
 /// General page). No snapshot run asks GitHub. `--menu-items <file>` gives Search Menu Items a made-up app and menus.
 /// For checking the layout without looking at the screen.
@@ -898,6 +904,9 @@ struct Snapshot {
     let accessibility: Bool
     /// `--input-monitoring allowed`: the Snippets page shows Input Monitoring as allowed (else not allowed).
     let inputMonitoring: Bool
+    /// `--command-line-tools found|old|missing`: what Settings → Development and the Extension Store take the
+    /// Command Line Tools to be (`CommandLineTools.fixedStatus`; missing without it). Nothing asks the Mac.
+    let commandLineTools: String?
     /// `--onboarding [<step>]`: the onboarding window instead, optionally on one step.
     let onboarding: Bool
     let onboardingStep: OnboardingStep?
@@ -963,6 +972,7 @@ struct Snapshot {
         loginItem = value("--login-item").flatMap(LoginItemStatus.init(rawValue:)) ?? .notRegistered
         accessibility = value("--accessibility") == "allowed"
         inputMonitoring = value("--input-monitoring") == "allowed"
+        commandLineTools = value("--command-line-tools")
         onboarding = arguments.contains("--onboarding")
         onboardingStep = value("--onboarding").flatMap(OnboardingStep.init(rawValue:))
         signIns = MemorySecretStore()

@@ -217,6 +217,14 @@ Extensions run in a separate Node.js process, the extension host.
       The calendars are read off the main thread (`LauncherModel.readSchedule`, and the Calendar page's `loadCalendars`), since every EventKit call waits on the calendar agent: the list shows as loading until the read lands, and ⌘D draws again from it without reading again.
       `EventKitCalendarSource` runs every call on one serial queue, and makes its store on first use.
       **Settings → Calendar** (`CalendarPage.swift`, after Sign-in) has Days Ahead and a checkbox per calendar.
+    - **Settings → Development** (`DevelopmentPage.swift`, after Calendar, SPEC-145 §1) has one row: **Command Line Tools**, the folder Fudge builds extensions' parts written in Swift with, and its status line.
+      `CommandLineTools.resolve` (core) is the one place that finds them, for the page, the Extension Store and `fudge build`, so they never disagree: the folder chosen with Choose… (`commandLineTools` in `settings.json`, an absolute path; Use Default clears it), else `/Library/Developer/CommandLineTools`, the only one found by itself (D-117: "only Apple's Command Line Tools").
+      A chosen folder's Swift is its `usr/bin/swift`, else `Toolchains/XcodeDefault.xctoolchain/usr/bin/swift`, so choosing Xcode's `Contents/Developer` works too.
+      A Swift that is, or leads to, one of macOS's stubs in `/usr/bin` (a chosen `/`) is never run, and counts as not found, since the stub offers to install the tools; nothing runs `xcrun` either.
+      The status line runs the folder's Swift with `--version` and shows `Swift 6.3.3`, the version after `Apple Swift version` (the first number on that line is the driver's), or `Not found`; older than 6.0 shows `Swift 6.0 or later is needed` and counts as not found.
+      Install…, shown while nothing is found, runs `xcode-select --install`, Apple's own download prompt, and the page reads the status again every few seconds until something is found.
+      The setting is this Mac's: an import keeps it (`Backup.consentKeys`).
+      Snapshot runs take `--command-line-tools found|old|missing` (`CommandLineTools.fixedStatus`) and never ask the Mac.
     - **Arguments.**
       A selected command's `arguments` get fields after the query, which then shrinks to its text.
       `ArgumentInput` (core) holds what's entered and which field has the keyboard, and takes the keys: Tab and ⇧Tab between the fields, Esc back to the query, ⌫ in an empty field back one, ↑↓ on a dropdown argument. ↵ with a required argument empty moves the keyboard there and outlines it.
@@ -564,6 +572,12 @@ Extensions run in a separate Node.js process, the extension host.
       Its one action, Open Extension Store Settings (↵, ⌘K or ⌘⇧,), opens the store's page.
       A background launch is refused with the same words.
       The extension host's environment carries `FUDGE_CLI` (the bundle's `fudge`) and `FUDGE_EXTENSIONS_DIR` to every worker, and the store installs with `fudge build <folder> --into "$FUDGE_EXTENSIONS_DIR"` (`BuildArguments`: an absolute path to a folder that exists).
+      **Parts written in Swift** (SPEC-145 §3, `store-extension/src/swift-parts.ts`): before each install or update the store asks the app whether the Command Line Tools are set up (`commandLineToolsReady` in `fudge:app`, answered only for the store, resolved afresh each time).
+      Set up, it passes `--swift-parts build` and shows nothing more (D-118), which changes nothing for an extension without such a part.
+      Building an extension's Swift part gets 20 minutes (`swiftBuildTimeout`), since the first one fetches and compiles SwiftPM's packages; any other build gets `buildTimeout`'s 10.
+      Not set up, an extension whose scan named a `swift:` import first gets a view (`SwiftPartsView`) saying what it needs, with Don't Install (↵), Install Without the Swift Part and Install with Command Line Tools, which installs once the tools are set up and until then opens Settings → Development (`openDevelopmentSettings`, from the user's own action only).
+      A `swift:` import the scan missed makes the build stop asking for `--swift-parts`, and the store shows the view then instead of the error.
+      An extension installed without its part says so on its detail page.
     - **The Commands page** (`CommandsPage.swift`) is the Settings window's second page:
       Fudge's own command groups, then the quicklinks as a group of their own (`SettingsModel.commandGroups`, shown once there is one, its Type "Quicklinks" and theirs "Quicklink", `BuiltInCommandGroup.typeLabels`),
       then every installed extension, each expanded to its commands (menu-bar ones included), with each command's alias, hotkey and Enabled checkbox (an extension's row has its own checkbox).
@@ -1019,7 +1033,19 @@ Extensions run in a separate Node.js process, the extension host.
     Every call rejects with Raycast's own `Rust functions are not supported on macOS`.
     The functions are found with Raycast's own patterns, in the `.rs` files under the package's `src/`, reading only regular files and following no link.
     The package's folder must hold a `Cargo.toml` and be inside the extension's folder, links resolved, both checked at the import, and nothing of it goes into the install.
-    A `swift:` import stops the build at the import, saying Fudge can't build a part written in Swift yet.
+    A `swift:` import (SPEC-145 §2, `scripts/compile/swift.ts`, from `@raycast/api` 2.13.1's `swift-files.js`) is a Swift package whose `@raycast` functions the extension calls, and `fudge build` must be told what to do with it: `--swift-parts build` or `--swift-parts leave-out` (`BuildArguments.SwiftParts`, `ExtensionBuilder.swiftParts`).
+    Without either, the build stops at the import, asking for one; without such an import, the flag changes nothing.
+    The package's folder must hold a `Package.swift` and be inside the extension's folder, links resolved, both checked at the import.
+    **build** needs the Command Line Tools (`ExtensionBuilder.commandLineTools`, `CommandLineTools.resolve`, asked only then), else stops saying where to set them up.
+    The plugin copies the package, keeping its folder's name, into the build's scratch folder, never building in the extension's source.
+    There it runs the tools' own `swift` with `DEVELOPER_DIR` added to the environment `fudge build` has, nothing else added or taken away: `package dump-package` (exactly one executable target, else Raycast's messages), then `swift build -c release --product <target> --cache-path <cache>` and its `--show-bin-path`.
+    The cache is one shared SwiftPM cache (`FudgePaths.swiftPackageCache`: `~/Library/Caches/Fudge/SwiftPM`, or under `$FUDGE_SUPPORT_DIR`), so a later build doesn't fetch the packages again.
+    The program goes into the install's `assets/compiled_raycast_swift/<package folder name>` with mode 755, Raycast's path, which its JavaScript runs (`ExtensionBuilder.installSwiftParts`), and the `.build` folder goes with the scratch folder.
+    The module is Raycast's: its `runSwiftFunction` without the Windows check (JSON arguments, `JSON.parse` of the trimmed stdout, a `SwiftError` with stderr, else stdout, as its message), the `raycast.js` the package's own plugin wrote (at `.build/plugins/outputs/<folder name lowercased>/<target>/destination/RaycastTypeScriptPlugin/`), and `SwiftError`.
+    A build that fails stops the install with SwiftPM's output after `the part written in Swift didn't build`, and a signal that ends the script ends `swift` too.
+    **leave-out** runs nothing: the module exports `SwiftError` and the package's functions, each refusing every call with a `SwiftError` saying the part wasn't installed and where to set up the tools.
+    The functions are found in every `.swift` file of the package's folder outside `.build` (targets can keep their sources elsewhere, `path: "src"`), comments stripped: `@raycast`, then any whitespace, attributes and modifiers, then `func <name>`, and the older `#exportFunction(<name>)`.
+    A build with a `swift:` import writes `swift-parts.json` into the install (`SwiftPartsRecord`: `build` or `leave-out`), one of `installedItems`, so the store can say an extension was installed without its part.
     Extension names are lowercase letters, digits, `-` and `_`, starting with a letter or digit, as Raycast's rule allows (`notion_researcher`): `ExtensionManifest.isValidName` is the one extension name rule, which every check of an extension's name uses (the build, backups and their paths, settings keys, built-in group names) and the store's `catalog.ts` mirrors.
     Command names are letters of either case, digits, `.`, `-` and `_`, starting with a letter or digit, as Raycast accepts them (`caffeinateWhile`, `search-projects.command`): `ExtensionManifest.isValidCommandName`, which the build and `compatibility.json` use.
     The compatibility scan and the store share it as `isCommandName` (`scripts/compat/source-files.ts`), and `runtime/test/fixtures/command-names.json` pins both.
@@ -1117,6 +1143,8 @@ Extensions run in a separate Node.js process, the extension host.
     A command is traced from its entry (`src/<name>.{tsx,ts,jsx,js}`, as the build finds it) through every import esbuild leaves, re-exports, `import()` and `require` included (`imports`), resolved among the files the scan read, ignoring case as APFS does (`resolveImport`): relative paths, `@/…` and `~/…` as `src/…`, and TypeScript's `./x.js` for `x.ts`.
     A bare import is a package's only when the manifest lists that package in any of its dependency sections, it's one of Node's built-ins, or the host provides it (`packages`), and a data file (`.json`, `.css`, an image) can't reach the API.
     A `rust:` import counts as a package's too, with nothing to follow, since the build writes its module from the Rust sources (SPEC-144).
+    So does a `swift:` import (SPEC-145 §3): its module runs a program or refuses, and holds none of the extension's JavaScript.
+    The report names the `swift:` imports (`swiftParts`), which the store reads.
     A command with an import that can't be followed (outside `src/`, an unreadable file, any other bare import, such as a tsconfig `paths` alias or a `baseUrl` import, or an `import()` or `require()` of a computed path, `hasComputedImport`) counts as reaching the whole extension.
     So does every command when a file that uses Raycast AI or the Browser Extension is reached by no entry, a command's or a tool's (`src/tools/<name>`), since something the scan can't see reaches it.
     A barrel's re-exports are followed whole, so a command can be counted for a module of the barrel it doesn't use; in the store that decides 3 of 224 commands.
