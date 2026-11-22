@@ -2180,6 +2180,35 @@ test("installed.json drops invalid names, folders and records; an entry without 
     assert.deepEqual(await readInstalled(path.join(support, "missing")), {});
 });
 
+test("installed.json is keyed by id: an added repository's record names the id's folder, Raycast's names none", async () => {
+    const support = await temporary();
+    const record = { tree: "t", commit: "c", installedAt: "x" };
+    await writeFile(
+        path.join(support, "installed.json"),
+        JSON.stringify({
+            github: record,
+            "someone+tools+github": { ...record, repository: "someone/tools" },
+            "git.example.org_8443+team+extensions+github": { ...record, dir: "GitHub", repository: "git.example.org_8443/team/extensions" },
+            "someone+tools+gist": record,
+            "someone+tools+jira": { ...record, repository: "someone/other" },
+            "someone+tools+linear": { ...record, repository: 7 },
+            beta: { ...record, repository: "someone/tools" },
+            gamma: { ...record, repository: "raycast/extensions" },
+            "raycast+extensions+github": { ...record, repository: "raycast/extensions" },
+            "Someone+tools+github": { ...record, repository: "Someone/tools" },
+            "someone/tools+gitlab": { ...record, repository: "someone/tools" },
+        }),
+    );
+    assert.deepEqual(await readInstalled(support), {
+        github: { ...record, dir: "github" },
+        "someone+tools+github": { ...record, dir: "github", repository: "someone/tools" },
+        "git.example.org_8443+team+extensions+github": { ...record, dir: "GitHub", repository: "git.example.org_8443/team/extensions" },
+    });
+    await writeFile(path.join(support, "installed.json"), "{ broken");
+    assert.deepEqual(await readInstalled(support), {});
+    assert.deepEqual(await readInstalled(path.join(support, "missing")), {});
+});
+
 // MARK: - Against a real repository (a local bare one, no network)
 
 async function sh(cwd: string, ...args: string[]): Promise<string> {

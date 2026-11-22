@@ -2,6 +2,7 @@
 // tests fake git, the fudge CLI, the confirmation and the Trash.
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isValidExtensionId } from "../../src/extension-id.ts";
 import {
     commandTitles,
     isValidFolder,
@@ -185,12 +186,18 @@ export async function readInstalled(supportPath: string): Promise<Installed> {
     }
     if (typeof object !== "object" || object === null) return {};
     const installed: Installed = {};
-    for (const [name, record] of Object.entries(object)) {
-        if (!isValidName(name) || typeof record !== "object" || record === null) continue;
-        const { tree, commit, installedAt, dir } = record as Record<string, unknown>;
+    for (const [key, record] of Object.entries(object)) {
+        if (!isValidExtensionId(key) || typeof record !== "object" || record === null) continue;
+        const { tree, commit, installedAt, dir, repository } = record as Record<string, unknown>;
         if (typeof tree !== "string" || typeof commit !== "string" || typeof installedAt !== "string") continue;
         if (dir !== undefined && !isValidFolder(dir)) continue;
-        installed[name] = { tree, commit, installedAt, dir: dir ?? name };
+        // A qualified id's record names its repository's folder, the id's own; Raycast's, under the bare name, names
+        // none (SPEC-157 E.1). Swift's `Backup.storeInstalls` reads them the same way.
+        const parts = key.split("+");
+        const name = parts.at(-1)!;
+        const folder = parts.length === 1 ? undefined : parts.slice(0, -1).join("/");
+        if (repository !== folder) continue;
+        installed[key] = { tree, commit, installedAt, dir: dir ?? name, ...(folder === undefined ? {} : { repository: folder }) };
     }
     return installed;
 }

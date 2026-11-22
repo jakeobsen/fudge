@@ -44,9 +44,10 @@ export type StoreEntry = {
     commands: StoreCommand[];
 };
 
-/** What `installed.json` records for an extension the store installed, by name. `dir` is the folder it came from,
- * which its updates follow. */
-export type InstallRecord = { tree: string; commit: string; installedAt: string; dir: string };
+/** What `installed.json` records for an extension the store installed, by its id (SPEC-157 E.1). `dir` is the folder
+ * it came from, which its updates follow; `repository` is the folder of the repository it's from, only for an added
+ * repository's (Raycast's records keep their bare names and have none). */
+export type InstallRecord = { tree: string; commit: string; installedAt: string; dir: string; repository?: string };
 export type Installed = Record<string, InstallRecord>;
 
 export type Status = "available" | "installed" | "update";
