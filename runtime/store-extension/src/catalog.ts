@@ -118,14 +118,20 @@ export function distinctFolders(names: string[]): string[] {
         });
 }
 
-/** Every valid entry under `<repo>/extensions/`, the copy `copy` names. A folder's name is checked before it's joined
- * into a path. */
-export async function readCatalog(repo: string, copy: RepositoryCopy): Promise<StoreEntry[]> {
-    const root = path.join(repo, "extensions");
-    const listed = await readdir(root, { withFileTypes: true }).catch(() => []);
-    const folders = distinctFolders(
+/** The folders under `<repo>/extensions/` the list reads, by the folder rule and once each, as on APFS; none when there's
+ * no such folder. */
+export async function catalogFolders(repo: string): Promise<string[]> {
+    const listed = await readdir(path.join(repo, "extensions"), { withFileTypes: true }).catch(() => []);
+    return distinctFolders(
         listed.filter((folder) => folder.isDirectory() && isValidFolder(folder.name)).map((folder) => folder.name),
     );
+}
+
+/** Every valid entry under `<repo>/extensions/`, the copy `copy` names, from `folders` when they're already listed. A
+ * folder's name is checked before it's joined into a path. */
+export async function readCatalog(repo: string, copy: RepositoryCopy, folders?: string[]): Promise<StoreEntry[]> {
+    const root = path.join(repo, "extensions");
+    folders ??= await catalogFolders(repo);
     const entries = await Promise.all(
         folders.map(async (folder) => {
             const text = await readRegularFile(path.join(root, folder, "package.json"), maxManifestBytes).catch(
