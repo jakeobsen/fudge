@@ -604,6 +604,7 @@ Extensions run in a separate Node.js process, the extension host.
       Fudge's own command groups, then the quicklinks as a group of their own (`SettingsModel.commandGroups`, shown once there is one, its Type "Quicklinks" and theirs "Quicklink", `BuiltInCommandGroup.typeLabels`),
       then every installed extension, each expanded to its commands (menu-bar ones included), with each command's alias, hotkey and Enabled checkbox (an extension's row has its own checkbox).
       An extension's group is keyed by its id (`CommandOwner.extension`) and titled with its `displayTitle`, so two extensions of one name are two groups that read apart.
+      `CommandsPageRows` (core) builds the rows, and the page only draws them; each command row is identified by its whole command id, since the page's lazy stack keeps one row per id across every group, and two extensions of one name have commands of the same names.
       The bundled Extension Store is listed too, unticked until it's enabled.
       An alias is saved on ↵, and Esc puts the old one back.
       Recording a hotkey suspends all of Fudge's hotkeys (`HotKeyRegistry.suspend`), so pressing one records it instead of firing.
