@@ -356,10 +356,16 @@ public enum SignInServer: Sendable, Equatable {
 
     /// `<server>/<provider>/<endpoint>`, for `authorize`, `token` or `refresh-token`.
     public func endpoint(_ provider: OAuthProvider, _ name: String) -> String? {
+        guard let base = trimmedBase else { return nil }
+        return "\(base)/\(provider.id)/\(name)"
+    }
+
+    /// The server's address without trailing slashes, which every address under it starts with; nil when off.
+    var trimmedBase: String? {
         guard let url else { return nil }
         var base = url.absoluteString
         while base.hasSuffix("/") { base.removeLast() }
-        return "\(base)/\(provider.id)/\(name)"
+        return base
     }
 
     /// The value saved in `settings.json`: `"fudge"` or the URL.

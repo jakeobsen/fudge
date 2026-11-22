@@ -153,6 +153,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ? Snapshot(arguments: CommandLine.arguments)?.signIns ?? MemorySecretStore() : KeychainSecretStore()
         model.tokenSecrets = secrets
         settingsModel.tokenSecrets = secrets
+        // The services the chosen sign-in server offers, picked once here: the server, or in a snapshot run
+        // `--sign-in-services`' fixed answer, never the network, even with a server chosen in `settings.json`.
+        settingsModel.signInServicesFetcher = SignInServices.fetcher(
+            snapshot: Snapshot.isRequested(CommandLine.arguments),
+            snapshotValue: Snapshot(arguments: CommandLine.arguments)?.signInServices,
+            network: { URLSessionSignInServices(userAgent: UpdateCheck.userAgent(version: FudgeVersion.current)) })
         // Who opens Raycast's links: LaunchServices; a snapshot run's fixed answer (`--raycast-links`), so it never
         // reads or changes the Mac's handlers, or registers Fudge Links.
         let raycastLinks: any RaycastLinks =
@@ -903,6 +909,9 @@ struct Snapshot {
     let onboardingStep: OnboardingStep?
     /// `--sign-ins <extension>/<providerId>=<Provider>,…`: sign-ins the Sign-in page lists, kept in memory.
     let signIns: MemorySecretStore
+    /// `--sign-in-services "<id>|<id>|…"`: what the chosen sign-in server answers it offers (`FixedSignInServices`),
+    /// so the line under the choice names those services. Without it there's no answer and the line is the plain one.
+    let signInServices: String?
     /// `--sign-in-consent`: picks Fudge's sign-in server on the Sign-in page and saves its consent sheet instead. It
     /// implies `--settings`, as `--clipboard-consent` does.
     let signInConsent: Bool
@@ -975,6 +984,7 @@ struct Snapshot {
                 providerName: parts[1])
             try? signIns.write(JSONEncoder().encode(tokens), account: parts[0])
         }
+        signInServices = value("--sign-in-services")
         signInConsent = arguments.contains("--sign-in-consent")
         clipboardConsent = arguments.contains("--clipboard-consent")
         ownAppSignIn = arguments.contains("--own-app-sign-in")
