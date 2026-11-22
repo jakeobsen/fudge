@@ -516,7 +516,7 @@ Extensions run in a separate Node.js process, the extension host.
       The import's summary lists the backup's extensions that are installed but changed since (`Backup.changedExtensions`, matched by name and shown with the current title): the first of a different version when both have one, a different store tree when both have one, or a different source; what it can't tell, and the bundled store, aren't listed.
       It only flags them, and the import restores them like any other.
       `Backup.apply` then saves the current state, unencrypted, to `backups/before-import-<time>.fudgebackup` (folder 0700, file 0600, the last 3 kept, always including the one just written), and replaces each part the backup holds:
-      an extension's data folder whole, the keyed files extension by extension, `settings.json` keeping this Mac's `extensionStore`, `signInServer` and their consent dates (`Backup.consentKeys`), since this Mac's sign-ins are in its Keychain.
+      an extension's data folder whole, the keyed files extension by extension, `settings.json` keeping this Mac's `extensionStore`, `signInServer` and their consent dates (`Backup.consentKeys`), since this Mac's sign-ins are in its Keychain, and its `extensionRepositories` and `raycastRepository`, since adding a repository is a choice to trust its code.
       A failed write puts back everything changed so far, trying every step; if one fails, the staging folder stays and the error names the before-import file.
       The app then reloads settings, hotkeys, history and root search (`AppDelegate.afterImport`).
     - **Bundled extensions** (`BundledExtensions`, core) are the Extension Store, Search Files, Search Emoji & Symbols and Clipboard History.
@@ -567,7 +567,7 @@ Extensions run in a separate Node.js process, the extension host.
       **The switch** is the first row of the store's Settings page (`ExtensionStoreSwitch`): turning it on shows the consent sheet and writes `extensionStore` and the ISO 8601 `extensionStoreConsentAt`.
       `FudgeSettings.isExtensionStoreOn` needs both, so a hand-set `true` counts as off.
       `FudgeSettings.setExtensionStore` writes the store's Enabled down first, so the switch never changes it.
-      Turning it off, after its own sheet, removes both keys and deletes only the store's `repo/` (`ExtensionStore.deleteRepository`), keeping its `installed.json`.
+      Turning it off, after its own sheet, removes both keys and deletes only the store's downloaded copies (`ExtensionStore.deleteRepository`): `repo/`, `repo-status.json` and `repositories/`, keeping its `installed.json` and the list of repositories.
       **While it's off, the app never starts the store's code:** `LauncherModel.launch` checks `ExtensionStore.isOff` against `settings.json` first.
       A launch the user started shows "The Extension Store is off." instead, a `Failure` with a `Notice`, drawn like an empty view.
       Its one action, Open Extension Store Settings (↵, ⌘K or ⌘⇧,), opens the store's page.
@@ -581,6 +581,24 @@ Extensions run in a separate Node.js process, the extension host.
       An extension installed without its part says so on its detail page.
       **Install notifications** (SPEC-156) add three `fudge:app` calls that only the store may make, as with `fudge.log`: `installEnded` (`store.installEnded`, an install's end, answered with `{ onScreen, notified }`), `askForNotifications` (`store.askForNotifications`) and `nextNotificationClick` (`store.nextNotificationClick`, which waits for a click).
       Any other extension gets an error.
+      **Extension repositories** (FUD-182, SPEC-157 A-B): the store's page has **Extension Repositories** below its switch (`ExtensionRepositoriesSection`), disabled while the store is off.
+      Raycast's official repository is first, with a switch (`raycastRepository` in `settings.json`, true unless `false`; only `false` is written) and no remove button; then the added ones in order, each with its name, its address and branch, a switch and a remove button.
+      They're kept in `extensionRepositories`, a list of `{ "address", "branch"?, "off"? }` written only when it isn't empty, `off` only when true (`FudgeSettings.listedRepositories`); reading parses each entry again beside those before it and skips any the rule refuses, a duplicate included, so a hand edit never adds what Settings would refuse.
+      `ExtensionRepository.parse(address:branch:existing:)` (core) is the rule, checked by hand on the address's UTF-8 bytes, never with `URL`, which disagrees with the runtime's `new URL` on `..`, `\`, tabs, `:443` and hosts outside ASCII.
+      Its checks run in one order: trimmed of ASCII spaces only, the `https` scheme in any case, no `@` before the path, and only letters, digits, `.`, `-` and `:` in the server and port, and letters, digits, `.`, `_`, `~`, `-` and `/` in the path.
+      Then a port of 1 to 5 digits with no leading zero, from 1 to 65535, a server, one trailing `/` and then one `.git` dropped, and no `.` or `..` segment.
+      Then the identity, the folder (`ExtensionRepositoryFolder`, whose refusals keep their own sentences), the branch (`isValidBranch`, the store's `git.ts` rule), at most 10, no duplicate identity, no equal or nesting folder, and last the folder of Raycast's or Fudge's own repository, a second guard.
+      The identity is `https://`, the server in lowercase with a port other than 443, and the path, in lowercase on `github.com` with no port or port 443; Raycast's identity is refused as already listed, and `https://github.com/fudgeapp/development` with its own sentence, both by identity, before the branch and the list, and again by folder at the end.
+      The copy id is the identity's SHA-256's first 16 hex digits (`isValidCopyId`: those or `raycast`), and the name is `owner/repository` as typed on GitHub, else the identity without `https://`.
+      The Extension Store's `repository-address.ts` (`parseRepositoryAddress`) is the same rule, step for step, and `runtime/test/fixtures/repository-addresses.json` pins both to the same cases, with each refusal's sentence and the status problems' sentences.
+      **Add…** checks the address first, and a refused one shows its reason under the fields in red and asks nothing; then `confirm` shows "Add <name>?" with the warning (`ExtensionRepositoryText`), and Add saves it on, checked again against the list as it is then.
+      The minus button asks "Remove <name>?" first; the store deletes the copy the next time it opens.
+      Each row's status line comes from the copy's status file (`ExtensionRepositoryStatus.read`: Raycast's `repo-status.json`, an added one's `repositories/<copyId>/status.json`), read when the page appears and when the window becomes key.
+      It's at most 4 KB, a JSON object with an ISO 8601 `checkedAt`, and a whole `extensions` count from 0 to 5,000 or a known `problem` kind, else `failed`; no file is "Not checked yet".
+      Any extension running in the host could write that file, so the row shows only Fudge's own sentences, with the branch from `settings.json`.
+      The store asks for the list with `extensionRepositories()` in `fudge:app` (`store.repositories`, answered only for the store's sessions, as `fudge.log` is, `BundledCalls.Call.storeRepositories`): `settings.json` is read afresh for each call, and the answer (`ExtensionRepository.storeAnswer`) is `[{ copyId, folder, address, branch?, name, on }]`, Raycast's first.
+      The store checks it again (`checkRepositoriesAnswer` in `repository-address.ts`): Raycast's entry only in first place, as `RAYCAST_COPY` with its `on`, then each added entry that parses again, beside those before it, to the copy id and folder answered.
+      A snapshot run takes `--add-repository <address>`, which types it on the store's page, presses Add… and saves the sheet, laid out off-screen as the consent sheets are.
     - **The Commands page** (`CommandsPage.swift`) is the Settings window's second page:
       Fudge's own command groups, then the quicklinks as a group of their own (`SettingsModel.commandGroups`, shown once there is one, its Type "Quicklinks" and theirs "Quicklink", `BuiltInCommandGroup.typeLabels`),
       then every installed extension, each expanded to its commands (menu-bar ones included), with each command's alias, hotkey and Enabled checkbox (an extension's row has its own checkbox).

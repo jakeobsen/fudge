@@ -179,6 +179,18 @@ In the **Extension Store** command, search the extensions, or pick a category in
 - It never touches extensions you installed with `fudge build` yourself.
   An extension installs under its own name, so it can't be installed while another extension of that name is: uninstall that one first.
 
+#### Extension repositories
+
+Besides Raycast's official repository, the Extension Store can list the extensions in repositories you add: any Git repository with an `extensions` folder holding one folder per extension, as Raycast's has.
+Add one under **Settings… → Extension Store → Extension Repositories**: type its address, such as `https://github.com/owner/repository`, and a branch if it isn't the default one, then click **Add…**.
+Only public `https://` addresses work, without a user name or password, and Fudge never asks for a password.
+Before adding a repository, Fudge asks once, since its extensions run their own code on your Mac like any app you install: only add one you trust.
+Each repository has a switch, Raycast's too; one that's off keeps its copy, but the Extension Store doesn't list or update its extensions.
+Under each one is what the Extension Store last found there: how many extensions it lists, or what went wrong.
+The minus button removes an added repository; the extensions you installed from it stay installed, but get no more updates.
+You can add up to 10, and `https://github.com/fudgeapp/development` can't be added, since Fudge keeps your own builds in that repository's folder.
+Changes reach the Extension Store the next time you open it, or when you press ⌘R in it.
+
 ### Signing in
 
 Some extensions sign in to a service, such as GitHub or Jira.
@@ -449,7 +461,7 @@ Fudge never downloads or installs anything by itself.
   The summary also lists the backup's extensions that changed since it was made (a new version, an update from the Extension Store, or installed another way); they're imported all the same.
   It then lists the extensions in the backup that aren't installed here, so you can reinstall them.
   It installs nothing itself.
-- **The extensions themselves aren't in a backup**, only the list, and neither are caches, the exchange rates, your sign-ins, the sign-in server or the Extension Store's switch (set these again yourself).
+- **The extensions themselves aren't in a backup**, only the list, and neither are caches, the exchange rates, your sign-ins, the sign-in server, the Extension Store's switch or its list of extension repositories (set these again yourself).
 - Before importing, Fudge saves what it's about to replace in `backups/` in its support folder (`~/Library/Application Support/fudge/backups`), readable by you only.
   It keeps the last 3.
   You can import one of those with **Import…**; it needs no password.

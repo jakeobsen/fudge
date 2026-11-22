@@ -75,6 +75,14 @@ public struct FudgeSettings: Sendable, Equatable {
     public var notifyInstallFinished = true
     /// **Install or update failed** (`notifyInstallFailed`): on unless `false`, and only `false` is written.
     public var notifyInstallFailed = true
+    /// The repositories added on the Extension Store's page (`extensionRepositories`, FUD-182), in the order added:
+    /// `{ "address", "branch"?, "off"? }` each, written only when there is one, `off` only when true. Reading parses
+    /// each again beside those before it and skips any `ExtensionRepository.parse` refuses, a duplicate included, so a
+    /// hand-edited file never adds what Settings would refuse.
+    public var extensionRepositories: [ListedRepository] = []
+    /// Raycast's official repository's switch in that list (`raycastRepository`): on unless `false`, and only `false`
+    /// is written.
+    public var raycastRepository = true
     /// The Color Picker's **Copy Format** (`colorFormat`): HEX unless set. An unknown value reads as HEX.
     public var colorFormat: ColorFormat = .default
     /// The calendars My Schedule leaves out (`calendarHidden`, by EventKit's calendar id), so a new one shows.
@@ -242,6 +250,26 @@ public struct FudgeSettings: Sendable, Equatable {
         return !number.boolValue
     }
 
+    /// Whether `value` is JSON's `true`: a boolean, never a number.
+    static func isJSONTrue(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return false }
+        return number.boolValue
+    }
+
+    /// `extensionRepositories`' entries that parse, each beside those before it; an entry that isn't an object with a
+    /// text `address` (and a text `branch`, if it has one) is skipped too.
+    static func listedRepositories(_ value: Any?) -> [ListedRepository] {
+        var listed: [ListedRepository] = []
+        for case let entry as [String: Any] in value as? [Any] ?? [] {
+            guard let address = entry["address"] as? String, entry["branch"] == nil || entry["branch"] is String,
+                case .success(let repository) = ExtensionRepository.parse(
+                    address: address, branch: entry["branch"] as? String, existing: listed.map(\.repository))
+            else { continue }
+            listed.append(ListedRepository(repository: repository, on: !isJSONTrue(entry["off"])))
+        }
+        return listed
+    }
+
     /// The JSON object in `file`; empty when the file is missing or blank. Throws `Unreadable` for anything else.
     private static func existingObject(at file: URL) throws -> [String: Any] {
         guard FileManager.default.fileExists(atPath: file.path) else { return [:] }
@@ -281,6 +309,8 @@ public struct FudgeSettings: Sendable, Equatable {
         // Only a JSON false turns one off; `as? Bool` would read a 0 as false too.
         settings.notifyInstallFinished = !isJSONFalse(object["notifyInstallFinished"])
         settings.notifyInstallFailed = !isJSONFalse(object["notifyInstallFailed"])
+        settings.extensionRepositories = listedRepositories(object["extensionRepositories"])
+        settings.raycastRepository = !isJSONFalse(object["raycastRepository"])
         settings.colorFormat = (object["colorFormat"] as? String).flatMap(ColorFormat.init(rawValue:)) ?? .default
         settings.calendarHidden = (object["calendarHidden"] as? [Any] ?? []).compactMap { $0 as? String }
         if let days = object["calendarDaysAhead"] as? Int, Schedule.daysAheadChoices.contains(days) {
@@ -329,6 +359,16 @@ public struct FudgeSettings: Sendable, Equatable {
         object["hyperkeyQuickPress"] = hyperkeyQuickPress ? true : nil
         object["notifyInstallFinished"] = notifyInstallFinished ? nil : false
         object["notifyInstallFailed"] = notifyInstallFailed ? nil : false
+        object["extensionRepositories"] =
+            extensionRepositories.isEmpty
+            ? nil
+            : extensionRepositories.map { listed -> [String: Any] in
+                var entry: [String: Any] = ["address": listed.repository.address]
+                entry["branch"] = listed.repository.branch
+                entry["off"] = listed.on ? nil : true
+                return entry
+            }
+        object["raycastRepository"] = raycastRepository ? nil : false
         object["colorFormat"] = colorFormat == .default ? nil : colorFormat.rawValue
         object["calendarHidden"] = calendarHidden.isEmpty ? nil : calendarHidden
         object["calendarDaysAhead"] = calendarDaysAhead == Schedule.defaultDaysAhead ? nil : calendarDaysAhead

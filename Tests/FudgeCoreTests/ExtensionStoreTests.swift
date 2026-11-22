@@ -166,8 +166,23 @@ private func storeFixture() throws -> (paths: FudgePaths, resources: URL) {
         at: repository.appendingPathComponent("extensions"), withIntermediateDirectories: true)
     let installed = repository.deletingLastPathComponent().appendingPathComponent("installed.json")
     try Data("{}".utf8).write(to: installed)
+    // Raycast's status beside it, and an added repository's copy and status (FUD-182).
+    let status = ExtensionStore.statusFile(copyId: "raycast", paths)
+    #expect(status == repository.deletingLastPathComponent().appendingPathComponent("repo-status.json"))
+    try Data(#"{"checkedAt":"2026-11-22T10:00:00Z","extensions":3}"#.utf8).write(to: status)
+    let added = ExtensionStore.statusFile(copyId: "0123456789abcdef", paths)
+    #expect(added.path.hasSuffix("/repositories/0123456789abcdef/status.json"))
+    try FileManager.default.createDirectory(
+        at: added.deletingLastPathComponent().appendingPathComponent("repo/extensions"),
+        withIntermediateDirectories: true)
+    try Data("{}".utf8).write(to: added)
+    let settings = paths.settingsFile
+    try Data(#"{"extensionRepositories":[{"address":"https://github.com/someone/tools"}]}"#.utf8).write(to: settings)
     try ExtensionStore.deleteRepository(paths)
     #expect(!FileManager.default.fileExists(atPath: repository.path))
+    #expect(!FileManager.default.fileExists(atPath: status.path))
+    #expect(!FileManager.default.fileExists(atPath: ExtensionStore.repositoriesDirectory(paths).path))
+    #expect(FudgeSettings.load(from: settings).extensionRepositories.count == 1, "the list of repositories stays")
     #expect(FileManager.default.fileExists(atPath: installed.path), "the store keeps its record of what it installed")
     #expect(FileManager.default.fileExists(atPath: paths.extensionsDirectory.appendingPathComponent("weather").path))
     try ExtensionStore.deleteRepository(paths)  // nothing left to delete is fine

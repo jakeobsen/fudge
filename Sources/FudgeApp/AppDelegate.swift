@@ -977,6 +977,9 @@ struct Snapshot {
     let signInConsent: Bool
     /// `--clipboard-consent`: turns on Clipboard History's switch and saves its consent sheet instead.
     let clipboardConsent: Bool
+    /// `--add-repository <address>`: types the address on the Extension Store's page, presses Add… and saves its
+    /// sheet instead (FUD-182). It implies `--settings`, as `--clipboard-consent` does.
+    let addRepository: String?
     /// `--own-app-sign-in`: **Extensions with their own sign-in** shows as on, in memory only.
     let ownAppSignIn: Bool
     /// `--raycast-links fudge|<app name>[,<app name>]`: who opens Raycast's links (no app without it), and who else
@@ -1049,6 +1052,7 @@ struct Snapshot {
         signInServicesList = arguments.contains("--sign-in-services-list")
         signInConsent = arguments.contains("--sign-in-consent")
         clipboardConsent = arguments.contains("--clipboard-consent")
+        addRepository = value("--add-repository")
         ownAppSignIn = arguments.contains("--own-app-sign-in")
         raycastLinks = value("--raycast-links")
         foundFiles = value("--found-files").map { URL(fileURLWithPath: $0) }
@@ -1074,7 +1078,7 @@ struct Snapshot {
             settingsExtension = next < arguments.count && !arguments[next].hasPrefix("--") ? arguments[next] : nil
         } else {
             // A consent sheet belongs to its Settings page, so its flag implies `--settings` (FUD-135 §4).
-            settings = signInConsent || clipboardConsent
+            settings = signInConsent || clipboardConsent || addRepository != nil
             settingsExtension = nil
         }
     }
@@ -1082,14 +1086,20 @@ struct Snapshot {
     func take(of controller: SettingsWindowController) {
         let page =
             signInConsent
-            ? SettingsModel.signInPage : clipboardConsent ? ClipboardHistory.extensionName : settingsExtension
+            ? SettingsModel.signInPage
+            : clipboardConsent
+                ? ClipboardHistory.extensionName
+                : addRepository != nil ? ExtensionStore.extensionName : settingsExtension
         // `--settings :commands --search text` searches the Commands page, as typing in its field does.
         controller.model.commandsSearch = search
         controller.renderOffscreen(extension: page)
-        if signInConsent || clipboardConsent {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [signInConsent] in
+        if signInConsent || clipboardConsent || addRepository != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [signInConsent, addRepository] in
                 if signInConsent {
                     controller.model.setSignInServer(.fudge)
+                } else if let addRepository {
+                    controller.model.repositoryAddress = addRepository
+                    controller.model.addRepository()
                 } else {
                     controller.model.setClipboardHistory(true)
                 }

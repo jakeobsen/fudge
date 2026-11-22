@@ -767,6 +767,93 @@ final class SettingsModel {
         extensionStoreChanged()
     }
 
+    // MARK: - Extension repositories (FUD-182)
+
+    /// Raycast's official repository's switch in the Extension Store's list.
+    var raycastRepository: Bool { fudgeSettings.raycastRepository }
+    /// The added repositories, in the order added.
+    var extensionRepositories: [ListedRepository] { fudgeSettings.extensionRepositories }
+    /// The Address and Branch fields under the list.
+    var repositoryAddress = ""
+    var repositoryBranch = ""
+    /// Why the address last added was refused, shown under the fields until the next try.
+    private(set) var repositoryProblem: String?
+    /// Each copy's status, by copy id, read when the page appears and when the window becomes key.
+    private(set) var repositoryStatuses: [String: ExtensionRepositoryStatus] = [:]
+
+    /// Reads each copy's status file again: Raycast's and every added repository's.
+    func loadRepositoryStatuses() {
+        let copyIds = [ExtensionRepository.raycastCopyId] + extensionRepositories.map(\.repository.copyId)
+        repositoryStatuses = Dictionary(
+            uniqueKeysWithValues: copyIds.map {
+                ($0, ExtensionRepositoryStatus.read(ExtensionStore.statusFile(copyId: $0, paths)))
+            })
+    }
+
+    func setRaycastRepository(_ on: Bool) {
+        change { $0.raycastRepository = on }
+    }
+
+    func setRepository(_ copyId: String, on: Bool) {
+        change { settings in
+            guard let index = settings.extensionRepositories.firstIndex(where: { $0.repository.copyId == copyId })
+            else { return }
+            settings.extensionRepositories[index].on = on
+        }
+    }
+
+    /// **Add…**: the address is checked first, and a refused one says why under the fields and asks nothing. Then
+    /// the sheet, which is the warning; Add saves the repository on and empties the fields.
+    func addRepository() {
+        let existing = readSettings().extensionRepositories.map(\.repository)
+        switch ExtensionRepository.parse(address: repositoryAddress, branch: repositoryBranch, existing: existing) {
+        case .failure(let refusal):
+            repositoryProblem = refusal.description
+        case .success(let repository):
+            repositoryProblem = nil
+            Task {
+                guard await confirm(Self.addRequest(repository)) else { return }
+                // Checked again against the list as it is now, in case it changed while the sheet was up.
+                let now = readSettings().extensionRepositories.map(\.repository)
+                switch ExtensionRepository.parse(address: repository.address, branch: repository.branch, existing: now)
+                {
+                case .failure(let refusal):
+                    repositoryProblem = refusal.description
+                case .success(let added):
+                    guard change({ $0.extensionRepositories.append(ListedRepository(repository: added)) }) else {
+                        return
+                    }
+                    repositoryAddress = ""
+                    repositoryBranch = ""
+                    loadRepositoryStatuses()
+                }
+            }
+        }
+    }
+
+    /// The minus button: asks first, then takes the repository out of `settings.json`. The Extension Store deletes
+    /// its copy the next time it opens, and what was installed from it stays.
+    func removeRepository(_ copyId: String) {
+        guard let listed = extensionRepositories.first(where: { $0.repository.copyId == copyId }) else { return }
+        Task {
+            guard await confirm(Self.removeRequest(listed.repository)) else { return }
+            change { $0.extensionRepositories.removeAll { $0.repository.copyId == copyId } }
+            loadRepositoryStatuses()
+        }
+    }
+
+    static func addRequest(_ repository: ExtensionRepository) -> LauncherModel.AlertRequest {
+        LauncherModel.AlertRequest(
+            title: ExtensionRepositoryText.addTitle(repository.name), message: ExtensionRepositoryText.addMessage,
+            primary: ExtensionRepositoryText.add, dismiss: ExtensionRepositoryText.cancel, destructive: false)
+    }
+
+    static func removeRequest(_ repository: ExtensionRepository) -> LauncherModel.AlertRequest {
+        LauncherModel.AlertRequest(
+            title: ExtensionRepositoryText.removeTitle(repository.name), message: ExtensionRepositoryText.removeMessage,
+            primary: ExtensionRepositoryText.remove, dismiss: ExtensionRepositoryText.cancel, destructive: true)
+    }
+
     // MARK: - Clipboard history (SPEC-077)
 
     /// Whether clipboard history is on: switched on through its consent sheet.
@@ -1436,6 +1523,7 @@ final class SettingsWindowController {
                     model.loadQuicklinks()
                     model.loadSnippets()
                     model.loadWindowLayouts()
+                    model.loadRepositoryStatuses()
                 }
             }
         }
@@ -1579,6 +1667,7 @@ private struct ExtensionPreferencesForm: View {
         Form {
             if manifest.name == ExtensionStore.extensionName {
                 ExtensionStoreSwitch(model: model)
+                ExtensionRepositoriesSection(model: model)
             }
             if manifest.name == ClipboardHistory.extensionName {
                 ClipboardHistorySettings(model: model)

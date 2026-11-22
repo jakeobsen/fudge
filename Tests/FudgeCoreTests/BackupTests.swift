@@ -792,3 +792,37 @@ private func storeFolder(_ trees: [String: String]) throws -> Folder {
         ])
     }
 }
+
+@Test func anImportKeepsThisMacsRepositoriesAndTakesNoneFromTheBackup() throws {
+    let source = try Folder()
+    try source.write(
+        "settings.json",
+        #"{"hotkey":"option+space","raycastRepository":false,"extensionRepositories":[{"address":"https://github.com/someone/tools"}]}"#
+    )
+    let file = source.url.appendingPathComponent("b.fudgebackup")
+    try BackupArchive.write(
+        Backup.collect(from: source.paths, installed: [], fudgeVersion: "1.0", now: now).entries, to: file,
+        password: password)
+
+    // A Mac with a list of its own keeps it, and its Raycast switch.
+    let target = try Folder()
+    try target.write(
+        "settings.json",
+        #"{"extensionRepositories":[{"address":"https://git.example.org/team/extensions","off":true}]}"#)
+    _ = try Backup.apply(
+        try Backup.open(file, password: password), to: target.paths, installed: [], fudgeVersion: "1.0", now: now)
+    let settings = try #require(target.json("settings.json"))
+    #expect(settings["hotkey"] as? String == "option+space", "the rest of the settings came in")
+    let list = try #require(settings["extensionRepositories"] as? [[String: Any]])
+    #expect(list.map { $0["address"] as? String } == ["https://git.example.org/team/extensions"])
+    #expect(list.first?["off"] as? Bool == true)
+    #expect(settings["raycastRepository"] == nil, "Raycast's switch stays on here")
+
+    // A Mac without a list gets none.
+    let empty = try Folder()
+    try empty.write("settings.json", #"{"hotkey":"cmd+space"}"#)
+    _ = try Backup.apply(
+        try Backup.open(file, password: password), to: empty.paths, installed: [], fudgeVersion: "1.0", now: now)
+    let emptySettings = try #require(empty.json("settings.json"))
+    #expect(emptySettings["extensionRepositories"] == nil && emptySettings["raycastRepository"] == nil)
+}

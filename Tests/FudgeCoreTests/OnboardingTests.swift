@@ -219,6 +219,8 @@ import Testing
         "hyperkeyQuickPress": "a detail of Hyperkey, which has its own step",
         "notifyInstallFinished": "on by default; macOS asks at the first confirmed install (SPEC-156 G)",
         "notifyInstallFailed": "on by default; macOS asks at the first confirmed install (SPEC-156 G)",
+        "extensionRepositories": "repositories the user adds on the Extension Store's page, none until then",
+        "raycastRepository": "Raycast's official repository in the Extension Store, on with the store itself",
         "colorFormat": "the Color Picker's format, not a feature",
         "calendarHidden": "which calendars My Schedule shows; it asks for access when first run",
         "calendarDaysAhead": "a detail of My Schedule",
