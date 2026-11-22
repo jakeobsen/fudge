@@ -192,7 +192,8 @@ struct SignInServerControls: View {
 }
 
 /// Show All's list: every name the server on screen offers, one per row, in the server's order, under a heading.
-/// Taller than about 320 points, it scrolls; Esc or a click outside closes the popover.
+/// Past 330 points it scrolls, and the last row it shows is cut partway, which hints that there's more. Esc or a click
+/// outside closes the popover.
 struct SignInServicesList: View {
     let names: [String]
 
@@ -208,7 +209,7 @@ struct SignInServicesList: View {
                 .fixedSize()
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxHeight: 320)
+            .frame(maxHeight: 330)
         }
         .padding(14)
         .fixedSize()
