@@ -94,6 +94,8 @@ public struct ClipboardHistory: Sendable, Equatable, Codable {
 
     /// The bundled extension whose sessions may call `clipboardHistory.*`.
     public static let extensionName = "fudge-clipboard-history"
+    /// Its id, the key its settings and data are kept under.
+    public static let id = ExtensionID.bundled(extensionName)
     /// What any other caller gets.
     public static let notClipboardHistory = "clipboardHistory calls are only for Fudge's Clipboard History."
     /// At most this many entries; the oldest unpinned go first.

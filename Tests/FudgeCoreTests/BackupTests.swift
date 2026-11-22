@@ -50,7 +50,7 @@ private final class Folder {
 private func installed(_ name: String, title: String, version: String? = nil) throws -> InstalledExtension {
     let versionField = version.map { #","version":"\#($0)""# } ?? ""
     let json = #"{"name":"\#(name)","title":"\#(title)"\#(versionField)}"#
-    return InstalledExtension(
+    return InstalledExtension.topLevel(
         manifest: try JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8)),
         directory: URL(fileURLWithPath: "/nonexistent/\(name)"))
 }

@@ -94,7 +94,7 @@ private let launcher = HotKeySpec.parse("option+space")!
         { "name": "other", "title": "Other", "commands": [{ "name": "first", "title": "First Tool", "mode": "view" }] }
         """
     try manifest.write(to: folder.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
-    let other = InstalledExtension(
+    let other = InstalledExtension.topLevel(
         manifest: try ExtensionManifest.load(from: folder.appendingPathComponent("package.json")), directory: folder)
     #expect(CommandNames.name(of: ":test-tools/first", in: [other], groups: [tools]) == "First Tool (Test Tools)")
     #expect(CommandNames.name(of: "other/first", in: [other], groups: [tools]) == "First Tool (Other)")

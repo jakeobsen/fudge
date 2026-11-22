@@ -311,6 +311,8 @@ public protocol FileMetadataQuery: AnyObject, Sendable {
 public actor FileSearch {
     /// The bundled extension that may call it.
     public static let extensionName = "fudge-file-search"
+    /// Its id, the key its settings and data are kept under.
+    public static let id = ExtensionID.bundled(extensionName)
     public static let defaultTimeLimit: Duration = .milliseconds(1500)
     /// How many of Spotlight's results are read, the most recently used first. A broad query on the whole Mac can
     /// gather far more.

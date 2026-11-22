@@ -80,7 +80,7 @@ private func bundledCommands(_ folder: String) throws -> [RootItem] {
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         .appendingPathComponent("runtime/\(folder)")
     let manifest = try ExtensionManifest.load(from: directory.appendingPathComponent("package.json"))
-    return RootItem.commands(of: InstalledExtension(manifest: manifest, directory: directory))
+    return RootItem.commands(of: InstalledExtension.topLevel(manifest: manifest, directory: directory))
 }
 
 private func byTitle(_ titles: [String]) -> [String] {
@@ -248,7 +248,7 @@ private func byTitle(_ titles: [String]) -> [String] {
 
 @Test func commandsBecomeRootItemsWithTheirExtensionAndIcon() throws {
     let manifest = try ExtensionManifest.load(from: Fixtures.greeter.appendingPathComponent("package.json"))
-    let installed = InstalledExtension(manifest: manifest, directory: Fixtures.greeter)
+    let installed = InstalledExtension.topLevel(manifest: manifest, directory: Fixtures.greeter)
     let items = RootItem.commands(of: installed)
     #expect(items.map(\.id) == ["command:greeter/greet", "command:greeter/quiet"])
     #expect(items.map(\.subtitle) == ["Greeter", "Greeter"])
@@ -266,7 +266,7 @@ private func byTitle(_ titles: [String]) -> [String] {
 
 private func commandItems(_ json: String, metadata: CommandMetadata = CommandMetadata()) throws -> [RootItem] {
     let manifest = try JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8))
-    let installed = InstalledExtension(
+    let installed = InstalledExtension.topLevel(
         manifest: manifest, directory: URL(fileURLWithPath: "/nonexistent/\(manifest.name)"))
     return RootItem.commands(of: installed, metadata: metadata)
 }

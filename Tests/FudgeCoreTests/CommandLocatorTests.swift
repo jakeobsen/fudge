@@ -5,7 +5,8 @@ import Testing
 
 private func installed(_ json: String) throws -> InstalledExtension {
     let manifest = try JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8))
-    return InstalledExtension(manifest: manifest, directory: URL(fileURLWithPath: "/nonexistent/\(manifest.name)"))
+    return InstalledExtension.topLevel(
+        manifest: manifest, directory: URL(fileURLWithPath: "/nonexistent/\(manifest.name)"))
 }
 
 private func extensions() throws -> [InstalledExtension] {

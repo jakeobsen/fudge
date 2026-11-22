@@ -8,6 +8,8 @@ import Foundation
 public enum ExtensionStore {
     /// The bundled extension's name, which a user's extension can't take.
     public static let extensionName = "fudge-extension-store"
+    /// Its id, the key its settings and data are kept under.
+    public static let id = ExtensionID.bundled(extensionName)
 
     /// The switch at the top of the store's Settings page.
     public enum Switch {
@@ -96,6 +98,21 @@ public enum BundledExtensions {
         "store-extension", "file-search-extension", "emoji-extension", "clipboard-history-extension",
     ]
 
+    /// Search Emoji & Symbols' id (`runtime/emoji-extension`).
+    public static let emojiID = ExtensionID.bundled("fudge-emoji")
+
+    /// The id of the bundled extension in `folder`: its manifest's name, as a constant, so the bundled extensions'
+    /// ids never come from a manifest read at run time.
+    public static func id(ofFolder folder: String) -> ExtensionID? {
+        switch folder {
+        case "store-extension": ExtensionStore.id
+        case "file-search-extension": FileSearch.id
+        case "emoji-extension": emojiID
+        case "clipboard-history-extension": ClipboardHistory.id
+        default: nil
+        }
+    }
+
     /// The bundled extension in `folder` of the app's resources, when it's there.
     public static func directory(_ folder: String, resources: URL?) -> URL? {
         guard let directory = resources?.appendingPathComponent(folder, isDirectory: true),
@@ -110,8 +127,11 @@ extension InstalledExtension {
     /// one's name gives way to it. Only the bundled ones' manifests are read here.
     public static func all(paths: FudgePaths, resources: URL?) -> [InstalledExtension] {
         var extensions = all(in: paths.extensionsDirectory)
-        let bundled = BundledExtensions.folders.compactMap { folder in
-            BundledExtensions.directory(folder, resources: resources).flatMap { try? load(from: $0) }
+        let bundled = BundledExtensions.folders.compactMap { folder -> InstalledExtension? in
+            guard let directory = BundledExtensions.directory(folder, resources: resources),
+                let id = BundledExtensions.id(ofFolder: folder)
+            else { return nil }
+            return try? load(from: directory, id: id, repository: .bundled)
         }
         let names = Set(bundled.map(\.manifest.name))
         extensions.removeAll { names.contains($0.manifest.name) }

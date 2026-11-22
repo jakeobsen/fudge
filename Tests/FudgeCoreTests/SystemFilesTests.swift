@@ -29,7 +29,7 @@ import Testing
 @Test func buildsTheLaunchEnvironment() throws {
     let paths = FudgePaths(supportDirectory: try Fixtures.temporaryDirectory())
     let manifest = try ExtensionManifest.load(from: Fixtures.greeter.appendingPathComponent("package.json"))
-    let installed = InstalledExtension(manifest: manifest, directory: URL(fileURLWithPath: "/ext/greeter"))
+    let installed = InstalledExtension.topLevel(manifest: manifest, directory: URL(fileURLWithPath: "/ext/greeter"))
     let environment = LaunchEnvironment.make(
         for: installed, command: manifest.commands[0], paths: paths, appearance: "dark")
     #expect(environment.extensionName == "greeter")

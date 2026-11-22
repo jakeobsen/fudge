@@ -113,7 +113,7 @@ public struct ExtensionManifest: Sendable, Equatable, Decodable {
 
     /// Extension names become folder and file names, so they're lowercase letters, digits, `-` and `_`, starting with
     /// a letter or a digit. Raycast allows `_` too (`notion_researcher`). This is the one extension name rule: every
-    /// check of an extension's name uses it, and the Extension Store's `catalog.ts` mirrors it, both pinned by
+    /// check of an extension's name uses it, and the runtime's `src/extension-id.ts` mirrors it, both pinned by
     /// `runtime/test/fixtures/extension-names.json`. Command names have their own rule (`isValidCommandName`).
     public static func isValidName(_ name: String) -> Bool {
         name.range(of: #"^[a-z0-9][a-z0-9_-]*$"#, options: .regularExpression) != nil

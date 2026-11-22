@@ -1,5 +1,5 @@
 {
-  "comment": "The extension name rule (ExtensionManifest.isValidName), pinned for both Swift and the Extension Store's catalog.ts, so the two can't drift apart. Raycast's own rule allows _ too.",
+  "comment": "The extension name rule (ExtensionManifest.isValidName), pinned for both Swift and the runtime's src/extension-id.ts (which the Extension Store's catalog.ts uses), so the two can't drift apart. Raycast's own rule allows _ too.",
   "valid": [
     "scratch",
     "better-visual-studio-code-project-manager",

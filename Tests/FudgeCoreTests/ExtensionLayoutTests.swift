@@ -36,7 +36,7 @@ private func names(in directory: URL) throws -> [String] {
     #expect(try names(in: install) == ["a.cjs", "assets", "b.cjs", "package.json"])
     #expect(
         try String(contentsOf: install.appendingPathComponent("a.cjs"), encoding: .utf8) == #"module.exports = "a""#)
-    let installed = try InstalledExtension.load(from: install)
+    let installed = try InstalledExtension.topLevel(from: install)
     #expect(installed.entry(for: "a") == install.appendingPathComponent("a.cjs"))
     #expect(ExtensionLayout.moveUp(install) == nil, "nothing is left to move")
 }
@@ -45,7 +45,7 @@ private func names(in directory: URL) throws -> [String] {
     let install = try oldInstall(in: try Fixtures.temporaryDirectory())
     // Stopped after the first rename.
     try files.moveItem(at: install.appendingPathComponent("dist/a.cjs"), to: install.appendingPathComponent("a.cjs"))
-    let installed = try InstalledExtension.load(from: install)
+    let installed = try InstalledExtension.topLevel(from: install)
     #expect(installed.entry(for: "a") == install.appendingPathComponent("a.cjs"))
     #expect(installed.entry(for: "b") == install.appendingPathComponent("dist/b.cjs"))
 
@@ -68,7 +68,7 @@ func anythingElseInDistLeavesTheInstallAsItIs(_ stray: String) throws {
 
     #expect(ExtensionLayout.moveUp(install) == .leftAlone(.unknownItem))
     #expect(try files.subpathsOfDirectory(atPath: install.path).sorted() == before, "nothing half-moved")
-    let installed = try InstalledExtension.load(from: install)
+    let installed = try InstalledExtension.topLevel(from: install)
     #expect(installed.entry(for: "a") == install.appendingPathComponent("dist/a.cjs"), "the fallback still finds it")
 }
 
@@ -88,7 +88,7 @@ func anythingElseInDistLeavesTheInstallAsItIs(_ stray: String) throws {
     #expect(ExtensionLayout.moveUp(install) == .leftAlone(.inBothPlaces))
     #expect(try String(contentsOf: install.appendingPathComponent("b.cjs"), encoding: .utf8) == "newer")
     #expect(files.fileExists(atPath: install.appendingPathComponent("dist/b.cjs").path))
-    let installed = try InstalledExtension.load(from: install)
+    let installed = try InstalledExtension.topLevel(from: install)
     #expect(installed.entry(for: "b") == install.appendingPathComponent("b.cjs"), "the root comes first")
 }
 
@@ -127,7 +127,7 @@ func anythingElseInDistLeavesTheInstallAsItIs(_ stray: String) throws {
 
 @Test func anEntryIsAtTheRootWhenItsInNeitherPlace() throws {
     let install = try oldInstall(in: try Fixtures.temporaryDirectory())
-    let installed = try InstalledExtension.load(from: install)
+    let installed = try InstalledExtension.topLevel(from: install)
     #expect(installed.entry(for: "missing") == install.appendingPathComponent("missing.cjs"))
 }
 

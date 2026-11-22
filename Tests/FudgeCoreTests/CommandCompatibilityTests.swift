@@ -16,7 +16,7 @@ private func installed(_ commands: [String], using: [String: [CommandCompatibili
     let list = commands.map { #"{"name":"\#($0)","title":"\#($0)","mode":"view"}"# }.joined(separator: ",")
     let json = #"{"name":"\#(slack)","title":"Slack","commands":[\#(list)]}"#
     let manifest = try! JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8))
-    return InstalledExtension(
+    return InstalledExtension.topLevel(
         manifest: manifest, directory: URL(fileURLWithPath: "/nonexistent"),
         compatibility: CommandCompatibility(commands: using))
 }
@@ -189,7 +189,9 @@ struct BuildRecordsCommandCompatibility {
         let builder = Fixtures.builder(scanCommands: { _ in CommandCompatibility(commands: ["quiet": [.ai]]) })
         let installed = try builder.build(source: source, into: extensions)
         #expect(installed.compatibility.commands == ["quiet": [.ai]])
-        #expect(try InstalledExtension.load(from: installed.directory).compatibility.commands == ["quiet": [.ai]])
+        #expect(
+            try InstalledExtension.load(from: installed.directory, id: installed.id, repository: installed.repository)
+                .compatibility.commands == ["quiet": [.ai]])
         // Its own file, so building over it again isn't refused as "not an install".
         _ = try builder.build(source: source, into: extensions)
     }
@@ -273,6 +275,6 @@ struct BuildScansEndToEnd {
         if exited != true { process.terminate() }
         try #require(exited == true, "fudge build exited")
         try #require(process.terminationStatus == 0)
-        return try InstalledExtension.load(from: extensions.appendingPathComponent("made-up"))
+        return try InstalledExtension.topLevel(from: extensions.appendingPathComponent("made-up"))
     }
 }
