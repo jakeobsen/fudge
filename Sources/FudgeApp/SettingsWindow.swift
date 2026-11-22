@@ -807,6 +807,62 @@ final class SettingsModel {
         }
     }
 
+    // MARK: - Extensions with their own sign-in, and Raycast's links (SPEC-132)
+
+    /// **Extensions with their own sign-in**: on only through its consent sheet, or onboarding's Turn On.
+    var ownAppSignIn: Bool { fudgeSettings.isOwnAppSignInOn }
+    /// `--own-app-sign-in`: a snapshot run shows the switch on, in memory only.
+    @ObservationIgnored var snapshotOwnAppSignIn = false
+    /// Which app opens Raycast's links: LaunchServices, set by the app delegate; a fixed answer in snapshot runs.
+    @ObservationIgnored var raycastLinks: any RaycastLinks = FixedRaycastLinks(app: nil)
+    /// Who opens them, read when the Sign-in page or onboarding's step shows and when its window becomes key.
+    private(set) var raycastLinksStatus = RaycastLinksStatus.elsewhere(nil)
+    /// Why Open with Fudge didn't work, until the next try.
+    private(set) var raycastLinksProblem: String?
+
+    /// The switch: on after its consent sheet's Continue, which records the date; off removes both keys, so new
+    /// direct sign-ins are refused, and the ones stored stay under Signed in. The sheet goes on the Settings window, or
+    /// where `ask` shows it.
+    func setOwnAppSignIn(_ on: Bool, ask: ((LauncherModel.AlertRequest) async -> Bool)? = nil) {
+        guard on != ownAppSignIn else { return }
+        guard on else {
+            change { $0.setOwnAppSignIn(false, now: Date()) }
+            return
+        }
+        let confirm = ask ?? confirm
+        Task {
+            let consent = OwnAppSignIn.Consent.self
+            guard
+                await confirm(
+                    LauncherModel.AlertRequest(
+                        title: consent.title, message: OwnAppSignIn.explanation, primary: consent.confirm,
+                        dismiss: consent.cancel, destructive: false))
+            else { return }
+            turnOnOwnAppSignIn()
+        }
+    }
+
+    /// Turns it on, the consent having been given: the switch's sheet, or onboarding's step, which shows the same
+    /// words.
+    func turnOnOwnAppSignIn() {
+        change { $0.setOwnAppSignIn(true, now: Date()) }
+    }
+
+    func refreshRaycastLinks() {
+        raycastLinksStatus = raycastLinks.status(fudge: Bundle.main.bundleURL)
+    }
+
+    /// **Open with Fudge**: makes Fudge open `raycast` and `com.raycast` links, then reads who opens them again. Only
+    /// the user's click does this, never a launch.
+    func openRaycastLinksWithFudge() {
+        raycastLinksProblem = nil
+        Task {
+            let (status, problem) = await raycastLinks.openWithFudge(Bundle.main.bundleURL)
+            raycastLinksStatus = status
+            raycastLinksProblem = problem
+        }
+    }
+
     func signOut(_ entry: SignInEntry) {
         do {
             try tokenStore.remove(extension: entry.extensionName, provider: entry.providerID)
@@ -1022,6 +1078,7 @@ final class SettingsModel {
     private func readSettings() -> FudgeSettings {
         var settings = FudgeSettings.load(from: paths.settingsFile)
         settings.offByDefault = InstalledExtension.offByDefault(allExtensions)
+        if snapshotOwnAppSignIn { settings.setOwnAppSignIn(true, now: Date()) }
         return settings
     }
 
@@ -1244,6 +1301,7 @@ final class SettingsWindowController {
             ) { _ in
                 MainActor.assumeIsolated {
                     model.refreshLoginItem()
+                    model.refreshRaycastLinks()
                     model.loadQuicklinks()
                     model.loadSnippets()
                     model.loadWindowLayouts()

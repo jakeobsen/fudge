@@ -683,11 +683,21 @@ private struct SignInView: View {
                     ProgressView().controlSize(.small)
                     Text("Finish signing in in your browser. Esc cancels.").foregroundStyle(.secondary)
                 }
+                if prompt.canPaste {
+                    Text(RaycastReturn.pasteHint).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                }
+                if let problem = prompt.pasteProblem {
+                    Text(problem).foregroundStyle(.red)
+                }
             } else {
                 if let description = prompt.description {
                     Text(description).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
                 Button("Continue in Browser", action: onContinue).buttonStyle(.borderedProminent)
+            }
+            if let elsewhere = prompt.linksElsewhere {
+                Text(elsewhere).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    .frame(maxWidth: 460)
             }
         }
         .padding(40)

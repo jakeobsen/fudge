@@ -10,7 +10,11 @@ import type { AddressInfo } from "node:net";
 import { test } from "node:test";
 import {
     grantType,
+    isRaycastDomainHost,
+    needsDecision,
     providersFromEnvironment,
+    raycastDomainsFromEnvironment,
+    raycastDomainsVariable,
     redirectedMessage,
     rewriteFetch,
     route,
@@ -291,4 +295,85 @@ test("routing and grant types", () => {
     assert.equal(grantType("grant_type=refresh_token&x=1"), "refresh_token");
     assert.equal(grantType(undefined), null);
     assert.equal(grantType("{}"), null);
+});
+
+// SPEC-132 §2 step 5: token and refresh grants to any of Raycast's hosts are refused, by the one definition core hands
+// over (`FUDGE_RAYCAST_DOMAINS`); every request to the proxies stays refused, and a plain GET to raycast.com doesn't.
+
+const raycastDomains = ["raycast.com"];
+
+test("Raycast's hosts are its domains and every host under them, read from the app's variable", () => {
+    assert.equal(raycastDomainsVariable, "FUDGE_RAYCAST_DOMAINS");
+    assert.deepEqual(raycastDomainsFromEnvironment('["raycast.com"]'), ["raycast.com"]);
+    assert.deepEqual(raycastDomainsFromEnvironment('["Raycast.COM", 3, ""]'), ["raycast.com"]);
+    for (const bad of ["not json", '{"x":1}', undefined]) assert.deepEqual(raycastDomainsFromEnvironment(bad), []);
+    for (const host of [
+        "raycast.com",
+        "www.raycast.com",
+        "WWW.Raycast.COM.",
+        "raycast.com..",
+        "x.oauth.raycast.com",
+        "x.oauth-proxy.raycast.com",
+        "apple-music-oauth.raycast.com",
+    ]) {
+        assert.ok(isRaycastDomainHost(host, raycastDomains), host);
+    }
+    for (const host of ["raycast.com.evil.test", "notraycast.com", "evilraycast.com", "example.com", ""]) {
+        assert.ok(!isRaycastDomainHost(host, raycastDomains), host);
+    }
+    assert.ok(!isRaycastDomainHost("www.raycast.com", []), "nothing without the app's list");
+});
+
+test("token and refresh grants to any of Raycast's hosts are refused, and only those", () => {
+    for (const url of [
+        "https://www.raycast.com/oauth/token",
+        "https://raycast.com/api/v1/oauth/token",
+        "https://WWW.Raycast.COM./oauth/token",
+        "https://x.oauth-proxy.raycast.com/token",
+        "https://apple-music-oauth.raycast.com/refresh-token",
+        "http://www.raycast.com/oauth/token",
+    ]) {
+        for (const grant of ["authorization_code", "refresh_token"]) {
+            assert.equal(route("POST", url, grant, providers, raycastDomains).kind, "refused", `${url} ${grant}`);
+        }
+        assert.equal(route("POST", url, "client_credentials", providers, raycastDomains).kind, "untouched", url);
+        assert.equal(route("POST", url, null, providers, raycastDomains).kind, "untouched", url);
+    }
+    assert.equal(route("GET", "https://www.raycast.com/", null, providers, raycastDomains).kind, "untouched");
+    // The proxies keep today's rule: every request there is refused, a GET included.
+    assert.equal(route("GET", "https://x.oauth.raycast.com/", null, providers, raycastDomains).kind, "refused");
+    assert.equal(route("GET", "https://x.oauth.raycast.com/", null, providers, []).kind, "refused");
+    // Only a request with a body to raycast.com is read for its grant; a plain GET goes straight through.
+    assert.ok(needsDecision(new URL("https://www.raycast.com/oauth/token"), providers, "POST", raycastDomains));
+    assert.ok(!needsDecision(new URL("https://www.raycast.com/"), providers, "GET", raycastDomains));
+    assert.ok(!needsDecision(new URL("https://www.raycast.com/"), providers, "head", raycastDomains));
+    assert.ok(needsDecision(new URL("https://x.oauth.raycast.com/"), providers, "GET", raycastDomains));
+});
+
+test("through fetch, a grant to raycast.com is refused while a GET there goes where it was going", async () => {
+    const previous = process.env[raycastDomainsVariable];
+    process.env[raycastDomainsVariable] = JSON.stringify(raycastDomains);
+    try {
+        for (const answer of [on, { server: null, signedIn: false }]) {
+            const { sent, fetch } = recorder();
+            const wrapped = rewriteFetch(fetch, providers, async () => answer, fetch);
+            for (const [url, grant] of [
+                ["https://www.raycast.com/oauth/token", "authorization_code"],
+                ["https://x.oauth-proxy.raycast.com/token", "refresh_token"],
+                ["https://apple-music-oauth.raycast.com/token", "authorization_code"],
+            ]) {
+                await assert.rejects(wrapped(url, post(grant)), /Fudge doesn't send requests to/, url);
+            }
+            await assert.rejects(wrapped("https://x.oauth.raycast.com/whatever"), /Fudge doesn't send requests to/);
+            await wrapped("https://www.raycast.com/");
+            await wrapped("https://www.raycast.com/store", { method: "POST", body: "q=x" });
+            assert.deepEqual(
+                sent.map((request) => request.url),
+                ["https://www.raycast.com/", "https://www.raycast.com/store"],
+            );
+        }
+    } finally {
+        if (previous === undefined) delete process.env[raycastDomainsVariable];
+        else process.env[raycastDomainsVariable] = previous;
+    }
 });

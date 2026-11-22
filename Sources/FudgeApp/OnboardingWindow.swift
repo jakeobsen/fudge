@@ -140,6 +140,7 @@ final class OnboardingWindowController {
     private func prepare(_ onboarding: Onboarding) -> OnboardingModel {
         settings.reload()
         settings.refreshLoginItem()
+        settings.refreshRaycastLinks()
         settings.accessibility.refresh()
         let model = OnboardingModel(onboarding: onboarding, file: file)
         model.leavingStep = { [settings] in settings.cancelRecording() }
@@ -180,6 +181,7 @@ final class OnboardingWindowController {
         ) { _ in
             MainActor.assumeIsolated {
                 settings.refreshLoginItem()
+                settings.refreshRaycastLinks()
                 settings.accessibility.refresh()
             }
         }
@@ -311,6 +313,28 @@ struct OnboardingView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+        case .raycast:
+            VStack(alignment: .leading, spacing: 12) {
+                title(RaycastStep.title)
+                Text(RaycastStep.explanation).fixedSize(horizontal: false, vertical: true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(settings.raycastLinksStatus.line)
+                    if !settings.raycastLinksStatus.isFudge {
+                        Text(RaycastStep.linksNote).foregroundStyle(.secondary)
+                    }
+                    if let problem = settings.raycastLinksProblem {
+                        Text(problem).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Text(OwnAppSignIn.title).font(.headline)
+                if settings.ownAppSignIn {
+                    Text("It's on. You can turn it off in Settings → Sign-in.").foregroundStyle(.secondary)
+                } else {
+                    // The consent sheet's own words.
+                    Text(OwnAppSignIn.explanation)
+                        .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
         case .clipboardHistory:
             VStack(alignment: .leading, spacing: 14) {
                 title("Clipboard history")
@@ -367,6 +391,7 @@ struct OnboardingView: View {
                     summary("Currency conversion") { Text(settings.currencyRates ? "On" : "Off") }
                     summary("Extension Store") { Text(storeOn ? "On" : "Off") }
                     summary("Sign-in") { Text(settings.signInServer.host ?? "Off") }
+                    summary("Own sign-in") { Text(settings.ownAppSignIn ? "On" : "Off") }
                     summary("Clipboard history") { Text(settings.clipboardHistory ? "On" : "Off") }
                     summary("Expand snippets") { Text(settings.expandSnippets ? "On" : "Off") }
                     summary("Hyperkey") { Text(settings.hyperkey ? "On" : "Off") }
@@ -391,6 +416,21 @@ struct OnboardingView: View {
                 model.next()
             }
             Button("Not Now") { model.next() }.keyboardShortcut(.defaultAction)
+        case .raycast:
+            // Each offer stays on the step; ↵ is Continue or Not Now, which changes nothing.
+            let buttons = RaycastStep.buttons(
+                links: settings.raycastLinksStatus, ownAppSignInOn: settings.ownAppSignIn)
+            ForEach(buttons.all.filter { $0 != buttons.defaultButton }, id: \.title) { button in
+                switch button {
+                case .openLinks: Button(button.title) { settings.openRaycastLinksWithFudge() }
+                case .turnOnOwnAppSignIn: Button(button.title) { settings.turnOnOwnAppSignIn() }
+                case .next: EmptyView()
+                }
+            }
+            Button(
+                RaycastStep.nextTitle(links: settings.raycastLinksStatus, ownAppSignInOn: settings.ownAppSignIn)
+            ) { model.next() }
+            .keyboardShortcut(.defaultAction)
         case .clipboardHistory where !settings.clipboardHistory:
             // An opt-in that records everything copied: ↵ is Not Now, never Keep.
             Button("Keep Clipboard History") {

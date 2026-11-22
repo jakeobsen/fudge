@@ -12,6 +12,9 @@ public enum OnboardingStep: String, CaseIterable, Sendable {
     case extensionStore
     /// Which sign-in server extensions use (FUD-128): the Sign-in page's own choice, with its consent sheet.
     case signIn
+    /// Raycast on the same Mac (SPEC-132 §3.3, D-88): why the two can get in each other's way, the offer to open
+    /// Raycast's links with Fudge, and the switch for extensions with their own sign-in (D-89).
+    case raycast
     /// Whether to keep clipboard history (FUD-117): an opt-in, with the consent sheet's own words.
     case clipboardHistory
     /// Whether to expand snippets as they're typed (FUD-101): an opt-in, explaining Input Monitoring.
@@ -28,6 +31,7 @@ public enum OnboardingStep: String, CaseIterable, Sendable {
         "currencyRates": .currency,
         "extensionStore": .extensionStore,
         "signInServer": .signIn,
+        "ownAppSignIn": .raycast,
         "clipboardHistory": .clipboardHistory,
         "expandSnippets": .snippetExpansion,
         "hyperkey": .hyperkey,

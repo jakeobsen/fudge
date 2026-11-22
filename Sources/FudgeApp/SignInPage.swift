@@ -16,6 +16,10 @@ struct SignInPage: View {
             Section {
                 SignInServerControls(model: model)
             }
+            Section {
+                OwnAppSignInControls(model: model)
+                RaycastLinksRow(model: model)
+            }
             Section("Signed in") {
                 if model.signIns.isEmpty {
                     Text("None yet.").foregroundStyle(.secondary)
@@ -37,7 +41,46 @@ struct SignInPage: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { model.loadSignIns() }
+        .onAppear {
+            model.loadSignIns()
+            model.refreshRaycastLinks()
+        }
+    }
+}
+
+/// **Extensions with their own sign-in** (SPEC-132 §5): its switch, with the line its consent sheet and onboarding
+/// show. Turning it on shows the sheet first, on the Settings window or where `ask` puts it.
+struct OwnAppSignInControls: View {
+    @Bindable var model: SettingsModel
+    var ask: ((LauncherModel.AlertRequest) async -> Bool)? = nil
+
+    var body: some View {
+        Toggle(isOn: Binding(get: { model.ownAppSignIn }, set: { model.setOwnAppSignIn($0, ask: ask) })) {
+            Text(OwnAppSignIn.title)
+            Text(OwnAppSignIn.explanation)
+        }
+    }
+}
+
+/// Which app opens Raycast's links (SPEC-132 §3.3), with Open with Fudge while it's another one.
+struct RaycastLinksRow: View {
+    @Bindable var model: SettingsModel
+
+    var body: some View {
+        LabeledContent {
+            HStack(spacing: 10) {
+                Text(model.raycastLinksStatus.row).foregroundStyle(.secondary)
+                if !model.raycastLinksStatus.isFudge {
+                    Button("Open with Fudge") { model.openRaycastLinksWithFudge() }
+                }
+            }
+        } label: {
+            Text("Raycast links")
+            Text("Signing in to some extensions ends with one, which has to open Fudge.")
+        }
+        if let problem = model.raycastLinksProblem {
+            Text(problem).font(.system(size: 11)).foregroundStyle(.red)
+        }
     }
 }
 

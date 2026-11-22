@@ -201,9 +201,11 @@ final class LauncherModel {
     @ObservationIgnored var tokenSecrets: any SecretStore = MemorySecretStore()
     /// Opens a sign-in's URL in the default browser; false when it couldn't.
     @ObservationIgnored var openInBrowser: (URL) -> Bool = { NSWorkspace.shared.open($0) }
-    /// Each session's latest `oauth.prepare` and the one the prompt shows, with their loopback listeners, and the relay
-    /// sign-ins pending (`SignInCalls.pending`).
-    @ObservationIgnored private var signInRequests = SignInRequests<OAuthLoopback>()
+    /// Each session's latest `oauth.prepare` and the one the prompt shows, with what each waits on (a loopback
+    /// listener, or Raycast's return link for a direct sign-in), and the relay sign-ins pending (`SignInCalls.pending`).
+    @ObservationIgnored private var signInRequests = SignInRequests<SignInListener>()
+    /// Which app opens Raycast's links, for a direct sign-in's prompt (SPEC-132 §3.3); a fixed answer in snapshot runs.
+    @ObservationIgnored var raycastLinks: any RaycastLinks = FixedRaycastLinks(app: nil)
     /// `node --version` per binary, read off the main actor (SPEC-084).
     @ObservationIgnored private let nodeVersions = NodeVersionCache()
     /// The user's answer to the prompt on screen: true for ↵, false for Esc or the command going away.
@@ -3979,8 +3981,11 @@ final class LauncherModel {
             environment: ExtensionStore.hostEnvironment(
                 cli: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil, paths: paths,
                 proxy: Self.systemProxy()
-            ).merging([OAuthProviders.environmentKey: OAuthProviders.environmentValue]) { _, new in new }
-                .merging(trust.environment) { _, new in new },
+            ).merging([
+                OAuthProviders.environmentKey: OAuthProviders.environmentValue,
+                OAuthProviders.raycastDomainsEnvironmentKey: OAuthProviders.raycastDomainsEnvironmentValue,
+            ]) { _, new in new }
+            .merging(trust.environment) { _, new in new },
             log: { session, level, message, source in
                 FudgeLog.command(
                     level, message, session: session, extensionName: source?.extensionName, command: source?.command)
@@ -4553,23 +4558,36 @@ final class LauncherModel {
                 "server": server.url.map { .string($0.absoluteString) } ?? .null, "signedIn": .bool(signedIn ?? false),
             ])
         case "oauth.prepare":
-            let server = FudgeSettings.load(from: paths.settingsFile).signIn
-            let (provider, authorize) = try PreparedSignIn.provider(
-                for: string("endpoint") ?? "", providerName: string("providerName") ?? "", server: server
+            let settings = FudgeSettings.load(from: paths.settingsFile)
+            let route = try PreparedSignIn.route(
+                for: string("endpoint") ?? "", providerName: string("providerName") ?? "",
+                redirectMethod: string("redirectMethod") ?? "", server: settings.signIn,
+                ownAppSignIn: settings.isOwnAppSignInOn
             ).get()
-            let loopback = try await OAuthLoopback.start()
-            let request = PreparedSignIn(provider: provider, authorizeURL: authorize, redirectURI: loopback.redirectURI)
+            let request: PreparedSignIn
+            let wait: any SignInWait
+            switch route {
+            case .relay(let provider, let authorize):
+                let loopback = try await OAuthLoopback.start()
+                request = PreparedSignIn(provider: provider, authorizeURL: authorize, redirectURI: loopback.redirectURI)
+                wait = loopback
+            case .direct(let method, let authorize, let redirect):
+                // No listener: Raycast's return link, or a pasted address, ends the wait (SPEC-132 §2).
+                request = PreparedSignIn(path: .direct(method), authorizeURL: authorize, redirectURI: redirect)
+                wait = OAuthLinkWait()
+            }
+            let listener = SignInListener(wait)
             // An earlier request this session never used stops listening. One the prompt shows isn't among them.
-            signInRequests.prepare((request, loopback), for: session)?.close()
+            signInRequests.prepare((request, listener), for: session)?.close()
             // A request that's never used to sign in stops listening after 5 minutes.
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(300))
-                guard let self, self.signInRequests.expire(loopback, of: session) else { return }
-                loopback.close()
+                guard let self, self.signInRequests.expire(listener, of: session) else { return }
+                listener.close()
             }
             return .object([
-                "provider": .string(provider.id), "authorizeURL": .string(authorize),
-                "redirectURI": .string(loopback.redirectURI),
+                "provider": request.provider.map { .string($0.id) } ?? .null,
+                "authorizeURL": .string(request.authorizeURL), "redirectURI": .string(request.redirectURI),
             ])
         case "oauth.authorize":
             return .object([
@@ -4590,26 +4608,33 @@ final class LauncherModel {
     }
 
     /// Signs in for `session`: shows "Sign in to <provider>", opens the browser on ↵, and waits up to 5 minutes for
-    /// the loopback callback. Brings the launcher back to the command when the browser returns.
+    /// the loopback callback, or, for a direct sign-in, Raycast's return link or a pasted address. Brings the launcher
+    /// back to the command when the browser returns.
     private func authorizeSignIn(_ values: [String: JSONValue], session: String, origin: CallOrigin) async throws
         -> String
     {
         guard origin.mayComeForward else { throw SignInRefusal.background }
         guard signIn == nil else { throw SignInRefusal.busy }
         let url: String = if case .string(let url) = values["url"] { url } else { "" }
+        let given: String? = if case .string(let state) = values["state"] { state } else { nil }
         guard let prepared = signInRequests.preparedRequest(of: session),
-            let state = prepared.request.state(ofAuthorizeURL: url), let target = URL(string: url)
+            let state = prepared.request.state(ofAuthorizeURL: url, given: given), let target = URL(string: url)
         else { throw SignInRefusal.notPrepared }
         // The prompt takes the request: Esc and the session ending reach its listener, whatever the session prepares
         // meanwhile.
         guard signInRequests.show(session) != nil else { throw SignInRefusal.busy }
-        let loopback = prepared.listener
+        let listener = prepared.listener
         func text(_ key: String) -> String? {
             if case .string(let value) = values[key], !value.isEmpty { value } else { nil }
         }
-        signIn = SignInPrompt(
-            session: session, providerName: text("providerName") ?? prepared.request.provider.name,
+        var prompt = SignInPrompt(
+            session: session, providerName: text("providerName") ?? prepared.request.provider?.name ?? "this service",
             description: text("description"), icon: values["providerIcon"].flatMap { $0 == .null ? nil : $0 })
+        if let method = prepared.request.directMethod {
+            prompt.canPaste = method.canPaste
+            prompt.linksElsewhere = RaycastReturn.elsewhereHint(raycastLinks.status(fudge: Bundle.main.bundleURL))
+        }
+        signIn = prompt
         actionPanel = nil
         // Nothing reaches the command while the prompt is up, a key held for the selected item's actions included.
         hold(nil)
@@ -4618,18 +4643,18 @@ final class LauncherModel {
         if !isVisible() { show() }
         let proceed = await withCheckedContinuation { signInAnswer = $0 }
         guard proceed, signIn?.session == session else {
-            finishSignIn(loopback, signedIn: false)
+            finishSignIn(listener, signedIn: false)
             throw SignInRefusal.cancelled
         }
         guard openInBrowser(target) else {
-            finishSignIn(loopback, signedIn: false)
+            finishSignIn(listener, signedIn: false)
             throw SignInRefusal.browser
         }
         signIn?.waiting = true
-        let outcome = await loopback.wait(state: state, timeout: 300)
-        let provider = signIn?.providerName ?? prepared.request.provider.name
-        // Only a code keeps the provider pending, for the token exchange that follows.
-        finishSignIn(loopback, signedIn: outcome.isCode)
+        let outcome = await listener.wait.wait(state: state, timeout: 300)
+        let provider = signIn?.providerName ?? prepared.request.provider?.name ?? "this service"
+        // Only a code keeps a relay provider pending, for the token exchange that follows.
+        finishSignIn(listener, signedIn: outcome.isCode)
         switch outcome {
         case .callback(.code(let code)):
             if !isVisible() { show() }
@@ -4653,7 +4678,25 @@ final class LauncherModel {
             if signIn?.waiting == false { answerSignIn(true) }
             return true
         }
+        if pressed == KeyShortcut(key: "v", modifiers: ["cmd"]), signIn?.waiting == true, signIn?.canPaste == true {
+            pasteSignIn()
+            return true
+        }
         return !pressed.modifiers.contains("cmd")
+    }
+
+    /// ⌘V while a direct Web sign-in waits (SPEC-132 §4): the clipboard is read then, and only then, and its text
+    /// ends the wait when it's this sign-in's address. The text is never logged or kept.
+    private func pasteSignIn() {
+        guard let wait = signInRequests.waitedOn?.linkWait else { return }
+        let text = NSPasteboard.general.string(forType: .string) ?? ""
+        signIn?.pasteProblem = wait.receive(pasted: text) ? nil : RaycastReturn.pasteProblem
+    }
+
+    /// A `raycast:` or `com.raycast:` link that opened Fudge (SPEC-132 §3.2). It ends the direct sign-in the prompt
+    /// waits on when it's that sign-in's return; anything else is ignored, with nothing shown or logged.
+    func receiveLink(_ link: String) {
+        signInRequests.waitedOn?.linkWait?.receive(link: link)
     }
 
     /// The prompt's ↵ (true) or Esc (false). Esc while the browser is open cancels the wait.
@@ -4667,15 +4710,15 @@ final class LauncherModel {
         }
     }
 
-    /// The sign-in on `loopback` is over, with a code or without: its listener closes, and the prompt goes when it was
+    /// The sign-in on `listener` is over, with a code or without: it stops waiting, and the prompt goes when it was
     /// the prompt's.
-    private func finishSignIn(_ loopback: OAuthLoopback, signedIn: Bool) {
+    private func finishSignIn(_ listener: SignInListener, signedIn: Bool) {
         let session = signInRequests.shown?.session
-        if signInRequests.finish(loopback, signedIn: signedIn) {
+        if signInRequests.finish(listener, signedIn: signedIn) {
             signIn = nil
             if let session { panelReset.release(session) }
         }
-        loopback.close()
+        listener.close()
     }
 
     /// A session that exits takes its sign-in with it.

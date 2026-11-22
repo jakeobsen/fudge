@@ -90,6 +90,42 @@ public enum OAuthProviders {
         let data = (try? encoder.encode(all)) ?? Data("[]".utf8)
         return String(decoding: data, as: UTF8.self)
     }
+
+    /// Raycast's domains (SPEC-132 §2): each, and every host under it, is Raycast's. The one definition, which
+    /// `oauth.prepare` refuses and the worker refuses token and refresh grants to (`isRaycastDomainHost` in
+    /// `oauth-fetch.ts`, handed this list in `raycastDomainsEnvironmentKey`).
+    public static let raycastDomains = ["raycast.com"]
+
+    /// Whether `host` is one of Raycast's: a domain in `raycastDomains` or a host under it, ignoring case and trailing
+    /// dots. Raycast's sign-in proxies and raycast.com's own sign-in all are.
+    public static func isRaycastDomainHost(_ host: String) -> Bool {
+        var host = host.lowercased()
+        while host.hasSuffix(".") { host.removeLast() }
+        return raycastDomains.contains { host == $0 || host.hasSuffix(".\($0)") }
+    }
+
+    /// The environment variable that hands `raycastDomains` to the extension host.
+    public static let raycastDomainsEnvironmentKey = "FUDGE_RAYCAST_DOMAINS"
+
+    /// `raycastDomains` as JSON, for `raycastDomainsEnvironmentKey`.
+    public static var raycastDomainsEnvironmentValue: String {
+        let data = (try? JSONEncoder().encode(raycastDomains)) ?? Data("[]".utf8)
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// The hosts of the table's own authorize URLs that aren't Raycast's (`accounts.google.com`, `auth.atlassian.com`,
+    /// `zoom.us`), lowercased: an endpoint there that isn't the table's exact URL is refused (SPEC-132 §2 step 2a),
+    /// since the worker can't tell its token exchange from the relay sign-in's.
+    public static var ownAuthorizeHosts: Set<String> {
+        Set(all.compactMap { URL(string: $0.authorizeURL)?.host?.lowercased() }.filter { !isRaycastDomainHost($0) })
+    }
+
+    /// Whether `host` is one of `ownAuthorizeHosts`, ignoring case and trailing dots.
+    public static func isOwnAuthorizeHost(_ host: String) -> Bool {
+        var host = host.lowercased()
+        while host.hasSuffix(".") { host.removeLast() }
+        return ownAuthorizeHosts.contains(host)
+    }
 }
 
 /// The relay extensions sign in through (`signInServer` in `settings.json`): off, Fudge's own, or the user's.
@@ -306,8 +342,15 @@ public enum OAuthCallback: Equatable, Sendable {
             let components = URLComponents(string: String(parts[1])), components.scheme == nil,
             components.host == nil, components.percentEncodedPath == path
         else { return .notFound }
+        return read(query: components.queryItems ?? [], state: state)
+    }
+
+    /// Reads a callback's query: its first `state`, `code`, `error` and `error_description`. Only this sign-in's
+    /// `state` (compared in constant time) with a code or an error ends the wait; anything else is `invalid`. The
+    /// loopback's request line, Raycast's return link and a pasted address are all read this way (SPEC-132 §3.2).
+    static func read(query items: [URLQueryItem], state: String) -> OAuthCallback {
         var values: [String: String] = [:]
-        for item in components.queryItems ?? [] where values[item.name] == nil {
+        for item in items where values[item.name] == nil {
             values[item.name] = item.value ?? ""
         }
         guard let given = values["state"], constantTimeEqual(given, state) else { return .invalid }
@@ -318,7 +361,7 @@ public enum OAuthCallback: Equatable, Sendable {
         return .invalid
     }
 
-    private static func constantTimeEqual(_ a: String, _ b: String) -> Bool {
+    static func constantTimeEqual(_ a: String, _ b: String) -> Bool {
         let x = Array(a.utf8)
         let y = Array(b.utf8)
         guard x.count == y.count else { return false }
@@ -535,17 +578,39 @@ public enum SignInRefusal: Error, Equatable, Sendable {
     }
 }
 
-/// A sign-in request the app has made ready (`oauth.prepare`): the provider, the relay's authorize URL and the
-/// loopback redirect.
+/// A sign-in request the app has made ready (`oauth.prepare`): where it goes, its authorize URL and its redirect.
 public struct PreparedSignIn: Equatable, Sendable {
-    public var provider: OAuthProvider
+    /// Where a sign-in goes (SPEC-132 §2).
+    public enum Path: Equatable, Sendable {
+        /// Through the relay, for one of `OAuthProviders`: the loopback listener takes the code.
+        case relay(OAuthProvider)
+        /// Straight to the extension's own OAuth app, coming back through Raycast's return address for the method:
+        /// a `raycast://oauth` link, or a pasted address (Web).
+        case direct(OAuthRedirectMethod)
+    }
+
+    public var path: Path
     public var authorizeURL: String
     public var redirectURI: String
 
     public init(provider: OAuthProvider, authorizeURL: String, redirectURI: String) {
-        self.provider = provider
+        self.init(path: .relay(provider), authorizeURL: authorizeURL, redirectURI: redirectURI)
+    }
+
+    public init(path: Path, authorizeURL: String, redirectURI: String) {
+        self.path = path
         self.authorizeURL = authorizeURL
         self.redirectURI = redirectURI
+    }
+
+    /// The relay's provider; nil on the direct path, which marks nothing pending and stores no `relayProvider`.
+    public var provider: OAuthProvider? {
+        if case .relay(let provider) = path { provider } else { nil }
+    }
+
+    /// The direct path's method; nil on the relay path.
+    public var directMethod: OAuthRedirectMethod? {
+        if case .direct(let method) = path { method } else { nil }
     }
 
     /// Maps `endpoint` (the extension's authorize URL) to a provider and the relay's authorize URL; refuses while
@@ -560,18 +625,78 @@ public struct PreparedSignIn: Equatable, Sendable {
         return .success((provider, authorize))
     }
 
-    /// The `state` of a URL the extension asks to open: it must be the relay's authorize URL this request names,
-    /// with this request's redirect and a `state`.
-    public func state(ofAuthorizeURL url: String) -> String? {
-        guard let components = URLComponents(string: url), let expected = URLComponents(string: authorizeURL),
-            components.scheme == expected.scheme, components.host == expected.host,
-            components.port == expected.port, components.path == expected.path
-        else { return nil }
+    /// What `oauth.prepare` decides (SPEC-132 §2).
+    public enum Route: Equatable, Sendable {
+        /// The relay path: the provider and the relay's authorize URL; the loopback listener gives the redirect.
+        case relay(OAuthProvider, authorizeURL: String)
+        /// The direct path: the endpoint as the extension gave it, and Raycast's redirect for the method.
+        case direct(OAuthRedirectMethod, authorizeURL: String, redirectURI: String)
+    }
+
+    /// Where a sign-in for `endpoint` goes, in this order (SPEC-132 §2):
+    /// 1. an endpoint in `OAuthProviders` takes the relay path, exactly as before (`provider(for:providerName:server:)`);
+    /// 2. one on Raycast's hosts (`OAuthProviders.isRaycastDomainHost`) is refused as before;
+    /// 2a. so is one on a table entry's own authorize host that isn't the table's exact URL
+    ///    (`OAuthProviders.isOwnAuthorizeHost`), since the worker can't tell its token exchange from the relay's;
+    /// 3. any other `https` endpoint with a host and no user info takes the direct path, for the Web, App and AppURI
+    ///    methods only, while **Extensions with their own sign-in** is on (`ownAppSignIn`);
+    /// 4. anything else is refused.
+    /// Nothing here depends on a particular extension (D-83).
+    public static func route(
+        for endpoint: String, providerName: String, redirectMethod: String, server: SignInServer, ownAppSignIn: Bool
+    ) -> Result<Route, SignInRefusal> {
+        if OAuthProviders.provider(authorizing: endpoint) != nil {
+            return provider(for: endpoint, providerName: providerName, server: server).map {
+                .relay($0.0, authorizeURL: $0.1)
+            }
+        }
+        guard let components = URLComponents(string: endpoint) else { return .failure(.unknownProvider(providerName)) }
+        if let host = components.host,
+            OAuthProviders.isRaycastDomainHost(host) || OAuthProviders.isOwnAuthorizeHost(host)
+        {
+            // Steps 2 and 2a: the same refusal as before the direct path existed.
+            return .failure(server == .off ? .off : .unknownProvider(providerName))
+        }
+        guard isDirectURL(components), let method = OAuthRedirectMethod(rawValue: redirectMethod) else {
+            return .failure(.unknownProvider(providerName))
+        }
+        guard ownAppSignIn else { return .failure(.off) }
+        return .success(.direct(method, authorizeURL: endpoint, redirectURI: method.raycastRedirectURI))
+    }
+
+    /// Whether a URL may be a direct sign-in's (SPEC-132 §2 step 3, §4): `https`, with a host and no user info, on
+    /// neither Raycast's hosts nor a table entry's own authorize host.
+    static func isDirectURL(_ components: URLComponents) -> Bool {
+        guard components.scheme?.lowercased() == "https", let host = components.host, !host.isEmpty,
+            components.user == nil, components.password == nil
+        else { return false }
+        return !OAuthProviders.isRaycastDomainHost(host) && !OAuthProviders.isOwnAuthorizeHost(host)
+    }
+
+    /// The `state` of a URL the extension asks to open, or nil when it may not be opened.
+    ///
+    /// On the relay path it must be the relay's authorize URL this request names, with this request's redirect and a
+    /// `state`. On the direct path it's any `https` URL with a host and no user info, on neither Raycast's hosts nor a
+    /// table entry's own authorize host (`isDirectURL`), whose `state` is this request's
+    /// (`given`, the `state` the extension sends with it, when it sends one): some extensions build the URL themselves
+    /// or override the redirect, so its host, path and redirect may differ from the endpoint's.
+    public func state(ofAuthorizeURL url: String, given: String? = nil) -> String? {
+        guard let components = URLComponents(string: url) else { return nil }
         let items = components.queryItems ?? []
-        guard items.first(where: { $0.name == "redirect_uri" })?.value == redirectURI,
-            let state = items.first(where: { $0.name == "state" })?.value, !state.isEmpty
-        else { return nil }
-        return state
+        let state = items.first(where: { $0.name == "state" })?.value ?? ""
+        switch path {
+        case .relay:
+            guard let expected = URLComponents(string: authorizeURL),
+                components.scheme == expected.scheme, components.host == expected.host,
+                components.port == expected.port, components.path == expected.path,
+                items.first(where: { $0.name == "redirect_uri" })?.value == redirectURI, !state.isEmpty
+            else { return nil }
+            return state
+        case .direct:
+            guard Self.isDirectURL(components), !state.isEmpty else { return nil }
+            if let given, !given.isEmpty, !OAuthCallback.constantTimeEqual(given, state) { return nil }
+            return state
+        }
     }
 }
 
@@ -616,17 +741,22 @@ public struct SignInRequests<Listener: AnyObject> {
     /// which is then gone.
     public mutating func finish(_ listener: Listener, signedIn code: Bool) -> Bool {
         guard let shown, shown.request.listener === listener else { return false }
-        if code { signedIn[shown.session, default: []].insert(shown.request.request.provider.id) }
+        if code, let provider = shown.request.request.provider {
+            signedIn[shown.session, default: []].insert(provider.id)
+        }
         self.shown = nil
         return true
     }
 
     /// The providers `session` has a relay sign-in pending for: its prepared request's, the prompt's when it's
-    /// `session`'s, and those it signed in to.
+    /// `session`'s, and those it signed in to. A direct sign-in (SPEC-132) is never pending: the fetch rewrite leaves
+    /// its token exchange alone.
     public func pending(of session: String) -> Set<String> {
         var providers = signedIn[session] ?? []
-        if let request = prepared[session] { providers.insert(request.request.provider.id) }
-        if let shown, shown.session == session { providers.insert(shown.request.request.provider.id) }
+        if let provider = prepared[session]?.request.provider { providers.insert(provider.id) }
+        if let shown, shown.session == session, let provider = shown.request.request.provider {
+            providers.insert(provider.id)
+        }
         return providers
     }
 

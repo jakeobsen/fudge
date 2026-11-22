@@ -332,7 +332,7 @@ function guardModule(module: HttpModule, protocol: "http:" | "https:", providers
     const original = module.request;
     const request = function (this: unknown, ...args: unknown[]) {
         const asked = requestURL(args, protocol);
-        if (asked === null || !needsDecision(asked.url, providers)) {
+        if (asked === null || !needsDecision(asked.url, providers, asked.method)) {
             return Reflect.apply(original, this, args) as Http.ClientRequest;
         }
         const caller = { original, self: this, args, options: asked.options };
