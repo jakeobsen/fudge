@@ -13,7 +13,7 @@ import Testing
         OAuthProviders.all.map(\.id) == [
             "github", "github", "linear", "slack", "asana", "google", "atlassian", "atlassian", "zoom", "zoom",
             "notion",
-            "notion", "todoist", "basecamp", "gumroad", "moneybird",
+            "notion", "todoist", "basecamp", "gumroad", "moneybird", "freeagent", "mollie", "plane", "homey", "figma",
         ])
     for provider in OAuthProviders.all {
         #expect(OAuthProviders.provider(authorizing: provider.authorizeURL) == provider, "\(provider.id)")
@@ -121,6 +121,41 @@ import Testing
             "https://oauth.raycast.com/v1/token/HkdQIb7W7JlFwNFCj2yL6zDPvJHb-vnTCrL_iPlT_K77Z-hQHyRJ-iiLSrkfjNta8Yys7_qRGKHBiAIVVt5GnqiV-VvvegeT9INJ24TrXTHk_P2MT0GOTd8fD9ogDuOgdPyMahi1mePSjhGKHTsBuPloYZFqNnDSzr4_ioxJBQ",
             "https://oauth.raycast.com/v1/refresh-token/66Tt7sCc6O70T4V3Rf_Dr4B941f08fkyizdDhimTODW0M7niNRllwvyk7FLX3XLaj0WNAWZBeOG1fZ8E1aTYWQR8ThljnyaUy3zS68Ocd5oxI6p4SUY7q2oIs_IauacmW75epq8Mn-mrdcpnmpuL19R7iPHgFy3FBS1ZeHRbSg"
         ),
+        // `freeagent`, its author's app on Raycast's shared proxy.
+        (
+            "freeagent", "FreeAgent",
+            "https://oauth.raycast.com/v1/authorize/PLlKWDuFWQjTTgdJHUy-wK47_zN8lc2ATzyvHJSoNy5WazXXYTG_h8Yz1eOPwlUvB-YNQos46o_9lgTxwUdQN3L9P4LsjYwgitMYkEmcHtGHsUyZYyBXwng3lgE",
+            "https://oauth.raycast.com/v1/token/csqaHeGaTfTpistIum6eBy7DDrJjcz7Z-FmW_HuU4Dsa3r-AhgMCGcEWYUCLR3k-5-PirrX1ilceu4WfRqUQlyCSEiYqzkZkIIKyx5n7khRbIe99FHiEBtENFXUZRz8",
+            "https://oauth.raycast.com/v1/refresh-token/wg1eYlPV441y6BfHcmZi19x61W2tqw045Dup4C6M8VgERbxtFByj1J97OeYVaiPHbYWoLz3nNnZ3nzXoMnZbqP6EhVYkT8eJefM79ey5sQLcdRL9vGnlBsLMqaB_Ylg"
+        ),
+        // `mollie-for-raycast`, its author's app on Raycast's shared proxy.
+        (
+            "mollie", "Mollie",
+            "https://oauth.raycast.com/v1/authorize/NxaZKqcp7vp8pAw3Mp8r8UOXy_z3pnka8zfft5NcBEoB09N36m-7Y6r_EBUphunBEkTTec8UnAC_hq1ENW73rgp77by3LF_mXqJ4ct1g9kqbLRe8Hx1ezlHoU2sxnqKZfzHWkdV7hGugdqZksA",
+            "https://oauth.raycast.com/v1/token/5p7_7xQdzkXilZdhppv_or2B9wwd0Sm7Fx0khb74h_MHnro7AO5w4tr9-aj5vJe4C0NnlLsV1Onr24ndgmFR5J_yRpV6b_hD8BzYSg6lcH1Q7s-1DUfZ0JFlZjE2nF0j-vunQ34iLi8d8w",
+            "https://oauth.raycast.com/v1/refresh-token/hiXK17eErlQSoxjH5w0qTI3fjCmQt-Qw7TWqV0PhNEi6xvSqLjnklSkwNy7D0g67FwQAfXV3udahWqjl2tFPa5b7zO_rFNtJQTvPto9gQMrQDdQFFC6VvdGZstEn8K2juivJh2SwmBzBfg"
+        ),
+        // `plane`, its author's app on Raycast's shared proxy.
+        (
+            "plane", "Plane",
+            "https://oauth.raycast.com/v1/authorize/dAAojlwLRis2jBTlrt8vrrmmaMYGJO0ZuPZb8awD6ouUaNVltt_bEeZACr4zFPcHvV0U5IVaAabS3IWAn0R-JN1vvk1g5WqXSrYpyH9SQAXQ2-nquGy9KhyrfKd8JnnBFC0kMLzniS13BIrr0F9mbrSMZuhXITeAlgHSnlJcqHBw7MMYbLNfwbMbeHPofwDPbroIsU1l8VVPQpu3Xba8L0jy6rBAQeczGhi0ghcoEfeuogNd5r3CRyU9WgCGoB3e7VqNvWNk5e0",
+            "https://oauth.raycast.com/v1/token/9KXLatvC9QrbuSafABDqcnA8IZW-JXwd4FF4CvZ-C6LFXfbl8FONXyjGuaO1n2XEFIW6bvDFFWDKH5IB_9gupDVVPiAHt5_mNmQJTQ_OmF7AYcKe6fF3I13O_hYIOETpCPknFn9ww9arA93J2knoGIWRSE-FFoVB2_lBGL8xP8FaRaj8_S6M-fsKUOg1YyyOFaK6dIIN5LF8i6P5J8y_L8Q6hWu4ZyyxmLCKHmEyPY9uoK-6ZZ27W0LMIrNzSHTS",
+            "https://oauth.raycast.com/v1/refresh-token/dERRhlRqcHTtXPJLaZZqs7h8JYsRPZrQeWpVvNN_5F9qd_Z6Hb1q6xr_iVeLUmKBj9Ewk3xHAuADSKCpQ1fb0rJq07vziFLkate0VW2zkV0a-xfj23KBoVM2y50aA4geUo7XQT4PS0MKFBIt44ZaD0QRnr3gdZIf37xWollM66pK35YAmuIgo4uFDFJnj1-A1zJ8FvuYL16tHK5qO4nK6SBKE-AktYpraqpziJUINAwN6ByKe_JO1MdvtGGeMb-5"
+        ),
+        // `homey`, its author's app on Raycast's shared proxy.
+        (
+            "homey", "Homey",
+            "https://oauth.raycast.com/v1/authorize/WTWZbnJLBrEo1FEYJ0E4Ix5Wpsxnpfkcb5d2EURGgmOtgPnpIE8QvYHgJX0LeG9yryHZ71LssD1tli8bdKKVlKuEIMx-W-Ql8H72V2kBFkRgv0HPkPPGPv6ULdVrop4rZsMi-kohkLrs7glA",
+            "https://oauth.raycast.com/v1/token/7EXpLgXJ1PDijhpr-BiJe3CVd8JGSZsST-oAdflCaTWLJuEE0vRMulR8bHGX4SRrBJWgXgZKC4A0b2jF90p7QELwCoXdZQnHrigsXbfLOolG1PwDUbDNB971f6EllEs4ndcak66nGw8",
+            "https://oauth.raycast.com/v1/refresh-token/ptpJtGSqQUGUt9zDDZGzv4iW-Vn7965_rjjtPM3sOeRSXhXL_GIF4ZrNDUR21AhW5zg-MUeZuMdoKG1co7oEkas3HYBat5-W4rLPUMScN0yOM5zlapM6xD-ryNobzZ55v22lc_5qXKo"
+        ),
+        // `figma-files`, its author's app on Raycast's shared proxy.
+        (
+            "figma", "Figma",
+            "https://oauth.raycast.com/v1/authorize/F7SnNEtLc3w2AFfhwdtXwpE-rW2l2OOtG3h0z76VKM6YJVtkU17gAmgJgqzIn6lO3X9SCv_iv3_3BS8a1Jq0gc14HUxILPg8wQNB8zBaX4-OjUj2ixG0",
+            "https://oauth.raycast.com/v1/token/rsuQtsavqnjuxmA3vCYSGa3E-D8_ruhzY4OqJIOA7aB4_wGaFh2WE0mQc_uMZ7E5Nk8-pAeW3JXE3WlUfgqu_-zNiM4yWU7i_z2-u0pO8HJFh7_H6ohVBh8fcDpk64nT",
+            "https://oauth.raycast.com/v1/refresh-token/qJfyXOqhjDouaj06_54vl2O3NoIfY36R_-OOExXZNAS073Bih0aeNaHLO9xEpW6lbooqWCpT6zO7zLvbTx1MtXF2dU5d4B_of5d05Yxh27JIAPHG0uBw7fINhej_ViQ-sbE"
+        ),
     ]
     let server = SignInServer.custom(URL(string: "https://relay.example")!)
     for entry in entries {
@@ -139,6 +174,14 @@ import Testing
         "https://oauth.raycast.com/v1/authorize/unknown", "https://todoist.oauth-proxy.raycast.com.evil.test/authorize",
         "http://todoist.oauth-proxy.raycast.com/authorize",
     ] {
+        #expect(OAuthProviders.provider(authorizing: lookalike) == nil, "\(lookalike)")
+    }
+    // The same for one of batch 2's addresses (`figma-files`).
+    let figma =
+        "https://oauth.raycast.com/v1/authorize/F7SnNEtLc3w2AFfhwdtXwpE-rW2l2OOtG3h0z76VKM6YJVtkU17gAmgJgqzIn6lO3X9SCv_iv3_3BS8a1Jq0gc14HUxILPg8wQNB8zBaX4-OjUj2ixG0"
+    var figmaChanged = Array(figma)
+    figmaChanged[figmaChanged.count - 1] = figmaChanged.last == "A" ? "B" : "A"
+    for lookalike in [figma + "/", String(figmaChanged), figma + "?x=1", "http" + figma.dropFirst("https".count)] {
         #expect(OAuthProviders.provider(authorizing: lookalike) == nil, "\(lookalike)")
     }
 }
