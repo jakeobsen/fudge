@@ -343,10 +343,10 @@ private struct ImportedStep: View {
             Text("Every extension in the backup is installed.")
         } else {
             Text("These extensions in the backup aren't installed. Reinstall them to use them:")
-            ForEach(result.notInstalled, id: \.name) { listed in
+            ForEach(result.notInstalled, id: \.key) { listed in
                 HStack(alignment: .firstTextBaseline) {
                     Text(listed.title)
-                    Text(listed.source == .store ? "from the Extension Store" : "built from a local folder")
+                    Text(Backup.whereFrom(listed))
                         .foregroundStyle(.secondary)
                 }
             }
