@@ -406,7 +406,8 @@ public enum TagPicking {
 }
 
 /// The values of Form fields with `storeValue`, saved when their form is submitted: one JSON file per extension in
-/// `form-values/`, by command name and field `id`. Dates are kept as `{ "$date": iso }`, as they cross the bridge.
+/// `form-values/`, by the extension's id, then command name and field `id`. Dates are kept as `{ "$date": iso }`, as
+/// they cross the bridge.
 public struct FormValueStore: Sendable {
     public let directory: URL
 
@@ -414,27 +415,27 @@ public struct FormValueStore: Sendable {
         self.directory = directory
     }
 
-    public func load(extension name: String, command: String) -> [String: JSONValue] {
-        loadAll(name)[command] ?? [:]
+    public func load(extension id: ExtensionID, command: String) -> [String: JSONValue] {
+        loadAll(id)[command] ?? [:]
     }
 
     /// Saves `values` for the command, keeping the other fields' and commands' values.
-    public func save(_ values: [String: JSONValue], extension name: String, command: String) throws {
+    public func save(_ values: [String: JSONValue], extension id: ExtensionID, command: String) throws {
         guard !values.isEmpty else { return }
-        var all = loadAll(name)
+        var all = loadAll(id)
         all[command, default: [:]].merge(values) { _, new in new }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(all).write(to: file(name), options: .atomic)
+        try encoder.encode(all).write(to: file(id), options: .atomic)
     }
 
-    private func file(_ name: String) -> URL {
-        directory.appendingPathComponent("\(name).json")
+    private func file(_ id: ExtensionID) -> URL {
+        directory.appendingPathComponent("\(id.key).json")
     }
 
-    private func loadAll(_ name: String) -> [String: [String: JSONValue]] {
-        guard let data = try? Data(contentsOf: file(name)) else { return [:] }
+    private func loadAll(_ id: ExtensionID) -> [String: [String: JSONValue]] {
+        guard let data = try? Data(contentsOf: file(id)) else { return [:] }
         return (try? JSONDecoder().decode([String: [String: JSONValue]].self, from: data)) ?? [:]
     }
 }

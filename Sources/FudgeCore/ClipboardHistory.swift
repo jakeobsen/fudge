@@ -383,6 +383,6 @@ public enum ClipboardOffset: Equatable, Sendable {
 }
 
 extension ClipboardHistory {
-    /// Whether a session of `caller` may make `clipboardHistory.*` calls: Clipboard History's own only.
-    public static func mayCall(_ caller: String?) -> Bool { caller == extensionName }
+    /// Whether a session of `caller` may make `clipboardHistory.*` calls: Clipboard History's own only, by its whole id.
+    public static func mayCall(_ caller: ExtensionID?) -> Bool { BundledCalls.mayCall(.clipboardHistory, from: caller) }
 }

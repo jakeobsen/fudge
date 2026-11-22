@@ -104,7 +104,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         installed = [:]
         for installedExtension in extensions {
             for command in installedExtension.manifest.commands where command.mode == "menu-bar" {
-                let id = FudgeSettings.commandID(extension: installedExtension.manifest.name, command: command.name)
+                let id = FudgeSettings.commandID(owner: .extension(installedExtension.id), command: command.name)
                 installed[id] = (installedExtension, command)
             }
         }
@@ -273,7 +273,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // A refusal on purpose (sign-in is off, SPEC-095) says so, never as a failure with its trace.
             let manifest = item.installed.manifest
             let signIn = SignInNotice(
-                notice: notice, message: message, extensionName: manifest.name, extensionTitle: manifest.title,
+                notice: notice, message: message, extension: item.installed.id, extensionTitle: manifest.title,
                 commandID: nil)
             let hud = signIn?.hud ?? MessageText.joined("\(item.command.title) failed", message)
             if fatal {

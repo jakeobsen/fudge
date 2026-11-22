@@ -464,7 +464,7 @@ struct OnboardingView: View {
 
     /// The store is on: its switch, and Enabled on the Commands page, which Turn On sets too.
     private var storeOn: Bool {
-        settings.extensionStore && settings.isEnabled(extension: ExtensionStore.extensionName)
+        settings.extensionStore && settings.isEnabled(owner: .extension(ExtensionStore.id))
     }
 
     /// The consent sheet's second paragraph, with its link.

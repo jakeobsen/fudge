@@ -283,13 +283,14 @@ public enum ExtensionRepositoryStatus: Equatable, Sendable {
     /// The status in `file`: `{ "checkedAt", "branch"?, "extensions" }` or `{ "checkedAt", "branch"?, "problem" }`.
     /// A file over 4 KB, one that isn't a JSON object, a `checkedAt` that isn't an ISO 8601 date, a count that isn't a
     /// whole number from 0 to 5,000, or a kind it doesn't know reads as `failed`; no file reads as not checked.
+    /// Only a regular file counts: a link, a FIFO or a device in its place reads as `failed`, without waiting on it, since
+    /// Settings reads it on the main thread.
     public static func read(_ file: URL) -> ExtensionRepositoryStatus {
-        guard let handle = try? FileHandle(forReadingFrom: file) else {
-            return FileManager.default.fileExists(atPath: file.path) ? .problem(.failed) : .notChecked
+        guard let data = RegularFile.read(file, maxBytes: maxBytes) else {
+            var info = stat()
+            return lstat(file.path, &info) == 0 ? .problem(.failed) : .notChecked
         }
-        defer { try? handle.close() }
-        guard let data = try? handle.read(upToCount: maxBytes + 1), data.count <= maxBytes,
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let checkedAt = object["checkedAt"] as? String, isISO8601(checkedAt)
         else { return .problem(.failed) }
         if let kind = object["problem"] {

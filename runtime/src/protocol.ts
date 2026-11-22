@@ -7,6 +7,7 @@
 // worker and adds it on the way back.
 
 import type { LaunchEnvironment } from "./api/launch.ts";
+import { isValidExtensionId } from "./extension-id.ts";
 import type { RpcRequest } from "./bridge.ts";
 import type { ItemSlots } from "./renderer/root.ts";
 import type { UINode } from "./renderer/serialize.ts";
@@ -49,6 +50,11 @@ export type AppMessage =
           preferences?: Record<string, unknown>;
           /** Facts for `environment` and where LocalStorage and Cache live. */
           environment?: Partial<LaunchEnvironment>;
+          /**
+           * The extension's id (FUD-183), beside `environment` and never in it: the host names the command's log lines
+           * by it, and the worker never gets it, so the extension isn't given it.
+           */
+          extensionId?: string;
       }
     | { type: "event"; session: string; node: number; path: string[]; args: unknown[] }
     /** Asks for these List or Grid items' `actions` and `detail`, which renders send only for some (`$deferred`). */
@@ -87,8 +93,8 @@ export type HostMessage =
     | { type: "pong"; id: number }
     | { type: "protocolError"; message: string; id?: number }
     /**
-     * A line for the command's log file. The host adds the extension's and the command's names from the launch, so
-     * the app can write it without looking the session up (SPEC-124).
+     * A line for the command's log file. The host adds the extension's id and the command's name from the launch, so
+     * the app can write it without looking the session up (SPEC-124, FUD-183).
      */
     | { type: "log"; session: string; level: LogLevel; message: string; extension?: string; command?: string }
     | (Exclude<WorkerMessage, { type: "log" }> & { session: string });
@@ -128,9 +134,20 @@ export function parseAppMessage(line: string): Parsed {
             const launchProps = isObject(value.launchProps) ? (value.launchProps as LaunchProps) : undefined;
             const preferences = isObject(value.preferences) ? value.preferences : undefined;
             const environment = isObject(value.environment) ? (value.environment as Partial<LaunchEnvironment>) : undefined;
+            // Kept only when it passes the id rule; anything else names no log file.
+            const extensionId = isValidExtensionId(value.extensionId) ? value.extensionId : undefined;
             return {
                 ok: true,
-                message: { type: "launch", session: session!, entry: value.entry, mode: value.mode, launchProps, preferences, environment },
+                message: {
+                    type: "launch",
+                    session: session!,
+                    entry: value.entry,
+                    mode: value.mode,
+                    launchProps,
+                    preferences,
+                    environment,
+                    ...(extensionId === undefined ? {} : { extensionId }),
+                },
             };
         }
         case "event": {

@@ -9,7 +9,7 @@ import SwiftUI
 struct CommandsPage: View {
     @Bindable var model: SettingsModel
     @State private var search = ""
-    @State private var collapsed: Set<String> = []
+    @State private var collapsed: Set<CommandOwner> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -55,7 +55,7 @@ struct CommandsPage: View {
 
     /// One group of rows: a group of Fudge's own commands, or an installed extension. `name` keys its Enabled.
     private struct GroupRow {
-        var name: String
+        var name: CommandOwner
         var title: String
         var type: String
         var icon: RowIcon
@@ -85,14 +85,14 @@ struct CommandsPage: View {
         let groups = model.commandGroups.filter { !$0.commands.isEmpty }.map { group in
             let types = BuiltInCommandGroup.typeLabels(ofGroup: group.name)
             return GroupRow(
-                name: group.name, title: group.title, type: types.group, icon: .app,
+                name: .group(group.name), title: group.title, type: types.group, icon: .app,
                 commands: group.commands.map {
                     CommandRow(name: $0.name, title: $0.title, icon: .symbol($0.symbol), type: types.command)
                 })
         }
         let extensions = model.allExtensions.map { installed in
             GroupRow(
-                name: installed.manifest.name, title: installed.manifest.title, type: "Extension",
+                name: .extension(installed.id), title: installed.manifest.title, type: "Extension",
                 icon: .asset(installed.manifest.icon, installed),
                 commands: installed.manifest.commands.filter { ["view", "no-view", "menu-bar"].contains($0.mode) }
                     .map { command in
@@ -128,13 +128,13 @@ struct CommandsPage: View {
             Text("--").foregroundStyle(.tertiary).frame(width: 150, alignment: .leading)
             Toggle(
                 "",
-                isOn: Binding(get: { model.isEnabled(extension: name) }, set: { model.setEnabled($0, extension: name) })
+                isOn: Binding(get: { model.isEnabled(owner: name) }, set: { model.setEnabled($0, owner: name) })
             )
             .labelsHidden()
             .accessibilityLabel("Enabled, \(row.title)")
             .frame(width: 60)
         }
-        .opacity(model.isEnabled(extension: name) ? 1 : 0.45)
+        .opacity(model.isEnabled(owner: name) ? 1 : 0.45)
         .rowStyle()
         .contentShape(Rectangle())
         .onTapGesture {
@@ -143,8 +143,8 @@ struct CommandsPage: View {
     }
 
     private func commandRow(_ command: CommandRow, of row: GroupRow) -> some View {
-        let id = FudgeSettings.commandID(extension: row.name, command: command.name)
-        let enabled = model.isEnabled(command: id) && model.isEnabled(extension: row.name)
+        let id = FudgeSettings.commandID(owner: row.name, command: command.name)
+        let enabled = model.isEnabled(command: id) && model.isEnabled(owner: row.name)
         let reason = model.offByDefaultReason(command: id)
         return HStack(spacing: 0) {
             HStack(spacing: 6) {

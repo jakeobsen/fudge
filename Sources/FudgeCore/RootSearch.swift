@@ -4,7 +4,7 @@ import Foundation
 public struct RootItem: Sendable, Equatable, Identifiable {
     public enum Kind: Sendable, Equatable {
         case application(URL)
-        case command(extension: String, command: String, mode: String, entry: URL)
+        case command(extension: ExtensionID, command: String, mode: String, entry: URL)
         /// fudge's Settings window, on its default page.
         case settings
         /// Reads the extensions and applications again, as the menu bar item's "Reload Extensions" does.
@@ -20,7 +20,7 @@ public struct RootItem: Sendable, Equatable, Identifiable {
         /// Opens the Create Snippet form.
         case createSnippet
         /// Runs one of Fudge's own commands (`BuiltInCommandGroup`).
-        case builtInCommand(group: String, command: String)
+        case builtInCommand(group: BuiltInGroup, command: String)
 
         /// The SF Symbol of one of Fudge's own items (Reload Extensions, Quit Fudge, …); nil for the rest, whose
         /// icons are an app's, an extension's, a quicklink's, Fudge's own or their group's command's.
@@ -143,8 +143,8 @@ public struct RootItem: Sendable, Equatable, Identifiable {
     }
 
     /// The id of a command's item, which its launches count under in `LaunchHistory`.
-    public static func commandID(extension extensionName: String, command: String) -> String {
-        "command:\(extensionName)/\(command)"
+    public static func commandID(owner: CommandOwner, command: String) -> String {
+        "command:\(owner.key)/\(command)"
     }
 
     /// The `settings.json` id of a command's item, an extension's or one of Fudge's own, or of a quicklink's
@@ -152,8 +152,10 @@ public struct RootItem: Sendable, Equatable, Identifiable {
     /// quicklink whose id can't be part of a key.
     public var commandSettingsID: String? {
         switch kind {
-        case .command(let extensionName, let command, _, _), .builtInCommand(let extensionName, let command):
-            FudgeSettings.commandID(extension: extensionName, command: command)
+        case .command(let id, let command, _, _):
+            FudgeSettings.commandID(owner: .extension(id), command: command)
+        case .builtInCommand(let group, let command):
+            FudgeSettings.commandID(owner: .group(group), command: command)
         case .quicklink(let quicklink):
             QuicklinkCommands.commandID(ofQuicklink: quicklink.id)
         default:
@@ -185,7 +187,7 @@ public struct RootItem: Sendable, Equatable, Identifiable {
     public static func builtInCommands(of group: BuiltInCommandGroup) -> [RootItem] {
         group.commands.map { command in
             RootItem(
-                id: commandID(extension: group.name, command: command.name),
+                id: commandID(owner: .group(group.name), command: command.name),
                 title: command.title,
                 subtitle: subtitle(group.title, unlessItRepeats: command.title),
                 extensionTitle: group.title,
@@ -197,22 +199,26 @@ public struct RootItem: Sendable, Equatable, Identifiable {
     }
 
     /// One item per command of the extension (view, no-view and menu-bar), with the subtitles commands set for
-    /// themselves.
+    /// themselves. An install that isn't Raycast's or bundled has its repository after its subtitle, so two installs
+    /// of one name read apart (`InstalledExtension.displayTitle`).
     public static func commands(of installed: InstalledExtension, metadata: CommandMetadata = CommandMetadata())
         -> [RootItem]
     {
         let manifest = installed.manifest
+        let suffix = String(installed.displayTitle.dropFirst(manifest.title.count))
         return manifest.commands.filter { ["view", "no-view", "menu-bar"].contains($0.mode) }.map { command in
             let icon = (command.icon ?? manifest.icon).map { installed.assetsDirectory.appendingPathComponent($0) }
+            let shown =
+                metadata.subtitle(extension: installed.id, command: command.name) ?? command.subtitle
+                ?? subtitle(manifest.title, unlessItRepeats: command.title)
             return RootItem(
-                id: commandID(extension: manifest.name, command: command.name),
+                id: commandID(owner: .extension(installed.id), command: command.name),
                 title: command.title,
-                subtitle: metadata.subtitle(extension: manifest.name, command: command.name) ?? command.subtitle
-                    ?? subtitle(manifest.title, unlessItRepeats: command.title),
-                extensionTitle: manifest.title,
+                subtitle: suffix.isEmpty ? shown : shown.map { $0 + suffix } ?? installed.displayTitle,
+                extensionTitle: installed.displayTitle,
                 keywords: command.keywords,
                 kind: .command(
-                    extension: manifest.name,
+                    extension: installed.id,
                     command: command.name,
                     mode: command.mode,
                     entry: installed.entry(for: command.name)
@@ -252,8 +258,8 @@ public enum RootSearch {
     /// order, each only when it's there. Any launch history at all puts it back to most-used first, then by title.
     public static let firstRunItemIDs = [
         RootItem.searchSnippets.id,
-        RootItem.commandID(extension: ClipboardHistory.extensionName, command: "clipboard-history"),
-        RootItem.commandID(extension: "fudge-emoji", command: "search-emoji"),
+        RootItem.commandID(owner: .extension(ClipboardHistory.id), command: "clipboard-history"),
+        RootItem.commandID(owner: .extension(BundledExtensions.emojiID), command: "search-emoji"),
         RootItem.settings.id,
     ]
 

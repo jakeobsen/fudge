@@ -695,7 +695,7 @@ private func storeFolder(_ trees: [String: String]) throws -> Folder {
     let settings = FudgeSettings.load(from: target.paths.settingsFile)
     #expect(settings.commands["\(name)/caffeinateWhile"]?.hotkey == "option+w")
     #expect(settings.commands["\(name)/caffeinateWhile"]?.alias == "cw")
-    #expect(!settings.isEnabled(extension: name, command: "addSchedule"))
+    #expect(!settings.isEnabled(owner: .extension(ExtensionID(stored: name)!), command: "addSchedule"))
     for path in ["history.json", "form-values/\(name).json"] {
         #expect(target.read(path) == source.read(path), "\(path)")
     }
@@ -708,7 +708,7 @@ private func storeFolder(_ trees: [String: String]) throws -> Folder {
     let source = try Folder()
     try source.write(
         "settings.json",
-        #"{"commands":{":test-tools/first":{"hotkey":"option+l","alias":"tf"}},"extensions":{":test-tools":{"enabled":false}}}"#
+        #"{"commands":{":tools/first":{"hotkey":"option+l","alias":"tf"}},"extensions":{":tools":{"enabled":false}}}"#
     )
     let file = source.url.appendingPathComponent("b.fudgebackup")
     try BackupArchive.write(
@@ -718,9 +718,9 @@ private func storeFolder(_ trees: [String: String]) throws -> Folder {
     _ = try Backup.apply(
         try Backup.open(file, password: password), to: target.paths, installed: [], fudgeVersion: "1.0", now: now)
     let settings = FudgeSettings.load(from: target.paths.settingsFile)
-    #expect(settings.commands[":test-tools/first"]?.hotkey == "option+l")
-    #expect(settings.commands[":test-tools/first"]?.alias == "tf")
-    #expect(!settings.isEnabled(extension: ":test-tools"))
+    #expect(settings.commands[":tools/first"]?.hotkey == "option+l")
+    #expect(settings.commands[":tools/first"]?.alias == "tf")
+    #expect(!settings.isEnabled(owner: .group(.tools)))
 }
 
 @Test func recentColorsGoIntoABackup() throws {

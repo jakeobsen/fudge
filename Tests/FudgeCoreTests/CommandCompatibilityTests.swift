@@ -7,8 +7,9 @@ import Testing
 // default never looks like the user's choice (the spec review's MUST).
 
 private let slack = "slack"
-private let emojis = FudgeSettings.commandID(extension: slack, command: "search-emojis")
-private let search = FudgeSettings.commandID(extension: slack, command: "search")
+private let slackOwner = CommandOwner.extension(ExtensionID(stored: slack)!)
+private let emojis = FudgeSettings.commandID(owner: slackOwner, command: "search-emojis")
+private let search = FudgeSettings.commandID(owner: slackOwner, command: "search")
 
 /// An installed extension with these commands, and what `compatibility.json` says they use.
 private func installed(_ commands: [String], using: [String: [CommandCompatibility.Unsupported]]) -> InstalledExtension
@@ -117,7 +118,7 @@ private func installed(_ commands: [String], using: [String: [CommandCompatibili
     #expect(!settings.isEnabled(commandID: emojis))
 
     // The extension's own Enabled still applies.
-    settings.extensions[slack] = .init(enabled: false)
+    settings.extensions[slackOwner] = .init(enabled: false)
     #expect(!settings.isEnabled(commandID: search))
 }
 
@@ -219,7 +220,7 @@ struct BuildScansEndToEnd {
     @Test func fudgeBuildListsTheCommandThatUsesRaycastAI() async throws {
         let installed = try await fudgeBuild(ask: "ask", plain: "plain")
         #expect(installed.compatibility.commands == ["ask": [.ai]])
-        #expect(InstalledExtension.offByDefault([installed]) == ["made-up/ask"])
+        #expect(InstalledExtension.offByDefault([installed]) == ["fudgeapp+development+made-up/ask"])
     }
 
     /// SPEC-143: a command named as Raycast accepts it (`caffeinateWhile`) is scanned too, so one that uses AI is
@@ -227,7 +228,7 @@ struct BuildScansEndToEnd {
     @Test func fudgeBuildListsACamelCaseCommandThatUsesRaycastAI() async throws {
         let installed = try await fudgeBuild(ask: "askAway", plain: "plain.command")
         #expect(installed.compatibility.commands == ["askAway": [.ai]])
-        #expect(InstalledExtension.offByDefault([installed]) == ["made-up/askAway"])
+        #expect(InstalledExtension.offByDefault([installed]) == ["fudgeapp+development+made-up/askAway"])
     }
 
     /// Builds a made-up extension with the real `fudge build`: a command named `ask` that reaches Raycast AI through

@@ -127,8 +127,7 @@ struct FudgeBuildRepositoryTests {
         let run = try RealTool()
         defer { run.remove() }
         #expect(try await run.build(Fixtures.greeter, ["--repository", "raycast/extensions"]).status == 0)
-        let store = FudgePaths(supportDirectory: run.support).supportDirectory(
-            forExtension: ExtensionStore.extensionName)
+        let store = FudgePaths(supportDirectory: run.support).supportDirectory(forExtension: ExtensionStore.id)
         try FileManager.default.createDirectory(at: store, withIntermediateDirectories: true)
         let record = Data(
             #"{"greeter":{"tree":"abc","commit":"def","installedAt":"2026-01-01T00:00:00.000Z","dir":"greeter"}}"#.utf8)

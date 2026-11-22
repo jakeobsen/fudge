@@ -26,7 +26,7 @@ struct SignInPage: View {
                 } else {
                     ForEach(model.signIns) { entry in
                         HStack(spacing: 12) {
-                            Text(model.extensionTitle(entry.extensionName) ?? entry.extensionName)
+                            Text(entry.extensionID.flatMap(model.extensionTitle) ?? entry.extensionKey)
                                 .frame(minWidth: 160, alignment: .leading)
                             Text(entry.providerName).foregroundStyle(.secondary)
                                 .frame(minWidth: 90, alignment: .leading)

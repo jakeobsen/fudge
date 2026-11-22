@@ -6,7 +6,8 @@ import Foundation
 /// never its name, so a rename keeps them.
 public enum QuicklinkCommands {
     /// The group's name: `:` and a valid extension name, so no extension can take its keys.
-    public static let groupName = ":quicklinks"
+    /// The group's key, also the prefix of its commands' ids.
+    public static let groupName = BuiltInGroup.quicklinks.rawValue
     public static let groupTitle = "Quicklinks"
     /// The SF Symbol a quicklink's row shows on the Commands page.
     public static let symbol = "link"
@@ -39,7 +40,7 @@ public enum QuicklinkCommands {
     /// A quicklink's key in `settings.json`'s `commands`: `:quicklinks/<id>`, the id exactly as `quicklinks.json`
     /// holds it. Nil when the id can't be part of a key (`isValidID`).
     public static func commandID(ofQuicklink id: String) -> String? {
-        isValidID(id) ? FudgeSettings.commandID(extension: groupName, command: id) : nil
+        isValidID(id) ? FudgeSettings.commandID(owner: .group(.quicklinks), command: id) : nil
     }
 
     /// The quicklink id a command key names; nil for any other key, and for one whose id `isValidID` refuses.
@@ -63,7 +64,7 @@ public enum QuicklinkCommands {
             .filter { isValidID($0.id) }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
             .map { BuiltInCommand(name: $0.id, title: $0.name, keywords: ["quicklink"], symbol: symbol) }
-        return BuiltInCommandGroup(name: groupName, title: groupTitle, commands: commands)
+        return BuiltInCommandGroup(name: .quicklinks, title: groupTitle, commands: commands)
     }
 
     /// What pressing a quicklink's hotkey does, as a no-view command's does: open it straight away, or show root

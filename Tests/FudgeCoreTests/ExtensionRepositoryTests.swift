@@ -256,3 +256,50 @@ private func status(_ text: String) throws -> ExtensionRepositoryStatus {
     #expect(ExtensionRepositoryStatus.notChecked.sentence(branch: nil) == "Not checked yet")
     #expect(!ExtensionRepositoryStatus.notChecked.isProblem && !ExtensionRepositoryStatus.extensions(3).isProblem)
 }
+
+/// `ExtensionRepositoryStatus.read(file)` on a thread of its own, or nil when it hasn't answered within 10 s. A read still
+/// waiting on a FIFO then gets a writer that closes at once, so it ends and the test run never hangs.
+private func readWithoutWaiting(_ file: URL) async throws -> ExtensionRepositoryStatus? {
+    if let status = try await OffThePool.run(within: .seconds(10), { ExtensionRepositoryStatus.read(file) }) {
+        return status
+    }
+    let writer = open(file.path, O_RDWR | O_NONBLOCK)
+    if writer >= 0 { close(writer) }
+    return nil
+}
+
+/// Settings reads the status file on the main thread, and any extension in the host could put something else there:
+/// only a regular file counts, and a FIFO is never waited on.
+@Test func aStatusFileThatIsntARegularFileReadsAsFailedWithoutWaiting() async throws {
+    let text = #"{ "checkedAt": "2026-11-22T10:00:00.123Z", "extensions": 3 }"#
+    // An empty FIFO with no writer: opening it to read would wait for one.
+    let empty = try Fixtures.temporaryDirectory().appendingPathComponent("status.json")
+    try #require(mkfifo(empty.path, 0o600) == 0)
+    #expect(try await readWithoutWaiting(empty) == .problem(.failed), "read at once, as failed")
+
+    // A FIFO holding a status, its writer gone: still not a status file.
+    let holding = try Fixtures.temporaryDirectory().appendingPathComponent("status.json")
+    try #require(mkfifo(holding.path, 0o600) == 0)
+    let reader = open(holding.path, O_RDONLY | O_NONBLOCK)
+    try #require(reader >= 0)
+    defer { close(reader) }
+    let writer = open(holding.path, O_WRONLY | O_NONBLOCK)
+    try #require(writer >= 0)
+    let bytes = Array(text.utf8)
+    let written = bytes.withUnsafeBytes { write(writer, $0.baseAddress, $0.count) }
+    close(writer)
+    try #require(written == bytes.count)
+    #expect(try await readWithoutWaiting(holding) == .problem(.failed))
+
+    // A link to a status file, and a link to nothing.
+    let target = try Fixtures.temporaryDirectory().appendingPathComponent("status.json")
+    try Data(text.utf8).write(to: target)
+    #expect(ExtensionRepositoryStatus.read(target) == .extensions(3))
+    let link = try Fixtures.temporaryDirectory().appendingPathComponent("status.json")
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+    #expect(ExtensionRepositoryStatus.read(link) == .problem(.failed))
+    let dangling = try Fixtures.temporaryDirectory().appendingPathComponent("status.json")
+    try FileManager.default.createSymbolicLink(
+        at: dangling, withDestinationURL: target.deletingLastPathComponent().appendingPathComponent("gone.json"))
+    #expect(ExtensionRepositoryStatus.read(dangling) == .problem(.failed))
+}

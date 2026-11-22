@@ -9,6 +9,8 @@ private func read(_ url: URL) -> String { (try? String(contentsOf: url, encoding
 
 private func lines(_ url: URL) -> [String] { read(url).split(separator: "\n").map(String.init) }
 
+private func id(_ key: String) -> ExtensionID { ExtensionID(stored: key)! }
+
 @Test func theLogsFolderIsTheUsersOrTheThrowawaySupportFolders() {
     let user = FudgePaths.logsDirectory(environment: [:])
     #expect(user.path.hasSuffix("/Library/Logs/Fudge"))
@@ -18,9 +20,8 @@ private func lines(_ url: URL) -> [String] { read(url).split(separator: "\n").ma
 
     let folder = URL(fileURLWithPath: "/tmp/run/Logs")
     #expect(LogFile.fudge.url(in: folder)?.path == "/tmp/run/Logs/Fudge.log")
-    #expect(LogFile.extensionNamed("amazon-aws").url(in: folder)?.path == "/tmp/run/Logs/Extensions/amazon-aws.log")
-    #expect(LogFile.extensionNamed("../x").url(in: folder) == nil)
-    #expect(LogFile.extensionNamed("").url(in: folder) == nil)
+    #expect(LogFile.extension(id("amazon-aws")).url(in: folder)?.path == "/tmp/run/Logs/Extensions/amazon-aws.log")
+    #expect(ExtensionID(stored: "../x") == nil && ExtensionID(stored: "") == nil, "neither names an extension's file")
 }
 
 @Test func eachLevelRecordsItselfAndTheLevelsAbove() {
@@ -64,7 +65,7 @@ private func lines(_ url: URL) -> [String] { read(url).split(separator: "\n").ma
     writer.flush()
     #expect(!FileManager.default.fileExists(atPath: folder.path), "nothing logged, nothing made")
     writer.write(.error, "first", to: .fudge)
-    writer.write(.error, "an extension's", command: "console", to: .extensionNamed("amazon-aws"))
+    writer.write(.error, "an extension's", command: "console", to: .extension(id("amazon-aws")))
     writer.write(.error, "second", to: .fudge)
     writer.flush()
     let fudge = lines(folder.appendingPathComponent("Fudge.log"))
@@ -125,8 +126,8 @@ private func lines(_ url: URL) -> [String] { read(url).split(separator: "\n").ma
     let disk = DispatchQueue(label: "test.slow-disk")
     disk.suspend()
     let writer = LogWriter(folder: folder, header: nil, pendingLimit: 10, queue: disk)
-    for index in 1...25 { writer.write(.error, "flood \(index)", to: .extensionNamed("flood")) }
-    for index in 1...3 { writer.write(.error, "steady \(index)", to: .extensionNamed("steady")) }
+    for index in 1...25 { writer.write(.error, "flood \(index)", to: .extension(id("flood"))) }
+    for index in 1...3 { writer.write(.error, "steady \(index)", to: .extension(id("steady"))) }
     disk.resume()
     writer.flush()
     let flood = lines(folder.appendingPathComponent("Extensions/flood.log")).map {
@@ -159,12 +160,16 @@ private func lines(_ url: URL) -> [String] { read(url).split(separator: "\n").ma
     let old = Date(timeIntervalSince1970: 1)
     let new = Date(timeIntervalSince1970: 2)
     let before = [
-        "kept": InstallStamp(version: "1.0", created: old), "bumped": InstallStamp(version: "1.0", created: old),
-        "rebuilt": InstallStamp(version: "2.0", created: old), "gone": InstallStamp(version: nil, created: old),
+        id("kept"): InstallStamp(version: "1.0", created: old),
+        id("bumped"): InstallStamp(version: "1.0", created: old),
+        id("rebuilt"): InstallStamp(version: "2.0", created: old),
+        id("gone"): InstallStamp(version: nil, created: old),
     ]
     let after = [
-        "kept": InstallStamp(version: "1.0", created: old), "bumped": InstallStamp(version: "1.1", created: new),
-        "rebuilt": InstallStamp(version: "2.0", created: new), "added": InstallStamp(version: "0.1", created: new),
+        id("kept"): InstallStamp(version: "1.0", created: old),
+        id("bumped"): InstallStamp(version: "1.1", created: new),
+        id("rebuilt"): InstallStamp(version: "2.0", created: new),
+        id("added"): InstallStamp(version: "0.1", created: new),
     ]
     #expect(
         InstallStamp.changes(from: before, to: after) == [
@@ -196,7 +201,7 @@ struct FudgeLogTests {
             log: { session, level, message, source in
                 calls.record()
                 FudgeLog.command(
-                    level, message, session: session, extensionName: source?.extensionName, command: source?.command)
+                    level, message, session: session, extension: source?.extensionID, command: source?.command)
             })
         defer { host.stop() }
         try host.send(.logLevel(.error))
@@ -212,7 +217,8 @@ struct FudgeLogTests {
                         manifestPath: support.appendingPathComponent("package.json").path, supportPath: support.path,
                         cachePath: support.path,
                         localStoragePath: support.appendingPathComponent("\(name).json").path,
-                        ownerOrAuthorName: "test", appearance: "light", isDevelopment: false)))
+                        ownerOrAuthorName: "test", appearance: "light", isDevelopment: false),
+                    extensionId: id(name)))
         }
         var exited: Set<String> = []
         var logMessages = 0
@@ -250,8 +256,8 @@ struct FudgeLogTests {
         defer { FudgeLog.start(writer: nil, level: .error) }
         FudgeLog.error("test-own-error")
         FudgeLog.info("test-own-info")
-        FudgeLog.command(.error, "test-command-error", session: "s", extensionName: "amazon-aws", command: "console")
-        FudgeLog.command(.info, "test-command-info", session: "s", extensionName: "amazon-aws", command: "console")
+        FudgeLog.command(.error, "test-command-error", session: "s", extension: id("amazon-aws"), command: "console")
+        FudgeLog.command(.info, "test-command-info", session: "s", extension: id("amazon-aws"), command: "console")
         FudgeLog.setLevel(.info)
         FudgeLog.info("test-own-info-later")
         writer.flush()
@@ -281,7 +287,7 @@ struct FudgeLogTests {
             node: try #require(HostFixture.node), script: HostFixture.runtime.appendingPathComponent("src/host.ts"),
             log: { session, level, message, source in
                 FudgeLog.command(
-                    level, message, session: session, extensionName: source?.extensionName, command: source?.command)
+                    level, message, session: session, extension: source?.extensionID, command: source?.command)
             })
         defer { host.stop() }
         var messages = host.messages.makeAsyncIterator()
@@ -298,7 +304,8 @@ struct FudgeLogTests {
             .launch(
                 session: "s-logs", entry: HostFixture.runtimeFixture("logs-no-view.cjs").path, mode: "no-view",
                 launchProps: LaunchProps(arguments: ["query": seeds["typed"]!]),
-                preferences: ["apiKey": .string(seeds["password"]!)], environment: environment))
+                preferences: ["apiKey": .string(seeds["password"]!)], environment: environment,
+                extensionId: id("amazon-aws")))
         // Each error the command reports goes where `LauncherModel` sends it, until the command exits.
         var errors: [Bool] = []
         while true {
@@ -311,7 +318,7 @@ struct FudgeLogTests {
             guard case .error(let session, let text, let stack, let fatal, _) = message else { break }
             errors.append(fatal)
             FudgeLog.commandError(
-                text, stack: stack, fatal: fatal, session: session, extensionName: "amazon-aws", command: "console")
+                text, stack: stack, fatal: fatal, session: session, extension: id("amazon-aws"), command: "console")
         }
         writer.flush()
         #expect(errors.contains(true), "the throw at the end is a fatal error: \(errors)")

@@ -228,13 +228,14 @@ private func drawn(_ text: String) -> (text: String, formatted: Bool) {
 
 private let defineWordID = ":tools/define-word"
 
-/// Root search's command items as `applySettings` gives them: Fudge's own, and two made up, one with an argument.
+/// Root search's command items as `applySettings` gives them: Fudge's own, and two made up, one with an argument,
+/// under the System group's key, since a group's key is one of a closed list (`BuiltInGroup`).
 private func items(_ settings: FudgeSettings = FudgeSettings()) -> [RootItem] {
     let madeUp = [
         RootItem(
-            id: "command::x/search", title: "Search", kind: .builtInCommand(group: ":x", command: "search"),
+            id: "command::system/search", title: "Search", kind: .builtInCommand(group: .system, command: "search"),
             arguments: [DefineWord.argument]),
-        RootItem(id: "command::x/plain", title: "Plain", kind: .builtInCommand(group: ":x", command: "plain")),
+        RootItem(id: "command::system/plain", title: "Plain", kind: .builtInCommand(group: .system, command: "plain")),
     ]
     return RootSearch.applying(settings, to: BuiltInCommandGroup.all.flatMap(RootItem.builtInCommands) + madeUp)
 }
@@ -263,12 +264,12 @@ private func settings(aliases: [String: String]) -> FudgeSettings {
 }
 
 @Test func aUsersOwnDefineAliasWinsOverTheDefault() throws {
-    let taken = settings(aliases: [":x/search": "define"])
+    let taken = settings(aliases: [":system/search": "define"])
     #expect(taken.alias(ofCommand: defineWordID) == nil, "the default isn't applied")
     #expect(items(taken).first { $0.title == "Define Word" }?.alias == nil)
     #expect(try #require(CommandAliases.handOff("define x", in: items(taken))).item.title == "Search")
     #expect(
-        CommandAliases.handOff("define x", in: items(settings(aliases: [":x/plain": "DEFINE"]))) == nil,
+        CommandAliases.handOff("define x", in: items(settings(aliases: [":system/plain": "DEFINE"]))) == nil,
         "an alias without arguments hands nothing off, and still takes the word, ignoring case")
     var off = FudgeSettings()
     off.commands[defineWordID] = .init(enabled: false)
@@ -300,9 +301,9 @@ private func settings(aliases: [String: String]) -> FudgeSettings {
 
     // Clearing an alias of a command with no default removes it, as before.
     var other = FudgeSettings()
-    other.setAlias("s", ofCommand: ":x/search")
-    other.setAlias("", ofCommand: ":x/search")
-    #expect(other.commands[":x/search"]?.alias == nil)
+    other.setAlias("s", ofCommand: ":system/search")
+    other.setAlias("", ofCommand: ":system/search")
+    #expect(other.commands[":system/search"]?.alias == nil)
 }
 
 @Test func theDefaultIsNeverWrittenToSettings() throws {

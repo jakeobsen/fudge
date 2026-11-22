@@ -195,7 +195,7 @@ final class ClipboardHistoryService {
 
     /// Answers `clipboardHistory.*`, only for Clipboard History's own sessions.
     func handle(
-        _ method: String, _ params: JSONValue, caller: String?, origin: CallOrigin, hideWindow: () async -> Void
+        _ method: String, _ params: JSONValue, caller: ExtensionID?, origin: CallOrigin, hideWindow: () async -> Void
     ) async throws -> JSONValue {
         guard ClipboardHistory.mayCall(caller) else {
             throw ClipboardHistoryError(ClipboardHistory.notClipboardHistory)

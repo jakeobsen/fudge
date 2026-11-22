@@ -635,15 +635,20 @@ public protocol SecretStore: Sendable {
 
 /// One row of Settings → Sign-in.
 public struct SignInEntry: Equatable, Sendable, Identifiable {
-    public var extensionName: String
+    /// The part of the account before its first `/`, as the Keychain has it.
+    public var extensionKey: String
     public var providerID: String
     public var providerName: String
     public var updatedAt: Date?
-    public var id: String { OAuthTokenStore.account(extension: extensionName, provider: providerID) }
+    /// The account, as the Keychain has it.
+    public var id: String { "\(extensionKey)/\(providerID)" }
+    /// The extension the sign-in is kept for; nil when the account's first part isn't an id, as only a hand-made item's
+    /// can be.
+    public var extensionID: ExtensionID? { ExtensionID(stored: extensionKey) }
 }
 
-/// The sign-ins Fudge keeps: one item per extension and `providerId`, account `<extension>/<providerId>`, holding a
-/// JSON `StoredTokenSet`.
+/// The sign-ins Fudge keeps: one item per extension and `providerId`, account `<extension id>/<providerId>`, holding a
+/// JSON `StoredTokenSet`. An id has no `/`, so an account splits back at its first one.
 public struct OAuthTokenStore: Sendable {
     /// The Keychain service of every item.
     public static let service = "io.github.jakeobsen.fudge.oauth"
@@ -670,8 +675,8 @@ public struct OAuthTokenStore: Sendable {
         }
     }
 
-    public static func account(extension extensionName: String, provider: String) -> String {
-        "\(extensionName)/\(provider)"
+    public static func account(extension id: ExtensionID, provider: String) -> String {
+        "\(id.key)/\(provider)"
     }
 
     /// A provider id from an extension: 1–64 characters, none of them `/` or a control character.
@@ -680,26 +685,30 @@ public struct OAuthTokenStore: Sendable {
             && !provider.unicodeScalars.contains { CharacterSet.controlCharacters.contains($0) }
     }
 
-    private func checkedAccount(_ extensionName: String, _ provider: String) throws -> String {
-        guard !extensionName.isEmpty, !extensionName.contains("/"), Self.isValid(provider: provider) else {
-            throw Failure.invalidName
-        }
-        return Self.account(extension: extensionName, provider: provider)
+    private func checkedAccount(_ id: ExtensionID, _ provider: String) throws -> String {
+        guard Self.isValid(provider: provider) else { throw Failure.invalidName }
+        return Self.account(extension: id, provider: provider)
     }
 
-    public func tokens(extension extensionName: String, provider: String) throws -> StoredTokenSet? {
-        guard let data = try secrets.read(account: checkedAccount(extensionName, provider)) else { return nil }
+    public func tokens(extension id: ExtensionID, provider: String) throws -> StoredTokenSet? {
+        guard let data = try secrets.read(account: checkedAccount(id, provider)) else { return nil }
         return try? JSONDecoder().decode(StoredTokenSet.self, from: data)
     }
 
-    public func save(_ tokens: StoredTokenSet, extension extensionName: String, provider: String) throws {
+    public func save(_ tokens: StoredTokenSet, extension id: ExtensionID, provider: String) throws {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        try secrets.write(encoder.encode(tokens), account: checkedAccount(extensionName, provider))
+        try secrets.write(encoder.encode(tokens), account: checkedAccount(id, provider))
     }
 
-    public func remove(extension extensionName: String, provider: String) throws {
-        try secrets.delete(account: checkedAccount(extensionName, provider))
+    public func remove(extension id: ExtensionID, provider: String) throws {
+        try secrets.delete(account: checkedAccount(id, provider))
+    }
+
+    /// Signs out of one listed sign-in, by its account as the Keychain has it, so a hand-made item whose first part
+    /// isn't an id can be signed out of too.
+    public func remove(_ entry: SignInEntry) throws {
+        try secrets.delete(account: entry.id)
     }
 
     /// Every stored sign-in, by extension then provider. An item that doesn't read is listed by its account, so it
@@ -707,17 +716,17 @@ public struct OAuthTokenStore: Sendable {
     public func entries() throws -> [SignInEntry] {
         try secrets.accounts().compactMap { account -> SignInEntry? in
             guard let slash = account.firstIndex(of: "/") else { return nil }
-            let extensionName = String(account[..<slash])
+            let extensionKey = String(account[..<slash])
             let provider = String(account[account.index(after: slash)...])
             let stored = (try? secrets.read(account: account)).flatMap {
                 try? JSONDecoder().decode(StoredTokenSet.self, from: $0)
             }
             return SignInEntry(
-                extensionName: extensionName, providerID: provider,
+                extensionKey: extensionKey, providerID: provider,
                 providerName: stored?.providerName ?? provider,
                 updatedAt: stored.flatMap { ISO8601DateFormatter().date(from: $0.updatedAt) })
         }
-        .sorted { ($0.extensionName, $0.providerID) < ($1.extensionName, $1.providerID) }
+        .sorted { ($0.extensionKey, $0.providerID) < ($1.extensionKey, $1.providerID) }
     }
 
     /// Signs out of everything, as changing the server does.
@@ -1023,12 +1032,12 @@ extension OAuthTokenStore {
 /// the parameters. `pending` holds the providers this session has prepared a relay sign-in for.
 public struct SignInCalls: Sendable {
     public let store: OAuthTokenStore
-    public let extensionName: String
+    public let extensionID: ExtensionID
     public let pending: Set<String>
 
-    public init(store: OAuthTokenStore, extensionName: String, pending: Set<String>) {
+    public init(store: OAuthTokenStore, extension extensionID: ExtensionID, pending: Set<String>) {
         self.store = store
-        self.extensionName = extensionName
+        self.extensionID = extensionID
         self.pending = pending
     }
 
@@ -1038,20 +1047,20 @@ public struct SignInCalls: Sendable {
         let provider = string("providerId") ?? ""
         switch method {
         case "oauth.tokens.get":
-            return try store.tokens(extension: extensionName, provider: provider).map(OAuthTokenStore.json) ?? .null
+            return try store.tokens(extension: extensionID, provider: provider).map(OAuthTokenStore.json) ?? .null
         case "oauth.tokens.set":
             guard var tokens = values["tokens"].flatMap(OAuthTokenStore.tokenSet) else {
                 throw OAuthTokenStore.Failure.invalidTokens
             }
             // Only a relay sign-in this session prepared marks the tokens; a refresh keeps the mark they had.
-            let existing = try store.tokens(extension: extensionName, provider: provider)
+            let existing = try store.tokens(extension: extensionID, provider: provider)
             tokens.relayProvider =
                 tokens.relayProvider.flatMap { pending.contains($0) ? $0 : nil }
                 ?? existing?.relayProvider
-            try store.save(tokens, extension: extensionName, provider: provider)
+            try store.save(tokens, extension: extensionID, provider: provider)
             return .null
         case "oauth.tokens.remove":
-            try store.remove(extension: extensionName, provider: provider)
+            try store.remove(extension: extensionID, provider: provider)
             return .null
         default:
             throw OAuthTokenStore.Failure.unknownCall
@@ -1062,7 +1071,7 @@ public struct SignInCalls: Sendable {
     /// or one it stored.
     public func hasRelaySignIn(provider: String) throws -> Bool {
         if pending.contains(provider) { return true }
-        let prefix = OAuthTokenStore.account(extension: extensionName, provider: "")
+        let prefix = OAuthTokenStore.account(extension: extensionID, provider: "")
         return try store.secrets.accounts().contains { account in
             guard account.hasPrefix(prefix), let data = try? store.secrets.read(account: account),
                 let tokens = try? JSONDecoder().decode(StoredTokenSet.self, from: data)

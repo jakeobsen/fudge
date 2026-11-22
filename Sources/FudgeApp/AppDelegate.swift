@@ -264,7 +264,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.clipboardHistoryChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.deleteClipboardHistory = { [weak self] in self?.model.clipboardHistory.deleteAll() }
         settingsModel.stopExtensionStore = { [weak self] in
-            await self?.model.unloadSessions(ofExtension: ExtensionStore.extensionName)
+            await self?.model.unloadSessions(ofExtension: ExtensionStore.id)
         }
         settingsModel.currencyRatesChanged = { [weak self] on in
             guard let self else { return }

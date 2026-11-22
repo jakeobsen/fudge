@@ -441,7 +441,7 @@ private func fixed(_ events: [CalendarEvent]) -> FixedCalendarSource {
 
 @Test func theCalendarGroupHasMySchedule() {
     let group = BuiltInCommandGroup.calendar
-    #expect(group.name == ":calendar" && BuiltInCommandGroup.isValidName(group.name))
+    #expect(group.id == ":calendar" && BuiltInCommandGroup.isValidName(group.id))
     #expect(group.commands.map(\.title) == ["My Schedule"])
     #expect(group.commandID(group.commands[0]) == ":calendar/my-schedule")
     #expect(ExtensionManifest.isValidName(ScheduleList.commandName))
