@@ -47,6 +47,9 @@ public struct HostSessions: Sendable {
         live.remove(session)
     }
 
+    /// Whether `session` is running in the host: started, and not exited or ended.
+    public func isRunning(_ session: String) -> Bool { live.contains(session) }
+
     /// The host stopped, and every session with it.
     public mutating func endAll() {
         live.removeAll()

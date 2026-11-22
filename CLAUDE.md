@@ -579,6 +579,8 @@ Extensions run in a separate Node.js process, the extension host.
       Not set up, an extension whose scan named a `swift:` import first gets a view (`SwiftPartsView`) saying what it needs, with Don't Install (↵), Install Without the Swift Part and Install with Command Line Tools, which installs once the tools are set up and until then opens Settings → Development (`openDevelopmentSettings`, from the user's own action only).
       A `swift:` import the scan missed makes the build stop asking for `--swift-parts`, and the store shows the view then instead of the error.
       An extension installed without its part says so on its detail page.
+      **Install notifications** (SPEC-156) add three `fudge:app` calls that only the store may make, as with `fudge.log`: `installEnded` (`store.installEnded`, an install's end, answered with `{ onScreen, notified }`), `askForNotifications` (`store.askForNotifications`) and `nextNotificationClick` (`store.nextNotificationClick`, which waits for a click).
+      Any other extension gets an error.
     - **The Commands page** (`CommandsPage.swift`) is the Settings window's second page:
       Fudge's own command groups, then the quicklinks as a group of their own (`SettingsModel.commandGroups`, shown once there is one, its Type "Quicklinks" and theirs "Quicklink", `BuiltInCommandGroup.typeLabels`),
       then every installed extension, each expanded to its commands (menu-bar ones included), with each command's alias, hotkey and Enabled checkbox (an extension's row has its own checkbox).
@@ -685,6 +687,20 @@ Extensions run in a separate Node.js process, the extension host.
       Below it, always shown, are the answers to "Allow <A> to open <B>'s commands?" (`LaunchPermissionsSection`, `LaunchPermissions.entries`), each changeable or forgotten, with the file read again before each change, a line saying none has asked yet when there are none, and the unreadable-file notice.
       Between them is Calendar access as macOS has it, with Open Privacy Settings (`CalendarAccessRow`); My Schedule asks for it, never this page.
       Show Onboarding Again restarts onboarding from Welcome.
+    - **The Notifications page** (`NotificationsPage.swift`, SPEC-156) comes after Permissions: macOS's answer for Fudge (`NotificationPermission.statusLine`), read and never asked when the page appears and when the window becomes key, with Ask Now while macOS hasn't been asked and Open Notification Settings otherwise.
+      Below it is one switch per Extension Store notification, Install or update finished and Install or update failed (`notifyInstallFinished` and `notifyInstallFailed` in `settings.json`, true unless `false`; only `false` is written).
+      **One decision per build** (`InstallNoticeCenter`, `InstallNotices`, core), known by its pid and `startedAt` and kept for the last 256 builds: nothing while the store is on screen (the panel visible with a store session on it) or for status 75, else a notification when its switch is on and macOS allows it.
+      While a store session is loaded, only its `store.installEnded` reports decide.
+      With none loaded, `InstallOutcomeWatcher` (an FSEvents stream on the store's `installing/`, on its own queue) decides from each new `<pid>.ended.json` that still has its record (`StoreBuildRecord`), and when a store session ends, the app reads the folder once for the outcomes it left undecided.
+      At launch the stream starts first, and then the outcomes already in the folder count as decided, with nothing posted.
+      **The notification** (`InstallNotice`) is `<title> is installed` or `<title> is updated`, or `Couldn't install <title>` or `Couldn't update <title>` with "Click to see what went wrong.", with the identifier `store:<name>` and the `userInfo` `{ name, dir, failed }`.
+      It shows even while Fudge is the active app (`willPresent` answers `.banner` and `.list`).
+      **A click** (`NotificationClicks`) with a store session still running on the screen's command (`ExtensionStore.sessionOnScreen`) shows the panel without the reset and answers the store's waiting `store.nextNotificationClick` call, or keeps the click for its next one.
+      With no store loaded, the command on screen is left and the store launches as from root search, with `launchContext.storeNotification`.
+      **macOS is asked** (`requestAuthorization(options: [.alert])`) only while it hasn't been, at most once a run, and only when the user confirms an install or update (`store.askForNotifications`, from a user-initiated store session), turns a switch on, or presses Ask Now.
+      It's never asked at launch, at a build's end, in a snapshot run or in a test.
+      **Only `SystemInstallNotifications` touches `UNUserNotificationCenter`**, as the poster, the asker and the delegate, made in `applicationWillFinishLaunching` unless the launch is a snapshot run.
+      A snapshot run gets `FixedInstallNotifications` (`--notifications not-asked|allowed|quiet|off|unknown`), and tests use a recording fake.
     - **Moving to Applications** (SPEC-114 §1).
       At launch, before onboarding, `AppLocation` (core) reads where the app runs from: a read-only volume is the disk image, and a path through `AppTranslocation` is macOS's read-only copy of a quarantined download.
       Either gets one alert, **Move to Applications** (↵) or **Not Now**, which keeps it running and asks nothing more this run.
@@ -716,7 +732,7 @@ Extensions run in a separate Node.js process, the extension host.
     - `SettingsWindow.swift` is the Settings window, with a fixed 200 pt sidebar beside the page (a `List` with the sidebar material, not a `NavigationSplitView`, so there's no divider to drag and nothing to collapse).
       Every way in goes through `SettingsWindowController.show`, which deminiaturizes the window, moves it to the current Space, activates Fudge with `activate(ignoringOtherApps:)` (`activateFromUserAction`; the plain `activate()` can be declined since macOS 14, leaving the window behind the app in front) and orders it front and key.
       It's for user-initiated entries only, never a background path: `show` takes the call's `CallOrigin` and does nothing for a background one. ⌘Q closes the window as ⌘W and its close button do (`SettingsNSWindow.performKeyEquivalent`, `WindowShortcut` in core), and Fudge keeps running; while a hotkey is being recorded, the recorder takes ⌘Q like any other key.
-      The sidebar lists Fudge's core pages on top: General, Permissions, Commands, Sign-in and Development.
+      The sidebar lists Fudge's core pages on top: General, Permissions, Notifications, Commands, Sign-in and Development.
       Under Extensions, one list sorted by title with `localizedStandardCompare` holds Fudge's Calculator, Calendar, Color Picker, Quicklinks, Snippets and Window Management pages, the extensions with preferences, and the Extension Store, whose page starts with its switch (`InstalledExtension.settingsPages`), enabled or not.
       `SettingsSidebar` (core) gives both lists and the tags of Fudge's own pages, which start with `:`, so no extension name can take one; `SettingsView` only draws them.
       Rows with exactly the same title put Fudge's own page first, then the extensions by tag, so the order never changes; such an extension shows " (installed)" after its title (`SettingsSidebar.title(of:)`; the store has a Color Picker of its own).
@@ -1035,6 +1051,23 @@ Extensions run in a separate Node.js process, the extension host.
     An ended one is settled in the queue: it's adopted into `installed.json` only when `<extensions>/<name>` was made between its start and the end bound (when the open store saw it end, or its deadline when it ended before the store opened) and the record has a tree, and dropped otherwise.
     One still running past its deadline gets SIGTERM, as the closed session's timer would have sent; this session's own records end through their own run.
     A build that exits 75 (another build of that extension is running, `fudge build`'s lock) is neither a failure nor an install: the toast says it's already being installed.
+    **A build's output and outcome** (SPEC-156 A): `recordedBuild` passes `--outcome <support>/installing`, and the build's stdout and stderr go to two files in `installing/` instead of pipes (`Run`'s `output`), so a build that outlives its worker never gets SIGPIPE and its whole output stays.
+    `spawnProgram` opens them `wx+` with mode 0600, gives them to the child as fd 1 and 2, and reads back at most the last 1 MiB of each through its own descriptors; git and `fudge scan` keep their pipes.
+    `recordBuild` makes them under dot names and renames them to `<pid>.out` and `<pid>.err` before it writes `<pid>.json`, and its `ended()` removes `<pid>.out`, `<pid>.err`, `<pid>.ended.json` and then the record.
+    The reader keeps these files while their record exists, deletes one without it once it's an hour old, and uses an `.ended.json` only when it's valid (`parseBuildOutcome`).
+    **Settling with an outcome** (D.2): status 0 is adopted when the folder was made between `startedAt` and the outcome's `endedAt`, and is otherwise dropped quietly with one Fudge.log line; 75 is dropped quietly; any other status is a failed drop.
+    A record without an outcome (killed, or crashed) is settled as before, and a failed drop's output then ends with `Its build stopped before it finished.` (`stoppedLine`).
+    A failed drop has details like `BuildFailed`'s (the two files' output, the command and the exit status), is logged and marks its row (`settledNotice`), and all of the pid's files are deleted.
+    **The report** (D.1): `installPressed` reports every install or update it ends, apart from `AlreadyBuilding` and a cancel, through `installEnded` with the last build's pid and `startedAt` (`reportEnd`), and a record seen ending is reported the same way.
+    A report that fails or isn't answered within 5 s counts as on screen and not notified.
+    The answer decides: notified hides the animated toast; a success not on screen selects its row once; a notified failure is logged, marked, selected and saved for a click, with no `FailureView`; a failure not notified pushes `FailureView` as before.
+    **The row mark** (D.3, `RowMarks`, in memory for the store session only) is `Couldn't install` or `Couldn't update` in red in place of the row's tag (a busy tag wins), with Try Again (↵) and Show Error (⌘↵) first; it goes when that name installs or updates.
+    `accessoryTexts` and `rowActions` take the mark as they take `busy`.
+    **A failure saved for a click** (D.4) is `<support>/failures/<name>.json` (`saveFailure`, atomic, mode 0600), written only for a failure that got a notification, and deleted when a click or Show Error opens it, when the name is pressed again, and at the store's open once it's 7 days old.
+    **The launch context** (D.5, `LaunchTarget`): `launchContext.storeNotification` (`{ name, dir, failed }`, checked by `noticeTarget`) selects that row once after the first load, once the records found at open have settled (held outside the queue).
+    With `failed`, it pushes `FailureView` from the session's mark, or else from the saved file, which then goes (`openNoticeTarget`).
+    A click while the store is loaded comes through one waiting `nextNotificationClick` call, made again after each answer (`followClicks`).
+    Right after the user confirms an install or update, before the build, the store calls `askForNotifications` without waiting for it (SPEC-156 G).
     **A failed install or update** pushes `FailureView` (`failure-view.tsx`, SPEC-116) over the list, and the toast only says where to look.
     It has the title, the likely cause in plain words (`causeOf` in `failure.ts`: npm or Node.js not found, which, since both come with Fudge, means a damaged app to reinstall, the npm registry or GitHub unreachable, Git missing, the extension's own build error with its first line, or else something went wrong), and the last 40 lines of the step's output.
     The output is untrusted (package names, build scripts' output), so it's in a code block nothing in it can close (`codeBlock`), and the title and cause are escaped code point by code point (`escapeMarkdown`), so no package can add an image, a link or formatting.
@@ -1050,6 +1083,9 @@ Extensions run in a separate Node.js process, the extension host.
     A second build of that name into that folder stops with `BuildError.alreadyBuilding` and exits with status 75 (`EX_TEMPFAIL`, used for nothing else), which the Extension Store reads; `runtime/test/fixtures/build-statuses.json` pins both sides.
     The kernel drops the lock when the build's process ends, however it ends, and the empty dot file stays, since deleting a lock file another build may have open would break the lock.
     The build gives it back with `LOCK_UN` before it closes the file (`unlockBuild`): a program another thread is starting holds a copy of every descriptor until its exec, so `close` alone could leave the lock with that copy for a moment.
+  - **`--outcome <folder>`** (SPEC-156 A.3), an absolute path to a folder that exists, checked as `--into` is: on every exit the tool makes itself (0, 1, 75, and 128+n from `endChildrenOnSignals`), it first writes `<folder>/<pid>.ended.json` atomically, `{ pid, status, endedAt }` (`BuildOutcomeFile`, `BuildOutcomeRecorder`, where the first status wins).
+    A file it can't write prints `fudge: couldn't save the build's outcome in <folder>: <reason>` to stderr and never changes the exit status; SIGKILL or a crash writes nothing.
+    The Extension Store passes `--outcome <support>/installing` on every build, and `runtime/test/fixtures/build-outcome.json` pins the format on both sides.
   - It reads `package.json` (`ExtensionManifest`) and compiles every command's `src/<command>.{tsx,ts,jsx,js}` with esbuild into `<extensions>/<name>/<command>.cjs`, beside `package.json` and `assets/`, as Raycast installs it (SPEC-123).
     So a command's `__dirname` is the extension's folder, and `${__dirname}/assets/…` and `${__dirname}/package.json` are its own, as extensions such as the store's amazon-aws expect.
     esbuild writes into a folder of its own inside the staging folder, and only the commands' files move up, so anything else it writes (a stylesheet an import pulls in) never reaches the install.

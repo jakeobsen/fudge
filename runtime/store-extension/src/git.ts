@@ -1,6 +1,6 @@
 // The store's local copy of github.com/raycast/extensions: a shallow, blobless, sparse clone made with the system git.
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rm, stat, writeFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { proxyVariables } from "./proxy.ts";
 import { longTimeout, shortTimeout } from "./timeouts.ts";
@@ -20,6 +20,8 @@ export const cancelGrace = 1000;
  * is given one (`fetchSource`): a git that's writing the index holds `index.lock`, and ending it would leave that
  * behind, so every later checkout and install would fail. `started` is called with the program's pid right after it
  * starts, and never for a program that couldn't start; it must not throw (the store records `fudge build` with it).
+ * With `output` (two paths), the program's stdout and stderr are those files instead of pipes (SPEC-156 A.1): a program
+ * that outlives the store's worker then never gets SIGPIPE, and its whole output stays.
  */
 export type Run = (
     program: string,
@@ -32,8 +34,55 @@ export type Run = (
         env?: NodeJS.ProcessEnv;
         signal?: AbortSignal;
         started?: (pid: number) => void;
+        output?: ProgramOutput;
     },
 ) => Promise<GitResult>;
+
+/** The files a program's stdout and stderr go to, made by the run (`wx+`, 0600, so it can read them back); the caller may rename them meanwhile. */
+export type ProgramOutput = { stdout: string; stderr: string };
+
+/** How much of each output file a run reads back: its end, which holds everything a failure keeps (`keptOutput`). */
+export const maxOutputBytes = 1024 * 1024;
+
+/**
+ * The text of an output file through its descriptor, so a rename on the way doesn't matter: its last `maxOutputBytes`,
+ * from the first line start inside them when the file is longer.
+ */
+export async function readOutputTail(handle: FileHandle, limit: number = maxOutputBytes): Promise<string> {
+    const { size } = await handle.stat();
+    const start = Math.max(0, size - limit);
+    // One byte before the cut too: a newline there means the cut is at a line's start, and that line is kept whole.
+    const from = start > 0 ? start - 1 : 0;
+    const buffer = Buffer.alloc(size - from);
+    let read = 0;
+    while (read < buffer.length) {
+        const { bytesRead } = await handle.read(buffer, read, buffer.length - read, from + read);
+        if (bytesRead === 0) break;
+        read += bytesRead;
+    }
+    let bytes = buffer.subarray(0, read);
+    if (start > 0) {
+        const newline = bytes.indexOf(0x0a);
+        bytes = newline === -1 ? bytes.subarray(bytes.length) : bytes.subarray(newline + 1);
+    }
+    return bytes.toString("utf8");
+}
+
+/** Opens both output files for a run, or none: a pair that can't be made leaves nothing behind. */
+async function openOutput(output: ProgramOutput): Promise<[FileHandle, FileHandle] | undefined> {
+    let stdout: FileHandle | undefined;
+    try {
+        stdout = await open(output.stdout, "wx+", 0o600);
+        const stderr = await open(output.stderr, "wx+", 0o600);
+        return [stdout, stderr];
+    } catch {
+        if (stdout) {
+            await stdout.close().catch(() => undefined);
+            await rm(output.stdout, { force: true }).catch(() => undefined);
+        }
+        return undefined;
+    }
+}
 
 /** The git processes running now, which `stopRunningGit()` ends. */
 const running = new Set<ChildProcess>();
@@ -65,15 +114,27 @@ export function storeEnvironment(base: NodeJS.ProcessEnv = process.env): NodeJS.
  * `spawn` with no shell, a timeout that sends SIGTERM, and `storeEnvironment()`. When the timeout fired, stderr ends
  * with "<program> stopped after N s", whatever the exit: `fudge` catches SIGTERM and exits with 143.
  */
-export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable, input, env, signal, started }) =>
-    new Promise((resolve) => {
-        if (signal?.aborted) {
-            resolve({ code: -1, stdout: "", stderr: `${path.basename(program)} cancelled` });
-            return;
-        }
+export const spawnProgram: Run = async (program, args, options) => {
+    if (options.signal?.aborted) return { code: -1, stdout: "", stderr: `${path.basename(program)} cancelled` };
+    // Files that can't be made fall back to pipes: the output files never stop a build (SPEC-153's rule for records).
+    const files = options.output ? await openOutput(options.output) : undefined;
+    try {
+        return await spawnWith(program, args, options, files);
+    } finally {
+        for (const file of files ?? []) await file.close().catch(() => undefined);
+    }
+};
+
+function spawnWith(
+    program: string,
+    args: string[],
+    { cwd, timeout, stoppable, input, env, signal, started }: Parameters<Run>[2],
+    files: [FileHandle, FileHandle] | undefined,
+): Promise<GitResult> {
+    return new Promise((resolve) => {
         const child = spawn(program, args, {
             cwd,
-            stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+            stdio: [input === undefined ? "ignore" : "pipe", files ? files[0].fd : "pipe", files ? files[1].fd : "pipe"],
             env: { ...storeEnvironment(), ...env },
             detached: signal !== undefined,
         });
@@ -126,13 +187,18 @@ export const spawnProgram: Run = (program, args, { cwd, timeout, stoppable, inpu
             finished();
             resolve({ code: -1, stdout, stderr: error.message });
         });
-        child.on("close", (code, signal) => {
+        child.on("close", async (code, signal) => {
             finished();
+            if (files) {
+                stdout = await readOutputTail(files[0]).catch(() => "");
+                stderr = await readOutputTail(files[1]).catch(() => "");
+            }
             if (timedOut) stderr += `\n${path.basename(program)} stopped after ${timeout / 1000} s`;
             else if (code === null) stderr += `\n${path.basename(program)} stopped (${signal ?? "killed"})`;
             resolve({ code: code ?? -1, stdout, stderr });
         });
     });
+}
 
 /** A git command that failed; its message is git's stderr, and `command` what ran, for a failure's report. */
 export class GitError extends Error {

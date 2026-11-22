@@ -20,6 +20,7 @@ public enum SettingsSidebar {
     // Fudge's own pages are tagged with a leading ":", which no extension name can have, so no extension takes one.
     public static let generalPage = ":general"
     public static let permissionsPage = ":permissions"
+    public static let notificationsPage = ":notifications"
     public static let commandsPage = ":commands"
     public static let signInPage = ":sign-in"
     public static let developmentPage = ":development"
@@ -34,6 +35,7 @@ public enum SettingsSidebar {
     public static let top: [Entry] = [
         Entry(tag: generalPage, title: "General", symbol: "gearshape"),
         Entry(tag: permissionsPage, title: "Permissions", symbol: "hand.raised"),
+        Entry(tag: notificationsPage, title: "Notifications", symbol: "bell"),
         Entry(tag: commandsPage, title: "Commands", symbol: "command"),
         Entry(tag: signInPage, title: "Sign-in", symbol: "person.badge.key"),
         Entry(tag: developmentPage, title: "Development", symbol: "hammer"),

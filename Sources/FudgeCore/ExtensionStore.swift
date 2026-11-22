@@ -39,6 +39,12 @@ public enum ExtensionStore {
         paths.supportDirectory(forExtension: extensionName).appendingPathComponent("repo", isDirectory: true)
     }
 
+    /// Where the store keeps its running builds' records, output and outcomes (`installing/`, SPEC-153 C.1, SPEC-156 A),
+    /// which the app watches for outcomes.
+    public static func installingDirectory(_ paths: FudgePaths) -> URL {
+        paths.supportDirectory(forExtension: extensionName).appendingPathComponent("installing", isDirectory: true)
+    }
+
     /// Deletes the downloaded repository, if there is one.
     public static func deleteRepository(_ paths: FudgePaths) throws {
         let folder = repositoryDirectory(paths)

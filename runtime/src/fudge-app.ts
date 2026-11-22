@@ -109,11 +109,59 @@ export async function openDevelopmentSettings(): Promise<void> {
     await callApp("commandLineTools.openSettings");
 }
 
+// The Extension Store's install notifications (SPEC-156). Only the store may make these calls; the app refuses any
+// other extension.
+
+/** An install or update the store ended: the last build it ran (a refusal before any build has none), and how. */
+export type InstallEndReport = {
+    build?: { pid: number; startedAt: string };
+    name: string;
+    dir: string;
+    title: string;
+    updating: boolean;
+    outcome: "installed" | "failed";
+};
+
+/** The app's answer: whether the store is on screen, and whether a notification went out. */
+export type InstallAnswer = { onScreen: boolean; notified: boolean };
+
+/** What a click on a notification opens: the extension's row, and its failure view when it failed. */
+export type NotificationClick = { name: string; dir: string; failed: boolean; repository?: string };
+
+/** Tells the app an install or update ended, so it decides whether a notification goes out, once per build. */
+export async function installEnded(report: InstallEndReport): Promise<InstallAnswer> {
+    const answer = (await callApp("store.installEnded", report)) as Record<string, unknown> | null;
+    if (typeof answer?.onScreen !== "boolean" || typeof answer.notified !== "boolean") {
+        throw new Error("The app's answer about the notification isn't one");
+    }
+    return { onScreen: answer.onScreen, notified: answer.notified };
+}
+
+/** After the user confirmed an install or update: macOS asks whether Fudge may show notifications, if it hasn't yet. */
+export async function askForNotifications(): Promise<void> {
+    await callApp("store.askForNotifications");
+}
+
+/**
+ * Waits for the next click on one of Fudge's install notifications while this store session is loaded; null when the
+ * call was replaced by a newer one.
+ */
+export async function nextNotificationClick(): Promise<NotificationClick | null> {
+    const click = (await callApp("store.nextNotificationClick")) as Record<string, unknown> | null;
+    if (click === null || typeof click !== "object") return null;
+    const { name, dir, failed, repository } = click;
+    if (typeof name !== "string" || typeof dir !== "string" || typeof failed !== "boolean") return null;
+    return typeof repository === "string" ? { name, dir, failed, repository } : { name, dir, failed };
+}
+
 export function createFudgeAppModule() {
     return Object.freeze({
         logToFudge,
         commandLineToolsReady,
         openDevelopmentSettings,
+        installEnded,
+        askForNotifications,
+        nextNotificationClick,
         searchFiles,
         listClipboardHistory,
         clipboardImage,

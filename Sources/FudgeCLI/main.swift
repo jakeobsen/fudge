@@ -6,10 +6,12 @@ let usage = """
 
     Commands:
       build <folder> [--into <extensions folder>] [--swift-parts build|leave-out]
+            [--outcome <folder>]
                       Compile the Raycast extension in <folder> and install it, in the
                       default extensions folder or, with --into, in that one.
                       An extension with a part written in Swift needs --swift-parts:
                       build it with Apple's Command Line Tools, or leave it out.
+                      With --outcome, write <pid>.ended.json there as it ends.
       scan <folder> [--json]
                       Say what the extension in <folder> uses that Fudge doesn't have
                       yet. Nothing is built or run.
@@ -17,15 +19,24 @@ let usage = """
       version         Print the Fudge version.
     """
 
+/// `fudge build --outcome`'s outcome, written at whichever exit comes first (SPEC-156 A.3).
+let outcome = BuildOutcomeRecorder()
+
+/// Ends the tool with `status`, writing the build's outcome first when it was asked for.
+func finish(_ status: Int32) -> Never {
+    outcome.ended(status: status)
+    exit(status)
+}
+
 func fail(_ message: String, status: Int32 = 1) -> Never {
     FileHandle.standardError.write(Data("fudge: \(message)\n".utf8))
-    exit(status)
+    finish(status)
 }
 
 /// The folder this tool really is in, links resolved: the bundle's `Contents/Helpers`, beside Fudge's own Node.js.
 let helpers = Bundle.main.executableURL?.resolvingSymlinksInPath().deletingLastPathComponent()
 
-func build(_ arguments: BuildArguments) {
+func build(_ arguments: BuildArguments) -> Never {
     guard let esbuild = ExtensionBuilder.locateEsbuild() else {
         fail("can't find esbuild: set FUDGE_ESBUILD to its path, or use the fudge tool inside Fudge.app")
     }
@@ -52,6 +63,7 @@ func build(_ arguments: BuildArguments) {
             source: arguments.source, into: arguments.destination ?? FudgePaths.standard().extensionsDirectory)
         let count = installed.manifest.commands.count
         print("→ installed \(installed.manifest.title) (\(count) command\(count == 1 ? "" : "s"))")
+        finish(0)
     } catch {
         // Another build of this extension into this folder: 75, which the Extension Store reads (SPEC-153 A).
         fail(String(describing: error), status: (error as? BuildError)?.exitStatus ?? 1)
@@ -90,13 +102,17 @@ case nil, "help", "-h", "--help":
 case "version", "--version":
     print(FudgeVersion.current)
 case "build":
-    // A signal that ends the tool (the Extension Store's timeout, ⌃C) ends npm and esbuild with it.
-    ChildProcesses.endChildrenOnSignals()
+    // A signal that ends the tool (the Extension Store's timeout, ⌃C) ends npm and esbuild with it, and the outcome
+    // says so.
+    ChildProcesses.endChildrenOnSignals(beforeExit: { outcome.ended(status: $0) })
+    let parsed: BuildArguments
     do {
-        build(try BuildArguments.parse(Array(arguments.dropFirst())))
+        parsed = try BuildArguments.parse(Array(arguments.dropFirst()))
     } catch {
         fail(String(describing: error), status: 2)
     }
+    if let folder = parsed.outcome { outcome.record(into: folder) }
+    build(parsed)
 case "scan":
     ChildProcesses.endChildrenOnSignals()
     do {

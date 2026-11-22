@@ -7,10 +7,34 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 import {
+    failureKeep,
+    failuresFolder,
+    followClicks,
+    LaunchTarget,
+    launchTarget,
+    noticeTarget,
+    openNoticeTarget,
+    pruneSavedFailures,
+    readSavedFailure,
+    removeSavedFailure,
+    reportEnd,
+    reportLimit,
+    RowMarks,
+    RowSelection,
+    saveFailure,
+    unanswered,
+    type FailureMark,
+    type InstallAnswer,
+    type InstallEndReport,
+    type NoticeTarget,
+} from "../store-extension/src/notices.ts";
+import {
     accessoryTexts,
     allFilter,
     categories,
     distinctFolders,
+    failedInstallTag,
+    failedUpdateTag,
     filterEntries,
     iconURL,
     installedFilter,
@@ -21,6 +45,7 @@ import {
     searchKeywords,
     sections,
     status,
+    updatingTag,
     type StoreEntry,
 } from "../store-extension/src/catalog.ts";
 import {
@@ -41,8 +66,11 @@ import {
     openCopy,
     OtherBuilds,
     pollInterval,
+    settledNotice,
     settledToast,
+    stoppedLine,
     type Settled,
+    type SettledSteps,
 } from "../store-extension/src/other-builds.ts";
 import {
     builtCompatibility,
@@ -81,6 +109,7 @@ import {
     storeEnvironment,
     StoreRepository,
     type GitResult,
+    type ProgramOutput,
     type Run,
 } from "../store-extension/src/git.ts";
 import {
@@ -957,6 +986,13 @@ async function storeContext(
 }
 const alphaEntry = parseManifest("alpha", manifest("alpha"))!;
 
+/** A build's arguments without the `--outcome <support>/installing` the store adds to every build (SPEC-156 A.3). */
+function withoutOutcome(args: string[]): string[] {
+    assert.equal(args.at(-2), "--outcome");
+    assert.ok(args.at(-1)!.endsWith(`${path.sep}installing`), args.at(-1));
+    return args.slice(0, -2);
+}
+
 test("install fetches the source, checks it, asks, builds into FUDGE_EXTENSIONS_DIR and records it", async () => {
     const { context, git, cli, asked, extensionsDir, supportPath, repoPath } = await storeContext();
     assert.deepEqual(await install(alphaEntry, context), {});
@@ -970,7 +1006,7 @@ test("install fetches the source, checks it, asks, builds into FUDGE_EXTENSIONS_
             primary: "Install",
         },
     ]);
-    assert.deepEqual(cli.calls.map((call) => [call.program, ...call.args]), [
+    assert.deepEqual(cli.calls.map((call) => [call.program, ...(call.args[0] === "build" ? withoutOutcome(call.args) : call.args)]), [
         ["/Applications/Fudge.app/Contents/Helpers/fudge", "scan", path.join(repoPath, "extensions/alpha"), "--json"],
         ["/Applications/Fudge.app/Contents/Helpers/fudge", "build", path.join(repoPath, "extensions/alpha"), "--into", extensionsDir],
     ]);
@@ -1001,7 +1037,7 @@ test("with the Command Line Tools set up, an extension with a Swift part install
     assert.deepEqual(chosen, [], "no view");
     assert.equal(asked.length, 1, "only the install's own confirmation");
     assert.equal(asked[0]!.message.includes("Swift"), false, "and nothing in it about Swift");
-    assert.deepEqual(cli.calls.at(-1)!.args, [
+    assert.deepEqual(withoutOutcome(cli.calls.at(-1)!.args), [
         "build", path.join(repoPath, "extensions/alpha"), "--into", extensionsDir, "--swift-parts", "build",
     ]);
     assert.equal(cli.calls.at(-1)!.timeout, swiftBuildTimeout, "a first Swift build fetches and compiles its packages");
@@ -1009,7 +1045,7 @@ test("with the Command Line Tools set up, an extension with a Swift part install
     const plain = await storeContext();
     plain.context.commandLineToolsReady = context.commandLineToolsReady;
     assert.deepEqual(await install(alphaEntry, plain.context), {});
-    assert.deepEqual(plain.cli.calls.at(-1)!.args.slice(-2), ["--swift-parts", "build"]);
+    assert.deepEqual(withoutOutcome(plain.cli.calls.at(-1)!.args).slice(-2), ["--swift-parts", "build"]);
     assert.equal(plain.cli.calls.at(-1)!.timeout, buildTimeout, "with no Swift part, the usual time");
     assert.equal(readyAsked, 2);
     // When the check didn't answer (install always scans, so that's a scan that failed), the build may have a Swift
@@ -1018,7 +1054,7 @@ test("with the Command Line Tools set up, an extension with a Swift part install
         const unchecked = await storeContext({ scan });
         unchecked.context.commandLineToolsReady = context.commandLineToolsReady;
         assert.deepEqual(await install(alphaEntry, unchecked.context), {}, JSON.stringify(scan));
-        assert.deepEqual(unchecked.cli.calls.at(-1)!.args.slice(-2), ["--swift-parts", "build"], JSON.stringify(scan));
+        assert.deepEqual(withoutOutcome(unchecked.cli.calls.at(-1)!.args).slice(-2), ["--swift-parts", "build"], JSON.stringify(scan));
         assert.equal(unchecked.cli.calls.at(-1)!.timeout, swiftBuildTimeout, JSON.stringify(scan));
     }
 });
@@ -1051,7 +1087,7 @@ test("without the tools, the view comes first, and its choice is what the build 
         } else {
             assert.deepEqual(done, {});
             assert.deepEqual(order, ["view: Alpha", "confirm"], "before anything is installed");
-            assert.deepEqual(builds.map((call) => call.args.slice(-2)), [["--swift-parts", flag]]);
+            assert.deepEqual(builds.map((call) => withoutOutcome(call.args).slice(-2)), [["--swift-parts", flag]]);
         }
     }
 });
@@ -1079,7 +1115,7 @@ test("a swift: import the check missed: without the tools, the build's question 
             return choice;
         };
         const done = await install(alphaEntry, context);
-        const builds = cli.calls.filter((call) => call.args[0] === "build").map((call) => call.args.slice(4));
+        const builds = cli.calls.filter((call) => call.args[0] === "build").map((call) => withoutOutcome(call.args).slice(4));
         assert.deepEqual(views, ["Alpha"]);
         if (choice === "dont-install") {
             assert.equal(done, false);
@@ -1146,7 +1182,7 @@ test("a folder whose manifest has another name installs from the folder, under t
     const aws = parseManifest("amazon-aws", manifest("aws", { title: "Amazon AWS" }))!;
     assert.deepEqual(await install(aws, context), {});
     assert.deepEqual(git.calls[0]!.args, ["sparse-checkout", "add", "/extensions/amazon-aws/"]);
-    assert.deepEqual(cli.calls.at(-1)!.args, ["build", path.join(repoPath, "extensions/amazon-aws"), "--into", extensionsDir]);
+    assert.deepEqual(withoutOutcome(cli.calls.at(-1)!.args), ["build", path.join(repoPath, "extensions/amazon-aws"), "--into", extensionsDir]);
     assert.deepEqual((await readInstalled(supportPath)).aws, {
         tree: "a5a1",
         commit: "c0ffee1234",
@@ -2908,12 +2944,17 @@ test("while a name installs, every row of that name says so and offers no Instal
     assert.deepEqual(tags("updating"), [{ tag: "Partly compatible" }, { tag: "Updating…" }], "in place of Installed");
     assert.deepEqual(tags("updating", "update"), [{ tag: "Partly compatible" }, { tag: "Updating…" }], "and of Update available");
 
-    assert.deepEqual(rowActions("available"), { install: true, update: false, uninstall: false });
-    assert.deepEqual(rowActions("installed"), { install: false, update: false, uninstall: true });
-    assert.deepEqual(rowActions("update"), { install: false, update: true, uninstall: true });
+    const none = { tryAgain: false, showError: false };
+    assert.deepEqual(rowActions("available"), { install: true, update: false, uninstall: false, ...none });
+    assert.deepEqual(rowActions("installed"), { install: false, update: false, uninstall: true, ...none });
+    assert.deepEqual(rowActions("update"), { install: false, update: true, uninstall: true, ...none });
     for (const state of ["available", "installed", "update"] as const) {
         for (const busy of ["installing", "updating"] as const) {
-            assert.deepEqual(rowActions(state, busy), { install: false, update: false, uninstall: false }, `${state}, ${busy}`);
+            assert.deepEqual(
+                rowActions(state, busy),
+                { install: false, update: false, uninstall: false, tryAgain: false, showError: false },
+                `${state}, ${busy}`,
+            );
         }
     }
 
@@ -2979,10 +3020,19 @@ test("each build is recorded in installing/<pid>.json while it runs, and the rec
         context.ownBuilds = own;
         const run = context.run!;
         let recorded: unknown;
+        let output: ProgramOutput | undefined;
         context.run = async (program, args, options) => {
             if (args[0] !== "build") return run(program, args, options);
+            output = options.output;
+            // As the build does: its output files, then its start, and its outcome at its end.
+            if (output) {
+                await writeFile(output.stdout, "out");
+                await writeFile(output.stderr, "err");
+            }
             options.started?.(4242);
             recorded = await waitFor(async () => JSON.parse(await readFile(path.join(supportPath, "installing/4242.json"), "utf8")));
+            const outcome = { pid: 4242, status: result.code ?? 0, endedAt: "2026-11-20T12:01:00.000Z" };
+            await writeFile(path.join(supportPath, "installing/4242.ended.json"), JSON.stringify(outcome));
             return { stdout: "", stderr: "", code: 0, ...result };
         };
         const outcome = await install(alphaEntry, context).then(
@@ -3002,13 +3052,40 @@ test("each build is recorded in installing/<pid>.json while it runs, and the rec
                 updating: false,
                 startedAt: "2026-11-20T12:00:00.000Z",
                 deadline: "2026-11-20T12:10:00.000Z",
-                command: [context.cli, "build", path.join(repoPath, "extensions/alpha"), "--into", extensionsDir],
+                command: [
+                    context.cli, "build", path.join(repoPath, "extensions/alpha"), "--into", extensionsDir,
+                    "--outcome", installingFolder(supportPath),
+                ],
             },
             ending,
         );
-        assert.deepEqual(await readdir(installingFolder(supportPath)), [], `${ending}: the record is gone`);
+        // The build's output goes to the two files beside its record (A.1), never to pipes.
+        assert.equal(path.dirname(output?.stdout ?? ""), installingFolder(supportPath), `${ending}: stdout to a file`);
+        assert.equal(path.dirname(output?.stderr ?? ""), installingFolder(supportPath), `${ending}: stderr to a file`);
+        assert.match(path.basename(output!.stdout), /^\..+\.out$/);
+        assert.match(path.basename(output!.stderr), /^\..+\.err$/);
+        assert.deepEqual(await readdir(installingFolder(supportPath)), [], `${ending}: the record, output and outcome are gone`);
         assert.ok(own.has(4242), "it's this session's build");
     }
+});
+
+test("a build whose installing/ folder can't be made runs as before: no output files and no --outcome", async () => {
+    const { context, supportPath } = await storeContext();
+    const lines: string[] = [];
+    context.log = (line) => lines.push(line);
+    // A file in the folder's place.
+    await writeFile(installingFolder(supportPath), "");
+    const run = context.run!;
+    let build: { args: string[]; output?: ProgramOutput } | undefined;
+    context.run = async (program, args, options) => {
+        if (args[0] === "build") build = { args, output: options.output };
+        return run(program, args, options);
+    };
+    await install(alphaEntry, context);
+    assert.ok(build, "it built");
+    assert.equal(build.output, undefined);
+    assert.ok(!build.args.includes("--outcome"), build.args.join(" "));
+    assert.ok(lines.some((line) => line.startsWith("Couldn't keep the output of Alpha's build: ")), lines.join("\n"));
 });
 
 test("a record is removed only once its write has settled, so a run that ends at once leaves none", async () => {
@@ -3308,11 +3385,13 @@ test("a build seen ending while the store is open: the end bound is that moment"
 
     assert.deepEqual(settledToast({ record, adopted: true, seen: true }), { failed: false, title: "Installed Alpha" });
     assert.deepEqual(settledToast({ record: { ...record, updating: true }, adopted: true, seen: true }), { failed: false, title: "Updated Alpha" });
-    assert.deepEqual(settledToast({ record, adopted: false, seen: true }), {
+    // A failed drop now has its output, so its toast points to the failure view (SPEC-156 D.2); a quiet drop has none.
+    assert.deepEqual(settledToast({ record, adopted: false, seen: true, failure: { output: "x" } }), {
         failed: true,
         title: "Couldn't install Alpha",
-        message: "Its build stopped before it finished. Try again to see the error.",
+        message: "See the details.",
     });
+    assert.equal(settledToast({ record, adopted: false, seen: true }), undefined);
 });
 
 test("a pid kill(pid, 0) can't find has ended, whatever ps says; EPERM and ESRCH both mean it isn't the store's", async () => {
@@ -3496,4 +3575,668 @@ test("a copy that can't be read: the records come first, so its removal waits fo
         "an open with nothing pending",
     );
     assert.deepEqual(quiet.order, ["loaded", "refresh"]);
+});
+
+// MARK: - Install notifications (SPEC-156 D.1, D.4, G)
+
+/** A press view with install notifications: the app's answer is `answer`, and every report, selection and quiet
+ * failure is listed. */
+function noticesView(answer: InstallAnswer | (() => Promise<InstallAnswer>), limit?: number) {
+    const pressed = pressView();
+    const reports: InstallEndReport[] = [];
+    const selected: string[] = [];
+    const quiet: { title: string; mark: FailureMark }[] = [];
+    pressed.view.notices = {
+        report: async (report) => {
+            reports.push(report);
+            return typeof answer === "function" ? answer() : answer;
+        },
+        select: (dir) => void selected.push(dir),
+        failedNotified: (title, _error, mark) => void quiet.push({ title, mark }),
+        ...(limit === undefined ? {} : { limit }),
+    };
+    return { ...pressed, reports, selected, quiet };
+}
+
+/** Gives every `fudge build` of `context` the pid `pid`, as `spawnProgram` would once it has started. */
+function withPid(context: StoreContext, pid: number) {
+    const run = context.run!;
+    context.run = async (program, args, options) => {
+        if (args[0] === "build") await options?.started?.(pid);
+        return run(program, args, options);
+    };
+}
+
+test("a finished install is reported with its build, and the answer decides the toast and the selection", async () => {
+    const cases: { answer: InstallAnswer; shown: string[]; selected: string[] }[] = [
+        { answer: { onScreen: false, notified: true }, shown: ["toast: Installing Alpha…", "loaded", "hidden"], selected: ["alpha"] },
+        { answer: { onScreen: false, notified: false }, shown: ["toast: Installing Alpha…", "loaded", "done: Installed Alpha"], selected: ["alpha"] },
+        { answer: { onScreen: true, notified: false }, shown: ["toast: Installing Alpha…", "loaded", "done: Installed Alpha"], selected: [] },
+    ];
+    for (const { answer, shown, selected } of cases) {
+        const { context } = await storeContext();
+        withPid(context, 4242);
+        const view = noticesView(answer);
+        await installPressed(alphaEntry, false, context, view.view);
+        assert.deepEqual(view.shown, shown, JSON.stringify(answer));
+        assert.deepEqual(view.selected, selected);
+        assert.equal(view.reports.length, 1);
+        const report = view.reports[0]!;
+        assert.equal(report.build?.pid, 4242);
+        assert.match(report.build?.startedAt ?? "", /^2026-11-20T12:00:00\.000Z$/);
+        assert.deepEqual({ ...report, build: undefined }, {
+            build: undefined, name: "alpha", dir: "alpha", title: "Alpha", updating: false, outcome: "installed",
+        });
+    }
+});
+
+test("an install that built twice reports its last build", async () => {
+    let runs = 0;
+    const { context } = await storeContext({
+        build: () =>
+            runs++ === 0
+                ? { code: 1, stderr: `✘ [ERROR] ${chooseSwiftPartsMessage} [plugin swift]\n\n    src/index.ts:1:20:` }
+                : { code: 0 },
+    });
+    context.chooseSwiftParts = async () => "leave-out";
+    const run = context.run!;
+    let pid = 500;
+    context.run = async (program, args, options) => {
+        if (args[0] === "build") await options?.started?.(++pid);
+        return run(program, args, options);
+    };
+    const view = noticesView({ onScreen: false, notified: false });
+    await installPressed(alphaEntry, false, context, view.view);
+    assert.equal(runs, 2);
+    assert.equal(view.reports.length, 1);
+    assert.equal(view.reports[0]?.build?.pid, 502);
+});
+
+test("a failure that got a notification is marked, kept and saved, with no failure view; one that didn't pushes it", async () => {
+    const notified = await storeContext({ cliCode: 1 });
+    withPid(notified.context, 77);
+    const view = noticesView({ onScreen: false, notified: true });
+    await installPressed(alphaEntry, true, notified.context, view.view);
+    assert.deepEqual(view.shown, ["toast: Updating Alpha…", "hidden"]);
+    assert.deepEqual(view.failures, [], "no failure view");
+    assert.equal(view.reports[0]?.outcome, "failed");
+    assert.equal(view.reports[0]?.build?.pid, 77);
+    assert.equal(view.quiet.length, 1);
+    assert.equal(view.quiet[0]!.title, "Couldn't update Alpha");
+    const mark = view.quiet[0]!.mark;
+    assert.equal(mark.dir, "alpha");
+    assert.match(mark.details.output, /esbuild failed/);
+    assert.equal(mark.details.code, 1);
+    const saved = await readSavedFailure(notified.supportPath, "alpha");
+    assert.deepEqual(saved, mark);
+
+    const plain = await storeContext({ cliCode: 1 });
+    const shown = noticesView({ onScreen: false, notified: false });
+    await installPressed(alphaEntry, false, plain.context, shown.view);
+    assert.deepEqual(shown.shown, ["toast: Installing Alpha…", "failed: Couldn't install Alpha (See the details.)"]);
+    assert.deepEqual(shown.failures, ["Couldn't install Alpha"]);
+    assert.deepEqual(shown.quiet, []);
+    assert.equal(await readSavedFailure(plain.supportPath, "alpha"), undefined, "nothing saved without a notification");
+});
+
+test("a report that throws or takes over its limit ends the press as before", async () => {
+    for (const answer of [
+        async (): Promise<InstallAnswer> => {
+            throw new Error("Only the Extension Store asks about install notifications");
+        },
+        () => new Promise<InstallAnswer>(() => {}),
+        async () => ({ onScreen: false }) as unknown as InstallAnswer,
+    ]) {
+        const { context } = await storeContext({ cliCode: 1 });
+        const view = noticesView(answer, 30);
+        await installPressed(alphaEntry, false, context, view.view);
+        assert.deepEqual(view.shown, ["toast: Installing Alpha…", "failed: Couldn't install Alpha (See the details.)"]);
+        assert.deepEqual(view.failures, ["Couldn't install Alpha"]);
+        assert.deepEqual(view.selected, [], "on screen: no selection");
+    }
+    assert.deepEqual(await reportEnd(undefined, { name: "a", dir: "a", title: "A", updating: false, outcome: "installed" }), unanswered);
+    assert.equal(reportLimit, 5000);
+});
+
+test("another build running and a cancel report nothing; a refusal before any build has no build", async () => {
+    const busy = await storeContext({ build: () => ({ code: 75 }) });
+    const view = noticesView({ onScreen: false, notified: true });
+    await installPressed(alphaEntry, false, busy.context, view.view);
+    const cancelled = await storeContext({ confirm: false });
+    await installPressed(alphaEntry, false, cancelled.context, view.view);
+    assert.deepEqual(view.reports, []);
+
+    const refused = await storeContext();
+    await mkdir(path.join(refused.extensionsDir, "alpha"), { recursive: true });
+    const refusal = noticesView({ onScreen: false, notified: false });
+    await installPressed(alphaEntry, false, refused.context, refusal.view);
+    assert.equal(refusal.reports.length, 1);
+    assert.equal(refusal.reports[0]!.build, undefined);
+    assert.equal(refusal.reports[0]!.outcome, "failed");
+});
+
+test("pressing a name again deletes the failure saved for its notification", async () => {
+    const { context, supportPath } = await storeContext();
+    const mark: FailureMark = {
+        name: "alpha", dir: "alpha", title: "Alpha", updating: false, failedAt: "2026-11-20T11:00:00.000Z", details: { output: "x" },
+    };
+    await saveFailure(supportPath, mark);
+    assert.ok(await readSavedFailure(supportPath, "alpha"));
+    await installPressed(alphaEntry, false, context, noticesView({ onScreen: true, notified: false }).view);
+    assert.equal(await readSavedFailure(supportPath, "alpha"), undefined);
+});
+
+test("macOS is asked once the user confirms, before the build, and never after a cancel", async () => {
+    for (const updating of [false, true]) {
+        const { context, cli } = await storeContext();
+        const order: string[] = [];
+        context.askForNotifications = async () => void order.push(`asked after ${cli.calls.filter((c) => c.args[0] === "build").length} builds`);
+        if (updating) await writeInstalled(context.supportPath, { alpha: { tree: "old", commit: "c", installedAt: "2026-11-01T00:00:00.000Z", dir: "alpha" } });
+        assert.ok(await install(alphaEntry, context));
+        assert.deepEqual(order, ["asked after 0 builds"]);
+    }
+    const cancelled = await storeContext({ confirm: false });
+    let asked = 0;
+    cancelled.context.askForNotifications = async () => void asked++;
+    assert.equal(await install(alphaEntry, cancelled.context), false);
+    assert.equal(asked, 0);
+    // A question that fails, at once or later, never stops the install.
+    for (const ask of [
+        () => {
+            throw new Error("no");
+        },
+        async () => {
+            throw new Error("no");
+        },
+    ]) {
+        const { context } = await storeContext();
+        context.askForNotifications = ask as () => Promise<void>;
+        assert.ok(await install(alphaEntry, context));
+    }
+});
+
+test("saved failures: read back only when valid, older than 7 days deleted at open", async () => {
+    const support = await temporary();
+    const mark: FailureMark = {
+        name: "alpha", dir: "alpha", title: "Alpha", updating: true, failedAt: "2026-11-20T11:00:00.000Z",
+        details: { output: "boom", command: "fudge build", code: 1 }, repository: "raycast/extensions",
+    };
+    await saveFailure(support, mark);
+    assert.deepEqual(await readSavedFailure(support, "alpha"), mark);
+    assert.equal(await readSavedFailure(support, "../alpha"), undefined);
+    // A refusal stays one, so its view shows the store's own words rather than a build error.
+    const refusal: FailureMark = { ...mark, name: "zeta", dir: "zeta", details: { output: "Another extension called zeta is installed.", refused: true } };
+    await saveFailure(support, refusal);
+    assert.deepEqual(await readSavedFailure(support, "zeta"), refusal);
+    await writeFile(path.join(failuresFolder(support), "zeta.json"), JSON.stringify({ ...refusal, details: { output: "x", refused: "yes" } }));
+    assert.equal(await readSavedFailure(support, "zeta"), undefined, "refused must be a boolean");
+    await rm(path.join(failuresFolder(support), "zeta.json"));
+    await writeFile(path.join(failuresFolder(support), "beta.json"), `{"title": 1}`);
+    assert.equal(await readSavedFailure(support, "beta"), undefined);
+    const old = new Date(Date.now() - failureKeep - 60_000);
+    await utimes(path.join(failuresFolder(support), "beta.json"), old, old);
+    await pruneSavedFailures(support);
+    assert.deepEqual(await readdir(failuresFolder(support)), ["alpha.json"]);
+    await removeSavedFailure(support, "alpha");
+    assert.deepEqual(await readdir(failuresFolder(support)), []);
+});
+
+test("a click's target and the launch context are checked; anything off is ignored", () => {
+    const good = { name: "alpha", dir: "alpha", failed: true };
+    assert.deepEqual(launchTarget({ storeNotification: good }), good);
+    assert.deepEqual(noticeTarget({ ...good, repository: "raycast/extensions" }), { ...good, repository: "raycast/extensions" });
+    for (const bad of [
+        { ...good, name: "Al pha" }, { ...good, dir: "../alpha" }, { ...good, dir: "a/b" }, { ...good, failed: "yes" },
+        { name: "alpha", dir: "alpha" }, { ...good, repository: 3 }, null, "alpha",
+    ]) {
+        assert.equal(noticeTarget(bad), undefined, JSON.stringify(bad));
+        assert.equal(launchTarget({ storeNotification: bad }), undefined);
+    }
+    assert.equal(launchTarget(undefined), undefined);
+    assert.equal(launchTarget({ other: good }), undefined);
+});
+
+test("row marks are per folder, gone when the name installs", () => {
+    let changes = 0;
+    const marks = new RowMarks(() => void changes++);
+    const mark: FailureMark = { name: "alpha", dir: "alpha-dir", title: "Alpha", updating: false, failedAt: "t", details: { output: "" } };
+    marks.mark(mark);
+    assert.equal(marks.get("alpha-dir"), mark);
+    marks.clear("beta");
+    assert.equal(changes, 1, "nothing to clear changes nothing");
+    marks.clear("alpha");
+    assert.equal(marks.get("alpha-dir"), undefined);
+    assert.equal(changes, 2);
+});
+
+/**
+ * The app's side of `selectedItemId` (`ListContent.selection`): it follows the id when it changed since the id it last
+ * followed and the list shows that row, forgets what it followed when the id goes, and reports only a selection that
+ * moved, later, as the bridge does.
+ */
+class FollowingList {
+    selected: string;
+    rendered: (string | undefined)[] = [];
+    private followed: string | undefined;
+    private readonly reports: string[] = [];
+    private readonly shown: Set<string>;
+
+    constructor(rows: string[], selected: string) {
+        this.shown = new Set(rows);
+        this.selected = selected;
+    }
+
+    render(selectedItemId: string | undefined): void {
+        this.rendered.push(selectedItemId);
+        if (selectedItemId !== undefined && selectedItemId !== this.followed && this.shown.has(selectedItemId)) {
+            this.followed = selectedItemId;
+            this.move(selectedItemId);
+        } else if (selectedItemId === undefined) {
+            this.followed = undefined;
+        }
+    }
+
+    /** The user moves the selection. */
+    move(id: string): void {
+        if (id === this.selected) return;
+        this.selected = id;
+        this.reports.push(id);
+    }
+
+    /** The reports reach the store. */
+    deliver(to: RowSelection): void {
+        for (const id of this.reports.splice(0)) to.reported(id);
+    }
+}
+
+test("a row is selected once, whenever it's asked for, even when it was already selected (D.1, D.5, E.1)", () => {
+    const list = new FollowingList(["w", "x", "y"], "x");
+    const rows = new RowSelection((asked) => list.render(asked));
+    rows.reported("x");
+    // X ends while the panel is hidden, with X selected: nothing to ask for.
+    rows.select("x");
+    list.deliver(rows);
+    assert.equal(list.selected, "x");
+    assert.equal(rows.current, undefined, "an already selected row isn't asked for");
+    // The user moves to Y; then the click on "X is installed" selects X.
+    list.move("y");
+    list.deliver(rows);
+    rows.select("x");
+    list.deliver(rows);
+    assert.equal(list.selected, "x", "the click selects its row");
+    assert.equal(rows.current, undefined, "selected once: from here the user moves it");
+    // Again: the user moves away, and another click on the same row selects it again.
+    list.move("w");
+    list.deliver(rows);
+    rows.select("x");
+    list.deliver(rows);
+    assert.equal(list.selected, "x");
+    assert.deepEqual(list.rendered, ["x", undefined, "x", undefined]);
+});
+
+test("an ask waits for its row, and asking for the selected row instead takes it back", () => {
+    const list = new FollowingList(["w", "x"], "x");
+    const rows = new RowSelection((asked) => list.render(asked));
+    rows.reported("x");
+    // A row the list doesn't show (a search hides it) stays asked for.
+    rows.select("z");
+    list.deliver(rows);
+    assert.equal(rows.current, "z");
+    assert.equal(list.selected, "x");
+    rows.select("x");
+    assert.equal(rows.current, undefined, "the newer ask, for the selected row, wins");
+    assert.equal(list.selected, "x");
+    assert.deepEqual(list.rendered, ["z", undefined]);
+});
+
+test("a failed row's mark: its tag and Try Again and Show Error, a busy tag winning while one runs", () => {
+    const failed = { updating: false };
+    const tags = (state: "available" | "installed" | "update", busy?: "installing" | "updating", mark = failed) =>
+        accessoryTexts(alphaEntry, state, undefined, busy, mark).filter((accessory) => "tag" in accessory);
+    assert.deepEqual(tags("available"), [{ tag: failedInstallTag }]);
+    assert.deepEqual(tags("installed"), [{ tag: failedInstallTag }], "in place of Installed");
+    assert.deepEqual(tags("update", undefined, { updating: true }), [{ tag: failedUpdateTag }], "in place of Update available");
+    assert.deepEqual(tags("update", "updating"), [{ tag: updatingTag }], "busy wins");
+    assert.equal(failedInstallTag, "Couldn't install");
+    assert.equal(failedUpdateTag, "Couldn't update");
+    assert.deepEqual(rowActions("available", undefined, failed), {
+        install: false, update: false, uninstall: false, tryAgain: true, showError: true,
+    });
+    assert.deepEqual(rowActions("update", undefined, { updating: true }), {
+        install: false, update: false, uninstall: true, tryAgain: true, showError: true,
+    });
+    assert.deepEqual(rowActions("available", "installing", failed), {
+        install: false, update: false, uninstall: false, tryAgain: false, showError: false,
+    });
+});
+
+test("a notified failure selects its row, and a success clears its mark", async () => {
+    const failing = await storeContext({ cliCode: 1 });
+    const view = noticesView({ onScreen: false, notified: true });
+    await installPressed(alphaEntry, false, failing.context, view.view);
+    assert.deepEqual(view.selected, ["alpha"]);
+    const cleared: string[] = [];
+    const { context } = await storeContext();
+    const ok = noticesView({ onScreen: true, notified: false });
+    ok.view.notices!.succeeded = (name) => void cleared.push(name);
+    await installPressed(alphaEntry, false, context, ok.view);
+    assert.deepEqual(cleared, ["alpha"]);
+});
+
+/** Settles one record from another session that wrote `status` as its outcome (none: killed), with its output files,
+ * and `<extensions>/alpha` made now when `folder`. */
+async function settleWithOutcome(options: { status?: number; endedAt?: string; folder: boolean; output?: [string, string] }) {
+    const supportPath = await temporary();
+    const extensionsDir = await temporary();
+    const record = otherRecord();
+    await writeBuildRecord(supportPath, record);
+    const folder = installingFolder(supportPath);
+    if (options.output) {
+        await writeFile(path.join(folder, `${record.pid}.out`), options.output[0]);
+        await writeFile(path.join(folder, `${record.pid}.err`), options.output[1]);
+    }
+    if (options.status !== undefined) {
+        const endedAt = options.endedAt ?? new Date(Date.now() + 10_000).toISOString();
+        await writeFile(path.join(folder, `${record.pid}.ended.json`), JSON.stringify({ pid: record.pid, status: options.status, endedAt }));
+    }
+    if (options.folder) await mkdir(path.join(extensionsDir, "alpha"));
+    const settled: Settled[] = [];
+    const lines: string[] = [];
+    // No process is running: the probe finds none.
+    const builds = new OtherBuilds({
+        supportPath,
+        extensionsDir,
+        probe: fakeProbe().probe,
+        own: new Set(),
+        settled: (outcome) => void settled.push(outcome),
+        log: (line) => void lines.push(line),
+    });
+    await builds.check();
+    await within(builds.hold("test", async () => {}), "settling");
+    return { record, settled, lines, left: await readdir(folder), installed: await readInstalled(supportPath) };
+}
+
+test("settling with an outcome: 0 adopted by the build's own end, 75 quiet, any other status failed with its output", async () => {
+    const adopted = await settleWithOutcome({ status: 0, folder: true });
+    assert.equal(adopted.settled[0]?.adopted, true);
+    assert.equal(adopted.settled[0]?.failure, undefined);
+    assert.ok(adopted.installed.alpha);
+    assert.deepEqual(adopted.left, [], "all of the pid's files go");
+
+    // The folder made after the build's own end, though before the deadline: dropped quietly, with one line.
+    const changed = await settleWithOutcome({ status: 0, endedAt: new Date(Date.now() - 30_000).toISOString(), folder: true });
+    assert.equal(changed.settled[0]?.adopted, false);
+    assert.equal(changed.settled[0]?.failure, undefined);
+    assert.deepEqual(changed.installed, {});
+    assert.equal(changed.lines.length, 1);
+    assert.match(changed.lines[0]!, /Alpha.*folder changed since/);
+
+    const busy = await settleWithOutcome({ status: 75, folder: false });
+    assert.deepEqual(
+        busy.settled.map(({ adopted, failure }) => ({ adopted, failure })),
+        [{ adopted: false, failure: undefined }],
+    );
+    assert.deepEqual(busy.lines, []);
+
+    const failed = await settleWithOutcome({ status: 1, folder: true, output: ["building\n", "error: esbuild failed\n"] });
+    assert.equal(failed.settled[0]?.adopted, false, "a failed build's folder isn't adopted");
+    assert.deepEqual(failed.settled[0]?.failure, {
+        output: "building\n\nerror: esbuild failed\n",
+        command: "fudge build /repo/extensions/alpha --into /Users/someone/Library/Application Support/Fudge/extensions",
+        code: 1,
+    });
+    assert.deepEqual(failed.left, []);
+});
+
+test("settling without an outcome is as before, and a failed drop's output ends with the stopped line", async () => {
+    const adopted = await settleWithOutcome({ folder: true });
+    assert.equal(adopted.settled[0]?.adopted, true);
+    const killed = await settleWithOutcome({ folder: false, output: ["half a build", ""] });
+    assert.equal(killed.settled[0]?.adopted, false);
+    assert.deepEqual(killed.settled[0]?.failure, {
+        output: `half a build\n${stoppedLine}`,
+        command: "fudge build /repo/extensions/alpha --into /Users/someone/Library/Application Support/Fudge/extensions",
+    });
+    assert.equal(stoppedLine, "Its build stopped before it finished.");
+    const silent = await settleWithOutcome({ folder: false });
+    assert.equal(silent.settled[0]?.failure?.output, stoppedLine);
+});
+
+/** A failure as the store keeps it, for `name`. */
+const failureMark = (name: string, output = "boom"): FailureMark => ({
+    name, dir: `${name}-dir`, title: name.toUpperCase(), updating: false, failedAt: "2026-11-22T10:00:00.000Z", details: { output },
+});
+
+/** The view's side of opening a target: what was selected and shown. */
+function targetSteps(supportPath: string, marks = new RowMarks()) {
+    const selected: string[] = [];
+    const shown: FailureMark[] = [];
+    return {
+        selected,
+        shown,
+        steps: { supportPath, select: (dir: string) => void selected.push(dir), marks, show: (mark: FailureMark) => void shown.push(mark) },
+    };
+}
+
+test("a target opens its row, and with failed its failure from memory or the saved file, which then goes", async () => {
+    const support = await temporary();
+    // From this session's memory: the mark stays on its row.
+    const marks = new RowMarks();
+    marks.mark(failureMark("alpha"));
+    const memory = targetSteps(support, marks);
+    await openNoticeTarget({ name: "alpha", dir: "alpha-dir", failed: true }, memory.steps);
+    assert.deepEqual(memory.selected, ["alpha-dir"]);
+    assert.deepEqual(memory.shown, [failureMark("alpha")]);
+    assert.ok(marks.get("alpha-dir"));
+
+    // From the file a notified failure saved: shown once, then deleted.
+    await saveFailure(support, failureMark("beta", "saved output"));
+    const saved = targetSteps(support);
+    await openNoticeTarget({ name: "beta", dir: "beta-dir", failed: true }, saved.steps);
+    assert.deepEqual(saved.selected, ["beta-dir"]);
+    assert.deepEqual(saved.shown, [failureMark("beta", "saved output")]);
+    assert.deepEqual(await readdir(failuresFolder(support)), []);
+    await openNoticeTarget({ name: "beta", dir: "beta-dir", failed: true }, saved.steps);
+    assert.equal(saved.shown.length, 1, "once: the file is gone");
+
+    // Memory wins over the file, and the file still goes.
+    await saveFailure(support, failureMark("alpha", "older"));
+    const both = targetSteps(support, marks);
+    await openNoticeTarget({ name: "alpha", dir: "alpha-dir", failed: true }, both.steps);
+    assert.deepEqual(both.shown, [failureMark("alpha")]);
+    assert.deepEqual(await readdir(failuresFolder(support)), []);
+
+    // With neither, or not failed: only the selection.
+    await saveFailure(support, failureMark("gamma"));
+    const plain = targetSteps(support);
+    await openNoticeTarget({ name: "delta", dir: "delta-dir", failed: true }, plain.steps);
+    await openNoticeTarget({ name: "gamma", dir: "gamma-dir", failed: false }, plain.steps);
+    assert.deepEqual(plain.selected, ["delta-dir", "gamma-dir"]);
+    assert.deepEqual(plain.shown, []);
+    assert.deepEqual(await readdir(failuresFolder(support)), ["gamma.json"], "a success's click leaves a saved failure alone");
+
+    // Two folders hold one name: a click on the other folder's row shows neither its memory nor its file.
+    await saveFailure(support, failureMark("alpha", "saved"));
+    const other = targetSteps(support, marks);
+    await openNoticeTarget({ name: "alpha", dir: "alpha-other", failed: true }, other.steps);
+    assert.deepEqual(other.selected, ["alpha-other"]);
+    assert.deepEqual(other.shown, []);
+    assert.ok((await readdir(failuresFolder(support))).includes("alpha.json"), "the other row's file stays");
+});
+
+test("the launch context opens once, after the first load, once the records found at open have settled", async () => {
+    let release: () => void = () => {};
+    const settling = new Promise<void>((resolve) => (release = resolve));
+    const held: string[] = [];
+    const others = {
+        hold: async <T>(key: string, step: () => Promise<T>) => {
+            held.push(key);
+            await settling;
+            return step();
+        },
+    };
+    const opened: NoticeTarget[] = [];
+    const open = async (target: NoticeTarget) => void opened.push(target);
+    const target = { name: "alpha", dir: "alpha", failed: true };
+    const launch = new LaunchTarget({ storeNotification: target }, others, open);
+    assert.equal(launch.loaded(false), undefined, "nothing before the first load");
+    assert.deepEqual(held, []);
+    const waiting = launch.loaded(true);
+    assert.equal(launch.loaded(true), undefined, "once");
+    await settle();
+    assert.deepEqual(held, ["notification"]);
+    assert.deepEqual(opened, [], "not while the records found at open are settling");
+    release();
+    await waiting;
+    assert.deepEqual(opened, [target]);
+    launch.loaded(true);
+    assert.equal(opened.length, 1);
+
+    // An invalid context, or none, opens nothing and holds nothing.
+    for (const context of [{ storeNotification: { ...target, dir: "../alpha" } }, { storeNotification: { name: "alpha" } }, undefined, "alpha"]) {
+        const quiet = new LaunchTarget(context, others, open);
+        assert.equal(quiet.loaded(true), undefined);
+    }
+    assert.deepEqual(held, ["notification"]);
+    assert.equal(opened.length, 1);
+});
+
+test("the launch context's failure comes from the record settled at open, else from the saved file", async () => {
+    const support = await temporary();
+    const marks = new RowMarks();
+    const open = (view: ReturnType<typeof targetSteps>) => (target: NoticeTarget) => openNoticeTarget(target, view.steps);
+    const noHold = { hold: <T>(_key: string, step: () => Promise<T>) => step() };
+
+    // The record the store just settled as failed is in this session's marks.
+    const settled = await settledNoticeRun({ seen: false, failure: { output: "orphan's error", code: 1 } });
+    for (const mark of settled.marked) marks.mark(mark);
+    const fromRecord = targetSteps(support, marks);
+    await new LaunchTarget({ storeNotification: { name: "alpha", dir: "alpha", failed: true } }, noHold, open(fromRecord)).loaded(true);
+    assert.deepEqual(fromRecord.selected, ["alpha"]);
+    assert.equal(fromRecord.shown[0]?.details.output, "orphan's error");
+
+    await saveFailure(support, failureMark("beta"));
+    const fromFile = targetSteps(support);
+    await new LaunchTarget({ storeNotification: { name: "beta", dir: "beta-dir", failed: true } }, noHold, open(fromFile)).loaded(true);
+    assert.deepEqual(fromFile.shown, [failureMark("beta")]);
+    assert.deepEqual(await readdir(failuresFolder(support)), [], "the saved file is deleted once opened");
+});
+
+test("clicks in a loaded store: each answer opened, the call made again after each, stopped by an error, null or the session's end", async () => {
+    const answers: unknown[] = [
+        { name: "alpha", dir: "alpha", failed: false },
+        { name: "../x", dir: "alpha", failed: true },
+        { name: "beta", dir: "beta", failed: true },
+    ];
+    let calls = 0;
+    const opened: NoticeTarget[] = [];
+    const next = async () => {
+        calls++;
+        if (answers.length === 0) throw new Error("The app doesn't answer it");
+        return answers.shift();
+    };
+    await followClicks(next, async (target) => void opened.push(target), () => false);
+    assert.deepEqual(opened, [{ name: "alpha", dir: "alpha", failed: false }, { name: "beta", dir: "beta", failed: true }]);
+    assert.equal(calls, 4, "made again after each answer, an invalid one included, until the call fails");
+
+    // A newer call replaced this one: stop.
+    let replacedCalls = 0;
+    await followClicks(async () => (replacedCalls++, null), async () => {}, () => false);
+    assert.equal(replacedCalls, 1);
+
+    // The session went while the call waited: the late answer opens nothing.
+    let stopped = false;
+    let answer: (value: unknown) => void = () => {};
+    const late: NoticeTarget[] = [];
+    const following = followClicks(() => new Promise((resolve) => (answer = resolve)), async (target) => void late.push(target), () => stopped);
+    stopped = true;
+    answer({ name: "alpha", dir: "alpha", failed: false });
+    await following;
+    assert.deepEqual(late, []);
+
+    // A target that can't be opened doesn't stop the next click.
+    const queue: unknown[] = [{ name: "alpha", dir: "alpha", failed: true }, { name: "beta", dir: "beta", failed: false }];
+    const after: string[] = [];
+    await followClicks(
+        async () => {
+            if (queue.length === 0) throw new Error("done");
+            return queue.shift();
+        },
+        async (target) => {
+            if (target.failed) throw new Error("can't push");
+            after.push(target.name);
+        },
+        () => false,
+    );
+    assert.deepEqual(after, ["beta"]);
+});
+
+/** Runs `settledNotice` for an Alpha record from another session with `answer` from the app, listing every step. */
+async function settledNoticeRun(
+    outcome: { seen: boolean; adopted?: boolean; failure?: { output: string; code?: number } },
+    answer: InstallAnswer = { onScreen: false, notified: false },
+) {
+    const record = otherRecord();
+    const logged: { title: string; output: string }[] = [];
+    const marked: FailureMark[] = [];
+    const reports: InstallEndReport[] = [];
+    const selected: string[] = [];
+    const saved: FailureMark[] = [];
+    const toasts: { failed: boolean; title: string; message?: string }[] = [];
+    const shown: FailureMark[] = [];
+    const steps: SettledSteps = {
+        logFailure: (title, failure) => void logged.push({ title, output: failure.output }),
+        marks: { mark: (mark) => void marked.push(mark) },
+        report: async (end) => (reports.push(end), answer),
+        select: (dir) => void selected.push(dir),
+        save: async (mark) => void saved.push(mark),
+        toast: async (toast) => void toasts.push(toast),
+        show: (mark) => void shown.push(mark),
+        now: () => new Date("2026-11-22T10:00:00.000Z"),
+    };
+    await settledNotice({ record, adopted: outcome.adopted ?? false, seen: outcome.seen, ...(outcome.failure ? { failure: outcome.failure } : {}) }, steps);
+    return { record, logged, marked, reports, selected, saved, toasts, shown };
+}
+
+test("a settled record's failure is logged and marked whenever it ended; one found ended at open reports nothing", async () => {
+    const found = await settledNoticeRun({ seen: false, failure: { output: "error: esbuild failed", code: 1 } });
+    assert.deepEqual(found.logged, [{ title: "Couldn't install Alpha", output: "error: esbuild failed" }]);
+    assert.deepEqual(found.marked, [{
+        name: "alpha", dir: "alpha", title: "Alpha", updating: false, failedAt: "2026-11-22T10:00:00.000Z",
+        details: { output: "error: esbuild failed", code: 1 },
+    }]);
+    assert.deepEqual([found.reports, found.selected, found.saved, found.toasts, found.shown], [[], [], [], [], []]);
+
+    const adoptedAtOpen = await settledNoticeRun({ seen: false, adopted: true });
+    assert.deepEqual([adoptedAtOpen.logged, adoptedAtOpen.marked, adoptedAtOpen.reports, adoptedAtOpen.toasts], [[], [], [], []]);
+
+    // A quiet drop seen ending (75, or a folder changed since): nothing at all.
+    const quiet = await settledNoticeRun({ seen: true });
+    assert.deepEqual([quiet.logged, quiet.reports, quiet.toasts, quiet.selected], [[], [], [], []]);
+});
+
+test("a settled record seen ending is reported with its build, and the answer decides as for the store's own", async () => {
+    const failure = { output: "error: esbuild failed", code: 1 };
+    const notified = await settledNoticeRun({ seen: true, failure }, { onScreen: false, notified: true });
+    assert.deepEqual(notified.reports, [{
+        build: { pid: notified.record.pid, startedAt: notified.record.startedAt },
+        name: "alpha", dir: "alpha", title: "Alpha", updating: false, outcome: "failed",
+    }]);
+    assert.deepEqual(notified.selected, ["alpha"]);
+    assert.deepEqual(notified.saved, notified.marked);
+    assert.deepEqual([notified.toasts, notified.shown], [[], []], "no toast and no failure view: the click opens it");
+
+    const quiet = await settledNoticeRun({ seen: true, failure }, { onScreen: false, notified: false });
+    assert.deepEqual(quiet.toasts, [{ failed: true, title: "Couldn't install Alpha", message: "See the details." }]);
+    assert.deepEqual(quiet.shown, quiet.marked);
+    assert.deepEqual([quiet.saved, quiet.selected], [[], []]);
+
+    const installedHidden = await settledNoticeRun({ seen: true, adopted: true }, { onScreen: false, notified: true });
+    assert.equal(installedHidden.reports[0]?.outcome, "installed");
+    assert.deepEqual(installedHidden.selected, ["alpha"]);
+    assert.deepEqual([installedHidden.toasts, installedHidden.saved, installedHidden.shown], [[], [], []]);
+
+    const installedOnScreen = await settledNoticeRun({ seen: true, adopted: true }, { onScreen: true, notified: false });
+    assert.deepEqual(installedOnScreen.selected, []);
+    assert.deepEqual(installedOnScreen.toasts, [{ failed: false, title: settledToast({ record: installedOnScreen.record, adopted: true, seen: true })!.title }]);
 });

@@ -14,6 +14,7 @@ final class SettingsModel {
     static let generalPage = SettingsSidebar.generalPage
     static let commandsPage = SettingsSidebar.commandsPage
     static let permissionsPage = SettingsSidebar.permissionsPage
+    static let notificationsPage = SettingsSidebar.notificationsPage
     static let quicklinksPage = SettingsSidebar.quicklinksPage
     static let snippetsPage = SettingsSidebar.snippetsPage
     static let colorPickerPage = SettingsSidebar.colorPickerPage
@@ -192,6 +193,50 @@ final class SettingsModel {
     func setColorFormat(_ format: ColorFormat) {
         guard format != colorFormat, change({ $0.colorFormat = format }) else { return }
         colorFormatChanged()
+    }
+
+    /// macOS's answer for Fudge's notifications (SPEC-156 F), read and never asked: when the Notifications page appears
+    /// and when the window becomes key. Nil until the first read.
+    var notificationPermission: NotificationPermission?
+    /// macOS's notifications, or a snapshot run's fixed answer; set by the app delegate.
+    @ObservationIgnored var notifications: any InstallNotifications = FixedInstallNotifications(.unknown)
+    /// Asks macOS (G), at most once per run, through the app's one notice center; set by the app delegate.
+    /// `needsSwitch`: only with either switch on.
+    @ObservationIgnored var askForNotifications: (_ needsSwitch: Bool) async -> Void = { _ in }
+    /// Settings → Notifications' **Install or update finished** (`notifyInstallFinished`).
+    var notifyInstallFinished: Bool { fudgeSettings.notifyInstallFinished }
+    /// **Install or update failed** (`notifyInstallFailed`).
+    var notifyInstallFailed: Bool { fudgeSettings.notifyInstallFailed }
+
+    func setNotifyInstallFinished(_ on: Bool) {
+        guard on != notifyInstallFinished, change({ $0.notifyInstallFinished = on }) else { return }
+        if on { askForNotificationsNow(needsSwitch: true) }
+    }
+
+    func setNotifyInstallFailed(_ on: Bool) {
+        guard on != notifyInstallFailed, change({ $0.notifyInstallFailed = on }) else { return }
+        if on { askForNotificationsNow(needsSwitch: true) }
+    }
+
+    /// Reads macOS's answer again.
+    func refreshNotificationPermission() {
+        let notifications = notifications
+        Task { notificationPermission = await notifications.permission() }
+    }
+
+    /// Ask Now, or a switch turned on: macOS asks while it hasn't been asked, then the row reads its answer.
+    func askForNotificationsNow(needsSwitch: Bool = false) {
+        let ask = askForNotifications
+        let notifications = notifications
+        Task {
+            await ask(needsSwitch)
+            notificationPermission = await notifications.permission()
+        }
+    }
+
+    /// Open Notification Settings: System Settings' Notifications pane.
+    func openNotificationSettings() {
+        NSWorkspace.shared.open(NotificationPermission.settingsURL)
     }
 
     /// How the calculator reads and shows numbers (`numberFormat` in `settings.json`).
@@ -1387,6 +1432,7 @@ final class SettingsWindowController {
                 MainActor.assumeIsolated {
                     model.refreshLoginItem()
                     model.refreshRaycastLinks()
+                    model.refreshNotificationPermission()
                     model.loadQuicklinks()
                     model.loadSnippets()
                     model.loadWindowLayouts()
@@ -1461,6 +1507,8 @@ struct SettingsView: View {
                     GeneralPage(model: model)
                 } else if model.selected == SettingsModel.permissionsPage {
                     PermissionsPage(model: model)
+                } else if model.selected == SettingsModel.notificationsPage {
+                    NotificationsPage(model: model)
                 } else if model.selected == SettingsModel.commandsPage {
                     CommandsPage(model: model)
                 } else if model.selected == SettingsModel.quicklinksPage {

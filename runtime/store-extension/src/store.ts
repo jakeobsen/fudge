@@ -24,8 +24,25 @@ import {
 } from "./compatibility.ts";
 import type { FailureDetails } from "./failure.ts";
 import { maxManifestBytes, readRegularFile } from "./files.ts";
-import { buildRecordFiles, ownBuilds, recordBuild, type BuildAbout, type BuildRecordFiles } from "./build-records.ts";
+import {
+    buildRecordFiles,
+    installingFolder,
+    ownBuilds,
+    recordBuild,
+    type BuildAbout,
+    type BuildId,
+    type BuildRecordFiles,
+} from "./build-records.ts";
 import { GitError, spawnProgram, type GitResult, type Run, type StoreRepository } from "./git.ts";
+import {
+    removeSavedFailure,
+    reportEnd,
+    saveFailure,
+    unanswered,
+    type FailureMark,
+    type InstallAnswer,
+    type InstallEndReport,
+} from "./notices.ts";
 import { sourceProblem } from "./sources.ts";
 import { askedForSwiftParts, decideSwiftParts, type SwiftParts, type SwiftPartsChoice } from "./swift-parts.ts";
 import { buildTimeout, swiftBuildTimeout } from "./timeouts.ts";
@@ -89,11 +106,25 @@ export type StoreContext = {
     buildRecords?: BuildRecordFiles;
     /** The pids of this session's builds (`ownBuilds`). */
     ownBuilds?: Set<number>;
+    /** Asks the app to have macOS ask about notifications (`askForNotifications` in `fudge:app`), once the user has
+     * confirmed an install or update (SPEC-156 G); not waited for, and its failure never stops the install. */
+    askForNotifications?: () => Promise<void>;
 };
+
+/** Calls `askForNotifications` without waiting, swallowing any failure. */
+function askForNotifications(context: StoreContext): void {
+    try {
+        void context.askForNotifications?.().catch(() => {});
+    } catch {
+        // The install goes on whatever the question did.
+    }
+}
 
 /**
  * Runs `fudge build` with its record in `installing/` (SPEC-153 C.1): written once it has a pid, and removed when the run
- * has ended, after the write has settled. The record never changes the run's result.
+ * has ended, after the write has settled. The record never changes the run's result. The build's output goes to files
+ * beside the record, and it writes its outcome there (`--outcome`, SPEC-156 A); a folder that can't be made leaves both
+ * out, and the build runs as before. `ran` is told the build's pid and start once it has started.
  */
 async function recordedBuild(
     context: StoreContext,
@@ -101,8 +132,18 @@ async function recordedBuild(
     args: string[],
     timeout: number,
     about: Omit<BuildAbout, "command">,
+    ran: (build: BuildId) => void = () => {},
 ): Promise<GitResult> {
-    const record = recordBuild({ ...about, command: [context.cli, ...args] }, timeout, {
+    const folder = installingFolder(context.supportPath);
+    const kept = await mkdir(folder, { recursive: true }).then(
+        () => true,
+        (error: unknown) => {
+            context.log?.(`Couldn't keep the output of ${about.title}'s build: ${error instanceof Error ? error.message : String(error)}`);
+            return false;
+        },
+    );
+    const built = kept ? [...args, "--outcome", folder] : args;
+    const record = recordBuild({ ...about, command: [context.cli, ...built] }, timeout, {
         supportPath: context.supportPath,
         now: context.now,
         log: context.log,
@@ -110,8 +151,10 @@ async function recordedBuild(
         own: context.ownBuilds ?? ownBuilds,
     });
     try {
-        return await run(context.cli, args, { timeout, started: record.started });
+        return await run(context.cli, built, { timeout, started: record.started, ...(kept ? { output: record.output } : {}) });
     } finally {
+        const build = record.build();
+        if (build) ran(build);
         await record.ended();
     }
 }
@@ -213,7 +256,11 @@ async function compatibilityOf(
  * folder is never replaced: one installed another way, one from another folder whose manifest has the same name, or one
  * Fudge bundles.
  */
-export async function install(entry: StoreEntry, context: StoreContext): Promise<InstallDone | false> {
+export async function install(
+    entry: StoreEntry,
+    context: StoreContext,
+    ran: (build: BuildId) => void = () => {},
+): Promise<InstallDone | false> {
     const name = checkedName(entry.name);
     const dir = checkedFolder(entry.dir);
     if (bundledNames.includes(name)) throw new StoreError(`${entry.title} can't be installed: ${name} is part of Fudge.`);
@@ -248,6 +295,7 @@ export async function install(entry: StoreEntry, context: StoreContext): Promise
         record ? "Update" : "Install",
     );
     if (!confirmed) return false;
+    askForNotifications(context);
 
     const run = context.run ?? spawnProgram;
     // Building a part written in Swift fetches and compiles SwiftPM's packages the first time (`swiftBuildTimeout`).
@@ -257,7 +305,7 @@ export async function install(entry: StoreEntry, context: StoreContext): Promise
         parts === "build" && (hasSwiftPart || unchecked) ? swiftBuildTimeout : buildTimeout;
     const about = { name, dir, title: entry.title, ...(tree === undefined ? {} : { tree }), commit, updating: record !== undefined };
     let args = buildArguments(source, context.extensionsDir, swift.swiftParts);
-    let result = await recordedBuild(context, run, args, timeout(swift.swiftParts), about);
+    let result = await recordedBuild(context, run, args, timeout(swift.swiftParts), about, ran);
     if (result.code === alreadyBuildingStatus) throw new AlreadyBuilding(entry.title);
     // A `swift:` import the check missed, without the tools: the build stopped at it, asking what to do, so the view
     // asks the user instead of showing that as an error.
@@ -265,7 +313,7 @@ export async function install(entry: StoreEntry, context: StoreContext): Promise
         const choice = await choose();
         if (choice === "dont-install") return false;
         args = buildArguments(source, context.extensionsDir, choice);
-        result = await recordedBuild(context, run, args, choice === "build" ? swiftBuildTimeout : buildTimeout, about);
+        result = await recordedBuild(context, run, args, choice === "build" ? swiftBuildTimeout : buildTimeout, about, ran);
         if (result.code === alreadyBuildingStatus) throw new AlreadyBuilding(entry.title);
     }
     if (result.code !== 0) {
@@ -400,6 +448,22 @@ export type InstallView = {
     toast: (title: string) => Promise<InstallToast>;
     load: () => Promise<void>;
     failed: (title: string, error: unknown) => void;
+    /** Install notifications (SPEC-156 D.1); without them, the press ends as it did before. */
+    notices?: InstallNotices;
+};
+
+/** The view's side of install notifications. */
+export type InstallNotices = {
+    /** `installEnded` in `fudge:app`. */
+    report: (report: InstallEndReport) => Promise<InstallAnswer>;
+    /** Selects the row of `dir`, once. */
+    select: (dir: string) => void;
+    /** A failure that got a notification: logged, its row marked, and kept for a click; no failure view. */
+    failedNotified: (title: string, error: unknown, mark: FailureMark) => void;
+    /** The name installed or updated: its row's mark goes. */
+    succeeded?: (name: string) => void;
+    /** How long to wait for the answer (`reportLimit`, 5 s). */
+    limit?: number;
 };
 
 /**
@@ -409,9 +473,23 @@ export type InstallView = {
  * C.6).
  */
 export async function installPressed(entry: StoreEntry, updating: boolean, context: StoreContext, view: InstallView): Promise<void> {
+    // Pressed again: a failure saved for a click is out of date (SPEC-156 D.4).
+    if (view.notices) await removeSavedFailure(context.supportPath, entry.name);
     const toast = await view.toast(`${updating ? "Updating" : "Installing"} ${entry.title}…`);
+    // The last `fudge build` the install ran, for the app to know it by (SPEC-156 C.1).
+    let build: BuildId | undefined;
+    const end = (outcome: InstallEndReport["outcome"]): InstallEndReport => ({
+        ...(build ? { build: { pid: build.pid, startedAt: build.startedAt } } : {}),
+        name: entry.name,
+        dir: entry.dir,
+        title: entry.title,
+        updating,
+        outcome,
+    });
     try {
-        const done = await install(entry, context);
+        const done = await install(entry, context, (ran) => {
+            build = ran;
+        });
         if (!done) {
             await toast.hide();
             return;
@@ -419,7 +497,12 @@ export async function installPressed(entry: StoreEntry, updating: boolean, conte
         await view.load();
         // With the note when what's on and off isn't what the confirmation said (SPEC-121 §2).
         const shown = doneToast(entry.title, updating, done);
-        toast.done(shown.title, shown.message);
+        // The app decides whether a notification says it (SPEC-156 D.1); then no HUD repeats it.
+        const answer = view.notices ? await reportEnd(view.notices.report, end("installed"), view.notices.limit) : unanswered;
+        view.notices?.succeeded?.(entry.name);
+        if (answer.notified) await toast.hide();
+        else toast.done(shown.title, shown.message);
+        if (!answer.onScreen) view.notices?.select(entry.dir);
     } catch (error) {
         if (error instanceof AlreadyBuilding) {
             toast.done(error.message);
@@ -428,6 +511,23 @@ export async function installPressed(entry: StoreEntry, updating: boolean, conte
         // The whole error, its likely cause, Copy Error and Try Again, in a view of its own; the toast only says where
         // to look.
         const title = `Couldn't ${updating ? "update" : "install"} ${entry.title}`;
+        const answer = view.notices ? await reportEnd(view.notices.report, end("failed"), view.notices.limit) : unanswered;
+        if (view.notices && answer.notified) {
+            // The notification opens it, as the row's mark does: no failure view behind the hidden panel.
+            await toast.hide();
+            const mark: FailureMark = {
+                name: entry.name,
+                dir: entry.dir,
+                title: entry.title,
+                updating,
+                failedAt: (context.now?.() ?? new Date()).toISOString(),
+                details: failureDetails(error),
+            };
+            view.notices.failedNotified(title, error, mark);
+            view.notices.select(entry.dir);
+            await saveFailure(context.supportPath, mark, context.log);
+            return;
+        }
         toast.failed(title, "See the details.");
         view.failed(title, error);
     }

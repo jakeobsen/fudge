@@ -11,10 +11,18 @@ private func page(_ name: String, _ title: String) throws -> InstalledExtension 
 }
 
 @Test func theTopListIsFudgesCorePagesInOrder() {
-    #expect(SettingsSidebar.top.map(\.title) == ["General", "Permissions", "Commands", "Sign-in", "Development"])
     #expect(
-        SettingsSidebar.top.map(\.tag) == [":general", ":permissions", ":commands", ":sign-in", ":development"])
-    #expect(SettingsSidebar.top.allSatisfy { $0.symbol != nil }, "each top row has its symbol")
+        SettingsSidebar.top.map(\.title) == [
+            "General", "Permissions", "Notifications", "Commands", "Sign-in", "Development",
+        ])
+    #expect(
+        SettingsSidebar.top.map(\.tag) == [
+            ":general", ":permissions", ":notifications", ":commands", ":sign-in", ":development",
+        ])
+    #expect(
+        SettingsSidebar.top.map(\.symbol) == [
+            "gearshape", "hand.raised", "bell", "command", "person.badge.key", "hammer",
+        ])
 }
 
 @Test func fudgesOwnPagesSortInAmongTheExtensions() throws {
@@ -99,16 +107,19 @@ private func page(_ name: String, _ title: String) throws -> InstalledExtension 
 @Test func theFixedTagsAreEveryPageOfFudgesOwn() {
     #expect(
         SettingsSidebar.fixedTags == [
-            ":general", ":permissions", ":commands", ":sign-in", ":development", ":calculator", ":calendar",
-            ":color-picker", ":quicklinks", ":snippets", ":window-management",
+            ":general", ":permissions", ":notifications", ":commands", ":sign-in", ":development", ":calculator",
+            ":calendar", ":color-picker", ":quicklinks", ":snippets", ":window-management",
         ])
     #expect(SettingsSidebar.fixedTags.contains(SettingsSidebar.calculatorPage))
+    #expect(SettingsSidebar.notificationsPage == ":notifications")
 }
 
 @Test func aSelectedPageStaysWhileItsListed() throws {
     let pages = [try page("weather", "Weather")]
     #expect(SettingsSidebar.lists(":calculator", among: pages))
     #expect(SettingsSidebar.lists(":general", among: []))
+    #expect(SettingsSidebar.lists(":notifications", among: pages), "a reload keeps the Notifications page")
+    #expect(SettingsSidebar.lists(":notifications", among: []))
     #expect(SettingsSidebar.lists("weather", among: pages))
     #expect(!SettingsSidebar.lists("weather", among: []), "an extension removed while its page is open")
     #expect(!SettingsSidebar.lists(":gone", among: pages))

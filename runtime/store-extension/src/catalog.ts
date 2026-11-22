@@ -192,33 +192,46 @@ export type AccessoryText = { text: string } | { tag: string };
 export const installingTag = "Installing…";
 export const updatingTag = "Updating…";
 
+/** The tags of a row whose install or update failed this session (SPEC-156 D.3). */
+export const failedInstallTag = "Couldn't install";
+export const failedUpdateTag = "Couldn't update";
+
+/** A row's failed install or update this session (SPEC-156 D.3): whether it was an update. */
+export type RowFailure = { updating: boolean };
+
 /** The author, the number of commands, Not compatible or Partly compatible when a cached scan says so
  * (`compatibilityTag`), and Installed or Update available, or, while its name is being installed or updated (`busy`),
- * Installing… or Updating… in their place. */
+ * Installing… or Updating… in their place, or else Couldn't install or Couldn't update when it `failed` this session. */
 export function accessoryTexts(
     entry: StoreEntry,
     state: Status,
     compatibility?: string,
     busy?: "installing" | "updating",
+    failed?: RowFailure,
 ): AccessoryText[] {
     const accessories: AccessoryText[] = [];
     if (entry.author) accessories.push({ text: entry.author });
     accessories.push({ text: entry.commands.length === 1 ? "1 command" : `${entry.commands.length} commands` });
     if (compatibility) accessories.push({ tag: compatibility });
     if (busy) accessories.push({ tag: busy === "updating" ? updatingTag : installingTag });
+    else if (failed) accessories.push({ tag: failed.updating ? failedUpdateTag : failedInstallTag });
     else if (state === "installed") accessories.push({ tag: "Installed" });
     else if (state === "update") accessories.push({ tag: "Update available" });
     return accessories;
 }
 
 /** Which of Install, Update and Uninstall a row offers: none while its name is being installed or updated (`busy`);
- * Show Details, Open in Browser, Copy Name and Refresh stay. */
+ * Show Details, Open in Browser, Copy Name and Refresh stay. A row that `failed` this session starts with Try Again and
+ * Show Error in place of Install and Update (SPEC-156 D.3). */
 export function rowActions(
     state: Status,
     busy?: "installing" | "updating",
-): { install: boolean; update: boolean; uninstall: boolean } {
-    if (busy) return { install: false, update: false, uninstall: false };
-    return { install: state === "available", update: state === "update", uninstall: state !== "available" };
+    failed?: RowFailure,
+): { install: boolean; update: boolean; uninstall: boolean; tryAgain: boolean; showError: boolean } {
+    const none = { tryAgain: false, showError: false };
+    if (busy) return { install: false, update: false, uninstall: false, ...none };
+    if (failed) return { install: false, update: false, uninstall: state !== "available", tryAgain: true, showError: true };
+    return { install: state === "available", update: state === "update", uninstall: state !== "available", ...none };
 }
 
 /** A command's title by its name, as the store's sentences name commands; the name when the manifest has none. */
