@@ -595,6 +595,7 @@ Extensions run in a separate Node.js process, the extension host.
       The minus button asks "Remove <name>?" first; the store deletes the copy the next time it opens.
       Each row's status line comes from the copy's status file (`ExtensionRepositoryStatus.read`: Raycast's `repo-status.json`, an added one's `repositories/<copyId>/status.json`), read when the page appears and when the window becomes key.
       It's at most 4 KB, a JSON object with an ISO 8601 `checkedAt`, and a whole `extensions` count from 0 to 5,000 or a known `problem` kind, else `failed`; no file is "Not checked yet".
+      Only a regular file counts (`RegularFile.read`): a link, a FIFO or a device there is `failed`, never followed or waited on, since Settings reads it on the main thread.
       Any extension running in the host could write that file, so the row shows only Fudge's own sentences, with the branch from `settings.json`.
       The store asks for the list with `extensionRepositories()` in `fudge:app` (`store.repositories`, answered only for the store's sessions, as `fudge.log` is, `BundledCalls.Call.storeRepositories`): `settings.json` is read afresh for each call, and the answer (`ExtensionRepository.storeAnswer`) is `[{ copyId, folder, address, branch?, name, on }]`, Raycast's first.
       The store checks it again (`checkRepositoriesAnswer` in `repository-address.ts`): Raycast's entry only in first place, as `RAYCAST_COPY` with its `on`, then each added entry that parses again, beside those before it, to the copy id and folder answered.

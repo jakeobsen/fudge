@@ -700,6 +700,14 @@
     {
       "address": "ｈttps://github.com/owner/repository",
       "refused": "https"
+    },
+    {
+      "address": "\u00a0https://github.com/owner/repository",
+      "refused": "https"
+    },
+    {
+      "address": "https://github.com/owner/repository\u2028",
+      "refused": "characters"
     }
   ],
   "copyIds": {
