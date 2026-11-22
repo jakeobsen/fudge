@@ -580,7 +580,11 @@ Extensions run in a separate Node.js process, the extension host.
       It's saved as the worker's `new URL()` writes it (scheme and host in lowercase, no default port, dot segments resolved), since a sign-in's authorize URL is compared with what the worker sends back; a host that parser would rewrite otherwise (non-ASCII, percent-encoded, IPv6, IPv4 in another notation) isn't accepted.
       Every choice but Off shows a consent sheet first ("Extensions will sign in through <host>."), and only Continue saves `signInServer` (`"fudge"` or the URL) with `signInServerConsentAt`; `FudgeSettings.signIn` needs both, so a hand-set server counts as off, and Off removes both.
       Changing the server signs out of everything, after its own sheet when there are sign-ins.
-      Below it, **Signed in** lists each stored sign-in (the extension's title, the provider, when) with Sign Out.
+      Under the server choice, **Extensions with their own sign-in** (SPEC-132 §5, D-89, `OwnAppSignInControls`) is a switch of its own, off by default and independent of the server.
+      Its line, "Let extensions sign in with their own apps. Most of them come back through raycast.com.", is one string (`OwnAppSignIn.explanation`) for the page, its consent sheet and onboarding.
+      Only the sheet's Continue saves `ownAppSignIn` with `ownAppSignInConsentAt` (`FudgeSettings.isOwnAppSignInOn` needs both, and both are this Mac's, in `Backup.consentKeys`); off removes both, and sign-ins already stored stay under Signed in.
+      Under it, the **Raycast links** row (`RaycastLinksRow`) says which app opens `raycast://oauth` and `com.raycast:/oauth` (Fudge, another app by name, or "another copy of Fudge"), with **Open with Fudge** when it isn't Fudge, read when the page appears and when the window becomes key.
+      Below them, **Signed in** lists each stored sign-in (the extension's title, the provider, when) with Sign Out.
       **Sign-ins** are Keychain generic passwords (`KeychainSecretStore`), service `io.github.jakeobsen.fudge.oauth`, account `<extension>/<providerId>`, holding a JSON `StoredTokenSet`;
       `OAuthTokenStore` (core) reads and writes them through the `SecretStore` protocol, and the `oauth.tokens.*` calls go through `SignInCalls` (core) with the calling session's extension, never one named in the call, so one extension never reads, sets or removes another's.
       A stored sign-in keeps `relayProvider`, the provider its relay sign-in was for, only when the session prepared that sign-in; a refresh keeps the mark.
@@ -593,6 +597,22 @@ Extensions run in a separate Node.js process, the extension host.
       A wrong path gets a 404 and a wrong `state` a 400, and the sign-in keeps waiting.
       The wait lasts at most 5 minutes, and a request never used closes after 5 minutes too.
       On the code, the launcher comes back to the command.
+      **The direct path** (SPEC-132, FUD-165) is for an extension with an OAuth app of its own: `oauth.prepare` also sends the client's `redirectMethod`, and `PreparedSignIn.route` (core) decides, in order.
+      An endpoint in `OAuthProviders` takes the relay path as above.
+      One on Raycast's hosts (`OAuthProviders.isRaycastDomainHost`: `raycastDomains`, so `raycast.com` and every host under it, ignoring case and trailing dots) or on a table entry's own authorize host (`ownAuthorizeHosts`, read from the table) is refused as before.
+      Any other `https` endpoint with a host and no user info takes the direct path while its switch is on (else the `off` refusal), for the Web, App and AppURI methods only.
+      There no listener starts, nothing is pending for the fetch rewrite, the stored sign-in has no `relayProvider`, and the redirect is Raycast's for the method (`OAuthRedirectMethod.raycastRedirectURI`).
+      Its ↵ opens any `https` URL on neither of those hosts whose `state` is the request's (`PreparedSignIn.isDirectURL`), since some extensions build the URL themselves.
+      The browser comes back through a `raycast://oauth` or `com.raycast:/oauth` link (`CFBundleURLTypes` in `App/Info.plist`, named `io.github.jakeobsen.fudge.sign-in`, with a get-URL Apple Event handler set in `applicationWillFinishLaunching`, so a link that launches Fudge isn't missed).
+      `RaycastReturn.read(link:state:)` (core) answers only those two shapes, reading the query as the loopback's is read (`OAuthCallback.read(query:state:)`, the state compared in constant time).
+      Every other link, a link with another state, and any link while no direct sign-in waits is ignored: nothing happens, nothing is shown, and nothing logs it.
+      `OAuthLinkWait` (app) is the direct sign-in's wait, in place of `OAuthLoopback`.
+      **The paste** (Web only, `SignInPrompt.canPaste`): while it waits, the prompt says to copy the browser's address and press ⌘V, which reads the clipboard then and only then.
+      `RaycastReturn.read(pasted:state:)` takes an `https` URL with any host or a `raycast://oauth` link, at most 16 KB; anything else shows "That address isn't from this sign-in." and the sign-in keeps waiting, and the text is never logged or kept.
+      When Fudge doesn't open Raycast's links, the prompt says so in one line (`RaycastReturn.elsewhereHint`), pointing to Settings → Sign-in.
+      **Who opens Raycast's links** is read through `RaycastLinks` (core): `SystemRaycastLinks` (`NSWorkspace.urlForApplication(toOpen:)`, and `setDefaultApplication(at:toOpenURLsWithScheme:)` for Open with Fudge) in the app, and `FixedRaycastLinks` in tests and snapshot runs, so neither touches LaunchServices.
+      Only the user's click changes the handler, never a launch or anything in the background.
+      Snapshot runs take `--raycast-links fudge|<app name>` for who opens them, and `--own-app-sign-in` shows the switch on, in memory only.
       **A sign-in stopped on purpose** (SPEC-095) names why in its refusal (`SignInRefusal.notice`: off, cancelled, timed out, or refused by the provider or the relay), and the error the command reports with that `notice` (`HostMessage.error`) shows as `SignInNotice` (core) in the command's place, drawn like the store's "off" notice, with no trace and nothing red:
       Like any failure that stands in for a command, the notice keeps the command's title in the bottom bar (`LauncherFooter`); one that belongs to no command, like the store's, says "Fudge".
       "Sign-in is off" with Open Extension Settings (↵, ⌘⇧,) and Open Sign-in Settings (⌘⌥,), or the others with Try Again (`RootAction.retryCommand`, as root search runs it).
@@ -646,7 +666,10 @@ Extensions run in a separate Node.js process, the extension host.
       The steps use General's own controls (`LauncherHotkeyControls`, `OpenAtLoginControls`, `CurrencyRatesToggle`, `HyperkeyControls`, and the Permissions page's `AccessibilityControls`), so an answer takes effect at once.
       The **Extension Store** step (after Currency) shows the store's consent sheet's own words (`ExtensionStore.Consent`), with **Turn On Extension Store**, which writes what the switch and its sheet write and also ticks the store's Enabled (`FudgeSettings.turnOnExtensionStore`), and **Not Now**, which is ↵.
       The **Sign-in** step is the Sign-in page's own choice (`SignInServerControls`, shared with the page, with `SignInServer.explanation`), whose consent sheets show on the onboarding window (`OnboardingModel.ask`; laid out off-screen in snapshot runs), with Continue as ↵, so Off stays Off.
-      The **Clipboard history** step (after Sign-in) shows the consent sheet's own words (`ClipboardHistory.consentMessage`, the one string both use) with **Keep Clipboard History**, which does what the switch and its sheet do (`SettingsModel.keepClipboardHistory`), and **Not Now**, which is ↵, so going through onboarding with ↵ never starts recording.
+      The **Raycast** step (after Sign-in, SPEC-132 §3.3, D-88, `RaycastStep`) says that Fudge runs extensions made for Raycast, that with Raycast on the same Mac the two can get in each other's way, and that signing in to some extensions ends with a Raycast link, which has to open Fudge.
+      It offers **Open Raycast Links with Fudge** while another app opens them (saying that Raycast's own links then open Fudge too), and **Turn On** for extensions with their own sign-in, with the switch's own line (`OnboardingStep.optIns` maps `ownAppSignIn` to it).
+      Its Continue, or Not Now while it offers something, is ↵ and changes nothing (`RaycastStep.buttons`), so going through onboarding with ↵ leaves the switch and the links as they were.
+      The **Clipboard history** step (after Raycast) shows the consent sheet's own words (`ClipboardHistory.consentMessage`, the one string both use) with **Keep Clipboard History**, which does what the switch and its sheet do (`SettingsModel.keepClipboardHistory`), and **Not Now**, which is ↵, so going through onboarding with ↵ never starts recording.
       When it's already on, the step says so and turning it off is left to Settings.
       **Expand snippets as you type**, after Clipboard history, works the same way: it explains Input Monitoring, and that pasting the snippet needs Accessibility (`SnippetExpander.permissionsExplanation`, the Snippets page's sheet's own words), **Turn On** does what the switch does (`SettingsModel.turnOnSnippetExpansion`, then macOS's prompt or pane), and **Not Now** is ↵.
       **Use Caps Lock as Hyper?** (after Snippet expansion) shows General's `HyperkeyControls`, with **Not Now** as ↵ while it's off.
@@ -762,10 +785,14 @@ Extensions run in a separate Node.js process, the extension host.
     `make raycast-types` regenerates them after updating the types, or run `npm run generate` by hand.
     `npm run typecheck` fails while either is stale.
   - **`OAuth`** (`src/api/oauth.ts`) signs in through a fudge-oauth relay (D-63), never Raycast's servers.
+    An extension with an OAuth app of its own signs in to its service directly instead (SPEC-132), coming back through Raycast's return address for its `RedirectMethod`, which is the redirect its app has registered.
     The relay lives in its own repository, `jakeobsen/fudge-oauth`; it holds the OAuth apps' secrets, so Fudge holds none.
     `OAuth.PKCEClient` can be built with any `RedirectMethod`, as `@raycast/utils`' `OAuthService` does when an extension loads.
-    `authorizationRequest()` asks the app for the request (`oauth.prepare`): the app refuses while sign-in is off, or for an `endpoint` that isn't one of `OAuthProviders`' authorize URLs, and otherwise starts the loopback listener and answers with the relay's authorize URL and the redirect.
-    The client makes the PKCE verifier (64 unreserved characters from `crypto.getRandomValues`), its S256 challenge and the `state`, and `toURL()` puts them on the relay's URL with the extension's `clientId`, `scope` and extra parameters.
+    `authorizationRequest()` asks the app for the request (`oauth.prepare`, with the client's `redirectMethod`): for one of `OAuthProviders`' authorize URLs the app refuses while sign-in is off, and otherwise starts the loopback listener and answers with the relay's authorize URL and the redirect.
+    For any other endpoint it answers as the direct path decides (see the Sign-in page): no provider, the endpoint itself and Raycast's redirect for the method.
+    The client makes the PKCE verifier (64 unreserved characters from `crypto.getRandomValues`), its S256 challenge and the `state`, and `toURL()` puts them on the URL with the extension's `clientId`, `scope` and extra parameters.
+    The `state` is the base64url of `{"id":"<16 random bytes, base64url>"}`, 42 characters with nothing else in it (`randomState`), which raycast.com's return page passes on unchanged.
+    On the direct path the extension's `extraParameters.redirect_uri` wins over Raycast's and becomes the request's `redirectURI`, as Raycast documents; the relay's loopback redirect is never overridden.
     `authorize()` sends the URL and its state to the app (`oauth.authorize`) and resolves `{ authorizationCode }`.
     `getTokens()`, `setTokens()` and `removeTokens()` call `oauth.tokens.*`; `getTokens()` returns a `TokenSet` whose `isExpired()` is true from 10 s before `expiresIn` runs out, so `OAuthService` refreshes on its own; without `expiresIn`, or with 0, it never is.
     `withAccessToken` retries a refused sign-in with a new promise until React gives up on the root (error #482), so after a refusal the worker reports that error as the refusal's own message (`explainRenderError`), once.
@@ -779,6 +806,8 @@ Extensions run in a separate Node.js process, the extension host.
     A request goes to the relay, as `<server>/<provider>/token` or `/refresh-token` with the same method, headers and body, only when it's a `POST` to one of the table's token or refresh URLs (by scheme, host and path) with `grant_type` `authorization_code` or `refresh_token`.
     Google, Atlassian and Zoom refresh at their own token URL, so there the grant picks the endpoint, and since those are the providers' own URLs, they go to the relay only when this extension has a relay sign-in for that provider, pending or stored (`SignInCalls.hasRelaySignIn`); an extension's own flow, or a service account's grant, goes where it was going.
     **Nothing is ever sent to Raycast's proxy hosts** (`*.oauth.raycast.com`, with or without a trailing dot): what isn't rewritten there is refused, with sign-in on or off.
+    **Token and refresh grants to any of Raycast's hosts are refused too** (SPEC-132 §2 step 5, `isRaycastDomainHost`, by the domains core hands over in `FUDGE_RAYCAST_DOMAINS`), through `fetch`, `http` and `https` alike.
+    Any other request there, a plain `GET` to raycast.com included, goes where it was going, and only a request with a body is read for its grant (`needsDecision`).
     A rewritten request goes to the relay through Node's `http`/`https` (`sendToRelay`), never undici, as the `Request` `fetch` would send (its method, headers and serialized body, its `signal`), and comes back as the `Response` `fetch` would give, streamed and decoded.
     Its connection always verifies (`relayTLSOptions`: `rejectUnauthorized: true` and TLS 1.2 at least), whatever the worker's `NODE_TLS_REJECT_UNAUTHORIZED` says, since it carries the code and verifier or the refresh token.
     A redirect from the relay is an error, never followed, since a 307 or 308 would send that body on.
