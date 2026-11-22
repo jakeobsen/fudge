@@ -36,6 +36,7 @@ import {
     type BuildRecordFiles,
 } from "./build-records.ts";
 import { GitError, spawnProgram, type GitResult, type Run, type StoreRepository } from "./git.ts";
+import type { RepositoryEntry } from "./repository-address.ts";
 import {
     removeSavedFailure,
     reportEnd,
@@ -89,8 +90,15 @@ export function alreadyBuildingTitle(title: string): string {
     return `${title} is already being installed`;
 }
 
+/** A repository that's on and the store's copy of it, as far as a row's work needs them (`StoreCopy`). */
+export type RowCopy = { entry: Pick<RepositoryEntry, "copyId" | "identity">; repo: StoreRepository };
+
+/** What a row installs nothing with: its repository was switched off or removed since it was listed (SPEC-157 D.6). */
+export const offOrRemovedMessage = "This repository is off or was removed.";
+
 export type StoreContext = {
-    repo: StoreRepository;
+    /** The copy of each repository that's on, by its copy id, as the list was last read; none for one that isn't. */
+    copyOf: (copyId: string) => RowCopy | undefined;
     supportPath: string;
     /** `FUDGE_CLI`: the app's `fudge` tool. */
     cli: string;
@@ -119,6 +127,24 @@ export type StoreContext = {
      * confirmed an install or update (SPEC-156 G); not waited for, and its failure never stops the install. */
     askForNotifications?: () => Promise<void>;
 };
+
+/**
+ * A row's own copy (SPEC-157 D.6), by the row's copy id and never another's: its install, its compatibility check and
+ * its README use that copy alone. Refused when its repository is off or was removed meanwhile.
+ */
+export function rowCopy(context: Pick<StoreContext, "copyOf">, copyId: string): RowCopy {
+    const copy = context.copyOf(copyId);
+    if (!copy || copy.entry.copyId !== copyId) throw new StoreError(offOrRemovedMessage);
+    return copy;
+}
+
+/** The confirmation's first line (D.5): where the extension comes from, its repository's identity without `https://`,
+ * and the commit. An added repository's extension also says it's kept apart (E.5). */
+export function confirmationText(identity: string, commit: string, added: boolean, compatibility: string): string {
+    const from = `From ${identity.replace(/^https:\/\//, "")} at ${commit.slice(0, 7)}. It runs its own code on your Mac, like any app you install.`;
+    const apart = added ? "It's kept apart from other extensions with the same name, with its own settings and data." : undefined;
+    return [from, apart, compatibility].filter((part): part is string => part !== undefined).join("\n\n");
+}
 
 /** Calls `askForNotifications` without waiting, swallowing any failure. */
 function askForNotifications(context: StoreContext): void {
@@ -313,8 +339,10 @@ export async function install(
     if (record ? !sameFolder(record.dir, dir) : await exists(installFolder(context.extensionsDir, name))) {
         throw new StoreError(nameTakenMessage(name));
     }
-    await context.repo.add(`/extensions/${dir}/`);
-    const source = path.join(context.repo.path, "extensions", dir);
+    // The row's own copy, as the list is now: one switched off or removed since installs nothing.
+    const copy = rowCopy(context, entry.copyId);
+    await copy.repo.add(`/extensions/${dir}/`);
+    const source = path.join(copy.repo.path, "extensions", dir);
     // The build installs under the name in this manifest, so it must still be the one the list showed.
     const current = await readRegularFile(path.join(source, "package.json"), maxManifestBytes)
         .then((text) => (JSON.parse(text) as { name?: unknown }).name)
@@ -323,7 +351,7 @@ export async function install(
     const problem = await sourceProblem(source);
     if (problem) throw new StoreError(`${entry.title} can't be installed. ${problem}.`);
 
-    const tree = (await context.repo.trees()).get(dir);
+    const tree = (await copy.repo.trees()).get(dir);
     const checked = await compatibilityOf(source, tree, context);
     // A part written in Swift (SPEC-145 §3): built whenever the tools are set up, with nothing more said (D-118);
     // without them, the view's choice, before anything is installed.
@@ -332,10 +360,10 @@ export async function install(
     const swift = await decideSwiftParts(hasSwiftPart, context.commandLineToolsReady ?? (async () => false), choose);
     if (!swift) return false;
     const compatibility = compatibilityLine(checked, commandTitles(entry));
-    const commit = await context.repo.commit();
+    const commit = await copy.repo.commit();
     const confirmed = await context.confirm(
         `${record ? "Update" : "Install"} ${entry.title}?`,
-        `From github.com/raycast/extensions at ${commit.slice(0, 7)}. It runs its own code on your Mac, like any app you install.\n\n${compatibility}`,
+        confirmationText(copy.entry.identity, commit, addedRepository(entry) !== undefined, compatibility),
         record ? "Update" : "Install",
     );
     if (!confirmed) return false;

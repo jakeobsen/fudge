@@ -23,13 +23,17 @@ import {
     categories,
     entryId,
     filterEntries,
+    filterRepositories,
     folderURL,
+    gitHubRepository,
     iconURL,
     installedFilter,
     installingTag,
     failedInstallTag,
     failedUpdateTag,
     namedRowId,
+    repositoryFilter,
+    repositoryHost,
     rowActions,
     rowId,
     searchKeywords,
@@ -49,8 +53,8 @@ import {
     scannerIdentity,
     type Compatibility,
 } from "./compatibility.ts";
-import { gitAvailable, stopRunningGit, StoreRepository } from "./git.ts";
-import { detailMarkdown, fetchReadme, readmeKey, readmeKeyParts, refetching, shownReadme } from "./readme.ts";
+import { gitAvailable, stopRunningGit } from "./git.ts";
+import { detailMarkdown, fetchReadme, readmeKey, readmeKeyParts, refetching, shownReadme, type RowRepository } from "./readme.ts";
 import {
     developmentBuildAccessory,
     developmentDetailMarkdown,
@@ -61,7 +65,7 @@ import {
     type DevelopmentBuild,
 } from "./development-builds.ts";
 import { RestingWork } from "./resting.ts";
-import type { FailureDetails } from "./failure.ts";
+import { causeOf, cleanOutput, failureMarkdown, type FailureDetails } from "./failure.ts";
 import { FailureView, LoadFailure, NeedsGit } from "./failure-view.tsx";
 import {
     failureDetails,
@@ -69,8 +73,10 @@ import {
     installPressed,
     InstallPresses,
     installsWithoutSwift,
+    offOrRemovedMessage,
     oneAtATime,
     readInstalled,
+    rowCopy,
     uninstall,
     type InstallView,
     type StoreContext,
@@ -79,7 +85,8 @@ import { systemProbe } from "./build-records.ts";
 import { heldRefreshMessage, OtherBuilds, settledNotice } from "./other-builds.ts";
 import { openCopies, refreshCopies, type CopySteps } from "./copy-turns.ts";
 import {
-    copyPath,
+    problemReport,
+    problemRows,
     problemSentence,
     raycastLoadFailure,
     readCopy,
@@ -87,9 +94,9 @@ import {
     shownRows,
     storeCopies,
     type CopyState,
+    type ProblemRow,
     type StoreCopy,
 } from "./repositories.ts";
-import { RAYCAST_COPY } from "./repository-address.ts";
 import {
     askForNotifications,
     commandLineToolsReady,
@@ -113,6 +120,7 @@ import {
 } from "./notices.ts";
 import type { SwiftPartsChoice } from "./swift-parts.ts";
 import { SwiftPartsView } from "./swift-parts-view.tsx";
+import os from "node:os";
 
 /** A failure the store had goes into `Fudge.log` too, with its output (SPEC-124); writing it never fails a step. */
 const logFailure = (title: string, error: unknown) => void logToFudge("error", failureLog(title, failureDetails(error))).catch(() => {});
@@ -166,8 +174,6 @@ export default function Command(props: LaunchProps) {
 
 function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsDir: string; launchContext?: unknown }) {
     const { push } = useNavigation();
-    // Raycast's copy, which installs and checks use until each row's work takes its own copy.
-    const repo = useMemo(() => new StoreRepository(copyPath(environment.supportPath, RAYCAST_COPY.copyId)), []);
     // A copy of each repository that's on, from the last read of the list (C.1), Raycast's first; none until it's read.
     const [copies, setCopies] = useState<StoreCopy[]>();
     const copiesNow = useRef(copies);
@@ -210,10 +216,30 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
     // The latest list, for a failure's link, which is made after the install's await.
     const loadedNow = useRef(loaded);
     loadedNow.current = loaded;
-    // The page of a row's folder at its copy's commit, for the failure view; none before its copy has loaded.
+    // A row's copy, as the list now has it: none once its repository is off or removed (SPEC-157 D.6).
+    const copyOf = useCallback(
+        (copyId: string) => copiesNow.current?.find((candidate) => candidate.entry.copyId === copyId),
+        [],
+    );
+    // The repository a row is from, as its accessory, detail and links name it (D.2, D.4).
+    const repositoryOf = (copyId: string): RowRepository | undefined => {
+        const copy = copyOf(copyId);
+        if (!copy) return undefined;
+        const gitHub = gitHubRepository(copy.entry.identity);
+        return { name: copy.entry.name, ...(gitHub ? { gitHub } : {}) };
+    };
+    // A failure of a row's work names its repository's host when "couldn't reach" applies and it isn't GitHub (C.6).
+    const withHost = (details: FailureDetails, copyId: string): FailureDetails => {
+        const identity = copyOf(copyId)?.entry.identity;
+        const host = identity === undefined ? undefined : repositoryHost(identity);
+        return host === undefined ? details : { ...details, host };
+    };
+    // The page of a row's folder at its copy's commit, for the failure view; none before its copy has loaded, or for a
+    // repository that isn't on github.com (D.4).
     const pageURL = (dir: string, copyId: string) => {
         const commit = loadedNow.current?.commits.get(copyId);
-        return commit === undefined ? undefined : folderURL(dir, commit);
+        const gitHub = repositoryOf(copyId)?.gitHub;
+        return commit === undefined || gitHub === undefined ? undefined : folderURL(gitHub, dir, commit);
     };
     // Drawn again when a name starts or stops installing (SPEC-153 B, C).
     const [, setBusyChanges] = useState(0);
@@ -427,9 +453,9 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                     oneAtATime(async () => {
                         if (cancelled()) return undefined;
                         const { copyId, dir } = readmeKeyParts(key);
-                        // The row's own copy, as the list now has it.
+                        // The row's own copy, as the list now has it (D.6).
                         const copy = copiesNow.current?.find((candidate) => candidate.entry.copyId === copyId);
-                        if (!copy) throw new Error("This repository is off or was removed.");
+                        if (!copy) throw new Error(offOrRemovedMessage);
                         return fetchReadme(copy.repo, dir);
                     }),
                 changed: (key, readme) => {
@@ -445,7 +471,8 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
 
     const context: StoreContext = useMemo(
         () => ({
-            repo,
+            // Each row's work takes its own copy by its copy id (D.6), as the list now has it.
+            copyOf,
             supportPath: environment.supportPath,
             cli,
             extensionsDir,
@@ -459,7 +486,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             chooseSwiftParts: (title) =>
                 new Promise<SwiftPartsChoice>((resolve) => push(<SwiftPartsView title={title} choose={resolve} />)),
         }),
-        [repo, cli, extensionsDir, push],
+        [copyOf, cli, extensionsDir, push],
     );
 
     // The detail's Compatibility line: the selected row is scanned once the selection rests on it, in the git queue,
@@ -468,9 +495,10 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
         () =>
             new CompatibilityChecks({
                 cached: (tree) => checkedNow.current.results.get(tree),
-                check: (_copyId, dir, tree, cancelled, signal) =>
+                check: (copyId, dir, tree, cancelled, signal) =>
                     oneAtATime(async () => {
-                        const result = await checkFolder(dir, context, cancelled, signal);
+                        // The row's own copy (D.6): one switched off or removed since is checked nowhere.
+                        const result = await checkFolder(rowCopy(context, copyId).repo, dir, context, cancelled, signal);
                         if (!result) return undefined;
                         await rememberCompatibility(environment.supportPath, checkedNow.current.scanner, tree, result);
                         return result;
@@ -514,7 +542,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                 push(
                     <FailureView
                         title={title}
-                        details={failureDetails(error)}
+                        details={withHost(failureDetails(error), entry.copyId)}
                         pageURL={pageURL(entry.dir, entry.copyId)}
                         cli={cli}
                         retry={() => void runInstall(entry, updating)}
@@ -546,7 +574,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
         push(
             <FailureView
                 title={`Couldn't ${mark.updating ? "update" : "install"} ${mark.title}`}
-                details={mark.details}
+                details={entry ? withHost(mark.details, entry.copyId) : mark.details}
                 pageURL={entry ? pageURL(entry.dir, entry.copyId) : undefined}
                 cli={cli}
                 retry={() => {
@@ -619,6 +647,15 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             }
         });
 
+    /** ⌘R on any row: a README that couldn't be fetched is tried again too, and the list and every copy are read again. */
+    const refreshPressed = () => {
+        readmeFetches.again();
+        // Held while a build from another session runs, which the toast says (SPEC-153 C.7).
+        const waiting = others.records();
+        if (waiting.length > 0) void showToast({ style: Toast.Style.Success, title: heldRefreshMessage(waiting) });
+        void refresh();
+    };
+
     const shown = loaded ? filterEntries(loaded.entries, filter, loaded.installed) : [];
     const { installed: installedRows, other } = sections(shown, loaded?.installed ?? {});
     // A row's id is its repository's folder and its folder there (`rowId`), which `readCatalog` checked.
@@ -638,6 +675,13 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
         readmeFetches.select(checking && checkingTree ? readmeKey(checking.copyId, checking.dir, checkingTree) : undefined);
         checks.select(checking?.copyId, checking?.dir, checkingTree);
     }, [readmeFetches, checks, checking, checkingTree]);
+
+    // A repository's filter goes back to All once its item has left the dropdown (D.3): switched off or removed, or the
+    // only repository still on.
+    useEffect(() => {
+        if (!filter.startsWith("repository:")) return;
+        if (!filterRepositories(copies ?? []).some((copy) => repositoryFilter(copy.entry.copyId) === filter)) setFilter(allFilter);
+    }, [copies, filter]);
 
     if (noGit) {
         return (
@@ -662,7 +706,9 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
         const mark = marks.get(entry.dir, addedRepository(entry));
         const offered = rowActions(state, busy, mark);
         const commit = commitOf(entry);
-        const icon = commit === undefined ? undefined : iconURL(entry, commit);
+        // Its repository (D.2, D.4): rows show only while their copy is on, so it's there.
+        const repository = repositoryOf(entry.copyId) ?? { name: "" };
+        const icon = commit === undefined ? undefined : iconURL(entry, repository.gitHub, commit);
         const tree = treeOf(entry);
         const compatibility = tree === undefined ? undefined : compatibilityTag(checked.results.get(tree));
         return (
@@ -676,7 +722,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                 accessories={
                     showingDetail
                         ? undefined
-                        : accessoryTexts(entry, state, compatibility, busy, mark).map((accessory) =>
+                        : accessoryTexts(entry, state, compatibility, busy, mark, repository.name).map((accessory) =>
                               "tag" in accessory
                                   ? { tag: { value: accessory.tag, color: tagColor(accessory.tag) } }
                                   : { text: accessory.text },
@@ -688,6 +734,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                         <List.Item.Detail
                             markdown={detailMarkdown(
                                 entry,
+                                repository,
                                 commit ?? "",
                                 tree === undefined
                                     ? undefined
@@ -745,22 +792,15 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                             )}
                         </ActionPanel.Section>
                         <ActionPanel.Section>
-                            {commit !== undefined && <Action.OpenInBrowser url={folderURL(entry.dir, commit)} />}
+                            {commit !== undefined && repository.gitHub !== undefined && (
+                                <Action.OpenInBrowser url={folderURL(repository.gitHub, entry.dir, commit)} />
+                            )}
                             <Action.CopyToClipboard title="Copy Name" content={entry.name} />
                             <Action
                                 title="Refresh"
                                 icon={Icon.ArrowClockwise}
                                 shortcut={{ modifiers: ["cmd"], key: "r" }}
-                                onAction={() => {
-                                    // A README that couldn't be fetched is tried again too.
-                                    readmeFetches.again();
-                                    // Held while a build from another session runs, which the toast says (SPEC-153 C.7).
-                                    const waiting = others.records();
-                                    if (waiting.length > 0) {
-                                        void showToast({ style: Toast.Style.Success, title: heldRefreshMessage(waiting) });
-                                    }
-                                    void refresh();
-                                }}
+                                onAction={refreshPressed}
                             />
                         </ActionPanel.Section>
                     </ActionPanel>
@@ -798,10 +838,68 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             }
         />
     );
+    /** A repository's problem row (C.6): Show Details, ⌘R Refresh and ⌘C Copy Error, git's output cleaned. */
+    const problemItem = (row: ProblemRow) => {
+        const id = `problem:${row.copyId}`;
+        return (
+            <List.Item
+                key={id}
+                id={id}
+                title={row.title}
+                icon={{ source: Icon.Warning, tintColor: Color.Orange }}
+                detail={
+                    showingDetail ? (
+                        <List.Item.Detail
+                            markdown={failureMarkdown(row.title, causeOf(row.details), cleanOutput(row.details.output, os.homedir()))}
+                        />
+                    ) : undefined
+                }
+                actions={
+                    <ActionPanel>
+                        <ActionPanel.Section>
+                            <Action
+                                title="Show Details"
+                                icon={Icon.Document}
+                                onAction={() =>
+                                    push(
+                                        <FailureView
+                                            title={row.title}
+                                            details={row.details}
+                                            cli={cli}
+                                            retry={refreshPressed}
+                                            retryTitle="Refresh"
+                                        />,
+                                    )
+                                }
+                            />
+                            <Action
+                                title="Refresh"
+                                icon={Icon.ArrowClockwise}
+                                shortcut={{ modifiers: ["cmd"], key: "r" }}
+                                onAction={refreshPressed}
+                            />
+                            <Action.CopyToClipboard
+                                title="Copy Error"
+                                shortcut={{ modifiers: ["cmd"], key: "c" }}
+                                content={problemReport(row, os.homedir())}
+                            />
+                        </ActionPanel.Section>
+                    </ActionPanel>
+                }
+            />
+        );
+    };
+    // The load-error view while no copy has rows (C.6): Raycast's failure, in place of the whole list, as today. Any copy
+    // read since makes every problem a row, Raycast's too.
+    const loadFailureShown = loadError !== undefined && (loaded?.entries.length ?? 0) === 0;
+    const problems = loadFailureShown ? [] : problemRows(copies ?? [], copyStates);
+    // The dropdown's repositories (D.3), when more than one is on.
+    const filteredRepositories = filterRepositories(copies ?? []);
+
     // The Installed section: the store's installs and the development builds, by title.
     const installedItems = [
         ...installedRows.map((entry) => ({ title: entry.title, node: item(entry) })),
-        ...(loaded && developmentRowsShown(filter) ? loaded.development : []).map((build) => ({
+        ...(loaded && !loadFailureShown && developmentRowsShown(filter) ? loaded.development : []).map((build) => ({
             title: build.title,
             node: developmentItem(build),
         })),
@@ -821,6 +919,17 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                 <List.Dropdown tooltip="Category" value={filter} onChange={setFilter}>
                     <List.Dropdown.Item title="All" value={allFilter} />
                     <List.Dropdown.Item title="Installed" value={installedFilter} />
+                    {filteredRepositories.length > 0 && (
+                        <List.Dropdown.Section title="Repositories">
+                            {filteredRepositories.map((copy) => (
+                                <List.Dropdown.Item
+                                    key={copy.entry.copyId}
+                                    title={copy.entry.name}
+                                    value={repositoryFilter(copy.entry.copyId)}
+                                />
+                            ))}
+                        </List.Dropdown.Section>
+                    )}
                     <List.Dropdown.Section title="Categories">
                         {categories(loaded?.entries ?? []).map((category) => (
                             <List.Dropdown.Item key={category} title={category} value={`category:${category}`} />
@@ -830,7 +939,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             }
         >
             {/* The load-error view while no copy has rows (C.6); a copy read since makes every problem a row. */}
-            {loadError && (loaded?.entries.length ?? 0) === 0 ? (
+            {loadError && loadFailureShown ? (
                 <LoadFailure
                     title={loadError.title}
                     details={loadError.details}
@@ -855,6 +964,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             ) : (
                 <List.EmptyView icon={Icon.MagnifyingGlass} title="No extensions found" />
             )}
+            <List.Section title="Repositories">{problems.map(problemItem)}</List.Section>
             <List.Section title="Installed">{installedItems.map((row) => row.node)}</List.Section>
             <List.Section title="Extensions">{other.map(item)}</List.Section>
         </List>

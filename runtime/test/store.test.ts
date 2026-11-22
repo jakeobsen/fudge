@@ -39,6 +39,9 @@ import {
     failedInstallTag,
     failedUpdateTag,
     filterEntries,
+    filterRepositories,
+    folderURL,
+    gitHubRepository,
     iconURL,
     installedFilter,
     installedRecord,
@@ -47,6 +50,8 @@ import {
     parseManifest,
     raycastCopy,
     readCatalog,
+    repositoryFilter,
+    repositoryHost,
     rowActions,
     rowId,
     searchKeywords,
@@ -131,7 +136,9 @@ import {
     refetching,
     rendererPass,
     shownReadme,
+    type RowRepository,
 } from "../store-extension/src/readme.ts";
+import { parseRepositoryAddress, RAYCAST_COPY, type ParsedRepository } from "../store-extension/src/repository-address.ts";
 import { RestingWork } from "../store-extension/src/resting.ts";
 import {
     caseClash,
@@ -148,13 +155,16 @@ import {
     installFolder,
     installsWithoutSwift,
     bundledNames,
+    confirmationText,
     doneToast,
     failureDetails,
     install,
     installPressed,
     InstallPresses,
+    offOrRemovedMessage,
     oneAtATime,
     readInstalled,
+    rowCopy,
     StoreError,
     uninstall,
     writeInstalled,
@@ -265,7 +275,7 @@ test("an entry has the manifest's fields, and only a plain icon file name", () =
     assert.equal(parseManifest("alpha", manifest("alpha", { icon: "../../x.png" }))?.icon, undefined);
     assert.equal(parseManifest("alpha", manifest("alpha", { icon: ".hidden" }))?.icon, undefined);
     assert.equal(
-        iconURL(entry, "abc123"),
+        iconURL(entry, "raycast/extensions", "abc123"),
         "https://raw.githubusercontent.com/raycast/extensions/abc123/extensions/alpha/assets/icon.png",
     );
 });
@@ -685,7 +695,7 @@ test("other images become their alt text; paths in the folder become GitHub's ra
     ].join("\n");
     const raw = "https://raw.githubusercontent.com/raycast/extensions/c0ffee/extensions/alpha";
     assert.equal(
-        filterImages(readme, "alpha", "c0ffee"),
+        filterImages(readme, "raycast/extensions", "alpha", "c0ffee"),
         [
             `![Shot](${raw}/media/shot.png)`,
             '![Hosted](https://raw.githubusercontent.com/a/b/main/x.png "A title")',
@@ -703,10 +713,10 @@ test("other images become their alt text; paths in the folder become GitHub's ra
 
 test("a source the renderer would read differently is never shown", () => {
     for (const source of ["a b", "x)", "<x", "x>", "media/a.png\n![y](https://evil.example/p.png", ""]) {
-        assert.equal(imageSource(source, "alpha", "c0ffee"), undefined, JSON.stringify(source));
+        assert.equal(imageSource(source, "raycast/extensions", "alpha", "c0ffee"), undefined, JSON.stringify(source));
     }
     const vector = "![a](<x)\n![y](https://evil.example/two.png>)";
-    const filtered = filterImages(vector, "alpha", "c0ffee");
+    const filtered = filterImages(vector, "raycast/extensions", "alpha", "c0ffee");
     assert.ok(!filtered.includes("evil.example/two.png)"), filtered);
     assert.ok(!/!\[[^\]]*\]\(https:\/\/evil/.test(filtered), filtered);
 });
@@ -728,29 +738,29 @@ test("everything in the detail goes through the filter, the manifest's text incl
             commands: [{ name: "run", title: "Run", description: evil }],
         }),
     )!;
-    const detail = detailMarkdown(entry, "c0ffee", `# Readme\n\n${evil}\n\n![shot](media/shot.png)`);
+    const detail = detailMarkdown(entry, raycastRow, "c0ffee", `# Readme\n\n${evil}\n\n![shot](media/shot.png)`);
     assert.ok(!detail.includes("evil.example"), detail);
     assert.match(detail, /^# Alpha/);
     assert.ok(detail.includes("raw.githubusercontent.com/raycast/extensions/c0ffee/extensions/alpha/media/shot.png"));
-    assert.match(detailMarkdown(entry, "c0ffee", undefined), /Loading the README/);
-    assert.match(detailMarkdown(entry, "c0ffee", readmeNotFetched), /couldn't fetch the README\. ⌘R tries again/);
-    const none = detailMarkdown(entry, "c0ffee", "");
+    assert.match(detailMarkdown(entry, raycastRow, "c0ffee", undefined), /Loading the README/);
+    assert.match(detailMarkdown(entry, raycastRow, "c0ffee", readmeNotFetched), /couldn't fetch the README\. ⌘R tries again/);
+    const none = detailMarkdown(entry, raycastRow, "c0ffee", "");
     assert.ok(!/README|---/.test(none), `a folder with no README shows the manifest alone: ${none}`);
 });
 
 test("the detail's Compatibility line comes first among the facts", () => {
     const entry = parseManifest("alpha", manifest("alpha"))!;
-    const markdown = detailMarkdown(entry, "c0ffee", "", "Not compatible: Raycast AI. Missing: `Clipboard.read`");
+    const markdown = detailMarkdown(entry, raycastRow, "c0ffee", "", "Not compatible: Raycast AI. Missing: `Clipboard.read`");
     assert.match(markdown, /\n\n\*\*Compatibility:\*\* Not compatible: Raycast AI\. Missing: `Clipboard\.read`  \n\*\*Author:\*\* someone/);
-    assert.doesNotMatch(detailMarkdown(entry, "c0ffee", ""), /Compatibility/, "no line without a state");
+    assert.doesNotMatch(detailMarkdown(entry, raycastRow, "c0ffee", ""), /Compatibility/, "no line without a state");
 });
 
 test("the detail names the repository folder when it differs from the name, and links to the folder", () => {
     const aws = parseManifest("amazon-aws", manifest("aws", { title: "Amazon AWS" }))!;
-    const detail = detailMarkdown(aws, "abc123", "");
+    const detail = detailMarkdown(aws, raycastRow, "abc123", "");
     assert.ok(detail.includes("In the repository as `amazon-aws`"), detail);
     assert.ok(detail.includes("https://github.com/raycast/extensions/tree/abc123/extensions/amazon-aws"), detail);
-    assert.ok(!detailMarkdown(alpha, "abc123", "").includes("In the repository as"), "not when they're the same");
+    assert.ok(!detailMarkdown(alpha, raycastRow, "abc123", "").includes("In the repository as"), "not when they're the same");
 });
 
 test("the detail lists each command with its mode", () => {
@@ -766,7 +776,7 @@ test("the detail lists each command with its mode", () => {
             ],
         }),
     )!;
-    const commands = detailMarkdown(entry, "c0ffee", undefined).split("## Commands\n\n")[1]!.split("\n\n")[0];
+    const commands = detailMarkdown(entry, raycastRow, "c0ffee", undefined).split("## Commands\n\n")[1]!.split("\n\n")[0];
     assert.equal(
         commands,
         [
@@ -1109,7 +1119,7 @@ async function storeContext(
     const asked: { title: string; message: string; primary: string }[] = [];
     const trashed: string[] = [];
     const context: StoreContext = {
-        repo: new StoreRepository(repoPath, { allowProtocols: "file", run: git.run }),
+        copyOf: raycastOnly(new StoreRepository(repoPath, { allowProtocols: "file", run: git.run })),
         supportPath,
         cli: "/Applications/Fudge.app/Contents/Helpers/fudge",
         extensionsDir,
@@ -1126,6 +1136,17 @@ async function storeContext(
     return { context, git, cli, asked, trashed, extensionsDir, supportPath, repoPath, sparse };
 }
 const alphaEntry = parseManifest("alpha", manifest("alpha"))!;
+
+/** Raycast's repository as a row's detail names it and links to it. */
+const raycastRow: RowRepository = { name: RAYCAST_COPY.name, gitHub: "raycast/extensions" };
+/** The copies a context looks rows up in: Raycast's only, at `repo`. */
+function raycastOnly(repo: StoreRepository): StoreContext["copyOf"] {
+    return (copyId) => (copyId === RAYCAST_COPY.copyId ? { entry: RAYCAST_COPY, repo } : undefined);
+}
+/** Raycast's copy, as a context has it. */
+function raycastRepo(context: Pick<StoreContext, "copyOf">): StoreRepository {
+    return context.copyOf(RAYCAST_COPY.copyId)!.repo;
+}
 
 /** A build's arguments without the `--outcome <support>/installing` the store adds to every build (SPEC-156 A.3). */
 function withoutOutcome(args: string[]): string[] {
@@ -1316,9 +1337,9 @@ test("an extension installed without its Swift part says so on its detail page, 
     assert.equal(await installedWithoutSwift(folder), true);
     await writeFile(path.join(folder, swiftPartsFile), "not json");
     assert.equal(await installedWithoutSwift(folder), false);
-    const markdown = detailMarkdown(alphaEntry, "c0ffee1234", "", undefined, true);
+    const markdown = detailMarkdown(alphaEntry, raycastRow, "c0ffee1234", "", undefined, true);
     assert.ok(markdown.includes("Installed without its part written in Swift."), markdown);
-    assert.equal(detailMarkdown(alphaEntry, "c0ffee1234", "", undefined).includes("Swift"), false);
+    assert.equal(detailMarkdown(alphaEntry, raycastRow, "c0ffee1234", "", undefined).includes("Swift"), false);
 });
 
 test("the list reads each install's Swift part choice from its folder in Raycast's, not the top level", async () => {
@@ -1807,7 +1828,7 @@ test("a detail scan fetches the folder's src/ with a per-file cap, checks out it
         sources: { alpha: ["index.ts", "lib/util.tsx", "data.json", "logo.png"] },
         scan: { stdout: JSON.stringify(report) },
     });
-    assert.deepEqual(await checkFolder("alpha", context, () => false), aiOnly);
+    assert.deepEqual(await checkFolder(raycastRepo(context), "alpha", context, () => false), aiOnly);
     assert.deepEqual(
         git.calls.map((call) => call.args),
         [
@@ -1859,17 +1880,17 @@ test("past the caps a row isn't checked: too many source files, or files under s
     const assets = (count: number) => Array.from({ length: count }, (_, n) => `assets/image${n}.png`);
     // Assets don't count toward the scan's cap, only toward the download's.
     const atCaps = await storeContext({ sources: { alpha: [...sources, ...assets(maxSrcFiles - maxScanFiles)] } });
-    assert.deepEqual(await checkFolder("alpha", atCaps.context, () => false), fromReport(supportedScan), "exactly both caps is fine");
+    assert.deepEqual(await checkFolder(raycastRepo(atCaps.context), "alpha", atCaps.context, () => false), fromReport(supportedScan), "exactly both caps is fine");
     assert.equal(atCaps.cli.calls.length, 1);
 
     const tooManySources = await storeContext({ sources: { alpha: [...sources, "one-more.tsx", "a.png"] } });
-    assert.deepEqual(await checkFolder("alpha", tooManySources.context, () => false), { notChecked: true });
+    assert.deepEqual(await checkFolder(raycastRepo(tooManySources.context), "alpha", tooManySources.context, () => false), { notChecked: true });
     assert.deepEqual(tooManySources.git.calls.map((call) => call.args[0]), ["ls-tree"], "nothing fetched");
     assert.deepEqual(tooManySources.cli.calls, []);
 
     // Every file under src/ is downloaded, so past the download's cap nothing is, however few the source files.
     const tooManyFiles = await storeContext({ sources: { alpha: ["index.ts", ...assets(maxSrcFiles)] } });
-    assert.deepEqual(await checkFolder("alpha", tooManyFiles.context, () => false), { notChecked: true });
+    assert.deepEqual(await checkFolder(raycastRepo(tooManyFiles.context), "alpha", tooManyFiles.context, () => false), { notChecked: true });
     assert.deepEqual(tooManyFiles.git.calls.map((call) => call.args[0]), ["ls-tree"], "nothing fetched");
     assert.deepEqual(tooManyFiles.cli.calls, []);
 
@@ -1890,8 +1911,8 @@ test("past the caps a row isn't checked: too many source files, or files under s
             const lines = missing.map((file) => `?${String(files.indexOf(file)).padStart(40, "0")}\n`);
             return { code: 0, stdout: `abc1 extensions/alpha/src\n${lines.join("")}`, stderr: "" };
         };
-        const overCap = { ...left.context, repo: new StoreRepository(left.repoPath, { allowProtocols: "file", run: withMissing }) };
-        assert.deepEqual(await checkFolder("alpha", overCap, () => false), expected, `${still} over the per-file cap`);
+        const overCap = { ...left.context, copyOf: raycastOnly(new StoreRepository(left.repoPath, { allowProtocols: "file", run: withMissing })) };
+        assert.deepEqual(await checkFolder(raycastRepo(overCap), "alpha", overCap, () => false), expected, `${still} over the per-file cap`);
         assert.ok(fetched, `${still}: fetched`);
         const checkedOut = left.git.calls.some((call) => call.args[0] === "sparse-checkout" && call.args[1] === "add");
         assert.equal(checkedOut, still === "hero.png", `${still}: checked out or not`);
@@ -1901,18 +1922,18 @@ test("past the caps a row isn't checked: too many source files, or files under s
     const big = await storeContext({ sources: { alpha: ["huge.js"] } });
     await mkdir(path.join(big.repoPath, "extensions/alpha/src"), { recursive: true });
     await writeFile(path.join(big.repoPath, "extensions/alpha/src/huge.js"), Buffer.alloc(maxScanBytes + 1));
-    assert.deepEqual(await checkFolder("alpha", big.context, () => false), { notChecked: true });
+    assert.deepEqual(await checkFolder(raycastRepo(big.context), "alpha", big.context, () => false), { notChecked: true });
     assert.deepEqual(big.cli.calls, [], "not scanned");
     assert.deepEqual(big.git.calls.at(-1)!.args, ["sparse-checkout", "set", "--no-cone", "--stdin"], "its patterns are taken out");
 });
 
 test("a detail scan that fails throws, and still takes its patterns out; one cancelled before its fetch fetches nothing", async () => {
     const failing = await storeContext({ sources: { alpha: ["index.ts"] }, scan: { code: 1 } });
-    await assert.rejects(checkFolder("alpha", failing.context, () => false), /fudge scan failed/);
+    await assert.rejects(checkFolder(raycastRepo(failing.context), "alpha", failing.context, () => false), /fudge scan failed/);
     assert.deepEqual(failing.git.calls.at(-1)!.args, ["sparse-checkout", "set", "--no-cone", "--stdin"]);
 
     const cancelled = await storeContext({ sources: { alpha: ["index.ts"] } });
-    assert.equal(await checkFolder("alpha", cancelled.context, () => true), undefined);
+    assert.equal(await checkFolder(raycastRepo(cancelled.context), "alpha", cancelled.context, () => true), undefined);
     assert.deepEqual(cancelled.git.calls.map((call) => call.args[0]), ["ls-tree"]);
     assert.deepEqual(cancelled.cli.calls, []);
 });
@@ -1954,7 +1975,7 @@ test("moving through 20 rows quickly fetches nothing; the row the selection rest
     const checks = new CompatibilityChecks({
         timers: clock.timers,
         cached: (tree) => results.get(tree),
-        check: (_copyId, dir, _tree, cancelled) => oneAtATime(() => checkFolder(dir, context, cancelled)),
+        check: (_copyId, dir, _tree, cancelled) => oneAtATime(() => checkFolder(raycastRepo(context), dir, context, cancelled)),
         changed: (_copyId, dir, tree, result) => {
             if (result !== "failed") results.set(tree, result);
             settled([dir, result]);
@@ -1993,7 +2014,7 @@ test("moving on cancels a check before its fetch, and a failed check says so", a
     const checks = new CompatibilityChecks({
         timers: clock.timers,
         cached: () => undefined,
-        check: (_copyId, dir, _tree, cancelled) => checkFolder(dir, context, cancelled),
+        check: (_copyId, dir, _tree, cancelled) => checkFolder(raycastRepo(context), dir, context, cancelled),
         changed: (_copyId, dir, _tree, result) => changes.push([dir, result]),
     });
     checks.select("raycast", "alpha", treeOf(1));
@@ -2008,7 +2029,7 @@ test("moving on cancels a check before its fetch, and a failed check says so", a
     const failed = new CompatibilityChecks({
         timers: clock.timers,
         cached: () => undefined,
-        check: (_copyId, dir, _tree, cancelled) => checkFolder(dir, failing.context, cancelled),
+        check: (_copyId, dir, _tree, cancelled) => checkFolder(raycastRepo(failing.context), dir, failing.context, cancelled),
         changed: (_copyId, dir, _tree, result) => changes.push([dir, result]),
     });
     failed.select("raycast", "alpha", treeOf(1));
@@ -2019,14 +2040,14 @@ test("moving on cancels a check before its fetch, and a failed check says so", a
 
 test("moving through 20 rows fetches no README; the row the selection rests on is fetched once, by its tree", async () => {
     const { context, git } = await storeContext();
-    await writeFile(path.join(context.repo.path, "extensions/alpha/README.md"), "# Alpha\n");
+    await writeFile(path.join(raycastRepo(context).path, "extensions/alpha/README.md"), "# Alpha\n");
     const clock = manualTimers();
     const readmes = new Map<string, string>();
     const fetches = new RestingWork<string>({
         timers: clock.timers,
         done: (key) => readmes.has(key.split("\0")[1]!),
         run: (key, cancelled) =>
-            oneAtATime(async () => (cancelled() ? undefined : fetchReadme(context.repo, key.split("\0")[0]!))),
+            oneAtATime(async () => (cancelled() ? undefined : fetchReadme(raycastRepo(context), key.split("\0")[0]!))),
         // As the view keeps them: a failed fetch isn't kept (the view shows it as no README).
         changed: (key, readme) => {
             if (readme !== "failed") readmes.set(key.split("\0")[1]!, readme);
@@ -2067,7 +2088,7 @@ test("a README git couldn't fetch isn't kept as missing: selecting it again wait
             ? { code: 128, stderr: "fatal: unable to access 'https://github.com/raycast/extensions/': Could not resolve host" }
             : {},
     );
-    const repo = new StoreRepository(context.repo.path, { allowProtocols: "file", run: failing.run });
+    const repo = new StoreRepository(raycastRepo(context).path, { allowProtocols: "file", run: failing.run });
     await writeFile(path.join(repo.path, "extensions/alpha/README.md"), "# Alpha\n");
     await assert.rejects(fetchReadme(repo, "alpha"), /Could not resolve host/, "a failed fetch throws");
     gitFails = false;
@@ -2129,7 +2150,7 @@ test("a README fetch on its way shows as loading, a failed one says so, and none
             ? { code: 128, stderr: "fatal: unable to access 'https://github.com/raycast/extensions/': Could not resolve host" }
             : {},
     );
-    const repo = new StoreRepository(context.repo.path, { allowProtocols: "file", run: failing.run });
+    const repo = new StoreRepository(raycastRepo(context).path, { allowProtocols: "file", run: failing.run });
     await writeFile(path.join(repo.path, "extensions/alpha/README.md"), "# Alpha\n");
     const entry = parseManifest("alpha", manifest("alpha"))!;
     const clock = manualTimers();
@@ -2157,7 +2178,7 @@ test("a README fetch on its way shows as loading, a failed one says so, and none
             failed = refetching(failed, key);
         },
     });
-    const shown = (dir = "alpha") => detailMarkdown(entry, "c0ffee", shownReadme(dir, readmes, failed));
+    const shown = (dir = "alpha") => detailMarkdown(entry, raycastRow, "c0ffee", shownReadme(dir, readmes, failed));
     const loading = /Loading the README/;
     const notFetched = /couldn't fetch the README/;
     /** Lets the waiting fetch start, looks while it runs, then lets it end. */
@@ -2456,7 +2477,7 @@ async function partialClone(files: Record<string, string | Buffer>) {
     const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}`, allowProtocols: "file" });
     await repo.clone();
     const { context, cli } = await storeContext();
-    return { repo, context: { ...context, repo }, cli, root, bare };
+    return { repo, context: { ...context, copyOf: raycastOnly(repo) }, cli, root, bare };
 }
 
 test("a check downloads no source file over the cap: that folder isn't checked, and its blob never comes", async () => {
@@ -2473,7 +2494,7 @@ test("a check downloads no source file over the cap: that folder isn't checked, 
     });
     assert.deepEqual(await notDownloaded(repo.path, "big"), ["assets/icon.png", "src/generated.ts", "src/index.ts"]);
 
-    assert.deepEqual(await checkFolder("big", context, () => false), { notChecked: true });
+    assert.deepEqual(await checkFolder(raycastRepo(context), "big", context, () => false), { notChecked: true });
     assert.deepEqual(
         await notDownloaded(repo.path, "big"),
         ["assets/icon.png", "src/generated.ts"],
@@ -2486,7 +2507,7 @@ test("a check downloads no source file over the cap: that folder isn't checked, 
     );
     assert.equal(cli.calls.length, 0, "nor scanned");
 
-    assert.deepEqual(await checkFolder("small", context, () => false), fromReport(supportedScan));
+    assert.deepEqual(await checkFolder(raycastRepo(context), "small", context, () => false), fromReport(supportedScan));
     assert.deepEqual(
         await notDownloaded(repo.path, "small"),
         ["README.md", "src/data.json"],
@@ -2510,7 +2531,7 @@ test("a check downloads no source file over the cap: that folder isn't checked, 
             return spawnProgram(program, args, options);
         },
     });
-    assert.deepEqual(await checkFolder("small", { ...context, repo: recording }, () => false), fromReport(supportedScan));
+    assert.deepEqual(await checkFolder(recording, "small", context, () => false), fromReport(supportedScan));
     assert.ok(calls.includes("rev-list") && !calls.includes("fetch"), `no fetch the second time: ${calls.join(", ")}`);
 });
 
@@ -2529,7 +2550,7 @@ test("only source files decide: an asset over the per-file cap never comes and t
     const patterns = async () => (await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean);
     assert.deepEqual(await notDownloaded(repo.path, "art"), ["src/hero.png", "src/icon.png", "src/index.ts"]);
 
-    assert.deepEqual(await checkFolder("art", context, () => false), fromReport(supportedScan));
+    assert.deepEqual(await checkFolder(raycastRepo(context), "art", context, () => false), fromReport(supportedScan));
     assert.deepEqual(
         await notDownloaded(repo.path, "art"),
         ["src/hero.png"],
@@ -2539,7 +2560,7 @@ test("only source files decide: an asset over the per-file cap never comes and t
     assert.deepEqual(await patterns(), ["/extensions/*/package.json"], "the scan's patterns went again");
 
     // Checking out a file that isn't here, with the lazy fetch off, would fail: it counts as source, so not checked.
-    assert.deepEqual(await checkFolder("gen", context, () => false), { notChecked: true });
+    assert.deepEqual(await checkFolder(raycastRepo(context), "gen", context, () => false), { notChecked: true });
     assert.deepEqual(await notDownloaded(repo.path, "gen"), ["src/table.js/rows.bin"]);
     assert.deepEqual(await patterns(), ["/extensions/*/package.json"], "nothing was checked out");
     assert.equal(cli.calls.length, 1, "nor scanned");
@@ -2590,7 +2611,7 @@ test("a server that refuses the folder's tree gets the fetch as before: each sou
     await sh(refusing.repo.path, "config", "protocol.version", "0");
     const v0 = recording();
     await assert.rejects(
-        checkFolder("small", { ...refusing.context, repo: new StoreRepository(refusing.repo.path, { allowProtocols: "file", run: v0.run }) }, () => false),
+        checkFolder(new StoreRepository(refusing.repo.path, { allowProtocols: "file", run: v0.run }), "small", refusing.context, () => false),
         /not our ref/,
     );
     const fetch = v0.calls.find((call) => gitArgs(call.args)[0] === "fetch")!;
@@ -2617,13 +2638,13 @@ test("a server that refuses the folder's tree gets the fetch as before: each sou
         return { code: 128, stdout: "", stderr: `error: git upload-pack: not our ref ${tree}\nfatal: remote error: upload-pack: not our ref ${tree}` };
     };
     const v2 = recording(refuseTrees);
-    const refused = { ...context, repo: new StoreRepository(repo.path, { allowProtocols: "file", run: v2.run }) };
-    assert.deepEqual(await checkFolder("art", refused, () => false), fromReport(supportedScan));
+    const refused = { ...context, copyOf: raycastOnly(new StoreRepository(repo.path, { allowProtocols: "file", run: v2.run })) };
+    assert.deepEqual(await checkFolder(raycastRepo(refused), "art", refused, () => false), fromReport(supportedScan));
     assert.deepEqual(await notDownloaded(repo.path, "art"), ["src/logo.png"], "only the source file came, not the asset");
     assert.ok(v2.steps().includes("sparse-checkout add"), "with the lazy fetch on");
 
     // A source file over the per-file cap comes all the same, and the total's check makes the row "Not checked".
-    assert.deepEqual(await checkFolder("huge", refused, () => false), { notChecked: true });
+    assert.deepEqual(await checkFolder(raycastRepo(refused), "huge", refused, () => false), { notChecked: true });
     assert.deepEqual(await notDownloaded(repo.path, "huge"), [], "every source file came, whatever its size");
     assert.equal(cli.calls.length, 1, "huge wasn't scanned");
     assert.deepEqual(
@@ -2659,7 +2680,7 @@ test("any other failure of the tree fetch fails the check: no fetch as before, n
     );
     const started = Date.now();
     await assert.rejects(
-        checkFolder("small", { ...context, repo: new StoreRepository(repo.path, { allowProtocols: "file", run: slow.run }) }, () => false, new AbortController().signal),
+        checkFolder(new StoreRepository(repo.path, { allowProtocols: "file", run: slow.run }), "small", context, () => false, new AbortController().signal),
         /git stopped after 0\.5 s/,
     );
     assert.ok(Date.now() - started < 10_000, `the check ended with the fetch (${Date.now() - started} ms)`);
@@ -2670,7 +2691,7 @@ test("any other failure of the tree fetch fails the check: no fetch as before, n
     await sh(repo.path, "config", "remote.origin.url", `file://${path.join(root, "nowhere.git")}`);
     const unreachable = recording();
     await assert.rejects(
-        checkFolder("small", { ...context, repo: new StoreRepository(repo.path, { allowProtocols: "file", run: unreachable.run }) }, () => false),
+        checkFolder(new StoreRepository(repo.path, { allowProtocols: "file", run: unreachable.run }), "small", context, () => false),
         /Could not read from remote repository/,
     );
     await unchanged("an unreachable remote", unreachable);
@@ -2707,7 +2728,7 @@ test("cancelling a check at each step ends only the download, leaves no lock, an
     await sh(repo.path, "config", "remote.origin.uploadpack", "sleep 30; git-upload-pack");
     const controller = new AbortController();
     const started = Date.now();
-    const during = checkFolder("small", context, () => controller.signal.aborted, controller.signal);
+    const during = checkFolder(raycastRepo(context), "small", context, () => controller.signal.aborted, controller.signal);
     setTimeout(() => controller.abort(), 500);
     assert.equal(await during, undefined);
     assert.ok(Date.now() - started < 500 + cancelGrace + 2000, `the fetch ended within the grace period (${Date.now() - started} ms)`);
@@ -2735,7 +2756,7 @@ test("cancelling a check at each step ends only the download, leaves no lock, an
         };
         const stepped = new StoreRepository(repo.path, { allowProtocols: "file", run });
         assert.deepEqual(
-            await checkFolder("small", { ...context, repo: stepped }, () => controller.signal.aborted, controller.signal),
+            await checkFolder(stepped, "small", context, () => controller.signal.aborted, controller.signal),
             expected,
             `cancelled during ${step}`,
         );
@@ -2749,7 +2770,7 @@ test("cancelling a check at each step ends only the download, leaves no lock, an
         await settledState(`during ${step}`, scans);
     }
 
-    assert.deepEqual(await checkFolder("small", context, () => false), fromReport(supportedScan), "the next check works");
+    assert.deepEqual(await checkFolder(raycastRepo(context), "small", context, () => false), fromReport(supportedScan), "the next check works");
     assert.deepEqual(await install(parseManifest("small", manifest("small"))!, context), {}, "and an install");
     assert.deepEqual(await locks(repo.path), []);
 });
@@ -4652,4 +4673,148 @@ test("a settled record seen ending is reported with its build, and the answer de
     const installedOnScreen = await settledNoticeRun({ seen: true, adopted: true }, { onScreen: true, notified: false });
     assert.deepEqual(installedOnScreen.selected, []);
     assert.deepEqual(installedOnScreen.toasts, [{ failed: false, title: settledToast({ record: installedOnScreen.record, adopted: true, seen: true })!.title }]);
+});
+
+// MARK: - Rows from more than one repository (SPEC-157 D.2-D.6, E.5)
+
+/** Added repositories as the rule parses them: one on github.com, one on another host. */
+const toolsRepository = parseRepositoryAddress("https://github.com/Someone/Tools", undefined, []) as ParsedRepository;
+const gitlabRepository = parseRepositoryAddress("https://gitlab.com/group/tools", undefined, [toolsRepository]) as ParsedRepository;
+const copyOfRepository = (repository: ParsedRepository) => ({ copyId: repository.copyId, repositoryFolder: repository.folder });
+
+test("a row from an added repository names it first among its accessories; Raycast's rows don't (D.2)", () => {
+    const fromTools = parseManifest("alpha", manifest("alpha"), copyOfRepository(toolsRepository))!;
+    assert.deepEqual(accessoryTexts(fromTools, "installed", undefined, undefined, undefined, "Someone/Tools"), [
+        { text: "Someone/Tools" },
+        { text: "someone" },
+        { text: "1 command" },
+        { tag: "Installed" },
+    ]);
+    assert.deepEqual(accessoryTexts(alphaEntry, "available", undefined, undefined, undefined, "Raycast"), [
+        { text: "someone" },
+        { text: "1 command" },
+    ]);
+    assert.deepEqual(accessoryTexts(fromTools, "available"), [{ text: "someone" }, { text: "1 command" }], "no name, none shown");
+});
+
+test("the Repositories filter shows one repository's rows, and is there only with more than one on (D.3)", () => {
+    const fromTools = parseManifest("alpha", manifest("alpha"), copyOfRepository(toolsRepository))!;
+    const entries = [alphaEntry, fromTools];
+    assert.equal(repositoryFilter("raycast"), "repository:raycast");
+    assert.deepEqual(filterEntries(entries, repositoryFilter("raycast"), {}), [alphaEntry]);
+    assert.deepEqual(filterEntries(entries, repositoryFilter(toolsRepository.copyId), {}), [fromTools]);
+    assert.deepEqual(filterEntries(entries, repositoryFilter(gitlabRepository.copyId), {}), [], "a repository with no rows");
+    assert.deepEqual(filterEntries(entries, allFilter, {}), entries);
+    assert.deepEqual(filterRepositories(["raycast"]), [], "one repository on: no section");
+    assert.deepEqual(filterRepositories([]), []);
+    assert.deepEqual(filterRepositories(["raycast", toolsRepository.copyId]), ["raycast", toolsRepository.copyId]);
+});
+
+test("links follow the row's repository: its owner and name on github.com, none on another host (D.4)", () => {
+    assert.equal(gitHubRepository(RAYCAST_COPY.identity), "raycast/extensions");
+    assert.equal(gitHubRepository(toolsRepository.identity), "someone/tools");
+    for (const other of [
+        gitlabRepository.identity,
+        "https://github.com:8443/someone/tools",
+        "https://github.com.example.org/someone/tools",
+        "https://gitlab.com/github.com/someone",
+        "https://github.com/someone/tools/more",
+    ]) {
+        assert.equal(gitHubRepository(other), undefined, other);
+    }
+    assert.equal(repositoryHost(RAYCAST_COPY.identity), undefined);
+    assert.equal(repositoryHost(toolsRepository.identity), undefined);
+    assert.equal(repositoryHost(gitlabRepository.identity), "gitlab.com");
+    assert.equal(repositoryHost("https://git.example.com:8443/tools"), "git.example.com:8443");
+
+    const entry = parseManifest("alpha", manifest("alpha", { icon: "icon.png" }), copyOfRepository(toolsRepository))!;
+    assert.equal(folderURL("someone/tools", "alpha", "abc123"), "https://github.com/someone/tools/tree/abc123/extensions/alpha");
+    assert.equal(
+        iconURL(entry, "someone/tools", "abc123"),
+        "https://raw.githubusercontent.com/someone/tools/abc123/extensions/alpha/assets/icon.png",
+    );
+    assert.equal(iconURL(entry, undefined, "abc123"), undefined, "another host: the default icon");
+
+    const readme = "![Shot](media/shot.png)\n![Hosted](https://raw.githubusercontent.com/a/b/main/x.png)";
+    assert.equal(
+        filterImages(readme, "someone/tools", "alpha", "c0ffee"),
+        "![Shot](https://raw.githubusercontent.com/someone/tools/c0ffee/extensions/alpha/media/shot.png)\n" +
+            "![Hosted](https://raw.githubusercontent.com/a/b/main/x.png)",
+    );
+    assert.equal(imageSource("media/shot.png", undefined, "alpha", "c0ffee"), undefined);
+    assert.equal(
+        filterImages(readme, undefined, "alpha", "c0ffee"),
+        "Shot\n![Hosted](https://raw.githubusercontent.com/a/b/main/x.png)",
+        "another host's own pictures become their alt text; GitHub's rule is unchanged",
+    );
+
+    const onGitHub = detailMarkdown(entry, { name: "Someone/Tools", gitHub: "someone/tools" }, "c0ffee", "![Shot](media/shot.png)");
+    assert.ok(onGitHub.includes("[Source on GitHub](https://github.com/someone/tools/tree/c0ffee/extensions/alpha)"), onGitHub);
+    assert.ok(onGitHub.includes("raw.githubusercontent.com/someone/tools/c0ffee/extensions/alpha/media/shot.png"), onGitHub);
+    const elsewhere = detailMarkdown(entry, { name: "gitlab.com/group/tools" }, "c0ffee", "![Shot](media/shot.png)");
+    assert.ok(!elsewhere.includes("Source on GitHub"), elsewhere);
+    assert.ok(!elsewhere.includes("githubusercontent"), elsewhere);
+    assert.ok(elsewhere.endsWith("---\n\nShot"), elsewhere);
+});
+
+test("every row's detail has a Repository line with its repository's name (D.2)", () => {
+    const fromTools = parseManifest("alpha", manifest("alpha"), copyOfRepository(toolsRepository))!;
+    assert.match(detailMarkdown(alphaEntry, raycastRow, "c0ffee", ""), /\*\*Repository:\*\* Raycast(  \n|$)/m);
+    assert.match(detailMarkdown(fromTools, { name: "Someone/Tools", gitHub: "someone/tools" }, "c0ffee", ""), /\*\*Repository:\*\* Someone\\\/Tools/);
+    // The name's marks are escaped, so none of it reads as Markdown.
+    assert.match(detailMarkdown(fromTools, { name: "gitlab.com/a_b/~c" }, "c0ffee", ""), /\*\*Repository:\*\* gitlab\\\.com\\\/a\\_b\\\/\\~c/);
+});
+
+test("the confirmation says where the extension comes from, and an added repository's that it's kept apart (D.5, E.5)", () => {
+    assert.equal(
+        confirmationText(RAYCAST_COPY.identity, "c0ffee1234", false, "Fudge supports everything this extension uses."),
+        "From github.com/raycast/extensions at c0ffee1. It runs its own code on your Mac, like any app you install.\n\n" +
+            "Fudge supports everything this extension uses.",
+    );
+    assert.equal(
+        confirmationText(gitlabRepository.identity, "abcdef0123", true, "Line."),
+        "From gitlab.com/group/tools at abcdef0. It runs its own code on your Mac, like any app you install.\n\n" +
+            "It's kept apart from other extensions with the same name, with its own settings and data.\n\nLine.",
+    );
+});
+
+test("each row installs from its own copy, and a row whose repository is gone installs nothing (D.6)", async () => {
+    const { context, git, cli, asked, supportPath, repoPath } = await storeContext();
+    const toolsPath = path.join(supportPath, "repositories", gitlabRepository.copyId, "repo");
+    await writeJSON(path.join(toolsPath, "extensions/alpha/package.json"), manifest("alpha", { dependencies: { a: "^1" } }));
+    const toolsRepo = new StoreRepository(toolsPath, { allowProtocols: "file", run: git.run });
+    const both: StoreContext = {
+        ...context,
+        copyOf: (copyId) => (copyId === gitlabRepository.copyId ? { entry: gitlabRepository, repo: toolsRepo } : context.copyOf(copyId)),
+    };
+    const fromGitlab = parseManifest("alpha", manifest("alpha"), copyOfRepository(gitlabRepository))!;
+    assert.deepEqual(await install(fromGitlab, both), {});
+    assert.ok(git.calls.length > 0 && git.calls.every((call) => call.cwd === toolsPath), "every git call in the row's own copy");
+    assert.deepEqual(git.calls[0]!.args, ["sparse-checkout", "add", "/extensions/alpha/"]);
+    assert.deepEqual(
+        cli.calls.map((call) => call.args.slice(0, 2)),
+        [
+            ["scan", path.join(toolsPath, "extensions/alpha")],
+            ["build", path.join(toolsPath, "extensions/alpha")],
+        ],
+        "scanned and built from its own copy",
+    );
+    assert.equal(
+        asked[0]!.message,
+        "From gitlab.com/group/tools at c0ffee1. It runs its own code on your Mac, like any app you install.\n\n" +
+            "It's kept apart from other extensions with the same name, with its own settings and data.\n\n" +
+            "Fudge supports everything this extension uses.",
+    );
+
+    // Its repository switched off or removed since the list was read: nothing is fetched, asked or built.
+    const before = { git: git.calls.length, cli: cli.calls.length, asked: asked.length };
+    const gone = parseManifest("beta", manifest("beta"), copyOfRepository(toolsRepository))!;
+    await assert.rejects(install(gone, both), (error) => error instanceof StoreError && error.message === offOrRemovedMessage);
+    assert.deepEqual({ git: git.calls.length, cli: cli.calls.length, asked: asked.length }, before);
+    assert.equal(offOrRemovedMessage, "This repository is off or was removed.");
+    // Raycast's row still uses Raycast's copy.
+    assert.equal(rowCopy(both, "raycast").repo.path, repoPath);
+    assert.equal(rowCopy(both, gitlabRepository.copyId).repo, toolsRepo);
+    // A lookup that answers with another repository's copy is refused too: never another's.
+    assert.throws(() => rowCopy({ copyOf: () => ({ entry: gitlabRepository, repo: toolsRepo }) }, "raycast"), StoreError);
 });

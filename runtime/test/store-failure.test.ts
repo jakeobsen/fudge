@@ -133,6 +133,31 @@ test("GitHub unreachable, by git's own words", () => {
     }
 });
 
+test("a repository on another host is named by its host in \"couldn't reach\" (SPEC-157 C.6)", () => {
+    for (const [output, host] of [
+        ["fatal: unable to access 'https://gitlab.com/group/tools/': Could not resolve host: gitlab.com", "gitlab.com"],
+        ["fatal: unable to access 'https://git.example.com:8443/tools/': Failed to connect to git.example.com port 8443", "git.example.com:8443"],
+        ["fatal: unable to access 'https://codeberg.org/someone/tools/': Proxy CONNECT aborted", "codeberg.org"],
+        // Only git's "unable to access" says it here, as it does for GitHub.
+        ["fatal: unable to access 'https://git.example.org/tools/': getaddrinfo() thread failed to start", "git.example.org"],
+    ] as const) {
+        const cause = causeOf({ output, command: "git clone --filter=blob:none", host });
+        assert.equal(cause.kind, "githubUnreachable", output);
+        assert.equal(cause.text, `Fudge couldn't reach ${host}. A proxy or firewall may be blocking it.`);
+        assert.equal(
+            causeOf({ output, command: "git clone", host }, { autoConfig: true }).text,
+            `Fudge couldn't reach ${host}. A proxy or firewall may be blocking it. Your Mac picks its proxy with an automatic configuration file, which npm and git can't read.`,
+        );
+    }
+    const github = "fatal: unable to access 'https://github.com/owner/tools/': Could not resolve host: github.com";
+    for (const host of [undefined, "github.com"]) {
+        assert.match(causeOf({ output: github, command: "git fetch", ...(host ? { host } : {}) }).text, /^Fudge couldn't reach GitHub \(github\.com\)\./);
+    }
+    // Only git's words name a host: an npm failure on another repository's row still names the registry.
+    const npm = causeOf({ output: "npm error code ENOTFOUND\nnpm error network request to https://registry.npmjs.org/x failed", command: "node npm-cli.js ci", host: "gitlab.com" });
+    assert.equal(npm.kind, "registryUnreachable");
+});
+
 test("the store's list failing to download: a failed git clone says GitHub can't be reached, with the proxy note", () => {
     // As `StoreRepository.clone` throws it: git's stderr, and the command that ran.
     const error = new GitError(

@@ -13,6 +13,9 @@ import {
     maxCopyExtensions,
     problemKinds,
     problemOf,
+    problemDetails,
+    problemReport,
+    problemRows,
     problemSentence,
     readCopy,
     readStatus,
@@ -23,6 +26,7 @@ import {
     unlistedCopies,
     waitsForRetry,
     writeStatus,
+    type CopyState,
     type CopyStatus,
 } from "../store-extension/src/repositories.ts";
 import { parseRepositoryAddress, type ParsedRepository, type RepositoryEntry } from "../store-extension/src/repository-address.ts";
@@ -350,4 +354,84 @@ test("removing a copy takes only an added copy id, and a failed removal leaves t
     });
     assert.deepEqual(keys.sort(), [`remove:${first.parsed.copyId}`, `remove:${second.parsed.copyId}`].sort());
     assert.deepEqual(await readdir(path.join(support, "repositories")), [first.parsed.copyId]);
+});
+
+// MARK: - Problem rows (C.6)
+
+test("each repository with a problem gets one row, in the list's order, with its name and sentence", () => {
+    const support = "/support";
+    const tools = added("https://gitlab.com/group/tools");
+    const pinned = added("https://github.com/Someone/Pinned", "release", true, [tools.parsed]);
+    const fine = added("https://github.com/someone/fine", undefined, true, [tools.parsed, pinned.parsed]);
+    const { copies } = storeCopies([raycastAnswer(), tools.answer, pinned.answer, fine.answer], support);
+    const unreachable = new GitError(
+        "fatal: unable to access 'https://gitlab.com/group/tools/': Could not resolve host: gitlab.com",
+        "git clone --filter=blob:none -- https://gitlab.com/group/tools",
+    );
+    const states = new Map<string, CopyState>([
+        [pinned.parsed.copyId, { problem: { kind: "noBranch", error: new NoBranch("fatal: Remote branch release not found", "release", "git clone") } }],
+        [tools.parsed.copyId, { rows: { entries: [], trees: new Map(), commit: "c" }, problem: { kind: "unreachable", error: unreachable } }],
+        ["raycast", { problem: { kind: "noPartialClone" } }],
+        [fine.parsed.copyId, { rows: { entries: [], trees: new Map(), commit: "c" } }],
+    ]);
+    const rows = problemRows(copies, states);
+    assert.deepEqual(
+        rows.map((row) => [row.copyId, row.title]),
+        [
+            ["raycast", "Raycast: This repository's server can't send only the files the Extension Store needs."],
+            [tools.parsed.copyId, "gitlab.com/group/tools: Couldn't reach this repository. It may be private, or the address may be wrong."],
+            [pinned.parsed.copyId, "Someone/Pinned: This repository has no branch called release."],
+        ],
+        "Raycast's first, then the list's order; a copy with rows and no problem has none",
+    );
+    // A problem with git's output: its command and output, and the repository's host when it isn't GitHub.
+    assert.deepEqual(rows[1]!.details, {
+        output: unreachable.message,
+        command: "git clone --filter=blob:none -- https://gitlab.com/group/tools",
+        host: "gitlab.com",
+    });
+    assert.equal(rows[2]!.details.host, undefined, "GitHub's is the default");
+    // A problem its status file gave has no output: the store's own sentence.
+    assert.deepEqual(rows[0]!.details, { output: problemSentence("noPartialClone"), refused: true });
+    assert.deepEqual(problemRows(copies, new Map()), [], "no problem, no row");
+    assert.deepEqual(problemRows([], states), [], "a repository that isn't on has none");
+});
+
+test("a copy's own problem is the store's sentence, and anything else git's output", () => {
+    const tools = added("https://git.example.com:8443/tools");
+    for (const kind of ["noExtensionsFolder", "empty", "tooMany"] as const) {
+        assert.deepEqual(problemDetails(tools.parsed, { kind, error: new CopyProblem(kind) }), { output: problemSentence(kind), refused: true });
+    }
+    assert.deepEqual(problemDetails(tools.parsed, { kind: "failed", error: new Error("disk full") }), {
+        output: "disk full",
+        host: "git.example.com:8443",
+    });
+    assert.deepEqual(problemDetails({ identity: "https://github.com/raycast/extensions" }, { kind: "failed", error: new GitError("fatal: bad", "git fetch") }), {
+        output: "fatal: bad",
+        command: "git fetch",
+    });
+});
+
+test("Copy Error on a problem row copies its title, then git's command and output, cleaned", () => {
+    const home = "/Users/someone";
+    const row = {
+        copyId: "0123456789abcdef",
+        title: "gitlab.com/group/tools: Couldn't reach this repository. It may be private, or the address may be wrong.",
+        details: {
+            output: "\u001b[31mfatal: unable to access 'https://user:hunter2@gitlab.com/group/tools/': token=abc123 in /Users/someone/x\u001b[0m\n\n",
+            command: "git -C /Users/someone/support/repo fetch",
+            host: "gitlab.com",
+        },
+    };
+    assert.equal(
+        problemReport(row, home),
+        [
+            row.title,
+            "Command: git -C ~/support/repo fetch",
+            "fatal: unable to access 'https://***@gitlab.com/group/tools/': token=*** in ~/x",
+        ].join("\n\n"),
+    );
+    const refused = { copyId: "raycast", title: "Raycast: This repository's server can't send only the files the Extension Store needs.", details: { output: "x", refused: true } };
+    assert.equal(problemReport(refused, home), refused.title, "the store's own words: the title, which holds the sentence");
+    assert.equal(problemReport({ ...row, details: { output: "fatal: no" } }, home), `${row.title}\n\nfatal: no`, "no command, no line");
 });

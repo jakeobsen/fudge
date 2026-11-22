@@ -2,10 +2,12 @@
 // each copy and its status file are, what went wrong with a copy, and the copies of repositories no longer listed.
 import { lstat, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { byTitle, catalogFolders, readCatalog, type RepositoryCopy, type StoreEntry } from "./catalog.ts";
+import { byTitle, catalogFolders, readCatalog, repositoryHost, type RepositoryCopy, type StoreEntry } from "./catalog.ts";
+import { cleanOutput, type FailureDetails } from "./failure.ts";
 import { readRegularFile } from "./files.ts";
 import { GitError, NoBranch, NoPartialClone, StoreRepository, type Run } from "./git.ts";
 import { checkRepositoriesAnswer, isValidCopyId, RAYCAST_COPY, type RepositoryEntry } from "./repository-address.ts";
+import { failureDetails } from "./store.ts";
 
 /** The folder in the store's support folder that holds the added repositories' copies, one folder per copy id. */
 export const repositoriesFolder = "repositories";
@@ -296,4 +298,48 @@ export function raycastLoadFailure(
     const raycast = copies.find((copy) => copy.entry.copyId === RAYCAST_COPY.copyId);
     const problem = raycast ? states.get(raycast.entry.copyId)?.problem : undefined;
     return problem?.error === undefined ? undefined : { error: problem.error };
+}
+
+/** A repository's problem row (C.6), in the list's first section, Repositories: `<name>: <sentence>`, and what its Show
+ * Details and Copy Error show. */
+export type ProblemRow = { copyId: string; title: string; details: FailureDetails };
+
+/**
+ * What a problem's failure view and Copy Error show: git's output and command, with the repository's host for "couldn't
+ * reach" when it isn't GitHub. A problem with no git output (one its status file gave, or the copy's own, such as no
+ * extensions folder) is the store's own sentence.
+ */
+export function problemDetails(
+    entry: Pick<RepositoryEntry, "identity" | "branch">,
+    problem: NonNullable<CopyState["problem"]>,
+): FailureDetails {
+    const sentence = problemSentence(problem.kind, entry.branch);
+    if (problem.error === undefined || problem.error instanceof CopyProblem) return { output: sentence, refused: true };
+    const host = repositoryHost(entry.identity);
+    return { ...failureDetails(problem.error), ...(host === undefined ? {} : { host }) };
+}
+
+/** One row per repository that's on and has a problem, in the list's order, Raycast's first (C.6). */
+export function problemRows(copies: readonly StoreCopy[], states: ReadonlyMap<string, CopyState>): ProblemRow[] {
+    return copies.flatMap((copy) => {
+        const problem = states.get(copy.entry.copyId)?.problem;
+        if (!problem) return [];
+        return [
+            {
+                copyId: copy.entry.copyId,
+                title: `${copy.entry.name}: ${problemSentence(problem.kind, copy.entry.branch)}`,
+                details: problemDetails(copy.entry, problem),
+            },
+        ];
+    });
+}
+
+/** What a problem row's Copy Error copies (C.6): its title, then git's command and output through `cleanOutput`; a
+ * problem of the store's own words is its title alone, which holds the sentence. */
+export function problemReport(row: ProblemRow, home: string): string {
+    if (row.details.refused) return row.title;
+    const command = row.details.command === undefined ? undefined : `Command: ${cleanOutput(row.details.command, home)}`;
+    return [row.title, command, cleanOutput(row.details.output, home).replace(/\s+$/, "")]
+        .filter((part): part is string => part !== undefined && part.length > 0)
+        .join("\n\n");
 }

@@ -205,17 +205,33 @@ export function status(entry: StoreEntry, installed: Installed, trees: Map<strin
     return tree !== undefined && tree !== record.tree ? "update" : "installed";
 }
 
-/** The search bar's dropdown values: "All", "Installed", then every category by name. */
+/** The search bar's dropdown values: "All", "Installed", one per repository that's on, then every category by name. */
 export const allFilter = "all";
 export const installedFilter = "installed";
+
+/** The dropdown value of a repository's item (SPEC-157 D.3): `repository:<copyId>`. */
+export function repositoryFilter(copyId: string): string {
+    return `repository:${copyId}`;
+}
+
+/** The repositories the dropdown lists (D.3): every one that's on, in the list's order, Raycast's first, and only when
+ * more than one is on. */
+export function filterRepositories<T>(on: readonly T[]): readonly T[] {
+    return on.length > 1 ? on : [];
+}
 
 export function categories(entries: StoreEntry[]): string[] {
     return [...new Set(entries.flatMap((entry) => entry.categories))].sort((a, b) => a.localeCompare(b, "en"));
 }
 
-/** The entries `filter` shows: all, the installed ones, or one category's (a category value is `category:<name>`). */
+/** The entries `filter` shows: all, the installed ones, one repository's (`repository:<copyId>`), or one category's (a
+ * category value is `category:<name>`). */
 export function filterEntries(entries: StoreEntry[], filter: string, installed: Installed): StoreEntry[] {
     if (filter === installedFilter) return entries.filter((entry) => installedRecord(entry, installed) !== undefined);
+    if (filter.startsWith("repository:")) {
+        const copyId = filter.slice("repository:".length);
+        return entries.filter((entry) => entry.copyId === copyId);
+    }
     if (filter.startsWith("category:")) {
         const category = filter.slice("category:".length);
         return entries.filter((entry) => entry.categories.includes(category));
@@ -251,17 +267,20 @@ export const failedUpdateTag = "Couldn't update";
 /** A row's failed install or update this session (SPEC-156 D.3): whether it was an update. */
 export type RowFailure = { updating: boolean };
 
-/** The author, the number of commands, Not compatible or Partly compatible when a cached scan says so
- * (`compatibilityTag`), and Installed or Update available, or, while its name is being installed or updated (`busy`),
- * Installing… or Updating… in their place, or else Couldn't install or Couldn't update when it `failed` this session. */
+/** The name of an added repository a row is from, first (SPEC-157 D.2; Raycast's rows show none), the author, the
+ * number of commands, Not compatible or Partly compatible when a cached scan says so (`compatibilityTag`), and Installed
+ * or Update available, or, while its name is being installed or updated (`busy`), Installing… or Updating… in their
+ * place, or else Couldn't install or Couldn't update when it `failed` this session. */
 export function accessoryTexts(
     entry: StoreEntry,
     state: Status,
     compatibility?: string,
     busy?: "installing" | "updating",
     failed?: RowFailure,
+    addedRepositoryName?: string,
 ): AccessoryText[] {
     const accessories: AccessoryText[] = [];
+    if (addedRepositoryName && addedRepository(entry) !== undefined) accessories.push({ text: addedRepositoryName });
     if (entry.author) accessories.push({ text: entry.author });
     accessories.push({ text: entry.commands.length === 1 ? "1 command" : `${entry.commands.length} commands` });
     if (compatibility) accessories.push({ tag: compatibility });
@@ -291,15 +310,33 @@ export function commandTitles(entry: StoreEntry): (name: string) => string {
     return (name) => entry.commands.find((command) => command.name === name)?.title || name;
 }
 
-/** The extension's folder (`dir`) at `commit`, on github.com and as raw files. */
-export function folderURL(dir: string, commit: string): string {
-    return `https://github.com/raycast/extensions/tree/${commit}/extensions/${dir}`;
+/**
+ * A repository's `owner/name` on github.com, from its identity, which its links use (SPEC-157 D.4); none for a
+ * repository on any other host, which gets no Open in Browser, no "Source on GitHub" link, no icon and no pictures
+ * from its own folder. The identity is the rule's, so a GitHub path is already its two segments in lowercase.
+ */
+export function gitHubRepository(identity: string): string | undefined {
+    return /^https:\/\/github\.com\/([^/]+\/[^/]+)$/.exec(identity)?.[1];
 }
 
-export function rawURL(dir: string, commit: string, file: string): string {
-    return `https://raw.githubusercontent.com/raycast/extensions/${commit}/extensions/${dir}/${file}`;
+/** The server of a repository on another host than github.com, from its identity, which "couldn't reach" names
+ * (SPEC-157 C.6); none for GitHub's. */
+export function repositoryHost(identity: string): string | undefined {
+    const server = identity.replace(/^https:\/\//, "").split("/")[0]!;
+    return server === "github.com" ? undefined : server;
 }
 
-export function iconURL(entry: StoreEntry, commit: string): string | undefined {
-    return entry.icon ? rawURL(entry.dir, commit, `assets/${entry.icon}`) : undefined;
+/** The extension's folder (`dir`) in `repository` (`owner/name` on github.com) at `commit`, on github.com and as raw
+ * files. */
+export function folderURL(repository: string, dir: string, commit: string): string {
+    return `https://github.com/${repository}/tree/${commit}/extensions/${dir}`;
+}
+
+export function rawURL(repository: string, dir: string, commit: string, file: string): string {
+    return `https://raw.githubusercontent.com/${repository}/${commit}/extensions/${dir}/${file}`;
+}
+
+/** The row's icon from its repository on github.com; none for another host, which shows the default one. */
+export function iconURL(entry: StoreEntry, repository: string | undefined, commit: string): string | undefined {
+    return entry.icon && repository ? rawURL(repository, entry.dir, commit, `assets/${entry.icon}`) : undefined;
 }
