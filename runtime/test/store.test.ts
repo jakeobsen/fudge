@@ -3724,7 +3724,7 @@ test("a failure that got a notification is marked, kept and saved, with no failu
     assert.equal(mark.dir, "alpha");
     assert.match(mark.details.output, /esbuild failed/);
     assert.equal(mark.details.code, 1);
-    const saved = await readSavedFailure(notified.supportPath, "alpha");
+    const saved = await readSavedFailure(notified.supportPath, { name: "alpha" });
     assert.deepEqual(saved, mark);
 
     const plain = await storeContext({ cliCode: 1 });
@@ -3733,7 +3733,7 @@ test("a failure that got a notification is marked, kept and saved, with no failu
     assert.deepEqual(shown.shown, ["toast: Installing Alpha…", "failed: Couldn't install Alpha (See the details.)"]);
     assert.deepEqual(shown.failures, ["Couldn't install Alpha"]);
     assert.deepEqual(shown.quiet, []);
-    assert.equal(await readSavedFailure(plain.supportPath, "alpha"), undefined, "nothing saved without a notification");
+    assert.equal(await readSavedFailure(plain.supportPath, { name: "alpha" }), undefined, "nothing saved without a notification");
 });
 
 test("a report that throws or takes over its limit ends the press as before", async () => {
@@ -3778,9 +3778,9 @@ test("pressing a name again deletes the failure saved for its notification", asy
         name: "alpha", dir: "alpha", title: "Alpha", updating: false, failedAt: "2026-11-20T11:00:00.000Z", details: { output: "x" },
     };
     await saveFailure(supportPath, mark);
-    assert.ok(await readSavedFailure(supportPath, "alpha"));
+    assert.ok(await readSavedFailure(supportPath, { name: "alpha" }));
     await installPressed(alphaEntry, false, context, noticesView({ onScreen: true, notified: false }).view);
-    assert.equal(await readSavedFailure(supportPath, "alpha"), undefined);
+    assert.equal(await readSavedFailure(supportPath, { name: "alpha" }), undefined);
 });
 
 test("macOS is asked once the user confirms, before the build, and never after a cancel", async () => {
@@ -3819,23 +3819,57 @@ test("saved failures: read back only when valid, older than 7 days deleted at op
         details: { output: "boom", command: "fudge build", code: 1 }, repository: "raycast/extensions",
     };
     await saveFailure(support, mark);
-    assert.deepEqual(await readSavedFailure(support, "alpha"), mark);
-    assert.equal(await readSavedFailure(support, "../alpha"), undefined);
+    assert.deepEqual(await readSavedFailure(support, { name: "alpha" }), mark);
+    assert.equal(await readSavedFailure(support, { name: "../alpha" }), undefined);
     // A refusal stays one, so its view shows the store's own words rather than a build error.
     const refusal: FailureMark = { ...mark, name: "zeta", dir: "zeta", details: { output: "Another extension called zeta is installed.", refused: true } };
     await saveFailure(support, refusal);
-    assert.deepEqual(await readSavedFailure(support, "zeta"), refusal);
+    assert.deepEqual(await readSavedFailure(support, { name: "zeta" }), refusal);
     await writeFile(path.join(failuresFolder(support), "zeta.json"), JSON.stringify({ ...refusal, details: { output: "x", refused: "yes" } }));
-    assert.equal(await readSavedFailure(support, "zeta"), undefined, "refused must be a boolean");
+    assert.equal(await readSavedFailure(support, { name: "zeta" }), undefined, "refused must be a boolean");
     await rm(path.join(failuresFolder(support), "zeta.json"));
     await writeFile(path.join(failuresFolder(support), "beta.json"), `{"title": 1}`);
-    assert.equal(await readSavedFailure(support, "beta"), undefined);
+    assert.equal(await readSavedFailure(support, { name: "beta" }), undefined);
     const old = new Date(Date.now() - failureKeep - 60_000);
     await utimes(path.join(failuresFolder(support), "beta.json"), old, old);
     await pruneSavedFailures(support);
     assert.deepEqual(await readdir(failuresFolder(support)), ["alpha.json"]);
-    await removeSavedFailure(support, "alpha");
+    await removeSavedFailure(support, { name: "alpha" });
     assert.deepEqual(await readdir(failuresFolder(support)), []);
+});
+
+test("saved failures are kept by id: two extensions of one name keep their own file", async () => {
+    const support = await temporary();
+    const base = { dir: "github", title: "GitHub", updating: false, failedAt: "2026-11-22T21:00:00.000Z" };
+    const raycast: FailureMark = { ...base, name: "github", details: { output: "raycast's" } };
+    const added: FailureMark = { ...base, name: "github", details: { output: "added" }, repository: "someone/tools" };
+    const hosted: FailureMark = { ...base, name: "github", details: { output: "hosted" }, repository: "git.example.org_8443/team/extensions" };
+    for (const mark of [raycast, added, hosted]) await saveFailure(support, mark);
+    assert.deepEqual((await readdir(failuresFolder(support))).sort(), [
+        "git.example.org_8443+team+extensions+github.json", "github.json", "someone+tools+github.json",
+    ]);
+    assert.deepEqual(await readSavedFailure(support, { name: "github" }), raycast);
+    assert.deepEqual(await readSavedFailure(support, { name: "github", repository: "raycast/extensions" }), raycast, "Raycast's folder named is Raycast's");
+    assert.deepEqual(await readSavedFailure(support, { name: "github", repository: "someone/tools" }), added);
+    assert.deepEqual(await readSavedFailure(support, hosted), hosted);
+    assert.equal(await readSavedFailure(support, { name: "github", repository: "someone/other" }), undefined);
+    // A file under an id holds that id's repository, or it isn't read.
+    const file = path.join(failuresFolder(support), "someone+tools+github.json");
+    for (const repository of [undefined, "someone/other", "raycast/extensions", 3]) {
+        const { name: _name, ...saved } = added;
+        await writeFile(file, JSON.stringify({ ...saved, repository }));
+        assert.equal(await readSavedFailure(support, added), undefined, `repository ${String(repository)}`);
+    }
+    await writeFile(path.join(failuresFolder(support), "github.json"), JSON.stringify({ ...base, details: { output: "x" }, repository: "someone/tools" }));
+    assert.equal(await readSavedFailure(support, { name: "github" }), undefined, "a bare name's file names no other repository");
+    // A refused folder or name saves and reads nothing, and never reaches outside the folder.
+    for (const repository of ["Someone/tools", "someone/tools/../x", "raycast", ""]) {
+        await saveFailure(support, { ...added, repository });
+        assert.equal(await readSavedFailure(support, { name: "github", repository }), undefined, repository);
+    }
+    await saveFailure(support, added);
+    await removeSavedFailure(support, { name: "github", repository: "someone/tools" });
+    assert.deepEqual((await readdir(failuresFolder(support))).sort(), ["git.example.org_8443+team+extensions+github.json", "github.json"], "only that one goes");
 });
 
 test("a click's target and the launch context are checked; anything off is ignored", () => {

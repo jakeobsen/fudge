@@ -420,7 +420,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
     };
     /** Show Error and a settled failure: the view, and the failure saved for its notification goes (D.4). */
     const showFailure = (mark: FailureMark) => {
-        void removeSavedFailure(environment.supportPath, mark.name);
+        void removeSavedFailure(environment.supportPath, mark);
         pushFailure(mark);
     };
     showFailureNow.current = showFailure;

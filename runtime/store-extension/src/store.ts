@@ -510,7 +510,7 @@ export type InstallNotices = {
  */
 export async function installPressed(entry: StoreEntry, updating: boolean, context: StoreContext, view: InstallView): Promise<void> {
     // Pressed again: a failure saved for a click is out of date (SPEC-156 D.4).
-    if (view.notices) await removeSavedFailure(context.supportPath, entry.name);
+    if (view.notices) await removeSavedFailure(context.supportPath, { name: entry.name });
     const toast = await view.toast(`${updating ? "Updating" : "Installing"} ${entry.title}…`);
     // The last `fudge build` the install ran, for the app to know it by (SPEC-156 C.1).
     let build: BuildId | undefined;
