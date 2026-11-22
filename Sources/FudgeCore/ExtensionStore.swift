@@ -47,11 +47,31 @@ public enum ExtensionStore {
         paths.supportDirectory(forExtension: extensionName).appendingPathComponent("installing", isDirectory: true)
     }
 
-    /// Deletes the downloaded repository, if there is one.
+    /// The status of Raycast's copy (FUD-182), beside it.
+    public static func repositoryStatusFile(_ paths: FudgePaths) -> URL {
+        paths.supportDirectory(forExtension: extensionName).appendingPathComponent("repo-status.json")
+    }
+
+    /// The copies of the added repositories, each in `repositories/<copyId>/` with its `repo/` and `status.json`.
+    public static func repositoriesDirectory(_ paths: FudgePaths) -> URL {
+        paths.supportDirectory(forExtension: extensionName).appendingPathComponent("repositories", isDirectory: true)
+    }
+
+    /// The status file of the copy with `copyId`: Raycast's beside `repo/`, an added one's in its folder.
+    public static func statusFile(copyId: String, _ paths: FudgePaths) -> URL {
+        copyId == ExtensionRepository.raycastCopyId
+            ? repositoryStatusFile(paths)
+            : repositoriesDirectory(paths).appendingPathComponent(copyId, isDirectory: true)
+                .appendingPathComponent("status.json")
+    }
+
+    /// Deletes the downloaded copies: Raycast's repository and its status, and the added repositories' copies. The
+    /// list of repositories in `settings.json` and `installed.json` stay.
     public static func deleteRepository(_ paths: FudgePaths) throws {
-        let folder = repositoryDirectory(paths)
-        guard FileManager.default.fileExists(atPath: folder.path) else { return }
-        try FileManager.default.removeItem(at: folder)
+        for item in [repositoryDirectory(paths), repositoryStatusFile(paths), repositoriesDirectory(paths)]
+        where FileManager.default.fileExists(atPath: item.path) {
+            try FileManager.default.removeItem(at: item)
+        }
     }
 
     /// What the extension host tells the store: where the `fudge` tool is, the folder it installs into

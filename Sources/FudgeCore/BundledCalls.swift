@@ -11,6 +11,8 @@ public enum BundledCalls {
         case commandLineTools
         /// `store.*`: the Extension Store's install notifications.
         case storeNotifications
+        /// `store.repositories`: the Extension Store's list of repositories (FUD-182).
+        case storeRepositories
         /// `clipboardHistory.*`: Clipboard History's list and its changes.
         case clipboardHistory
         /// `files.search`: Search Files' Spotlight queries.
@@ -19,7 +21,7 @@ public enum BundledCalls {
         /// The one extension that may make the call.
         public var caller: ExtensionID {
             switch self {
-            case .fudgeLog, .commandLineTools, .storeNotifications: ExtensionStore.id
+            case .fudgeLog, .commandLineTools, .storeNotifications, .storeRepositories: ExtensionStore.id
             case .clipboardHistory: ClipboardHistory.id
             case .filesSearch: FileSearch.id
             }
