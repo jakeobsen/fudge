@@ -467,3 +467,64 @@ test("stopping the build stops swift too", async () => {
     while (alive(swiftPid) && Date.now() < gone) await new Promise((resolve) => setTimeout(resolve, 50));
     assert.equal(alive(swiftPid), false, "swift was stopped");
 });
+
+test("stopping the build as Fudge does cancels SwiftPM's jobs, which run in process groups of their own", async () => {
+    // The made-up swift acts as SwiftPM does: its job is in a process group of its own, it ignores SIGTERM, and only
+    // SIGINT makes it cancel the job. Fudge stops a build as `ChildProcesses.endAll` does: SIGTERM to the script's
+    // process group, then SIGKILL to it a second later.
+    const tools = fakeTools();
+    const jobs = mkdtempSync(path.join(scratch, "jobs-"));
+    const request = swiftRequest({ mode: "build", swift: tools.swift });
+    const file = path.join(mkdtempSync(path.join(scratch, "request-")), "request.json");
+    writeFileSync(file, JSON.stringify({ extension: swiftPart, options: options(swiftPart, ["src/greet.ts"]), swift: request }));
+    const child = spawn(process.execPath, [shipped, file], {
+        cwd: swiftPart,
+        stdio: "ignore",
+        detached: true,
+        env: { ...process.env, ESBUILD_BINARY_PATH: esbuildBinary, FAKE_SWIFT_JOBS: jobs },
+    });
+    const exited = new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code)));
+    const pidOf = (name: string) => {
+        const file = path.join(jobs, name);
+        return existsSync(file) ? Number(readFileSync(file, "utf8").trim()) || undefined : undefined;
+    };
+    const alive = (pid: number) => {
+        try {
+            process.kill(pid, 0);
+            return true;
+        } catch {
+            return false;
+        }
+    };
+    const deadline = Date.now() + 30_000;
+    while (pidOf("swift.pid") === undefined || pidOf("job.pid") === undefined) {
+        assert.ok(Date.now() < deadline, "swift and its job started");
+        await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const swiftPid = pidOf("swift.pid")!;
+    const jobPid = pidOf("job.pid")!;
+    try {
+        assert.ok(alive(swiftPid) && alive(jobPid));
+        process.kill(-child.pid!, "SIGTERM");
+        const kill = setTimeout(() => {
+            try {
+                process.kill(-child.pid!, "SIGKILL");
+            } catch {}
+        }, 1000);
+        const code = await exited;
+        clearTimeout(kill);
+        assert.equal(code, 143, "the script ended on SIGTERM, before the SIGKILL");
+        // The script waited for swift to cancel, so nothing writes to the build's folders once it has gone.
+        assert.equal(alive(swiftPid), false, "swift had ended when the script did");
+        const gone = Date.now() + 10_000;
+        while ((alive(swiftPid) || alive(jobPid)) && Date.now() < gone) await new Promise((resolve) => setTimeout(resolve, 50));
+        assert.equal(alive(swiftPid), false, "swift ended");
+        assert.equal(alive(jobPid), false, "its job was cancelled");
+    } finally {
+        for (const pid of [swiftPid, jobPid]) {
+            try {
+                process.kill(pid, "SIGKILL");
+            } catch {}
+        }
+    }
+});

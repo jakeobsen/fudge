@@ -219,7 +219,18 @@ export class SwiftError extends Error {
 const running = new Set<ChildProcess>();
 let forwarding = false;
 
-/** Passes SIGTERM and SIGINT on to every `swift` running, then ends with the status the signal would give. */
+/** How long a stopped script waits for `swift` to cancel its jobs: under the 1 s `ChildProcesses.endAll` gives the
+ * script's process group before SIGKILL. */
+const cancelWait = 800;
+
+/**
+ * On SIGTERM or SIGINT, cancels every `swift` running, then ends with the status the signal would give.
+ *
+ * SwiftPM starts each compile job (`swift-driver`, `swift-frontend`) in a process group of its own, so a signal to
+ * `swift` alone, or to this script's group, never reaches them, and `swift build` dies at once on SIGTERM. SIGINT is
+ * what makes SwiftPM cancel its jobs, so each `swift` runs in a process group of its own (`detached`), out of reach of
+ * the SIGKILL that may follow, and gets SIGINT there. The script waits up to `cancelWait` for them to end.
+ */
 function forwardSignals(): void {
     if (forwarding) return;
     forwarding = true;
@@ -228,9 +239,22 @@ function forwardSignals(): void {
         ["SIGINT", 2],
     ] as const) {
         process.on(signal, () => {
-            for (const child of running) child.kill(signal);
-            process.exit(128 + number);
+            for (const child of running) cancel(child);
+            const end = Date.now() + cancelWait;
+            const ended = () => [...running].every((child) => child.exitCode !== null || child.signalCode !== null);
+            const check = () => (ended() || Date.now() >= end ? process.exit(128 + number) : setTimeout(check, 20));
+            check();
         });
+    }
+}
+
+/** SIGINT to `child`'s process group, which SwiftPM answers by cancelling its jobs. */
+function cancel(child: ChildProcess): void {
+    if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+    try {
+        process.kill(-child.pid, "SIGINT");
+    } catch {
+        // The group is gone already.
     }
 }
 
@@ -241,7 +265,8 @@ type Ran = { code: number | null; signal: NodeJS.Signals | null; stdout: string;
 function runSwift(swift: string, args: string[], directory: string): Promise<Ran> {
     forwardSignals();
     return new Promise((resolve, reject) => {
-        const child = spawn(swift, args, { cwd: directory, stdio: ["ignore", "pipe", "pipe"] });
+        // In a process group of its own, so stopping the build cancels SwiftPM's jobs (`forwardSignals`).
+        const child = spawn(swift, args, { cwd: directory, stdio: ["ignore", "pipe", "pipe"], detached: true });
         running.add(child);
         const stdout: Buffer[] = [];
         const stderr: Buffer[] = [];

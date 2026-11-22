@@ -369,7 +369,8 @@ const action = (mounted: Mounted, title: string) => all(top(mounted), "Action").
 
 /** Waits until `fudge version` has answered and the view has drawn again with it. */
 async function versionArrives(mounted: Mounted) {
-    for (let i = 0; i < 100 && mounted.snapshots.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    // Up to 10 s: the made-up `fudge --version` is a process of its own, slow to start on a busy Mac.
+    for (let i = 0; i < 1000 && mounted.snapshots.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 10));
     await mounted.settle();
 }
 

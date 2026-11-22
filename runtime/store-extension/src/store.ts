@@ -202,7 +202,10 @@ export async function install(entry: StoreEntry, context: StoreContext): Promise
 
     const run = context.run ?? spawnProgram;
     // Building a part written in Swift fetches and compiles SwiftPM's packages the first time (`swiftBuildTimeout`).
-    const timeout = (parts?: SwiftParts) => (parts === "build" && hasSwiftPart ? swiftBuildTimeout : buildTimeout);
+    // When the check didn't answer (its scan failed), the build may have such a part, so it gets that time too.
+    const unchecked = checked === undefined || checked.notChecked === true;
+    const timeout = (parts?: SwiftParts) =>
+        parts === "build" && (hasSwiftPart || unchecked) ? swiftBuildTimeout : buildTimeout;
     let args = buildArguments(source, context.extensionsDir, swift.swiftParts);
     let result = await run(context.cli, args, { timeout: timeout(swift.swiftParts) });
     // A `swift:` import the check missed, without the tools: the build stopped at it, asking what to do, so the view

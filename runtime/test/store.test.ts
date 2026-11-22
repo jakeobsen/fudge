@@ -984,6 +984,15 @@ test("with the Command Line Tools set up, an extension with a Swift part install
     assert.deepEqual(plain.cli.calls.at(-1)!.args.slice(-2), ["--swift-parts", "build"]);
     assert.equal(plain.cli.calls.at(-1)!.timeout, buildTimeout, "with no Swift part, the usual time");
     assert.equal(readyAsked, 2);
+    // When the check didn't answer (install always scans, so that's a scan that failed), the build may have a Swift
+    // part, so it gets that time too.
+    for (const scan of [{ code: 1, stdout: "" }, { stdout: "not json" }, { stdout: "{}" }]) {
+        const unchecked = await storeContext({ scan });
+        unchecked.context.commandLineToolsReady = context.commandLineToolsReady;
+        assert.deepEqual(await install(alphaEntry, unchecked.context), {}, JSON.stringify(scan));
+        assert.deepEqual(unchecked.cli.calls.at(-1)!.args.slice(-2), ["--swift-parts", "build"], JSON.stringify(scan));
+        assert.equal(unchecked.cli.calls.at(-1)!.timeout, swiftBuildTimeout, JSON.stringify(scan));
+    }
 });
 
 test("without the tools, the view comes first, and its choice is what the build is told", async () => {

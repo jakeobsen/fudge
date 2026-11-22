@@ -8,7 +8,11 @@
 #   build -c release --product T … the program (a copy of `program`) and raycast.js where SwiftPM writes them;
 #                                  $FAKE_SWIFT_FAIL (or a file named fail beside it) fails it, $FAKE_SWIFT_SLEEP
 #                                  waits (writing its pid there),
-#                                  $FAKE_SWIFT_NO_JS writes no raycast.js
+#                                  $FAKE_SWIFT_NO_JS writes no raycast.js; $FAKE_SWIFT_JOBS (a folder) acts as
+#                                  SwiftPM does when stopped: `swift` runs the build as a child in its own process
+#                                  group, which starts a job in a process group of its own; SIGTERM is ignored, and
+#                                  only SIGINT to the group makes the build cancel the job, which takes a moment;
+#                                  swift.pid and job.pid go in that folder
 here=$(cd "$(dirname "$0")" && pwd)
 echo "$PWD $*" >> "$here/runs.log"
 env >> "$here/environment.log"
@@ -27,6 +31,22 @@ for argument in "$@"; do
   if [ "$argument" = "--show-bin-path" ]; then echo "$PWD/.build/arm64-apple-macosx/release"; exit 0; fi
 done
 if [ -n "$FAKE_SWIFT_SLEEP" ]; then echo $$ > "$FAKE_SWIFT_SLEEP"; exec sleep 60; fi
+if [ -n "$FAKE_SWIFT_JOBS" ]; then
+  # The build is Perl, since sh ignores SIGINT in a background job and can't trap it there.
+  /usr/bin/perl -e '
+    my $job = fork() // die "fork: $!";
+    if ($job == 0) { setpgrp(0, 0); exec("sleep", "60"); }
+    $SIG{TERM} = "IGNORE";
+    $SIG{INT} = sub { kill("KILL", -$job, $job); select(undef, undef, undef, 0.2); exit(130); };
+    open(my $file, ">", "$ENV{FAKE_SWIFT_JOBS}/job.pid") or die; print $file "$job\n"; close($file);
+    waitpid($job, 0);
+  ' &
+  build=$!
+  trap '' TERM INT
+  echo $$ > "$FAKE_SWIFT_JOBS/swift.pid"
+  while kill -0 "$build" 2>/dev/null; do wait "$build"; done
+  exit 0
+fi
 if [ -n "$FAKE_SWIFT_FAIL" ] || [ -e "$here/fail" ]; then echo "Sources/X/Y.swift:1:1: error: cannot find 'x' in scope" >&2; exit 1; fi
 product=$5
 mkdir -p .build/arm64-apple-macosx/release
