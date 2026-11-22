@@ -47,6 +47,15 @@ import {
 } from "./compatibility.ts";
 import { gitAvailable, stopRunningGit, StoreRepository } from "./git.ts";
 import { detailMarkdown, fetchReadme, refetching, shownReadme } from "./readme.ts";
+import {
+    developmentBuildAccessory,
+    developmentDetailMarkdown,
+    developmentRowId,
+    developmentRowsShown,
+    readDevelopmentBuilds,
+    uninstallDevelopmentBuild,
+    type DevelopmentBuild,
+} from "./development-builds.ts";
 import { RestingWork } from "./resting.ts";
 import type { FailureDetails } from "./failure.ts";
 import { FailureView, LoadFailure, NeedsGit } from "./failure-view.tsx";
@@ -93,6 +102,8 @@ type Loaded = {
     trees: Map<string, string>;
     commit: string;
     withoutSwift: ReadonlySet<string>;
+    /** The builds in `fudgeapp/development`, read with `installed.json` (SPEC-157 E.9). */
+    development: DevelopmentBuild[];
 };
 /** The cached scans this Fudge's scanner wrote, by tree id, and the trees whose check failed in this run. */
 type Checked = { scanner: string; results: Map<string, Compatibility>; failed: Set<string> };
@@ -213,15 +224,16 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
         // The records of builds from another session, read with each load, apart from the copy.
         await others.check();
         const scanner = await scannerIdentity(cli);
-        const [entries, installed, trees, commit, results] = await Promise.all([
+        const [entries, installed, trees, commit, results, development] = await Promise.all([
             readCatalog(repo.path),
             readInstalled(environment.supportPath),
             repo.trees(),
             repo.commit(),
             readCompatibility(environment.supportPath, scanner),
+            readDevelopmentBuilds(extensionsDir),
         ]);
         const withoutSwift = await installsWithoutSwift(extensionsDir, Object.keys(installed));
-        setLoaded({ entries, installed, trees, commit, withoutSwift });
+        setLoaded({ entries, installed, trees, commit, withoutSwift, development });
         setChecked((current) => ({ scanner, results, failed: current.scanner === scanner ? current.failed : new Set() }));
         hasLoaded.current = true;
         setLoadError(undefined);
@@ -465,6 +477,23 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             }
         });
 
+    /** Uninstall on a development build's row (E.9): its folder to the Trash, no record read or written. */
+    const runUninstallDevelopment = (build: DevelopmentBuild) =>
+        oneAtATime(async () => {
+            try {
+                if (!(await uninstallDevelopmentBuild(build, context))) return;
+                await load();
+                await showToast({ style: Toast.Style.Success, title: `Uninstalled ${build.title}` });
+            } catch (error) {
+                logFailure(`Couldn't uninstall ${build.title}`, error);
+                await showToast({
+                    style: Toast.Style.Failure,
+                    title: `Couldn't uninstall ${build.title}`,
+                    message: message(error),
+                });
+            }
+        });
+
     const shown = loaded ? filterEntries(loaded.entries, filter, loaded.installed) : [];
     const { installed: installedRows, other } = sections(shown, loaded?.installed ?? {});
     // Only the selected row carries its actions (the first row until something is selected): 3,500 action panels
@@ -606,6 +635,43 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
         );
     };
 
+    /** A development build's row (E.9): its own id, no icon, and only Uninstall and Copy Name. */
+    const developmentItem = (build: DevelopmentBuild) => (
+        <List.Item
+            key={developmentRowId(build.name)}
+            id={developmentRowId(build.name)}
+            title={build.title}
+            subtitle={showingDetail ? undefined : build.description}
+            keywords={[build.name]}
+            accessories={showingDetail ? undefined : [{ text: developmentBuildAccessory }]}
+            detail={showingDetail ? <List.Item.Detail markdown={developmentDetailMarkdown(build)} /> : undefined}
+            actions={
+                <ActionPanel>
+                    <ActionPanel.Section>
+                        <Action
+                            title="Uninstall"
+                            icon={Icon.Trash}
+                            style={Action.Style.Destructive}
+                            shortcut={{ modifiers: ["ctrl"], key: "x" }}
+                            onAction={() => runUninstallDevelopment(build)}
+                        />
+                    </ActionPanel.Section>
+                    <ActionPanel.Section>
+                        <Action.CopyToClipboard title="Copy Name" content={build.name} />
+                    </ActionPanel.Section>
+                </ActionPanel>
+            }
+        />
+    );
+    // The Installed section: the store's installs and the development builds, by title.
+    const installedItems = [
+        ...installedRows.map((entry) => ({ title: entry.title, node: item(entry) })),
+        ...(loaded && developmentRowsShown(filter) ? loaded.development : []).map((build) => ({
+            title: build.title,
+            node: developmentItem(build),
+        })),
+    ].sort((a, b) => a.title.localeCompare(b.title, "en", { sensitivity: "base" }));
+
     return (
         <List
             isLoading={!loaded && !loadError}
@@ -638,7 +704,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             ) : (
                 <List.EmptyView icon={Icon.MagnifyingGlass} title="No extensions found" />
             )}
-            <List.Section title="Installed">{installedRows.map(item)}</List.Section>
+            <List.Section title="Installed">{installedItems.map((row) => row.node)}</List.Section>
             <List.Section title="Extensions">{other.map(item)}</List.Section>
         </List>
     );

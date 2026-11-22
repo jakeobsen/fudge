@@ -6,11 +6,14 @@ import { after, test } from "node:test";
 import {
     developmentBuildAccessory,
     developmentBuildFolder,
+    developmentDetailMarkdown,
     developmentRowId,
+    developmentRowsShown,
     readDevelopmentBuilds,
     uninstallDevelopmentBuild,
     type DevelopmentBuild,
 } from "../store-extension/src/development-builds.ts";
+import { allFilter, installedFilter } from "../store-extension/src/catalog.ts";
 import { maxManifestBytes } from "../store-extension/src/files.ts";
 import { bundledNames } from "../store-extension/src/store.ts";
 
@@ -161,4 +164,20 @@ test("Uninstall on a development build's row moves only fudgeapp/development/<fo
     assert.equal(await uninstallDevelopmentBuild(bad, refused.context), false);
     assert.deepEqual(refused.asked, []);
     assert.deepEqual(refused.trashed, []);
+});
+
+test("development build rows show under All and Installed only, with a detail that says what they are", () => {
+    assert.equal(developmentRowsShown(allFilter), true);
+    assert.equal(developmentRowsShown(installedFilter), true);
+    for (const filter of ["category:Productivity", "repository:raycast", "repository:0123456789abcdef", ""]) {
+        assert.equal(developmentRowsShown(filter), false, filter);
+    }
+    assert.equal(
+        developmentDetailMarkdown({ name: "my_tool", title: "My Tool", description: "Does things" }),
+        "# My Tool\n\nDoes things\n\nA development build, in the development folder as `my_tool`.",
+    );
+    assert.equal(
+        developmentDetailMarkdown({ name: "github", title: "github", description: "" }),
+        "# github\n\nA development build, in the development folder as `github`.",
+    );
 });

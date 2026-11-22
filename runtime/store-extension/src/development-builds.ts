@@ -6,6 +6,7 @@
 import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
 import { developmentFolder, isValidName } from "../../src/extension-id.ts";
+import { allFilter, installedFilter } from "./catalog.ts";
 import { maxManifestBytes, readRegularFile } from "./files.ts";
 
 /** A development build as its row shows it. */
@@ -23,6 +24,19 @@ export const developmentBuildAccessory = "Development build";
 /** A development build row's list id, which no catalog row's id can be. */
 export function developmentRowId(name: string): string {
     return `development:${name}`;
+}
+
+/** Development builds show under All and Installed, and under no category or repository. */
+export function developmentRowsShown(filter: string): boolean {
+    return filter === allFilter || filter === installedFilter;
+}
+
+/** The detail pane of a development build's row: what it is and where, since it has no README or commands here. */
+export function developmentDetailMarkdown(build: DevelopmentBuild): string {
+    // The folder passed the name rule, so it holds nothing markdown reads; the code span keeps `_` literal.
+    return [`# ${build.title}`, build.description, `A development build, in the development folder as \`${build.name}\`.`]
+        .filter(Boolean)
+        .join("\n\n");
 }
 
 /** `<extensionsDir>/fudgeapp/development`. */
