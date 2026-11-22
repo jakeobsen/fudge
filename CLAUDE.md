@@ -603,6 +603,7 @@ Extensions run in a separate Node.js process, the extension host.
     - **The Commands page** (`CommandsPage.swift`) is the Settings window's second page:
       Fudge's own command groups, then the quicklinks as a group of their own (`SettingsModel.commandGroups`, shown once there is one, its Type "Quicklinks" and theirs "Quicklink", `BuiltInCommandGroup.typeLabels`),
       then every installed extension, each expanded to its commands (menu-bar ones included), with each command's alias, hotkey and Enabled checkbox (an extension's row has its own checkbox).
+      An extension's group is keyed by its id (`CommandOwner.extension`) and titled with its `displayTitle`, so two extensions of one name are two groups that read apart.
       The bundled Extension Store is listed too, unticked until it's enabled.
       An alias is saved on ↵, and Esc puts the old one back.
       Recording a hotkey suspends all of Fudge's hotkeys (`HotKeyRegistry.suspend`), so pressing one records it instead of firing.
@@ -703,7 +704,7 @@ Extensions run in a separate Node.js process, the extension host.
     - **The Permissions page** (`PermissionsPage.swift`) comes after General: Accessibility's status (`AccessibilityStatus`, read without a prompt when it's shown and every second while it's on screen), its reason, and Open Accessibility Settings.
       The reason (`AccessibilityPermission.reason`, which onboarding's Accessibility step shows too) names Fudge's own commands that need it first, then extensions that read the selection or paste.
       That button asks for macOS's prompt on the first click and opens the pane on later ones, or at once when something in this run already asked for the prompt (`AccessibilityPermission.request`, `SystemAccessibility.promptShown`), so the prompt and the pane never stack.
-      Below it, always shown, are the answers to "Allow <A> to open <B>'s commands?" (`LaunchPermissionsSection`, `LaunchPermissions.entries`), each changeable or forgotten, with the file read again before each change, a line saying none has asked yet when there are none, and the unreadable-file notice.
+      Below it, always shown, are the answers to "Allow <A> to open <B>'s commands?" (`LaunchPermissionsSection`, `LaunchPermissions.entries`, each extension shown by its `displayTitle`), each changeable or forgotten, with the file read again before each change, a line saying none has asked yet when there are none, and the unreadable-file notice.
       Between them is Calendar access as macOS has it, with Open Privacy Settings (`CalendarAccessRow`); My Schedule asks for it, never this page.
       Show Onboarding Again restarts onboarding from Welcome.
     - **The Notifications page** (`NotificationsPage.swift`, SPEC-156) comes after Permissions: macOS's answer for Fudge (`NotificationPermission.statusLine`), read and never asked when the page appears and when the window becomes key, with Ask Now while macOS hasn't been asked and Open Notification Settings otherwise.
@@ -759,7 +760,7 @@ Extensions run in a separate Node.js process, the extension host.
       An extension from Raycast's official repository with exactly the title of one of Fudge's own pages shows " (installed)" after its title (`SettingsSidebar.title(of:)`; the Extension Store has a Color Picker of its own).
       A development build's and an added repository's rows show their `displayTitle` instead ("GitHub (development)", "GitHub (someone/tools)"), never " (installed)" as well.
       A selected page that's no longer listed, such as an extension removed while its page is open, gives way to General (`SettingsSidebar.lists`).
-      The window holds each extension's preferences, stored by `PreferenceStore` in `preferences/<extension id>.json`.
+      The window holds each extension's preferences by its id (`InstalledExtension.index`, so a duplicate can't trap), stored by `PreferenceStore` in `preferences/<extension id>.json`, and each field (`PreferenceField`) reads and saves them by that id.
       Before a launch, `PreferenceResolver` merges stored values, manifest defaults and type defaults.
       It turns appPicker references into Raycast `Application` objects, and the launch message carries the values to `getPreferenceValues()`.
       A command with an unset required preference opens this window instead of running.
