@@ -13,13 +13,15 @@ private struct ThreeGitHubs {
 
     struct NotMade: Error {}
 
-    init(in extensions: URL, owner: String = "someone") throws {
+    /// `versions` gives a manifest version by repository folder; the others have none.
+    init(in extensions: URL, owner: String = "someone", versions: [String: String] = [:]) throws {
         func make(_ folder: String) throws -> InstalledExtension {
             let directory = extensions.appendingPathComponent(folder, isDirectory: true)
                 .appendingPathComponent("github", isDirectory: true)
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let version = versions[folder].map { #","version":"\#($0)""# } ?? ""
             let manifest = """
-                {"name":"github","title":"GitHub","author":"\(owner)","commands":[
+                {"name":"github","title":"GitHub"\(version),"author":"\(owner)","commands":[
                 {"name":"search","title":"Search","mode":"view"},{"name":"bar","title":"Bar","mode":"menu-bar"}]}
                 """
             try Data(manifest.utf8).write(to: directory.appendingPathComponent("package.json"))
@@ -93,6 +95,15 @@ private func id(_ key: String) throws -> ExtensionID { try #require(ExtensionID(
         FudgeSettings.commandID(owner: .extension(try id("someone+tools+github")), command: "search")
             == "someone+tools+github/search")
     #expect(RootItem.commandID(owner: .extension(try id("github")), command: "search") == "command:github/search")
+}
+
+@Test func aCommandIDWhoseOwnerIsNoOwnerHasOnlyItsOwnEnabled() {
+    var settings = FudgeSettings()
+    settings.setEnabled(false, commandID: "Bad Key/run")
+    settings.offByDefault = ["Bad Key/other"]
+    #expect(!settings.isEnabled(commandID: "Bad Key/run"))
+    #expect(!settings.isEnabled(commandID: "Bad Key/other"))
+    #expect(settings.isEnabled(commandID: "Bad Key/third"))
 }
 
 @Test func twoGitHubsKeepTheirOwnHotkeysAliasesAndEnabled() throws {
@@ -302,6 +313,33 @@ private func id(_ key: String) throws -> ExtensionID { try #require(ExtensionID(
     #expect(metadata.subtitle(extension: try id("someone+tools+github"), command: "search") == nil)
 }
 
+@Test func todaysMenuBarDropdownAndHistoryFilesAreFoundUnderTheSameKeys() throws {
+    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    let folder = try Fixtures.temporaryDirectory()
+    let menuBar = folder.appendingPathComponent("menu-bar.json")
+    try Data(#"{"active":["github/bar"]}"#.utf8).write(to: menuBar)
+    let active = MenuBarStore.load(from: menuBar)
+    #expect(
+        three.all.map { active.isActive(FudgeSettings.commandID(owner: .extension($0.id), command: "bar")) } == [
+            true, false, false,
+        ])
+    let dropdowns = folder.appendingPathComponent("dropdown-values.json")
+    try Data(#"{"github/search/kind":"open"}"#.utf8).write(to: dropdowns)
+    let store = SearchBarDropdown.Store(file: dropdowns)
+    #expect(
+        three.all.map {
+            store.value(for: SearchBarDropdown.Store.key(extension: $0.id, command: "search", dropdown: "kind"))
+        } == ["open", nil, nil])
+    let history = folder.appendingPathComponent("history.json")
+    try Data(#"{"entries":{"command:github/search":{"count":3,"lastUsed":"2026-11-20T10:00:00Z"}}}"#.utf8)
+        .write(to: history)
+    let launches = LaunchHistory.load(from: history)
+    #expect(
+        three.all.map { launches.entries[RootItem.commandID(owner: .extension($0.id), command: "search")]?.count } == [
+            3, nil, nil,
+        ])
+}
+
 // MARK: - launchCommand with two extensions of one name (F)
 
 private func request(_ name: String = "github", owner: String = "someone") -> LaunchRequest {
@@ -427,4 +465,64 @@ private func caller(in folder: String) throws -> InstalledExtension {
             with: JSONEncoder().encode(Backup.Listed(name: "github", title: "GitHub", source: .local)))
         as? [String: Any]
     #expect(raycastEntry?["id"] == nil && raycastEntry?["repository"] == nil)
+}
+
+/// A backup holding only a manifest that lists `extensions`.
+private func backupListing(_ extensions: [Backup.Listed]) -> Backup.Contents {
+    Backup.Contents(
+        manifest: Backup.Manifest(
+            format: 1, fudgeVersion: "1.0", created: Date(timeIntervalSince1970: 1_795_000_000),
+            extensions: extensions),
+        root: [:], perExtension: [:], data: [:], hadExtensionStore: false)
+}
+
+/// Each of the three at version 1.0, except `newer`'s repository folder at 2.0.
+private func versions(newer: String? = nil) -> [String: String] {
+    Dictionary(
+        uniqueKeysWithValues: ["raycast/extensions", "someone/tools", "fudgeapp/development"].map {
+            ($0, $0 == newer ? "2.0" : "1.0")
+        })
+}
+
+@Test func anImportFlagsEachChangedGitHubByItsID() throws {
+    let paths = FudgePaths(supportDirectory: try Fixtures.temporaryDirectory())
+    let then = try ThreeGitHubs(in: try Fixtures.temporaryDirectory(), versions: versions())
+    let backup = backupListing(Backup.listed(then.all, paths: paths))
+    #expect(backup.manifest.extensions.count == 3)
+    for (folder, key) in [
+        ("someone/tools", "someone+tools+github"), ("raycast/extensions", "github"),
+        ("fudgeapp/development", "fudgeapp+development+github"),
+    ] {
+        let now = try ThreeGitHubs(in: try Fixtures.temporaryDirectory(), versions: versions(newer: folder))
+        #expect(
+            Backup.changedExtensions(backup, installed: now.all, paths: paths) == [
+                Backup.Changed(name: key, title: "GitHub", reason: .version(backup: "1.0", now: "2.0"))
+            ], "only \(key) is at another version")
+    }
+    let same = try ThreeGitHubs(in: try Fixtures.temporaryDirectory(), versions: versions())
+    #expect(Backup.changedExtensions(backup, installed: same.all, paths: paths).isEmpty)
+}
+
+@Test func anImportListsTheGitHubThatIsntInstalledByItsID() throws {
+    let three = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
+    let paths = FudgePaths(supportDirectory: try Fixtures.temporaryDirectory())
+    let backup = backupListing(Backup.listed(three.all, paths: paths))
+    let result = try Backup.apply(
+        backup, to: paths, installed: [three.raycast, three.development], fudgeVersion: "1.0",
+        now: Date(timeIntervalSince1970: 1_795_000_000))
+    #expect(result.notInstalled.map(\.key) == ["someone+tools+github"])
+}
+
+@Test func aBackupListingAnIDTheRuleRefusesIsRefused() throws {
+    func manifest(id: String) -> [BackupEntry] {
+        let text = #"""
+            {"format":1,"fudgeVersion":"1.0","created":"2026-11-20T10:00:00Z","extensions":[
+            {"name":"github","title":"GitHub","source":"repository","id":"\#(id)","repository":"someone/tools"}]}
+            """#
+        return [BackupEntry(path: "manifest.json", data: Data(text.utf8))]
+    }
+    #expect(try Backup.contents(of: manifest(id: "someone+tools+github")).manifest.extensions.count == 1)
+    for bad in ["raycast+extensions+github", "Bad Key", "someone/tools+github"] {
+        #expect(throws: BackupError.refused(.extensionName(bad))) { try Backup.contents(of: manifest(id: bad)) }
+    }
 }

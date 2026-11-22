@@ -247,11 +247,16 @@ private func params(_ query: String, limit: Int? = nil) -> JSONValue {
 private let homeOptions = FileSearchOptions(scope: .home, leaveOut: [home + "/Library"], home: home)
 
 @Test func onlySearchFilesMayCall() async throws {
-    let queries = Queries([FakeQuery([])])
+    // One query for each caller, so a caller let through fails the checks below instead of running out of queries.
+    let queries = Queries((0..<6).map { _ in FakeQuery([]) })
     let search = FileSearch(makeQuery: queries.next)
     let weather = try #require(ExtensionID(stored: "weather"))
     let store = try #require(ExtensionID(stored: "fudge-extension-store"))
-    for caller in [weather, store, nil] {
+    // An extension of Search Files' name from another repository, or a development build of one, is another id.
+    let lookalikes = try ["someone+tools+fudge-file-search", "fudgeapp+development+fudge-file-search"].map {
+        try #require(ExtensionID(stored: $0))
+    }
+    for caller in [weather, store, nil] + lookalikes {
         await #expect(throws: FileSearchError.notSearchFiles) {
             try await search.search(params("x"), options: homeOptions, session: "s-1", caller: caller)
         }
