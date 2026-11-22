@@ -141,6 +141,7 @@ public enum DSStore {
         // the leaf (4,096 bytes at 4,096). A block's address is its offset, with the power of two of its size in the
         // low five bits.
         let rootOffset: UInt32 = 2048
+        let rootSize: UInt32 = 1 << 11
         let addresses: [UInt32] = [rootOffset | 11, 32 | 5, 4096 | 12]
         var root = Data()
         root.appendBigEndian(UInt32(addresses.count))
@@ -165,9 +166,11 @@ public enum DSStore {
         tree.appendBigEndian(UInt32(1))  // one node in all
         tree.appendBigEndian(UInt32(nodeSize))
 
+        // The header names the allocator's own block by its offset and its size, as Finder writes it (2,048), not the
+        // length of the data in it.
         var header = Data("Bud1".utf8)
         header.appendBigEndian(rootOffset)
-        header.appendBigEndian(UInt32(root.count))
+        header.appendBigEndian(rootSize)
         header.appendBigEndian(rootOffset)
         header.append(Data(count: 16))
 

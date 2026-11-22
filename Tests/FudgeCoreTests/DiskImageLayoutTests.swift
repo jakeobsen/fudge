@@ -18,6 +18,8 @@ private struct StoreReader {
     }
 
     let bytes: [UInt8]
+    var root = 0
+    var rootSize = 0
     var blocks: [Block] = []
     var table: [String: Int] = [:]
     var free: [[Int]] = []
@@ -29,8 +31,8 @@ private struct StoreReader {
         bytes = Array(data)
         guard u32(0) == 1, ascii(4, 4) == "Bud1" else { throw Problem.malformed("not a buddy allocator file") }
         // Offsets in the allocator count from byte 4 of the file.
-        let root = Int(u32(8))
-        let rootSize = Int(u32(12))
+        root = Int(u32(8))
+        rootSize = Int(u32(12))
         guard u32(16) == UInt32(root), 4 + root + rootSize <= bytes.count else {
             throw Problem.malformed("the allocator's own block")
         }
@@ -169,6 +171,16 @@ private let madeUpAlias = AliasRecord(
     #expect(taken.first?.lowerBound == 0)
     #expect(taken.last?.upperBound == 1 << 31)
     for (left, right) in zip(taken, taken.dropFirst()) { #expect(left.upperBound == right.lowerBound) }
+}
+
+@Test func theHeaderGivesTheAllocatorsBlockAsFinderWritesIt() throws {
+    let store = try StoreReader(try DiskImageLayout.dsStore(backgroundAlias: madeUpAlias.bytes))
+    // The header names the allocator's own block, block 0, by its offset and its whole size: 2,048 in every
+    // `.DS_Store` Finder writes, never the length of the data in it.
+    let allocator = try #require(store.blocks.first)
+    #expect(store.root == allocator.offset)
+    #expect(store.rootSize == allocator.size)
+    #expect(store.rootSize == 2048)
 }
 
 @Test func recordsAreSortedAsFinderKeepsThem() throws {
