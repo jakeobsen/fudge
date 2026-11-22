@@ -63,7 +63,7 @@ private func route(
 @Test func raycastsHostsAndTheTablesOwnHostsAreRefusedAsBefore() {
     var refused = [
         "https://www.raycast.com/oauth/authorize", "https://raycast.com/oauth/authorize",
-        "https://WWW.Raycast.COM./oauth/authorize", "https://notion.oauth.raycast.com/authorize",
+        "https://WWW.Raycast.COM./oauth/authorize", "https://x.oauth.raycast.com/authorize",
         "https://github.oauth.raycast.com/authorize/", "https://x.oauth-proxy.raycast.com/authorize",
         "https://apple-music-oauth.raycast.com/authorize", "https://accounts.google.com/o/oauth2/auth",
         "https://ACCOUNTS.GOOGLE.COM./o/oauth2/v2/auth?x=1",

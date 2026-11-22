@@ -229,6 +229,23 @@ test("a token request through https goes to the relay, body and headers intact",
     assert.deepEqual(relaySeen.map((seen) => [seen.path, seen.body]), [["/base/github/refresh-token", refresh]]);
 });
 
+// `trek`, `gumroad` and `moneybird` declare @raycast/utils 1.x, which posts its token requests through
+// https.request (FUD-166): their shared-proxy addresses go to the relay that way too.
+test("1.x token and refresh requests to the shared proxy's addresses go to the relay", async () => {
+    answer = { server: `${base(relay)}/base/`, signedIn: false };
+    relaySeen.length = 0;
+    await exchange(() => https.request("https://oauth.raycast.com/v1/token/wMaXr3BdE5QWGZQ_RE_7GyB37_wTuBYOg_9C7CxiqtwHYOELsCyxDKiOshV4mPWXj9NZ_cZ9-dLIkELMnqbN08GDHCnmBp0i2Z950v2kWuOU88VMf3YxkiQAxj5HiAGYW9ceuj9hTDeIBYyBIXciFpDsR6WPhJAjJsHqvz2j8IQQe28efSJFi18", post), codeGrant);
+    const refresh = new URLSearchParams({ grant_type: "refresh_token", refresh_token: "r" }).toString();
+    await exchange(() => https.request("https://oauth.raycast.com/v1/refresh-token/-8K39Rwy5HY5-DzNTOVLTMvKH6EQVd5E50z9mvLJ4bahXJu2susPq_DcGFFUYrhctLgTTXZLhmYRvlBnpIaGuxPDB7QTscbBrsz63tOA4RvPXoqJYh4JKtyUgQMAheFWBKh6gvNI08Q", { method: "POST" }), refresh);
+    assert.deepEqual(
+        relaySeen.map((seen) => [seen.path, seen.body]),
+        [
+            ["/base/basecamp/token", codeGrant],
+            ["/base/gumroad/refresh-token", refresh],
+        ],
+    );
+});
+
 test("a redirect from the relay fails the request, and its Location is never reached", async () => {
     answer = { server: base(relay), signedIn: false };
     for (const status of [301, 302, 303, 307, 308]) {
