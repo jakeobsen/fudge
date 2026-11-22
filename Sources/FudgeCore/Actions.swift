@@ -112,7 +112,8 @@ public enum RootAction: Sendable, Equatable {
     case copyAnswer
     /// Copies the Calculator card's question and answer, as `question = answer`.
     case copyQuestionAndAnswer
-    /// Opens Settings on the General page, from the "Currency conversion is off" card.
+    /// Opens Settings on the Calculator page (`RootActions.currencySettingsPage`), from the "Currency conversion is
+    /// off" card.
     case turnOnCurrencyConversion
     /// Downloads the exchange rates again, from the "Couldn't download exchange rates" card.
     case retryExchangeRates
@@ -163,6 +164,10 @@ public enum RootActions {
             []
         }
     }
+
+    /// The Settings page the "Currency conversion is off" card opens, by ↵ or its Turn On Currency Conversion: the
+    /// Calculator page, where its switch is.
+    public static let currencySettingsPage = SettingsSidebar.calculatorPage
 
     /// The one entry of the Extension Store's "off" view: its Settings page, as ⌘⇧, opens it.
     public static let extensionStoreOffSections = section([

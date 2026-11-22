@@ -10,17 +10,18 @@ final class SettingsModel {
     private(set) var extensions: [InstalledExtension] = []
     /// The page shown. Change it with `select(_:)`, which ends a hotkey recording on the page being left.
     private(set) var selected: String?
-    /// The General and Commands pages' entries in the sidebar; extension names can't start with ":".
-    static let generalPage = ":general"
-    static let commandsPage = ":commands"
-    static let permissionsPage = ":permissions"
-    static let quicklinksPage = ":quicklinks"
-    static let snippetsPage = ":snippets"
-    static let colorPickerPage = ":color-picker"
-    static let windowManagementPage = ":window-management"
-    static let signInPage = ":sign-in"
-    static let calendarPage = ":calendar"
-    static let developmentPage = ":development"
+    /// The sidebar's pages of Fudge's own (`SettingsSidebar`, where the tags are); extension names can't start with ":".
+    static let generalPage = SettingsSidebar.generalPage
+    static let commandsPage = SettingsSidebar.commandsPage
+    static let permissionsPage = SettingsSidebar.permissionsPage
+    static let quicklinksPage = SettingsSidebar.quicklinksPage
+    static let snippetsPage = SettingsSidebar.snippetsPage
+    static let colorPickerPage = SettingsSidebar.colorPickerPage
+    static let windowManagementPage = SettingsSidebar.windowManagementPage
+    static let signInPage = SettingsSidebar.signInPage
+    static let calendarPage = SettingsSidebar.calendarPage
+    static let developmentPage = SettingsSidebar.developmentPage
+    static let calculatorPage = SettingsSidebar.calculatorPage
     /// Every installed extension, for the Commands page.
     private(set) var allExtensions: [InstalledExtension] = []
     /// `settings.json`, as the Commands page edits it.
@@ -80,13 +81,8 @@ final class SettingsModel {
         loadWindowLayouts()
         loadSignIns()
         loadCalendars()
-        if selected != Self.generalPage, selected != Self.commandsPage, selected != Self.permissionsPage,
-            selected != Self.quicklinksPage, selected != Self.snippetsPage, selected != Self.signInPage,
-            selected != Self.colorPickerPage, selected != Self.windowManagementPage, selected != Self.calendarPage,
-            selected != Self.developmentPage, !extensions.contains(where: { $0.manifest.name == selected })
-        {
-            select(Self.generalPage)
-        }
+        // A page that's no longer listed (an extension removed while its page is open) gives way to General.
+        if !SettingsSidebar.lists(selected, among: extensions) { select(Self.generalPage) }
     }
 
     /// Shows `page`. Leaving a page ends a hotkey recording on it, with no change, and Fudge's hotkeys resume.
@@ -1445,20 +1441,13 @@ struct SettingsView: View {
         // until the sidebar collapsed, and with no toggle (it jumped across the title bar) nothing brought it back.
         // There's no split view, so no divider and no collapsed state to restore.
         HStack(spacing: 0) {
+            // Both lists come from `SettingsSidebar`: Fudge's core pages on top, then its other pages among the
+            // extensions', sorted by title.
             List(selection: Binding(get: { model.selected }, set: { model.select($0) })) {
-                Label("General", systemImage: "gearshape").tag(SettingsModel.generalPage)
-                Label("Permissions", systemImage: "hand.raised").tag(SettingsModel.permissionsPage)
-                Label("Commands", systemImage: "command").tag(SettingsModel.commandsPage)
-                Label("Quicklinks", systemImage: "link").tag(SettingsModel.quicklinksPage)
-                Label("Snippets", systemImage: "doc.text").tag(SettingsModel.snippetsPage)
-                Label("Window Management", systemImage: "macwindow").tag(SettingsModel.windowManagementPage)
-                Label("Sign-in", systemImage: "person.badge.key").tag(SettingsModel.signInPage)
-                Label("Color Picker", systemImage: "eyedropper").tag(SettingsModel.colorPickerPage)
-                Label("Calendar", systemImage: "calendar").tag(SettingsModel.calendarPage)
-                Label("Development", systemImage: "hammer").tag(SettingsModel.developmentPage)
+                ForEach(SettingsSidebar.top, id: \.tag) { SidebarRow(entry: $0).tag($0.tag) }
                 Section("Extensions") {
-                    ForEach(model.extensions, id: \.manifest.name) { installed in
-                        Text(installed.manifest.title).tag(installed.manifest.name)
+                    ForEach(SettingsSidebar.extensions(model.extensions), id: \.tag) {
+                        SidebarRow(entry: $0).tag($0.tag)
                     }
                 }
             }
@@ -1488,7 +1477,11 @@ struct SettingsView: View {
                     CalendarPage(model: model)
                 } else if model.selected == SettingsModel.developmentPage {
                     DevelopmentPage(model: model)
-                } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {
+                } else if model.selected == SettingsModel.calculatorPage {
+                    CalculatorPage(model: model)
+                } else if let installed = model.extensions.first(where: {
+                    SettingsSidebar.tag(of: $0) == model.selected
+                }) {
                     ExtensionPreferencesForm(model: model, installed: installed)
                 } else {
                     Text("No extension has preferences.").foregroundStyle(.secondary)
@@ -1499,6 +1492,20 @@ struct SettingsView: View {
         // The width it opens at: any narrower and the Commands table squeezes its Name column, truncating names and
         // running a command's subtitle into the Type column.
         .frame(minWidth: 880, minHeight: 400)
+    }
+}
+
+/// One sidebar row: a top row's title and symbol, or, under Extensions, the title only. Its tag is set where it's
+/// listed.
+private struct SidebarRow: View {
+    let entry: SettingsSidebar.Entry
+
+    var body: some View {
+        if let symbol = entry.symbol {
+            Label(entry.title, systemImage: symbol)
+        } else {
+            Text(entry.title)
+        }
     }
 }
 
