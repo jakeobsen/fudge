@@ -261,7 +261,7 @@ import Testing
 
 @Test func theStepsShowTheirSettingsOwnWords() {
     // One string each, shared with the store's consent sheet and the Sign-in page.
-    #expect(SignInServer.explanation == "Extensions sign in to services like GitHub and Linear through this server.")
+    #expect(SignInServer.explanation == "Extensions sign in to services through this server.")
     #expect(ExtensionStore.Consent.message.hasPrefix("This adds the Extension Store to Fudge."))
     #expect(ExtensionStore.Consent.note.contains(ExtensionStore.Consent.issueLinkText))
     #expect(FudgeSettings().signIn == .off, "Sign-in starts Off, which ↵ keeps")
