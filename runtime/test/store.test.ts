@@ -137,6 +137,7 @@ import {
     alreadyBuildingStatus,
     buildArguments,
     installFolder,
+    installsWithoutSwift,
     bundledNames,
     doneToast,
     failureDetails,
@@ -1181,6 +1182,20 @@ test("an extension installed without its Swift part says so on its detail page, 
     const markdown = detailMarkdown(alphaEntry, "c0ffee1234", "", undefined, true);
     assert.ok(markdown.includes("Installed without its part written in Swift."), markdown);
     assert.equal(detailMarkdown(alphaEntry, "c0ffee1234", "", undefined).includes("Swift"), false);
+});
+
+test("the list reads each install's Swift part choice from its folder in Raycast's, not the top level", async () => {
+    const extensionsDir = await temporary();
+    const leaveOut = JSON.stringify({ swiftParts: "leave-out" });
+    // The store's install, filed in Raycast's folder, and one of another name still at the top level (FUD-183).
+    await mkdir(installFolder(extensionsDir, "say"), { recursive: true });
+    await writeFile(path.join(installFolder(extensionsDir, "say"), swiftPartsFile), leaveOut);
+    await mkdir(path.join(extensionsDir, "speak"), { recursive: true });
+    await writeFile(path.join(extensionsDir, "speak", swiftPartsFile), leaveOut);
+    await mkdir(installFolder(extensionsDir, "built"), { recursive: true });
+    const build = JSON.stringify({ swiftParts: "build" });
+    await writeFile(path.join(installFolder(extensionsDir, "built"), swiftPartsFile), build);
+    assert.deepEqual([...(await installsWithoutSwift(extensionsDir, ["say", "speak", "built", "missing"]))], ["say"]);
 });
 
 test("a scan's swift: imports become the store's swiftPart, kept in the cache", () => {

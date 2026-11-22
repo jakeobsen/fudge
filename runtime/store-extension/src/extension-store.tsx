@@ -53,9 +53,9 @@ import { FailureView, LoadFailure, NeedsGit } from "./failure-view.tsx";
 import {
     failureDetails,
     failureLog,
-    installFolder,
     installPressed,
     InstallPresses,
+    installsWithoutSwift,
     oneAtATime,
     readInstalled,
     uninstall,
@@ -78,7 +78,7 @@ import {
     type FailureMark,
     type NoticeTarget,
 } from "./notices.ts";
-import { installedWithoutSwift, type SwiftPartsChoice } from "./swift-parts.ts";
+import type { SwiftPartsChoice } from "./swift-parts.ts";
 import { SwiftPartsView } from "./swift-parts-view.tsx";
 
 /** A failure the store had goes into `Fudge.log` too, with its output (SPEC-124); writing it never fails a step. */
@@ -220,10 +220,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             repo.commit(),
             readCompatibility(environment.supportPath, scanner),
         ]);
-        const withoutSwift = new Set<string>();
-        for (const name of Object.keys(installed)) {
-            if (await installedWithoutSwift(installFolder(extensionsDir, name))) withoutSwift.add(name);
-        }
+        const withoutSwift = await installsWithoutSwift(extensionsDir, Object.keys(installed));
         setLoaded({ entries, installed, trees, commit, withoutSwift });
         setChecked((current) => ({ scanner, results, failed: current.scanner === scanner ? current.failed : new Set() }));
         hasLoaded.current = true;
