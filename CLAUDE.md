@@ -1102,7 +1102,7 @@ Extensions run in a separate Node.js process, the extension host.
   - **The layout** (FUD-183): the extensions folder holds each repository's installs in a folder of their own, where `<name>` is always the manifest's name.
     `raycast/extensions/<name>` is Raycast's official repository (the Extension Store's installs), `<owner>/<repository>/<name>` one on GitHub, `<host>/<path…>/<name>` one on another server, and `fudgeapp/development/<name>` the development builds.
     `fudge build --repository <folder>` (`BuildArguments`, checked with `ExtensionRepositoryFolder.isValid`) installs into `<into>/<folder>/<name>`; without it, or with `fudgeapp/development`, the build is a development build, with the id `fudgeapp+development+<name>`, beside any other install of that name.
-    Only the address `https://github.com/fudgeapp/development` is refused as a repository (SPEC-157), never the folder: the architect owns the GitHub organization `fudgeapp`, so no one else's repository has it.
+    Only the address `https://github.com/fudgeapp/development` is refused as a repository (SPEC-157), never the folder: the GitHub organization `fudgeapp` is Fudge's own, so no one else's repository has it.
     Before writing anything, the build checks that the destination isn't the source (`checkSource`), and that no folder on the way from `--into` to the repository's folder holds `package.json`: "That repository's folder is inside an installed extension."
     A destination that doesn't exist yet passes `checkDestination`, so without that check a build could write inside an install.
     Then it makes the folders on the way (0755), and they go again when the build fails.
