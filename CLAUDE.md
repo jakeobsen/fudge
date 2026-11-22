@@ -1261,6 +1261,8 @@ Extensions run in a separate Node.js process, the extension host.
   `make lint` fails on a line over 400 characters outside code blocks and tables.
 - **The product's name is Fudge**, capitalized, in all text people read.
   `fudge` is only the CLI command, paths, env variables and identifiers.
+- **No em dash (U+2014) in Fudge's text**: write a colon or a comma instead, and join two parts of a message with `MessageText.joined`.
+  `make lint` fails on one in any file git tracks or would track, except Unicode's own data in `runtime/vendor/`; the en dash in ranges such as "09:00 – 09:30" stays.
 
 ## Branches, CI and releases
 

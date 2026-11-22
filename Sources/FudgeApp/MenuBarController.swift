@@ -237,7 +237,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             item.lifecycle.launchFailed()
             item.picks.removeAll()
             host.log(item.id, "error", "couldn't start \(item.id): \(failure.message)")
-            if userInitiated { host.showHUD("\(item.command.title) failed — \(failure.message)") }
+            if userInitiated { host.showHUD(MessageText.joined("\(item.command.title) failed", failure.message)) }
         }
     }
 
@@ -275,7 +275,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             let signIn = SignInNotice(
                 notice: notice, message: message, extensionName: manifest.name, extensionTitle: manifest.title,
                 commandID: nil)
-            let hud = signIn?.hud ?? "\(item.command.title) failed — \(message)"
+            let hud = signIn?.hud ?? MessageText.joined("\(item.command.title) failed", message)
             if fatal {
                 if item.lifecycle.failed(session) { host.showHUD(hud) }
                 draw(item)

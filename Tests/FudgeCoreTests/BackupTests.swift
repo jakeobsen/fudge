@@ -621,11 +621,11 @@ private func storeFolder(_ trees: [String: String]) throws -> Folder {
         ],
         paths: folder.paths)
     #expect(
-        changed.map { "\($0.title) — \($0.text)" } == [
-            "Alpha — version 1.2.0 in the backup, 1.3.0 now",
-            "Beta — updated in the Extension Store since the backup",
-            "Delta — installed from a local folder now",
-            "Gamma — installed from the Extension Store now",
+        changed.map { "\($0.title): \($0.text)" } == [
+            "Alpha: version 1.2.0 in the backup, 1.3.0 now",
+            "Beta: updated in the Extension Store since the backup",
+            "Delta: installed from a local folder now",
+            "Gamma: installed from the Extension Store now",
         ], "one line each, sorted by title")
 }
 

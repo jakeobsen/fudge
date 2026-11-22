@@ -1,4 +1,4 @@
-# fudge — a keyboard launcher for macOS, built to run Raycast extensions.
+# Fudge, a keyboard launcher for macOS, built to run Raycast extensions.
 #
 # Single command surface for building, testing and running fudge.
 # Run `make help` for targets.
@@ -62,7 +62,7 @@ export PATH := $(NODE_HOME)/bin:$(PATH)
 .PHONY: help release-check app dmg dmg-image release run install-extension build runtime node test test-swift test-runtime lint fmt raycast-types compat-scan clean
 
 help:
-	@printf 'Fudge — a keyboard launcher for macOS, built to run Raycast extensions\n\n'
+	@printf 'Fudge, a keyboard launcher for macOS, built to run Raycast extensions\n\n'
 	@printf 'Usage: make <target>\n\n'
 	@printf '  help           Show this help (default).\n'
 	@printf '  app            Build %s (CONFIG=debug|release, now: %s). Signs with SIGN_IDENTITY: by default\n' '$(APP)' '$(CONFIG)'
@@ -259,6 +259,12 @@ lint: runtime/node_modules
 	@cd runtime && npm run --silent typecheck
 	@# Docs are one sentence per line: no line of CLAUDE.md or README.md over 400 characters, outside code and tables.
 	@perl -CSD -ne 'chomp; if (/^\s*(```|~~~)/) { $$fence = !$$fence } elsif (!$$fence && !/^\s*\|/ && length > 400) { print STDERR "$$ARGV:$$.: " . length . " characters; write docs one sentence per line\n"; $$bad = 1 } if (eof) { close ARGV; $$fence = 0 } END { exit $$bad }' CLAUDE.md README.md
+	@# No em dash (U+2014) in any file git tracks or would track, except Unicode's own data in runtime/vendor; ignored
+	@# files (node_modules, dist, build) aren't read. The dash is written as its UTF-8 bytes, so this line can't match itself.
+	@# git grep exits 0 on a match, 1 on none and 128 on an error, so only 1 passes.
+	@found=0; git --no-pager grep --untracked -n -I -F -e $$'\xe2\x80\x94' -- . ':!runtime/vendor' || found=$$?; \
+	if [ "$$found" -eq 0 ]; then printf 'Fudge'\''s text has no em dash: use a colon or a comma (CLAUDE.md, Conventions).\n' >&2; exit 1; \
+	elif [ "$$found" -ne 1 ]; then printf 'Couldn'\''t check for em dashes: git grep exited with %s.\n' "$$found" >&2; exit 1; fi
 
 fmt:
 	@swift format --in-place --recursive Package.swift Sources Tests
