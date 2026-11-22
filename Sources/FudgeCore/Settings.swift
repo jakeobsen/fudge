@@ -23,6 +23,11 @@ public struct FudgeSettings: Sendable, Equatable {
     public var signInServer: String?
     /// When the user confirmed the sign-in server's consent sheet (`signInServerConsentAt`, ISO 8601).
     public var signInServerConsentAt: String?
+    /// **Extensions with their own sign-in** (`ownAppSignIn`, SPEC-132 §5); it counts only with the consent date
+    /// beside it (`isOwnAppSignInOn`).
+    public var ownAppSignIn = false
+    /// When the user confirmed its consent sheet (`ownAppSignInConsentAt`, ISO 8601).
+    public var ownAppSignInConsentAt: String?
     /// **Expand Snippets as You Type** (`expandSnippets`, SPEC-078 §5), off by default.
     public var expandSnippets = false
     /// Clipboard history's switch (`clipboardHistory`); it counts only with the consent date beside it.
@@ -241,6 +246,8 @@ public struct FudgeSettings: Sendable, Equatable {
         settings.extensionStoreConsentAt = object["extensionStoreConsentAt"] as? String
         settings.signInServer = object["signInServer"] as? String
         settings.signInServerConsentAt = object["signInServerConsentAt"] as? String
+        settings.ownAppSignIn = object["ownAppSignIn"] as? Bool ?? false
+        settings.ownAppSignInConsentAt = object["ownAppSignInConsentAt"] as? String
         settings.expandSnippets = object["expandSnippets"] as? Bool ?? false
         settings.clipboardHistory = object["clipboardHistory"] as? Bool ?? false
         settings.clipboardHistoryConsentAt = object["clipboardHistoryConsentAt"] as? String
@@ -284,6 +291,8 @@ public struct FudgeSettings: Sendable, Equatable {
         object["extensionStoreConsentAt"] = extensionStoreConsentAt
         object["signInServer"] = signInServer
         object["signInServerConsentAt"] = signInServerConsentAt
+        object["ownAppSignIn"] = ownAppSignIn ? true : nil
+        object["ownAppSignInConsentAt"] = ownAppSignInConsentAt
         object["expandSnippets"] = expandSnippets ? true : nil
         object["clipboardHistory"] = clipboardHistory ? true : nil
         object["clipboardHistoryConsentAt"] = clipboardHistoryConsentAt

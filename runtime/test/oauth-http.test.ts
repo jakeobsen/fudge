@@ -18,6 +18,7 @@ import { pathToFileURL } from "node:url";
 import zlib from "node:zlib";
 import {
     providersFromEnvironment,
+    raycastDomainsVariable,
     redirectedMessage,
     rewriteFetch,
     refusedMessage,
@@ -500,4 +501,34 @@ test("an extension's global agent never carries a relay request: replaced, loose
         https.globalAgent = global;
     }
     assert.equal(secureSeen.length, 0, "nothing reached the relay unverified");
+});
+
+test("old clients' token and refresh grants to any of Raycast's hosts are refused too, before any DNS lookup", async () => {
+    // @raycast/utils 1.x posts its token requests through node-fetch, which uses https.request (SPEC-132 §2 step 5).
+    const previous = process.env[raycastDomainsVariable];
+    process.env[raycastDomainsVariable] = '["raycast.com"]';
+    const lookups: string[] = [];
+    // A lookup fails at once, so a request that isn't refused fails with another message instead of hanging.
+    const lookup = ((host: string, _options: unknown, callback: (error: Error) => void) => {
+        lookups.push(host);
+        callback(new Error("looked up"));
+    }) as unknown as net.LookupFunction;
+    try {
+        for (const [send, host] of [
+            [() => https.request("https://www.raycast.com/oauth/token", { ...post, lookup }), "www.raycast.com"],
+            [() => https.request({ hostname: "x.oauth-proxy.raycast.com", path: "/token", ...post, lookup }), "x.oauth-proxy.raycast.com"],
+            [() => http.request("http://apple-music-oauth.raycast.com/refresh-token", { ...post, lookup }), "apple-music-oauth.raycast.com"],
+        ] as const) {
+            await assert.rejects(exchange(send, codeGrant), new RegExp(refusedMessage(host, false).replace(/\./g, "\\.")));
+        }
+        const refresh = new URLSearchParams({ grant_type: "refresh_token", refresh_token: "r" }).toString();
+        await assert.rejects(
+            exchange(() => https.request("https://WWW.Raycast.COM./oauth/token", { method: "POST", lookup }), refresh),
+            /Fudge doesn't send requests to/,
+        );
+        assert.deepEqual(lookups, []);
+    } finally {
+        if (previous === undefined) delete process.env[raycastDomainsVariable];
+        else process.env[raycastDomainsVariable] = previous;
+    }
 });

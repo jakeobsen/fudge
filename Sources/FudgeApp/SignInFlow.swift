@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import FudgeCore
 import Network
@@ -225,6 +226,113 @@ final class OAuthLoopback: @unchecked Sendable {
     }
 }
 
+/// What a sign-in waits on after ↵: the loopback listener (the relay path), or Raycast's return link and a pasted
+/// address (the direct path, SPEC-132). Either ends once, with the callback, the timeout or a cancel.
+@MainActor
+protocol SignInWait: AnyObject, Sendable {
+    /// Waits for the callback carrying `state`, for up to `timeout`.
+    func wait(state: String, timeout: TimeInterval) async -> OAuthLoopback.Outcome
+    /// Ends a wait as cancelled (Esc, the command going away) and stops waiting.
+    func cancel()
+    /// Stops waiting; a wait still going ends as cancelled.
+    func close()
+}
+
+extension OAuthLoopback: SignInWait {}
+
+/// One prepared sign-in's wait, as `SignInRequests` keeps it: by identity, which needs a class.
+@MainActor
+final class SignInListener {
+    let wait: any SignInWait
+
+    init(_ wait: any SignInWait) {
+        self.wait = wait
+    }
+
+    func cancel() { wait.cancel() }
+    func close() { wait.close() }
+    /// A direct sign-in's wait, for Raycast's return link and a pasted address.
+    var linkWait: OAuthLinkWait? { wait as? OAuthLinkWait }
+}
+
+/// What a direct sign-in waits on (SPEC-132 §3.2, §4): a `raycast://oauth` or `com.raycast:/oauth` link opening Fudge,
+/// or, for Web, the address the user pastes. Only this sign-in's `state` with a code or an error ends the wait;
+/// anything else is ignored, and nothing logs it.
+@MainActor
+final class OAuthLinkWait: SignInWait {
+    private var state: String?
+    private var waiting: CheckedContinuation<OAuthLoopback.Outcome, Never>?
+    private var timer: Task<Void, Never>?
+    private var closed = false
+
+    func wait(state: String, timeout: TimeInterval) async -> OAuthLoopback.Outcome {
+        guard !closed else { return .cancelled }
+        let outcome = await withCheckedContinuation {
+            (continuation: CheckedContinuation<OAuthLoopback.Outcome, Never>) in
+            self.state = state
+            waiting = continuation
+            timer = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(timeout))
+                guard !Task.isCancelled else { return }
+                self?.finish(.timedOut)
+            }
+        }
+        close()
+        return outcome
+    }
+
+    /// A link that opened Fudge.
+    func receive(link: String) {
+        guard let state, waiting != nil else { return }
+        let callback = RaycastReturn.read(link: link, state: state)
+        if callback.endsWait { finish(.callback(callback)) }
+    }
+
+    /// A pasted address: true when it ended the wait.
+    func receive(pasted text: String) -> Bool {
+        guard let state, waiting != nil else { return false }
+        let callback = RaycastReturn.read(pasted: text, state: state)
+        guard callback.endsWait else { return false }
+        finish(.callback(callback))
+        return true
+    }
+
+    func cancel() {
+        finish(.cancelled)
+        close()
+    }
+
+    func close() {
+        closed = true
+        finish(.cancelled)
+    }
+
+    private func finish(_ outcome: OAuthLoopback.Outcome) {
+        timer?.cancel()
+        timer = nil
+        guard let waiting else { return }
+        self.waiting = nil
+        state = nil
+        waiting.resume(returning: outcome)
+    }
+}
+
+/// Which app opens Raycast's links, from LaunchServices (SPEC-132 §3.3). Only the user's click on Open Raycast Links
+/// with Fudge changes it, never a launch or anything in the background.
+struct SystemRaycastLinks: RaycastLinks {
+    func opener(of url: URL) -> URL? {
+        NSWorkspace.shared.urlForApplication(toOpen: url)
+    }
+
+    func bundleIdentifier(of app: URL) -> String? {
+        Bundle(url: app)?.bundleIdentifier
+    }
+
+    func open(scheme: String, with app: URL) async throws {
+        try await NSWorkspace.shared.setDefaultApplication(at: app, toOpenURLsWithScheme: scheme)
+    }
+}
+
 /// "Sign in to <provider>" in the launcher, while an extension signs in.
 struct SignInPrompt: Equatable {
     var session: String
@@ -233,4 +341,10 @@ struct SignInPrompt: Equatable {
     var icon: JSONValue?
     /// After ↵: the browser is open, and the callback is awaited.
     var waiting = false
+    /// A direct Web sign-in (SPEC-132 §4): while it waits, ⌘V reads a pasted address.
+    var canPaste = false
+    /// A direct sign-in while another app opens Raycast's links: the line saying so.
+    var linksElsewhere: String?
+    /// After a paste that didn't end the sign-in.
+    var pasteProblem: String?
 }

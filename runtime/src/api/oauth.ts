@@ -1,7 +1,9 @@
-// `OAuth`: signing in through a fudge-oauth relay (SPEC-056, decision D-63). `@raycast/utils`' `OAuthService` builds
-// an `OAuth.PKCEClient` when the extension loads and asks it for tokens; signing in goes through the relay the user
-// chose in Settings → Sign-in, never Raycast's servers. The app opens the browser, waits for the loopback callback
-// and keeps the tokens in the Keychain, for the calling extension only.
+// `OAuth`: signing in through a fudge-oauth relay (SPEC-056, decision D-63), or straight to an extension's own OAuth
+// app (SPEC-132). `@raycast/utils`' `OAuthService` builds an `OAuth.PKCEClient` when the extension loads and asks it for
+// tokens. Its built-in providers sign in through the relay the user chose in Settings → Sign-in, never Raycast's
+// servers; an extension with an OAuth app of its own signs in to its service directly, and comes back through
+// Raycast's return address for its redirect method. The app opens the browser, waits for the loopback callback or
+// that return, and keeps the tokens in the Keychain, for the calling extension only.
 
 import { createHash } from "node:crypto";
 import { callApp } from "../bridge.ts";
@@ -75,9 +77,15 @@ export function codeChallenge(verifier: string): string {
     return createHash("sha256").update(verifier, "ascii").digest("base64url");
 }
 
-/** A random `state`: 16 bytes, base64url. */
-function randomState(): string {
-    return Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("base64url");
+/**
+ * A random `state`: the base64url (unpadded) of the JSON object `{"id":"<16 random bytes, base64url>"}`, 42 characters.
+ * raycast.com's return page passes a state on only when it's JSON or base64url JSON, and passes this one on as it is,
+ * so the state Fudge compares is the one it made (SPEC-132 §1). Nothing else goes in it: with no `scheme` or `flavor`,
+ * the page opens `raycast://oauth`.
+ */
+export function randomState(): string {
+    const id = Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("base64url");
+    return Buffer.from(JSON.stringify({ id }), "utf8").toString("base64url");
 }
 
 // MARK: - Tokens
@@ -175,10 +183,13 @@ type AuthorizationRequestOptions = {
     extraParameters?: Record<string, string>;
 };
 
-/** What the app answers `oauth.prepare` with. */
-type Prepared = { provider: string; authorizeURL: string; redirectURI: string };
+/**
+ * What the app answers `oauth.prepare` with: the relay's provider, authorize URL and loopback redirect, or, on the
+ * direct path (no provider), the extension's own endpoint and Raycast's redirect for its method.
+ */
+type Prepared = { provider: string | null; authorizeURL: string; redirectURI: string };
 
-/** Raycast's `OAuth.PKCEClient`, signing in through the relay. */
+/** Raycast's `OAuth.PKCEClient`, signing in through the relay or straight to the extension's own OAuth app. */
 class PKCEClient {
     redirectMethod: string;
     providerName: string;
@@ -199,8 +210,9 @@ class PKCEClient {
     }
 
     /**
-     * A sign-in request for one of the providers Fudge knows (by `endpoint`, its default authorize URL). The app
-     * refuses while sign-in is off, and for any other endpoint.
+     * A sign-in request: through the relay for one of the providers Fudge knows (by `endpoint`, its default authorize
+     * URL), or straight to the extension's own `endpoint`, coming back through Raycast's return address for this
+     * client's `redirectMethod`. The app refuses while the path the endpoint takes is off, and for Raycast's hosts.
      */
     async authorizationRequest(options: AuthorizationRequestOptions) {
         const prepared = await signInStep(() =>
@@ -208,16 +220,22 @@ class PKCEClient {
                 endpoint: String(options?.endpoint ?? ""),
                 providerName: this.providerName,
                 providerId: this.providerId,
+                redirectMethod: String(this.redirectMethod ?? ""),
             }),
         );
-        this.#relayProvider = prepared.provider;
+        this.#relayProvider = prepared.provider ?? undefined;
+        const direct = this.#relayProvider === undefined;
+        // On the direct path the extension's own `redirect_uri` wins over Raycast's, as Raycast documents for providers
+        // that refuse a query in the redirect, so the token request repeats what the authorize URL sent. The relay's
+        // loopback redirect is never overridden.
+        const override = options?.extraParameters?.redirect_uri;
         const codeVerifierValue = codeVerifier();
         const request = {
             clientId: String(options.clientId ?? ""),
             codeChallenge: codeChallenge(codeVerifierValue),
             codeVerifier: codeVerifierValue,
             state: randomState(),
-            redirectURI: prepared.redirectURI,
+            redirectURI: direct && override !== undefined && override !== null ? String(override) : prepared.redirectURI,
             toURL(): string {
                 const url = new URL(prepared.authorizeURL);
                 const parameters: Record<string, string> = {
@@ -241,7 +259,7 @@ class PKCEClient {
 
     /**
      * Signs in: the app shows "Sign in to <provider>", opens the URL in the browser on ↵, and waits for the loopback
-     * callback with this request's `state`.
+     * callback with this request's `state`, or, on the direct path, Raycast's return link or a pasted address.
      */
     async authorize(options: { url?: string; state?: string; toURL?: () => string }) {
         const url = typeof options?.toURL === "function" ? options.toURL() : String(options?.url ?? "");
