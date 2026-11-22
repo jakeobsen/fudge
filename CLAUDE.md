@@ -1199,6 +1199,7 @@ Extensions run in a separate Node.js process, the extension host.
     A test that counts reloads waits for the stream's queue first (`streamStarted`, with a deadline), then for the watcher to go quiet.
     A path counts unless any of its components under the folder starts with `.` (`.staging-*`, `.old-*`, the locks and `.DS_Store`), in a repository's folder as at the top.
     A trailing 0.3 s debounce makes each install, rebuild or removal one reload: `LauncherModel.reloadExtensions()` (the installed extensions only, keeping the scanned applications, the query and the selection), the command hotkeys, and the Settings window if it's open.
+    A first build into a repository folder that doesn't exist yet can be two reloads, since it makes the folder before it compiles and the compile can outlast the debounce.
     The menu's Reload Extensions also scans applications again.
     Snapshot runs don't watch.
 - **The Makefile assembles the app bundle** (`make app`):

@@ -190,7 +190,7 @@ In the **Extension Store** command, search the extensions, or pick a category in
   An install that failed after you closed the store is marked on its row the next time you open the store, with **Try Again** and **Show Error**.
   **Settings… → Notifications** chooses which of these notifications Fudge shows.
 - It never touches extensions you installed with `fudge build` yourself.
-  It installs in the folder of Raycast's official repository, so an extension can't be installed while another of that name is installed there without it: uninstall that one first.
+  It installs in the folder of Raycast's official repository, so it won't install an extension while one of that name that it didn't install is in that folder: uninstall that one first.
   A development build of the same name, in the development folder, doesn't stop it: the two are installed side by side.
 
 #### Extension repositories
