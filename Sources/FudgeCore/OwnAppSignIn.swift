@@ -28,7 +28,8 @@ public enum OAuthRedirectMethod: String, Sendable, CaseIterable {
 
 /// Raycast's return address coming back to Fudge (SPEC-132 §3.2, §4).
 public enum RaycastReturn {
-    /// The schemes Fudge registers for it (`CFBundleURLTypes`), which are Raycast's own.
+    /// The schemes Fudge Links declares for it (`CFBundleURLTypes` in `App/Links/Info.plist`), which are Raycast's
+    /// own. Fudge.app itself declares none (SPEC-140, D-107).
     public static let schemes = ["raycast", "com.raycast"]
 
     /// One link of each shape, for asking which app opens them.
@@ -81,19 +82,19 @@ public enum RaycastReturn {
     }
 }
 
-/// Who opens Raycast's links now (SPEC-132 §3.3).
+/// Who opens Raycast's links now (SPEC-132 §3.3, SPEC-140 §3.1).
 public enum RaycastLinksStatus: Equatable, Sendable {
     /// How another copy of Fudge is named.
     public static let anotherFudge = "another copy of Fudge"
 
-    /// Fudge opens both `raycast://oauth` and `com.raycast:/oauth`.
+    /// Fudge opens both `raycast://oauth` and `com.raycast:/oauth`, through its Fudge Links.
     case fudge
     /// Another app opens at least one of them, by its name; nil when no app does.
     case elsewhere(String?)
 
     public var isFudge: Bool { self == .fudge }
 
-    /// Onboarding's line.
+    /// Onboarding's line, and the Sign-in page's switch's while it's off.
     public var line: String {
         switch self {
         case .fudge: "Raycast links open Fudge."
@@ -101,14 +102,80 @@ public enum RaycastLinksStatus: Equatable, Sendable {
         case .elsewhere(nil): "No app opens Raycast links."
         }
     }
+}
 
-    /// The Sign-in page's row, after "Raycast links".
-    public var row: String {
-        switch self {
-        case .fudge: "open with Fudge"
-        case .elsewhere(let app?): "open with \(app)"
-        case .elsewhere(nil): "no app opens them"
+/// The Sign-in page's switch, **Fudge opens Raycast links** (D-114). It shows who opens them, read from
+/// LaunchServices whenever the page appears or its window becomes key, never a stored value. On does what Open Raycast
+/// Links with Fudge does; off gives both schemes back to the other app that claims them.
+public struct RaycastLinksToggle: Equatable, Sendable {
+    public static let title = "Fudge opens Raycast links"
+    public static let explanation = "Signing in to some extensions ends with one, which has to open Fudge."
+    /// Under the switch while it's on and no other app claims both schemes, so there's nothing to give them back to.
+    public static let nothingToGiveBack = "No other app can open them, so Fudge keeps them."
+
+    public var isOn: Bool
+    /// Off can always be switched on (from the disk image, the refusal shows then); on only with an app to give the
+    /// links back to.
+    public var canChange: Bool
+    /// The line under it: who opens them, or who gets them back when it's turned off.
+    public var note: String
+
+    /// `giveBackTo` is the name of the app turning it off gives them back to (`RaycastLinks.handBackTarget`).
+    public init(status: RaycastLinksStatus, giveBackTo: String?) {
+        isOn = status.isFudge
+        guard isOn else {
+            canChange = true
+            note = status.line
+            return
         }
+        canChange = giveBackTo != nil
+        note = giveBackTo.map { "Turn it off to give them back to \($0)." } ?? Self.nothingToGiveBack
+    }
+}
+
+/// **Fudge Links** (SPEC-140, D-107): the small app inside Fudge.app, the only part of Fudge that declares Raycast's
+/// schemes. Only the user's Open with Fudge registers it with LaunchServices, so no build, launch, snapshot run, copy or
+/// Spotlight makes Fudge open Raycast's links. macOS opens it with a link; it hands the link to Fudge as a get-URL Apple
+/// Event and quits. Its decisions are here, so they're tested.
+public enum RaycastLinksHelper {
+    /// Its own bundle identifier, under Fudge's: macOS saves the user's choice by bundle identifier, not path.
+    public static let bundleIdentifier = FudgeVersion.bundleIdentifier + ".links"
+    /// Its name, the file's and the bundle's, so whatever macOS shows names it the same way.
+    public static let name = "Fudge Links"
+    /// How long it waits for a link when it's launched without one, before quitting.
+    public static let idleQuitSeconds = 10.0
+
+    /// Where it is inside the app at `app`: `<app>/Contents/Helpers/Fudge Links.app`, a place no launch, copy or
+    /// Spotlight registers.
+    public static func url(in app: URL) -> URL {
+        app.appendingPathComponent("Contents/Helpers/\(name).app", isDirectory: true)
+    }
+
+    /// The app that holds the helper at `helper`: three folders up.
+    public static func holder(of helper: URL) -> URL {
+        helper.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    }
+
+    /// Whether it hands `link` on: only `raycast:` and `com.raycast:` links, the scheme ignoring case. Anything else is
+    /// dropped. The link's shape is Fudge's to check (`RaycastReturn.read(link:state:)`).
+    public static func handsOn(_ link: String) -> Bool {
+        guard let scheme = URLComponents(string: link)?.scheme?.lowercased() else { return false }
+        return RaycastReturn.schemes.contains(scheme)
+    }
+
+    /// Which Fudges get a link: every running one, each app once, the one holding the helper first, since each takes
+    /// only its own sign-in's return. With none running, the holder, launched in the background, when it's Fudge;
+    /// else none, and the link is dropped.
+    public static func targets(running: [URL], holder: URL, holderIsFudge: Bool) -> [URL] {
+        var seen = Set<String>()
+        let distinct = running.filter { seen.insert(path(of: $0)).inserted }
+        guard !distinct.isEmpty else { return holderIsFudge ? [holder] : [] }
+        let holderPath = path(of: holder)
+        return distinct.filter { path(of: $0) == holderPath } + distinct.filter { path(of: $0) != holderPath }
+    }
+
+    static func path(of app: URL) -> String {
+        app.standardizedFileURL.resolvingSymlinksInPath().path
     }
 }
 
@@ -117,85 +184,156 @@ public enum RaycastLinksStatus: Equatable, Sendable {
 public protocol RaycastLinks: Sendable {
     /// The app that opens `url` now, nil when none does.
     func opener(of url: URL) -> URL?
+    /// Every app that can open `url`.
+    func claimants(of url: URL) -> [URL]
     /// The bundle identifier of the app at `app`, nil when it has none.
     func bundleIdentifier(of app: URL) -> String?
+    /// Registers the app at `app` with LaunchServices, throwing the system's error.
+    func register(_ app: URL) throws
     /// Makes the app at `app` open links with `scheme`, throwing the system's error.
     func open(scheme: String, with app: URL) async throws
 }
 
 extension RaycastLinks {
-    /// Who opens Raycast's links: Fudge (at `fudge`) only when it opens both shapes. Another app is named as the
-    /// Finder names it; a copy of Fudge somewhere else on the Mac (another build claims the schemes too) is "another
-    /// copy of Fudge".
-    public func status(fudge: URL) -> RaycastLinksStatus {
-        let others = RaycastReturn.links.map { opener(of: $0) }.filter { !Self.same($0, fudge) }
+    /// Who opens Raycast's links: Fudge only when its Fudge Links (at `helper`) opens both shapes. Another app is named
+    /// as the Finder names it; another copy's Fudge Links, or a Fudge that declares the schemes itself (a build from
+    /// before Fudge Links), is "another copy of Fudge".
+    public func status(helper: URL) -> RaycastLinksStatus {
+        let others = RaycastReturn.links.map { opener(of: $0) }.filter { !Self.same($0, helper) }
         guard let other = others.first else { return .fudge }
         return .elsewhere(
             other.map { app in
-                let id = bundleIdentifier(of: app)
-                return id != nil && id == bundleIdentifier(of: fudge)
-                    ? RaycastLinksStatus.anotherFudge : Self.appName(app)
+                Self.isFudges(bundleIdentifier(of: app)) ? RaycastLinksStatus.anotherFudge : Self.appName(app)
             })
     }
 
-    /// **Open Raycast Links with Fudge**: makes Fudge open both schemes, then reads the status again. The system's
-    /// message comes back when it refused.
-    public func openWithFudge(_ fudge: URL) async -> (status: RaycastLinksStatus, problem: String?) {
+    /// The app turning the switch off gives Raycast's links back to: the first that claims both shapes and isn't
+    /// Fudge's (neither this Fudge Links nor any app with Fudge's or Fudge Links' bundle identifier). Nil when there's
+    /// none, since there's no public way to unregister Fudge Links.
+    public func handBackTarget(helper: URL) -> URL? {
+        let both = claimants(of: RaycastReturn.links[1])
+        return claimants(of: RaycastReturn.links[0]).first { app in
+            !Self.same(app, helper) && !Self.isFudges(bundleIdentifier(of: app)) && both.contains { Self.same($0, app) }
+        }
+    }
+
+    /// **Open Raycast Links with Fudge**, or switching it on (SPEC-140 §3.2): registers Fudge Links, makes it open
+    /// both schemes, then reads the status again. Nothing changes while Fudge runs from its disk image or a
+    /// translocated copy, whose Fudge Links goes away. The system's message comes back when it refused.
+    public func openWithFudge(helper: URL, location: AppLocation) async -> (
+        status: RaycastLinksStatus, problem: String?
+    ) {
+        if let refusal = location.raycastLinksRefusal { return (status(helper: helper), refusal) }
+        do {
+            try register(helper)
+        } catch {
+            return (status(helper: helper), error.localizedDescription)
+        }
         var problem: String?
         for scheme in RaycastReturn.schemes {
             do {
-                try await open(scheme: scheme, with: fudge)
+                try await open(scheme: scheme, with: helper)
             } catch {
                 problem = problem ?? error.localizedDescription
             }
         }
-        let status = status(fudge: fudge)
+        let status = status(helper: helper)
         if problem == nil, !status.isFudge { problem = "macOS didn't make Fudge open Raycast links." }
         return (status, problem)
     }
 
+    /// Switching it off (D-114): gives both schemes back to `app` explicitly, so the choice macOS saves names that app
+    /// and Fudge Links can't take them back without a click. Then reads the status again.
+    public func giveBack(to app: URL, helper: URL) async -> (status: RaycastLinksStatus, problem: String?) {
+        var problem: String?
+        for scheme in RaycastReturn.schemes {
+            do {
+                try await open(scheme: scheme, with: app)
+            } catch {
+                problem = problem ?? error.localizedDescription
+            }
+        }
+        let status = status(helper: helper)
+        if problem == nil, status.isFudge { problem = "macOS didn't give Raycast links back to \(Self.appName(app))." }
+        return (status, problem)
+    }
+
+    static func isFudges(_ bundleIdentifier: String?) -> Bool {
+        bundleIdentifier == FudgeVersion.bundleIdentifier || bundleIdentifier == RaycastLinksHelper.bundleIdentifier
+    }
+
     static func same(_ a: URL?, _ b: URL) -> Bool {
         guard let a else { return false }
-        return a.standardizedFileURL.resolvingSymlinksInPath().path
-            == b.standardizedFileURL.resolvingSymlinksInPath().path
+        return RaycastLinksHelper.path(of: a) == RaycastLinksHelper.path(of: b)
     }
 
     /// An app's name as the Finder shows it, without `.app`.
-    static func appName(_ app: URL) -> String {
+    public static func appName(_ app: URL) -> String {
         app.deletingPathExtension().lastPathComponent
     }
 }
 
-/// A `RaycastLinks` that never touches LaunchServices: tests and snapshot runs (`--raycast-links fudge|<app name>`).
+/// A `RaycastLinks` that never touches LaunchServices: tests and snapshot runs (`--raycast-links fudge|<app name>`, or
+/// `fudge,<app name>` for Fudge Links opening them with that app claiming them too).
 public final class FixedRaycastLinks: RaycastLinks, @unchecked Sendable {
     private let lock = NSLock()
     private var openers: [String: URL]
+    private var claimantsByScheme: [String: [URL]]
     /// What `open` throws, if anything.
     public var refusal: (any Error)?
+    /// What `register` throws, if anything.
+    public var registrationRefusal: (any Error)?
     /// Bundle identifiers by app path; none otherwise.
     public var identifiers: [String: String] = [:]
     /// The schemes `open` was asked to change, in order.
     public private(set) var opened: [String] = []
+    /// The apps `register` was asked to register, in order.
+    public private(set) var registered: [URL] = []
 
-    /// Both schemes open `app` (nil: no app opens them).
+    /// Both schemes open `app`, the only app that claims them (nil: no app opens or claims them).
     public init(app: URL?) {
         openers = Dictionary(
             uniqueKeysWithValues: RaycastReturn.schemes.compactMap { scheme in app.map { (scheme, $0) } })
+        claimantsByScheme = Dictionary(
+            uniqueKeysWithValues: RaycastReturn.schemes.map { scheme in (scheme, app.map { [$0] } ?? []) })
     }
 
-    /// For a snapshot run: `fudge` opens them, or an app of that name in `/Applications`.
-    public convenience init(snapshotValue: String, fudge: URL) {
-        self.init(
-            app: snapshotValue == "fudge"
-                ? fudge : URL(fileURLWithPath: "/Applications/\(snapshotValue).app", isDirectory: true))
+    /// For a snapshot run: `fudge` (Fudge Links at `helper`) or an app of that name in `/Applications` opens them, and
+    /// any app named after a comma claims them too.
+    public convenience init(snapshotValue: String, helper: URL) {
+        let apps = snapshotValue.split(separator: ",").map { name in
+            name == "fudge" ? helper : URL(fileURLWithPath: "/Applications/\(name).app", isDirectory: true)
+        }
+        self.init(app: apps.first)
+        for app in apps.dropFirst() { claim(app) }
+    }
+
+    /// Adds `app` to the apps that claim both schemes, opening neither.
+    public func claim(_ app: URL) {
+        lock.withLock {
+            for scheme in RaycastReturn.schemes where !(claimantsByScheme[scheme] ?? []).contains(app) {
+                claimantsByScheme[scheme, default: []].append(app)
+            }
+        }
     }
 
     public func opener(of url: URL) -> URL? {
         lock.withLock { url.scheme.flatMap { openers[$0.lowercased()] } }
     }
 
+    public func claimants(of url: URL) -> [URL] {
+        lock.withLock { url.scheme.flatMap { claimantsByScheme[$0.lowercased()] } ?? [] }
+    }
+
     public func bundleIdentifier(of app: URL) -> String? {
         lock.withLock { identifiers[app.path] }
+    }
+
+    public func register(_ app: URL) throws {
+        try lock.withLock {
+            registered.append(app)
+            if let registrationRefusal { throw registrationRefusal }
+        }
     }
 
     public func open(scheme: String, with app: URL) async throws {
@@ -203,6 +341,7 @@ public final class FixedRaycastLinks: RaycastLinks, @unchecked Sendable {
             opened.append(scheme)
             if let refusal { throw refusal }
             openers[scheme] = app
+            if !(claimantsByScheme[scheme] ?? []).contains(app) { claimantsByScheme[scheme, default: []].append(app) }
         }
     }
 }
@@ -248,7 +387,8 @@ public enum RaycastStep {
 
     /// One of the step's buttons.
     public enum Button: Equatable, Sendable {
-        /// **Open Raycast Links with Fudge**: changes the Mac's handler for `raycast` and `com.raycast`.
+        /// **Open Raycast Links with Fudge**: registers Fudge Links and makes it the Mac's handler for `raycast` and
+        /// `com.raycast`, as the Sign-in page's switch does.
         case openLinks
         /// **Turn On**: what §5's switch and its sheet do.
         case turnOnOwnAppSignIn

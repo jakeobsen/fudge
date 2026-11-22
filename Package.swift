@@ -9,11 +9,13 @@ let package = Package(
     products: [
         .executable(name: "FudgeApp", targets: ["FudgeApp"]),
         .executable(name: "fudge", targets: ["FudgeCLI"]),
+        .executable(name: "FudgeLinks", targets: ["FudgeLinks"]),
     ],
     targets: [
         .target(name: "FudgeCore"),
         .executableTarget(name: "FudgeApp", dependencies: ["FudgeCore"]),
         .executableTarget(name: "FudgeCLI", dependencies: ["FudgeCore"]),
+        .executableTarget(name: "FudgeLinks", dependencies: ["FudgeCore"]),
         .testTarget(name: "FudgeCoreTests", dependencies: ["FudgeCore"], exclude: ["Fixtures"]),
     ]
 )

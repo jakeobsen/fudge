@@ -61,16 +61,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hyperkey?.quit()
     }
 
-    /// Raycast's return links (SPEC-132 §3.1): the get-URL handler goes in before launch finishes, so a link that
-    /// launches Fudge isn't missed. Such a link finds no sign-in waiting, and is ignored.
+    /// Raycast's return links (SPEC-132 §3.1), handed on by Fudge Links (SPEC-140), since Fudge.app declares no URL
+    /// types: the get-URL handler goes in before launch finishes, so a link that launches Fudge isn't missed. Such a
+    /// link finds no sign-in waiting, and is ignored.
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSAppleEventManager.shared().setEventHandler(
             self, andSelector: #selector(openLink(_:withReplyEvent:)), forEventClass: AEEventClass(kInternetEventClass),
             andEventID: AEEventID(kAEGetURL))
     }
 
-    /// A `raycast:` or `com.raycast:` link opening Fudge. Only the direct sign-in waiting for it takes it; nothing logs
-    /// it or its query.
+    /// A `raycast:` or `com.raycast:` link Fudge Links handed on. Only the direct sign-in waiting for it takes it;
+    /// nothing logs it or its query.
     @objc private func openLink(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
         guard let link = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue else { return }
         model?.receiveLink(link)
@@ -153,12 +154,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.tokenSecrets = secrets
         settingsModel.tokenSecrets = secrets
         // Who opens Raycast's links: LaunchServices; a snapshot run's fixed answer (`--raycast-links`), so it never
-        // reads or changes the Mac's handlers.
+        // reads or changes the Mac's handlers, or registers Fudge Links.
         let raycastLinks: any RaycastLinks =
             Snapshot.isRequested(CommandLine.arguments)
             ? FixedRaycastLinks(
                 snapshotValue: Snapshot(arguments: CommandLine.arguments)?.raycastLinks ?? "",
-                fudge: Bundle.main.bundleURL)
+                helper: RaycastLinksHelper.url(in: Bundle.main.bundleURL))
             : SystemRaycastLinks()
         model.raycastLinks = raycastLinks
         settingsModel.raycastLinks = raycastLinks
@@ -868,7 +869,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// `--snapshot <file.png> --onboarding [<step>]` renders the onboarding window, with the same fakes, on its pending
 /// steps from `onboarding.json`; with a step id, on every step from the start, at that one.
 /// `--own-app-sign-in` shows **Extensions with their own sign-in** as on, and `--raycast-links fudge|<app name>` says
-/// who opens Raycast's links, on the Sign-in page and onboarding's Raycast step; neither touches LaunchServices.
+/// who opens Raycast's links (`fudge,<app name>`: Fudge Links does, and that app claims them too), on the Sign-in page
+/// and onboarding's Raycast step; neither touches LaunchServices.
 /// `--update-available <version>` shows that version as found by an update check, wherever Fudge shows one (the
 /// General page). No snapshot run asks GitHub. `--menu-items <file>` gives Search Menu Items a made-up app and menus.
 /// For checking the layout without looking at the screen.
@@ -908,8 +910,8 @@ struct Snapshot {
     let clipboardConsent: Bool
     /// `--own-app-sign-in`: **Extensions with their own sign-in** shows as on, in memory only.
     let ownAppSignIn: Bool
-    /// `--raycast-links fudge|<app name>`: who opens Raycast's links (no app without it). Nothing reads or changes
-    /// LaunchServices.
+    /// `--raycast-links fudge|<app name>[,<app name>]`: who opens Raycast's links (no app without it), and who else
+    /// claims them. Nothing reads or changes LaunchServices.
     let raycastLinks: String?
     /// `--found-files <file>`: Search Files' results, a JSON array of `files.search` entries (`~/` paths are in the
     /// home folder). Snapshots never ask Spotlight, so without it there are none.

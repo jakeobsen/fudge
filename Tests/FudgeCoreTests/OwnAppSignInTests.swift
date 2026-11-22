@@ -263,46 +263,223 @@ private final class Wait {}
 // MARK: - Raycast's links and onboarding's step (§3.3, D-88)
 
 private let fudge = URL(fileURLWithPath: "/Applications/Fudge.app", isDirectory: true)
+private let helper = RaycastLinksHelper.url(in: fudge)
 private let raycast = URL(fileURLWithPath: "/Applications/Raycast.app", isDirectory: true)
 
+@Test func fudgeLinksIsInsideTheAppsHelpers() {
+    #expect(helper.path == "/Applications/Fudge.app/Contents/Helpers/Fudge Links.app")
+    #expect(RaycastLinksHelper.holder(of: helper).path == fudge.path)
+    #expect(RaycastLinksHelper.bundleIdentifier == "io.github.jakeobsen.fudge.links")
+    #expect(RaycastLinksHelper.bundleIdentifier.hasPrefix(FudgeVersion.bundleIdentifier + "."))
+}
+
 @Test func whoOpensRaycastsLinks() {
-    #expect(FixedRaycastLinks(app: fudge).status(fudge: fudge) == .fudge)
-    #expect(FixedRaycastLinks(app: raycast).status(fudge: fudge) == .elsewhere("Raycast"))
-    #expect(FixedRaycastLinks(app: nil).status(fudge: fudge) == .elsewhere(nil))
-    // Another build of Fudge claims the schemes too, and is named as such.
-    let copy = URL(fileURLWithPath: "/Users/someone/build/Fudge.app", isDirectory: true)
-    let other = FixedRaycastLinks(app: copy)
-    other.identifiers = [copy.path: "io.github.jakeobsen.fudge", fudge.path: "io.github.jakeobsen.fudge"]
-    #expect(other.status(fudge: fudge) == .elsewhere("another copy of Fudge"))
-    #expect(RaycastLinksStatus.elsewhere("another copy of Fudge").row == "open with another copy of Fudge")
-    #expect(RaycastLinksStatus.fudge.row == "open with Fudge")
-    #expect(RaycastLinksStatus.elsewhere("Raycast").row == "open with Raycast")
-    #expect(RaycastLinksStatus.elsewhere(nil).row == "no app opens them")
+    #expect(FixedRaycastLinks(app: helper).status(helper: helper) == .fudge)
+    #expect(FixedRaycastLinks(app: raycast).status(helper: helper) == .elsewhere("Raycast"))
+    #expect(FixedRaycastLinks(app: nil).status(helper: helper) == .elsewhere(nil))
+    #expect(RaycastLinksStatus.fudge.line == "Raycast links open Fudge.")
+    #expect(RaycastLinksStatus.elsewhere("Raycast").line == "Raycast links open Raycast.")
+    #expect(RaycastLinksStatus.elsewhere(nil).line == "No app opens Raycast links.")
 }
 
-@Test func fudgeOpensThemOnlyWhenBothShapesAreFudges() async throws {
-    let links = FixedRaycastLinks(app: fudge)
+@Test func fudgeOpensThemOnlyWhenFudgeLinksOpensBothShapes() async throws {
+    let links = FixedRaycastLinks(app: helper)
     try await links.open(scheme: "com.raycast", with: raycast)
-    #expect(links.status(fudge: fudge) == .elsewhere("Raycast"))
+    #expect(links.status(helper: helper) == .elsewhere("Raycast"))
+    // Fudge.app itself, a build from before Fudge Links that declares the schemes, isn't Fudge Links.
+    let older = FixedRaycastLinks(app: fudge)
+    older.identifiers = [fudge.path: FudgeVersion.bundleIdentifier]
+    #expect(older.status(helper: helper) == .elsewhere("another copy of Fudge"))
 }
 
-@Test func openWithFudgeSetsBothSchemesThenReadsTheStatusAgain() async {
+@Test func anotherCopysFudgeLinksOrAnOlderBuildIsAnotherCopyOfFudge() {
+    let copy = URL(fileURLWithPath: "/Users/someone/build/Fudge.app", isDirectory: true)
+    let copysHelper = FixedRaycastLinks(app: RaycastLinksHelper.url(in: copy))
+    copysHelper.identifiers = [RaycastLinksHelper.url(in: copy).path: RaycastLinksHelper.bundleIdentifier]
+    #expect(copysHelper.status(helper: helper) == .elsewhere("another copy of Fudge"))
+    let olderBuild = FixedRaycastLinks(app: copy)
+    olderBuild.identifiers = [copy.path: FudgeVersion.bundleIdentifier]
+    #expect(olderBuild.status(helper: helper) == .elsewhere("another copy of Fudge"))
+}
+
+@Test func openWithFudgeRegistersFudgeLinksThenSetsBothSchemes() async {
     let links = FixedRaycastLinks(app: raycast)
-    let (status, problem) = await links.openWithFudge(fudge)
+    let (status, problem) = await links.openWithFudge(helper: helper, location: .installed)
+    #expect(links.registered == [helper])
     #expect(links.opened == ["raycast", "com.raycast"])
     #expect(status == .fudge && problem == nil)
+}
+
+@Test func openWithFudgeChangesNothingFromTheDiskImageOrATranslocatedCopy() async {
+    for location in [AppLocation.diskImage, .translocated] {
+        let links = FixedRaycastLinks(app: raycast)
+        let (status, problem) = await links.openWithFudge(helper: helper, location: location)
+        #expect(links.registered.isEmpty && links.opened.isEmpty, "nothing changed from \(location)")
+        #expect(status == .elsewhere("Raycast"))
+        #expect(problem == "Move Fudge to Applications first, so it can open Raycast links.")
+    }
 }
 
 private struct Refused: LocalizedError {
     var errorDescription: String? { "The system refused." }
 }
 
-@Test func aRefusalShowsTheSystemsMessageAndChangesNothing() async {
+@Test func aRefusedRegistrationShowsItsMessageAndChangesNoScheme() async {
     let links = FixedRaycastLinks(app: raycast)
-    links.refusal = Refused()
-    let (status, problem) = await links.openWithFudge(fudge)
+    links.registrationRefusal = Refused()
+    let (status, problem) = await links.openWithFudge(helper: helper, location: .installed)
+    #expect(links.registered == [helper] && links.opened.isEmpty)
     #expect(status == .elsewhere("Raycast"))
     #expect(problem == "The system refused.")
+}
+
+@Test func aRefusedSchemeShowsTheSystemsMessageAndReadsTheStatusAgain() async {
+    let links = FixedRaycastLinks(app: raycast)
+    links.refusal = Refused()
+    let (status, problem) = await links.openWithFudge(helper: helper, location: .installed)
+    #expect(links.opened == ["raycast", "com.raycast"])
+    #expect(status == .elsewhere("Raycast"))
+    #expect(problem == "The system refused.")
+}
+
+/// A fake LaunchServices that accepts every change but never makes Fudge Links (or the other app) the opener.
+private final class Ignoring: RaycastLinks, @unchecked Sendable {
+    let app: URL
+    init(app: URL) { self.app = app }
+    func opener(of url: URL) -> URL? { app }
+    func claimants(of url: URL) -> [URL] { [app, raycast] }
+    func bundleIdentifier(of app: URL) -> String? { nil }
+    func register(_ app: URL) throws {}
+    func open(scheme: String, with app: URL) async throws {}
+}
+
+@Test func aChangeThatDoesntTakeSaysSo() async {
+    let on = await Ignoring(app: raycast).openWithFudge(helper: helper, location: .installed)
+    #expect(on.status == .elsewhere("Raycast") && on.problem == "macOS didn't make Fudge open Raycast links.")
+    let off = await Ignoring(app: helper).giveBack(to: raycast, helper: helper)
+    #expect(off.status == .fudge && off.problem == "macOS didn't give Raycast links back to Raycast.")
+}
+
+@Test func switchingOffGivesBothSchemesBackToTheOtherApp() async {
+    let links = FixedRaycastLinks(app: helper)
+    links.claim(raycast)
+    #expect(links.handBackTarget(helper: helper) == raycast)
+    let (status, problem) = await links.giveBack(to: raycast, helper: helper)
+    #expect(links.opened == ["raycast", "com.raycast"])
+    #expect(links.registered.isEmpty)
+    #expect(status == .elsewhere("Raycast") && problem == nil)
+    // A refusal shows the system's message, and the switch shows who opens them.
+    let refused = FixedRaycastLinks(app: helper)
+    refused.claim(raycast)
+    refused.refusal = Refused()
+    let result = await refused.giveBack(to: raycast, helper: helper)
+    #expect(result.status == .fudge && result.problem == "The system refused.")
+}
+
+@Test func theAppToGiveThemBackToClaimsBothAndIsntFudges() async throws {
+    // Raycast claims both.
+    let both = FixedRaycastLinks(app: helper)
+    both.claim(raycast)
+    #expect(both.handBackTarget(helper: helper) == raycast)
+    // Raycast claims only one: nothing to give both back to.
+    let one = FixedRaycastLinks(app: helper)
+    try await one.open(scheme: "raycast", with: raycast)
+    try await one.open(scheme: "raycast", with: helper)
+    #expect(one.claimants(of: URL(string: "raycast://oauth")!).contains(raycast))
+    #expect(one.handBackTarget(helper: helper) == nil)
+    // Only copies of Fudge besides Fudge Links: none.
+    let copy = URL(fileURLWithPath: "/Users/someone/build/Fudge.app", isDirectory: true)
+    let copies = FixedRaycastLinks(app: helper)
+    copies.claim(copy)
+    copies.claim(RaycastLinksHelper.url(in: copy))
+    copies.identifiers = [
+        copy.path: FudgeVersion.bundleIdentifier,
+        RaycastLinksHelper.url(in: copy).path: RaycastLinksHelper.bundleIdentifier,
+    ]
+    #expect(copies.handBackTarget(helper: helper) == nil)
+    // Nobody else.
+    #expect(FixedRaycastLinks(app: helper).handBackTarget(helper: helper) == nil)
+}
+
+@Test func theSwitchShowsWhoOpensThemAndWhenItCantBeTurnedOff() {
+    #expect(RaycastLinksToggle.title == "Fudge opens Raycast links")
+    let on = RaycastLinksToggle(status: .fudge, giveBackTo: "Raycast")
+    #expect(on.isOn && on.canChange && on.note == "Turn it off to give them back to Raycast.")
+    // On with no other app to give them back to: it can't be switched off, and says why.
+    let kept = RaycastLinksToggle(status: .fudge, giveBackTo: nil)
+    #expect(kept.isOn && !kept.canChange && kept.note == "No other app can open them, so Fudge keeps them.")
+    // Off, it can always be switched on, and says who opens them.
+    for (status, note) in [
+        (RaycastLinksStatus.elsewhere("Raycast"), "Raycast links open Raycast."),
+        (.elsewhere("another copy of Fudge"), "Raycast links open another copy of Fudge."),
+        (.elsewhere(nil), "No app opens Raycast links."),
+    ] {
+        for giveBackTo in ["Raycast", nil] {
+            let off = RaycastLinksToggle(status: status, giveBackTo: giveBackTo)
+            #expect(!off.isOn && off.canChange && off.note == note)
+        }
+    }
+}
+
+@Test func fudgeLinksHandsOnOnlyRaycastsSchemes() {
+    for link in [
+        "raycast://oauth?state=s&code=c", "RAYCAST://x", "com.raycast:/oauth?code=c", "COM.Raycast:/oauth",
+        "raycast://extensions/a/b",
+    ] {
+        #expect(RaycastLinksHelper.handsOn(link), "\(link)")
+    }
+    for link in [
+        "https://raycast.com/redirect?code=c", "raycastx://oauth", "com.raycast.macos://x", "fudge://x", "oauth", "",
+        "not a link at all",
+    ] {
+        #expect(!RaycastLinksHelper.handsOn(link), "\(link)")
+    }
+}
+
+@Test func fudgeLinksHandsTheLinkToEveryRunningFudgeHolderFirst() {
+    let other = URL(fileURLWithPath: "/Users/someone/build/Fudge.app", isDirectory: true)
+    let third = URL(fileURLWithPath: "/Applications/Fudge 2.app", isDirectory: true)
+    // The holder among the running ones comes first, whatever the order, and each app gets it once.
+    #expect(
+        RaycastLinksHelper.targets(running: [other, fudge, third, other], holder: fudge, holderIsFudge: true)
+            == [fudge, other, third])
+    // Another running Fudge gets it rather than launching the holder.
+    #expect(RaycastLinksHelper.targets(running: [other], holder: fudge, holderIsFudge: true) == [other])
+    // With none running, the holder when it's Fudge; else none.
+    #expect(RaycastLinksHelper.targets(running: [], holder: fudge, holderIsFudge: true) == [fudge])
+    #expect(RaycastLinksHelper.targets(running: [], holder: fudge, holderIsFudge: false).isEmpty)
+}
+
+@Test func aSnapshotRunsFixedAnswer() {
+    #expect(FixedRaycastLinks(snapshotValue: "fudge", helper: helper).status(helper: helper) == .fudge)
+    #expect(FixedRaycastLinks(snapshotValue: "Raycast", helper: helper).status(helper: helper) == .elsewhere("Raycast"))
+    #expect(FixedRaycastLinks(snapshotValue: "", helper: helper).status(helper: helper) == .elsewhere(nil))
+    let both = FixedRaycastLinks(snapshotValue: "fudge,Raycast", helper: helper)
+    #expect(both.status(helper: helper) == .fudge)
+    #expect(both.handBackTarget(helper: helper) == raycast)
+    #expect(FixedRaycastLinks(snapshotValue: "fudge", helper: helper).handBackTarget(helper: helper) == nil)
+}
+
+/// The repository's `App/…` file at `path`.
+private func appPlist(_ path: String) throws -> [String: Any] {
+    let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        .deletingLastPathComponent().appendingPathComponent(path)
+    return try #require(
+        PropertyListSerialization.propertyList(from: Data(contentsOf: url), format: nil) as? [String: Any])
+}
+
+@Test func onlyFudgeLinksDeclaresRaycastsSchemes() throws {
+    #expect(try appPlist("App/Info.plist")["CFBundleURLTypes"] == nil, "Fudge.app declares no URL types (D-107)")
+    let links = try appPlist("App/Links/Info.plist")
+    #expect(links["CFBundleIdentifier"] as? String == RaycastLinksHelper.bundleIdentifier)
+    #expect(links["CFBundleExecutable"] as? String == "FudgeLinks")
+    #expect(links["CFBundleName"] as? String == RaycastLinksHelper.name)
+    #expect(links["CFBundleDisplayName"] as? String == RaycastLinksHelper.name)
+    #expect(links["LSUIElement"] as? Bool == true)
+    #expect(links["NSHumanReadableCopyright"] == nil)
+    let types = try #require(links["CFBundleURLTypes"] as? [[String: Any]])
+    #expect(types.count == 1)
+    #expect(types.first?["CFBundleURLSchemes"] as? [String] == RaycastReturn.schemes)
 }
 
 @Test func theRaycastStepsReturnChangesNothing() {

@@ -18,6 +18,8 @@ SHORT_VERSION = $(shell '$(NODE)' runtime/scripts/bundle-version.ts '$(VERSION)'
 BUILD_NUMBER := $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
 CONFIG    ?= debug
 APP       := build/Fudge.app
+# Fudge Links (SPEC-140), the app inside Fudge.app that alone declares Raycast's link schemes.
+LINKS_APP := $(APP)/Contents/Helpers/Fudge Links.app
 # The disk image a release ships, named after the version without its leading v (Fudge-0.3.0.dmg).
 DMG       := build/Fudge-$(patsubst v%,%,$(VERSION)).dmg
 # The extensions bundled with the app, as BundledExtensions.folders lists them.
@@ -132,6 +134,10 @@ app: release-check build
 	@mkdir -p '$(APP)/Contents/MacOS' '$(APP)/Contents/Helpers' '$(APP)/Contents/Resources/runtime'
 	@cp '$(SWIFT_BIN)/FudgeApp' '$(APP)/Contents/MacOS/Fudge'
 	@cp '$(SWIFT_BIN)/fudge' '$(ESBUILD)' '$(APP)/Contents/Helpers/'
+	@# Fudge Links: a nested app here, since nothing but Open with Fudge's LSRegisterURL on it registers it
+	@# (Contents/Library/LoginItems is registered at every launch).
+	@mkdir -p '$(LINKS_APP)/Contents/MacOS' && cp '$(SWIFT_BIN)/FudgeLinks' '$(LINKS_APP)/Contents/MacOS/FudgeLinks' \
+		&& cp App/Links/Info.plist '$(LINKS_APP)/Contents/Info.plist'
 	@# Fudge's own Node.js (SPEC-115): the binary beside the helpers, npm from its distribution, and its license,
 	@# which also covers what Node.js bundles, npm included.
 	@cp '$(NODE)' '$(APP)/Contents/Helpers/node'
@@ -150,6 +156,8 @@ app: release-check build
 	@plutil -replace CFBundleShortVersionString -string '$(SHORT_VERSION)' '$(APP)/Contents/Info.plist'
 	@plutil -replace CFBundleVersion -string '$(BUILD_NUMBER)' '$(APP)/Contents/Info.plist'
 	@plutil -replace FudgeGitDescribe -string '$(VERSION)' '$(APP)/Contents/Info.plist'
+	@plutil -replace CFBundleShortVersionString -string '$(SHORT_VERSION)' '$(LINKS_APP)/Contents/Info.plist'
+	@plutil -replace CFBundleVersion -string '$(BUILD_NUMBER)' '$(LINKS_APP)/Contents/Info.plist'
 	@cp runtime/dist/host.js runtime/dist/worker.js '$(APP)/Contents/Resources/runtime/'
 	@# `fudge scan`'s scanner, and Raycast's types it reads, with their MIT notice.
 	@cp runtime/dist/compat-scan.js '$(APP)/Contents/Resources/runtime/'
@@ -171,7 +179,8 @@ app: release-check build
 	@# strip warns that it invalidates the linker's signature, which the signing below replaces, so its output shows
 	@# only when it fails.
 	@if [ '$(CONFIG)' = release ]; then \
-		out=$$(strip -S -x '$(APP)/Contents/MacOS/Fudge' '$(APP)/Contents/Helpers/fudge' 2>&1) || \
+		out=$$(strip -S -x '$(APP)/Contents/MacOS/Fudge' '$(APP)/Contents/Helpers/fudge' \
+			'$(LINKS_APP)/Contents/MacOS/FudgeLinks' 2>&1) || \
 			{ printf '%s\nmake app: strip failed\n' "$$out"; exit 1; }; \
 	fi
 	@# Signed inside-out with the hardened runtime (scripts/sign-app.sh): each helper with App/Helpers/<name>.entitlements

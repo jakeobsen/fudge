@@ -815,10 +815,20 @@ final class SettingsModel {
     @ObservationIgnored var snapshotOwnAppSignIn = false
     /// Which app opens Raycast's links: LaunchServices, set by the app delegate; a fixed answer in snapshot runs.
     @ObservationIgnored var raycastLinks: any RaycastLinks = FixedRaycastLinks(app: nil)
+    /// This app's Fudge Links, the only part of Fudge that can open Raycast's links.
+    @ObservationIgnored var raycastLinksHelper = RaycastLinksHelper.url(in: Bundle.main.bundleURL)
     /// Who opens them, read when the Sign-in page or onboarding's step shows and when its window becomes key.
     private(set) var raycastLinksStatus = RaycastLinksStatus.elsewhere(nil)
-    /// Why Open with Fudge didn't work, until the next try.
+    /// While Fudge opens them: the app switching it off gives them back to, nil when no other app claims them.
+    private(set) var raycastLinksGiveBack: URL?
+    /// Why switching it on or off didn't work, until the next try.
     private(set) var raycastLinksProblem: String?
+
+    /// The Sign-in page's **Fudge opens Raycast links** switch, from who opens them now.
+    var raycastLinksToggle: RaycastLinksToggle {
+        RaycastLinksToggle(
+            status: raycastLinksStatus, giveBackTo: raycastLinksGiveBack.map(SystemRaycastLinks.appName))
+    }
 
     /// The switch: on after its consent sheet's Continue, which records the date; off removes both keys, so new
     /// direct sign-ins are refused, and the ones stored stay under Signed in. The sheet goes on the Settings window, or
@@ -849,16 +859,40 @@ final class SettingsModel {
     }
 
     func refreshRaycastLinks() {
-        raycastLinksStatus = raycastLinks.status(fudge: Bundle.main.bundleURL)
+        show(raycastLinksStatus: raycastLinks.status(helper: raycastLinksHelper))
     }
 
-    /// **Open with Fudge**: makes Fudge open `raycast` and `com.raycast` links, then reads who opens them again. Only
-    /// the user's click does this, never a launch.
+    private func show(raycastLinksStatus status: RaycastLinksStatus) {
+        raycastLinksStatus = status
+        raycastLinksGiveBack = status.isFudge ? raycastLinks.handBackTarget(helper: raycastLinksHelper) : nil
+    }
+
+    /// The Sign-in page's switch: on is Open Raycast Links with Fudge, off gives them back to the other app that claims
+    /// them. Only the user's click gets here.
+    func setRaycastLinks(_ on: Bool) {
+        guard on != raycastLinksStatus.isFudge else { return }
+        if on { openRaycastLinksWithFudge() } else { giveRaycastLinksBack() }
+    }
+
+    /// **Open Raycast Links with Fudge** (onboarding), or switching it on: registers Fudge Links and makes it open
+    /// `raycast` and `com.raycast` links, then reads who opens them again. Refused from the disk image or a translocated
+    /// copy. Only the user's click does this, never a launch.
     func openRaycastLinksWithFudge() {
         raycastLinksProblem = nil
         Task {
-            let (status, problem) = await raycastLinks.openWithFudge(Bundle.main.bundleURL)
-            raycastLinksStatus = status
+            let (status, problem) = await raycastLinks.openWithFudge(helper: raycastLinksHelper, location: appLocation)
+            show(raycastLinksStatus: status)
+            raycastLinksProblem = problem
+        }
+    }
+
+    /// Switching it off: gives both schemes back to the other app that claims them, then reads who opens them again.
+    private func giveRaycastLinksBack() {
+        guard let app = raycastLinksGiveBack else { return }
+        raycastLinksProblem = nil
+        Task {
+            let (status, problem) = await raycastLinks.giveBack(to: app, helper: raycastLinksHelper)
+            show(raycastLinksStatus: status)
             raycastLinksProblem = problem
         }
     }
