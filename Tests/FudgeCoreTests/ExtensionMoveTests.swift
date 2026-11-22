@@ -61,11 +61,15 @@ private func inode(_ url: URL) -> UInt64? {
 }
 
 /// A legacy install named `raycast` would land inside itself, so it waits under `.move-raycast` while
-/// `raycast/extensions/` is made; a `.move-raycast` a stop left is finished first.
+/// `raycast/extensions/` is made, before any other install, whatever their names; a `.move-raycast` a stop left is
+/// finished first.
 @Test func aLegacyRaycastInstallGoesThroughItsHiddenName() throws {
     let extensions = try Fixtures.temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: extensions) }
+    // `alpha` sorts before `raycast`, so it would ask for `raycast/extensions/` while `raycast` is still an install.
+    try Layout.install("alpha", at: "alpha", in: extensions)
     let legacy = try Layout.install("raycast", at: "raycast", in: extensions)
+    try Layout.install("zeta", at: "zeta", in: extensions)
     let folderInode = inode(legacy)
 
     var renames: [(String, String)] = []
@@ -74,12 +78,20 @@ private func inode(_ url: URL) -> UInt64? {
             (String(from.dropFirst(extensions.path.count + 1)), String(to.dropFirst(extensions.path.count + 1))))
         return renamex_np(from, to, UInt32(RENAME_EXCL))
     }
-    #expect(report == ExtensionLayout.MoveReport(moved: ["raycast"], left: []))
-    #expect(renames.map(\.0) == ["raycast", ".move-raycast"])
-    #expect(renames.map(\.1) == [".move-raycast", "raycast/extensions/raycast"])
+    #expect(report == ExtensionLayout.MoveReport(moved: ["raycast", "alpha", "zeta"], left: []))
+    #expect(renames.map(\.0) == ["raycast", ".move-raycast", "alpha", "zeta"])
+    #expect(
+        renames.map(\.1) == [
+            ".move-raycast", "raycast/extensions/raycast", "raycast/extensions/alpha", "raycast/extensions/zeta",
+        ])
     let moved = extensions.appendingPathComponent("raycast/extensions/raycast")
     #expect(inode(moved) == folderInode)
-    #expect(Layout.loaded(extensions) == ["raycast raycast raycast/extensions/raycast"])
+    #expect(try names(in: extensions) == ["raycast"])
+    #expect(
+        Layout.loaded(extensions) == [
+            "alpha raycast raycast/extensions/alpha", "raycast raycast raycast/extensions/raycast",
+            "zeta raycast raycast/extensions/zeta",
+        ])
 
     // A stop between the two renames left it hidden: the next move finishes it before anything else.
     let again = try Fixtures.temporaryDirectory()
@@ -91,6 +103,30 @@ private func inode(_ url: URL) -> UInt64? {
             == ExtensionLayout.MoveReport(moved: [".move-raycast", "github"], left: []))
     #expect(try names(in: again.appendingPathComponent("raycast/extensions")) == ["github", "raycast"])
     #expect(try names(in: again) == ["raycast"])
+
+    // Filing it fails after the first rename (on purpose here): its line says where it is now, and the next move
+    // finishes it.
+    let stopped = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: stopped) }
+    try Layout.install("raycast", at: "raycast", in: stopped)
+    try Layout.install("zeta", at: "zeta", in: stopped)
+    let failing = ExtensionLayout.moveIntoRepositories(extensions: stopped) { from, to in
+        guard !from.hasSuffix("/.move-raycast") else {
+            errno = EIO
+            return -1
+        }
+        return renamex_np(from, to, UInt32(RENAME_EXCL))
+    }
+    #expect(
+        failing
+            == ExtensionLayout.MoveReport(
+                moved: ["zeta"],
+                left: ["left raycast as .move-raycast: moving it into raycast/extensions failed: Input/output error"]))
+    #expect(try names(in: stopped) == [".move-raycast", "raycast"])
+    #expect(
+        ExtensionLayout.moveIntoRepositories(extensions: stopped)
+            == ExtensionLayout.MoveReport(moved: [".move-raycast"], left: []))
+    #expect(try names(in: stopped.appendingPathComponent("raycast/extensions")) == ["raycast", "zeta"])
 }
 
 @Test func legacyFudgeappAndDevelopmentInstallsMoveLikeAnyOther() throws {
