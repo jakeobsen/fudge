@@ -11,7 +11,7 @@ It is not affiliated with or endorsed by Raycast.
 Fudge needs macOS 14 or later and a Mac with Apple silicon.
 On an Intel Mac, [build it from source](#building-from-source).
 
-Each release on GitHub has a disk image, `Fudge-<version>.dmg`: open it and drag Fudge to Applications.
+Each release on GitHub has a disk image, `Fudge.dmg`, also there as `Fudge-<version>.dmg`: open it and drag Fudge to Applications.
 Fudge includes the Node.js that runs extensions, so there's nothing else to install.
 If you open Fudge straight from the disk image or from Downloads, it offers to move itself to Applications, since it can't open at login from there.
 On an account that can't add apps to `/Applications`, it moves to the Applications folder in your home folder instead.
