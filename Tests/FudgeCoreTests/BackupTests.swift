@@ -597,6 +597,7 @@ private func storeFolder(_ trees: [String: String]) throws -> Folder {
          "beta":{"tree":"t-beta","repository":"someone/tools"},
          "raycast+extensions+github":{"tree":"t-raycast","repository":"raycast/extensions"},
          "Someone+tools+github":{"tree":"t-case","repository":"Someone/tools"},
+         "someone/tools+gitlab":{"tree":"t-slash","repository":"someone/tools"},
          "../x":{"tree":"t"}}
         """#)
     #expect(
