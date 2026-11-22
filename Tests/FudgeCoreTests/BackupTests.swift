@@ -583,6 +583,31 @@ private func storeFolder(_ trees: [String: String]) throws -> Folder {
             == [Backup.Listed(name: "alpha", title: "Alpha", version: nil, source: .store, storeTree: nil)])
 }
 
+@Test func theStoresRecordsAreReadByIdWithTheirRepository() throws {
+    let folder = try Folder()
+    try folder.write(
+        "extension-data/fudge-extension-store/installed.json",
+        #"""
+        {"alpha":{"tree":"t-alpha"},
+         "someone+tools+github":{"tree":"t-added","repository":"someone/tools"},
+         "git.example.org_8443+team+extensions+github":{"tree":"t-host","repository":"git.example.org_8443/team/extensions"},
+         "someone+tools+gist":{"tree":"t-none"},
+         "someone+tools+jira":{"tree":"t-other","repository":"someone/other"},
+         "someone+tools+linear":{"tree":"t-number","repository":7},
+         "beta":{"tree":"t-beta","repository":"someone/tools"},
+         "raycast+extensions+github":{"tree":"t-raycast","repository":"raycast/extensions"},
+         "Someone+tools+github":{"tree":"t-case","repository":"Someone/tools"},
+         "../x":{"tree":"t"}}
+        """#)
+    #expect(
+        Backup.storeInstalls(folder.paths) == [
+            "alpha": Backup.StoreInstall(tree: "t-alpha"),
+            "someone+tools+github": Backup.StoreInstall(tree: "t-added"),
+            "git.example.org_8443+team+extensions+github": Backup.StoreInstall(tree: "t-host"),
+        ],
+        "a qualified id needs its own folder as the record's repository; a bare name needs none")
+}
+
 @Test func anOldManifestWithoutStoreTreesStillReads() throws {
     let json = #"""
         {"format":1,"fudgeVersion":"0.9","created":"2026-11-20T10:00:00Z","extensions":[

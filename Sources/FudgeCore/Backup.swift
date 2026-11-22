@@ -629,8 +629,12 @@ public enum Backup {
         var tree: String?
     }
 
-    /// What the Extension Store recorded as its installs (`installed.json`: `{ "<name>": { "tree", "commit",
-    /// "installedAt" } }`), by name. A missing or broken file reads as none.
+    /// What the Extension Store recorded as its installs (`installed.json`: `{ "<id>": { "tree", "commit",
+    /// "installedAt", "repository" } }`), by id. A missing or broken file reads as none.
+    ///
+    /// A key the id rule refuses is skipped, and so is a record whose `repository` isn't its key's folder (SPEC-157
+    /// E.1), as the store's `readInstalled` reads them: a qualified id's record names the id's repository folder, and
+    /// Raycast's, under the bare name, names none.
     static func storeInstalls(_ paths: FudgePaths) -> [String: StoreInstall] {
         let file = paths.supportDirectory(forExtension: ExtensionStore.id)
             .appendingPathComponent("installed.json")
@@ -638,10 +642,20 @@ public enum Backup {
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return [:] }
         var installs: [String: StoreInstall] = [:]
-        for (name, record) in object where ExtensionManifest.isValidName(name) {
-            installs[name] = StoreInstall(tree: (record as? [String: Any])?["tree"] as? String)
+        for (key, record) in object where ExtensionID.isValid(key) {
+            let fields = record as? [String: Any] ?? [:]
+            guard namesItsFolder(fields["repository"], key: key) else { continue }
+            installs[key] = StoreInstall(tree: fields["tree"] as? String)
         }
         return installs
+    }
+
+    /// Whether an `installed.json` record's `repository` is its key's folder: absent under a bare name (Raycast's),
+    /// else the id's parts before the name, joined with `/`.
+    static func namesItsFolder(_ repository: Any?, key: String) -> Bool {
+        let parts = key.split(separator: Character(ExtensionID.separator), omittingEmptySubsequences: false)
+        guard parts.count > 1 else { return repository == nil }
+        return repository as? String == parts.dropLast().joined(separator: "/")
     }
 
     static func encode(_ manifest: Manifest) -> Data {
