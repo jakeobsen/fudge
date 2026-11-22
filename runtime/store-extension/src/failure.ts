@@ -10,6 +10,7 @@ export const shownLines = 40;
 export const keptOutput = 200_000;
 
 export type FailureKind =
+    | "bundlerMissing"
     | "npmMissing"
     | "registryUnreachable"
     | "githubUnreachable"
@@ -75,6 +76,11 @@ const network =
  */
 const npmMissing =
     /Fudge's own Node\.js|couldn't run \S*\/Helpers\/node:|Cannot find module '[^'\n]*\/npm-cli\.js'|env: (?:npm|node): No such file or directory|\b(?:npm|node): command not found/;
+/**
+ * `fudge build` without its compile step, Fudge's own Node.js and bundling script (`BuildError.noBundler`). Both come
+ * with Fudge too, but npm isn't what's missing, so it has its own words. Checked before `npmMissing`, which it matches.
+ */
+const bundlerMissing = /compiling needs Fudge's own Node\.js and its bundling script/;
 const gitNetwork =
     /Could not resolve (?:host|proxy)|Failed to connect to|Connection (?:timed out|refused|reset)|SSL certificate problem|unable to access 'https:\/\/github\.com|Proxy CONNECT aborted|The requested URL returned error: 40[37]|Operation timed out/i;
 
@@ -85,6 +91,14 @@ export function causeOf(failure: FailureDetails, proxy: ProxyFacts = { autoConfi
     const pac = proxy.autoConfig
         ? " Your Mac picks its proxy with an automatic configuration file, which npm and git can't read."
         : "";
+    if (bundlerMissing.test(output)) {
+        return {
+            kind: "bundlerMissing",
+            text:
+                "Fudge couldn't find a part it needs to build extensions. It comes with Fudge, so this copy of Fudge " +
+                "is damaged. Reinstall Fudge.",
+        };
+    }
     if (npmMissing.test(output) || (code === 127 && /\bnpm\b/.test(command + output))) {
         return {
             kind: "npmMissing",

@@ -68,6 +68,9 @@ public enum BuildError: Error, Equatable, CustomStringConvertible {
     /// Compiling runs Fudge's own Node.js and its bundling script (`ExtensionBuilder.locateBundler`), and one of them
     /// isn't beside the tool.
     case noBundler
+    /// The compile step exited with `status`, and `output` is what esbuild printed. The step is named rather than its
+    /// command, which holds a request file that's deleted with the build's scratch folder.
+    case compileFailed(status: Int32, output: String)
 
     public var description: String {
         switch self {
@@ -92,6 +95,8 @@ public enum BuildError: Error, Equatable, CustomStringConvertible {
         case .noBundler:
             "compiling needs Fudge's own Node.js and its bundling script, which aren't beside this fudge tool; "
                 + "use the fudge inside Fudge.app"
+        case .compileFailed(let status, let output):
+            ShellError.describe("compiling the extension", status: status, output: output)
         }
     }
 }
@@ -290,7 +295,7 @@ public struct ExtensionBuilder: Sendable {
 
     /// Runs the bundling script on `request`, written into `scratch`, with Fudge's own Node.js in the extension's
     /// folder, driving `esbuild` (`ESBUILD_BINARY_PATH`). esbuild prints its warnings and errors as its command line
-    /// does, and a failure is a `ShellError` holding them.
+    /// does, and a failure is `BuildError.compileFailed` holding them.
     static func compile(
         _ request: BundleRequest, in source: URL, scratch: URL, esbuild: URL, node: URL, bundler: URL
     ) throws -> ShellResult {
@@ -298,8 +303,12 @@ public struct ExtensionBuilder: Sendable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         try encoder.encode(request).write(to: file)
-        return try Shell.run(
-            node, [bundler.path, file.path], in: source, environment: ["ESBUILD_BINARY_PATH": esbuild.path])
+        do {
+            return try Shell.run(
+                node, [bundler.path, file.path], in: source, environment: ["ESBUILD_BINARY_PATH": esbuild.path])
+        } catch let failure as ShellError {
+            throw BuildError.compileFailed(status: failure.status, output: failure.output)
+        }
     }
 
     /// Installs the extension's dependencies under `scratch` and returns the `node_modules` folder.

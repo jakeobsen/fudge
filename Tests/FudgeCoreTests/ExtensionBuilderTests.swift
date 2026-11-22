@@ -336,8 +336,23 @@ struct ExtensionBuilderTests {
         #expect(built == (try Data(contentsOf: output.appendingPathComponent("quiet.cjs"))))
     }
 
+    /// What building `source` failed with in the compile step: its exit status, esbuild's output, and the message
+    /// `fudge build` prints after `fudge: `. Records an issue when it built or failed some other way.
+    func compileFailure(of source: URL) throws -> (status: Int32, output: String, message: String)? {
+        do {
+            try builder.build(source: source, into: try Fixtures.temporaryDirectory())
+            Issue.record("it built")
+        } catch let error as BuildError {
+            if case .compileFailed(let status, let output) = error { return (status, output, "\(error)") }
+            Issue.record("another failure: \(error)")
+        }
+        return nil
+    }
+
     /// SPEC-144 N5: a failed compile says exactly what esbuild's command line said, and nothing on top of it. With
     /// more than 6 errors, that's the first 6 and how many there were (the command line's `--log-limit=6`).
+    /// SPEC-147 A1: its first line names the compile step, never the request file in the build's scratch folder,
+    /// which is gone by the time anyone reads it.
     @Test(arguments: [1, 10])
     func aFailedCompileSaysWhatTheCommandLineSaid(errors: Int) throws {
         let source = try Fixtures.greeterCopy()
@@ -346,27 +361,31 @@ struct ExtensionBuilderTests {
         let uses = (0..<errors).map { "missing\($0)" }.joined(separator: ", ")
         try (imports.joined() + "export default function Command() { return [\(uses)]; }\n").write(
             to: source.appendingPathComponent("src/greet.tsx"), atomically: true, encoding: .utf8)
-        func failure(_ run: () throws -> Void) -> String? {
-            do {
-                try run()
-                return nil
-            } catch let error as ShellError {
-                return error.output
-            } catch {
-                return "\(error)"
-            }
-        }
-        let fromBuild = failure { try builder.build(source: source, into: try Fixtures.temporaryDirectory()) }
+        let fromBuild = try #require(try compileFailure(of: source))
         let entries = try ["greet", "quiet"].map { try ExtensionBuilder.entry(for: $0, in: source) }
         let output = try Fixtures.temporaryDirectory()
-        let fromCommandLine = failure {
+        var fromCommandLine: String?
+        do {
             try Shell.run(
                 try #require(Fixtures.esbuild), Fixtures.commandLine(entries: entries, source: source, output: output),
                 in: source)
+        } catch let error as ShellError {
+            fromCommandLine = error.output
         }
-        #expect(fromBuild?.contains("✘ [ERROR] Could not resolve \"./nowhere\"") == true, "\(fromBuild ?? "built")")
-        #expect(fromBuild?.contains("6 of \(errors) errors shown") == (errors > 6), "\(fromBuild ?? "built")")
-        #expect(fromBuild == fromCommandLine)
+        let commandLine = try #require(fromCommandLine, "the command line built it")
+        #expect(fromBuild.output.contains("✘ [ERROR] Could not resolve \"./nowhere\""), "\(fromBuild.output)")
+        #expect(fromBuild.output.contains("6 of \(errors) errors shown") == (errors > 6), "\(fromBuild.output)")
+        #expect(fromBuild.output == commandLine)
+        #expect(
+            fromBuild.message
+                == "compiling the extension failed (exit 1):\n"
+                + commandLine.trimmingCharacters(in: .whitespacesAndNewlines))
+        // Only the first line is Fudge's: esbuild's own lines can name the scratch folder, for an error inside an
+        // installed dependency, and are never rewritten.
+        let firstLine = String(fromBuild.message.prefix { $0 != "\n" })
+        for scratch in ["fudge-build-", "bundle-request.json", ExtensionBuilder.temporaryDirectory().path] {
+            #expect(!firstLine.contains(scratch), "\(firstLine)")
+        }
     }
 
     /// SPEC-144 §1: a build's warnings are the ones esbuild's command line printed, at most 6 and how many there were.
@@ -415,16 +434,12 @@ struct ExtensionBuilderTests {
         defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
         try "import { run } from \"swift:../swift\";\nexport default function Command() { return run; }\n".write(
             to: source.appendingPathComponent("src/greet.tsx"), atomically: true, encoding: .utf8)
-        do {
-            try builder.build(source: source, into: try Fixtures.temporaryDirectory())
-            Issue.record("a Swift part built")
-        } catch let error as ShellError {
-            #expect(
-                error.output.contains(
-                    "✘ [ERROR] this extension has a part written in Swift, which Fudge can't build yet "
-                        + "(\"swift:../swift\") [plugin swift]"), "\(error.output)")
-            #expect(error.output.contains("src/greet.tsx:1:20:"), "at the import")
-        }
+        let failure = try #require(try compileFailure(of: source))
+        #expect(
+            failure.output.contains(
+                "✘ [ERROR] this extension has a part written in Swift, which Fudge can't build yet "
+                    + "(\"swift:../swift\") [plugin swift]"), "\(failure.output)")
+        #expect(failure.output.contains("src/greet.tsx:1:20:"), "at the import")
     }
 
     @Test func reportsCompileErrors() throws {
@@ -434,9 +449,8 @@ struct ExtensionBuilderTests {
             atomically: true,
             encoding: .utf8
         )
-        #expect(throws: ShellError.self) {
-            try builder.build(source: source, into: try Fixtures.temporaryDirectory())
-        }
+        let failure = try #require(try compileFailure(of: source))
+        #expect(failure.message.hasPrefix("compiling the extension failed (exit 1):\n✘ [ERROR] "), "\(failure.message)")
     }
 }
 
