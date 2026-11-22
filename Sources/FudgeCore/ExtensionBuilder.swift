@@ -262,6 +262,9 @@ public struct ExtensionBuilder: Sendable {
         var define = ["process.env.NODE_ENV": "\"production\""]
         var legalComments = "none"
         var logLevel = "warning"
+        /// The command line's default: it shows 6 messages and says how many there were. The JavaScript API's default
+        /// is no limit.
+        var logLimit = 6
         var external = ExtensionBuilder.providedModules
         var nodePaths: [String]
 

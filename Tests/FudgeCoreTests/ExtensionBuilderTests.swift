@@ -336,11 +336,15 @@ struct ExtensionBuilderTests {
         #expect(built == (try Data(contentsOf: output.appendingPathComponent("quiet.cjs"))))
     }
 
-    /// SPEC-144 N5: a failed compile says exactly what esbuild's command line said, and nothing on top of it.
-    @Test func aFailedCompileSaysWhatTheCommandLineSaid() throws {
+    /// SPEC-144 N5: a failed compile says exactly what esbuild's command line said, and nothing on top of it. With
+    /// more than 6 errors, that's the first 6 and how many there were (the command line's `--log-limit=6`).
+    @Test(arguments: [1, 10])
+    func aFailedCompileSaysWhatTheCommandLineSaid(errors: Int) throws {
         let source = try Fixtures.greeterCopy()
         defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
-        try "import { missing } from \"./nowhere\";\nexport default function Command() { return missing; }\n".write(
+        let imports = (0..<errors).map { "import { missing\($0) } from \"./nowhere\($0 == 0 ? "" : "-\($0)")\";\n" }
+        let uses = (0..<errors).map { "missing\($0)" }.joined(separator: ", ")
+        try (imports.joined() + "export default function Command() { return [\(uses)]; }\n").write(
             to: source.appendingPathComponent("src/greet.tsx"), atomically: true, encoding: .utf8)
         func failure(_ run: () throws -> Void) -> String? {
             do {
@@ -361,7 +365,31 @@ struct ExtensionBuilderTests {
                 in: source)
         }
         #expect(fromBuild?.contains("✘ [ERROR] Could not resolve \"./nowhere\"") == true, "\(fromBuild ?? "built")")
+        #expect(fromBuild?.contains("6 of \(errors) errors shown") == (errors > 6), "\(fromBuild ?? "built")")
         #expect(fromBuild == fromCommandLine)
+    }
+
+    /// SPEC-144 §1: a build's warnings are the ones esbuild's command line printed, at most 6 and how many there were.
+    @Test(arguments: [1, 9])
+    func aBuildWarnsAsTheCommandLineWarned(warnings: Int) throws {
+        let source = try Fixtures.greeterCopy()
+        defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+        // esbuild warns about each duplicate key in an object literal, and builds anyway.
+        let objects = (0..<warnings).map { "  { key\($0): 1, key\($0): 2 },\n" }.joined()
+        try "export default function Command() {\n  return [\n\(objects)  ];\n}\n".write(
+            to: source.appendingPathComponent("src/greet.tsx"), atomically: true, encoding: .utf8)
+        let log = BuildLog()
+        let builder = Fixtures.builder(log: { log.append($0) })
+        try builder.build(source: source, into: try Fixtures.temporaryDirectory())
+        let entries = try ["greet", "quiet"].map { try ExtensionBuilder.entry(for: $0, in: source) }
+        let fromCommandLine = try Shell.run(
+            try #require(Fixtures.esbuild),
+            Fixtures.commandLine(entries: entries, source: source, output: try Fixtures.temporaryDirectory()),
+            in: source
+        ).output.trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(fromCommandLine.contains("▲ [WARNING] Duplicate key \"key0\" in object literal"), "\(fromCommandLine)")
+        #expect(fromCommandLine.contains("6 of \(warnings) warnings shown") == (warnings > 6), "\(fromCommandLine)")
+        #expect(log.lines.contains(fromCommandLine), "\(log.lines)")
     }
 
     /// SPEC-144: an extension with a Rust part installs as Raycast installs it on a Mac. Nothing of the Rust part goes
@@ -497,4 +525,13 @@ struct ExtensionBuilderTests {
     let builder = ExtensionBuilder(esbuild: URL(fileURLWithPath: "/missing"), node: nil)
     #expect(throws: BuildError.noNode) { try builder.build(source: source, into: extensions) }
     #expect("\(BuildError.noNode)".contains("use the fudge inside Fudge.app"))
+}
+
+/// The lines a build logs, from whichever thread logs them.
+private final class BuildLog: @unchecked Sendable {
+    // @unchecked: `stored` is behind `lock`.
+    private let lock = NSLock()
+    private var stored: [String] = []
+    var lines: [String] { lock.withLock { stored } }
+    func append(_ line: String) { lock.withLock { stored.append(line) } }
 }
