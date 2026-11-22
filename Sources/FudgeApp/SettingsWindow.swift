@@ -769,17 +769,19 @@ final class SettingsModel {
 
     // MARK: - Extension repositories (FUD-182)
 
-    /// Raycast's official repository's switch in the Extension Store's list.
+    /// Raycast's official repository's switch in the Extension Store's list, while it's there.
     var raycastRepository: Bool { fudgeSettings.raycastRepository }
+    /// Whether Raycast's official repository is in the list, first.
+    var raycastRepositoryListed: Bool { fudgeSettings.raycastRepositoryListed }
+    /// **Add Raycast's Repository** under the list: only while Raycast's has been removed.
+    var showsAddRaycastRepository: Bool { fudgeSettings.showsAddRaycastRepository }
     /// The added repositories, in the order added.
     var extensionRepositories: [ListedRepository] { fudgeSettings.extensionRepositories }
-    /// The Address and Branch fields under the list.
-    var repositoryAddress = ""
-    var repositoryBranch = ""
-    /// Why the address last added was refused, shown under the fields until the next try.
-    private(set) var repositoryProblem: String?
     /// Each copy's status, by copy id, read when the page appears and when the window becomes key.
     private(set) var repositoryStatuses: [String: ExtensionRepositoryStatus] = [:]
+    /// A snapshot run's **Add Repository** window, drawn in the page, since it never begins a sheet
+    /// (`--add-repository`).
+    var snapshotAddRepository: ExtensionRepositoryDraft?
 
     /// Reads each copy's status file again: Raycast's and every added repository's.
     func loadRepositoryStatuses() {
@@ -802,55 +804,57 @@ final class SettingsModel {
         }
     }
 
-    /// **Add…**: the address is checked first, and a refused one says why under the fields and asks nothing. Then
-    /// the sheet, which is the warning; Add saves the repository on and empties the fields.
-    func addRepository() {
-        let existing = readSettings().extensionRepositories.map(\.repository)
-        switch ExtensionRepository.parse(address: repositoryAddress, branch: repositoryBranch, existing: existing) {
-        case .failure(let refusal):
-            repositoryProblem = refusal.description
-        case .success(let repository):
-            repositoryProblem = nil
-            Task {
-                guard await confirm(Self.addRequest(repository)) else { return }
-                // Checked again against the list as it is now, in case it changed while the sheet was up.
-                let now = readSettings().extensionRepositories.map(\.repository)
-                switch ExtensionRepository.parse(address: repository.address, branch: repository.branch, existing: now)
-                {
-                case .failure(let refusal):
-                    repositoryProblem = refusal.description
-                case .success(let added):
-                    guard change({ $0.extensionRepositories.append(ListedRepository(repository: added)) }) else {
-                        return
-                    }
-                    repositoryAddress = ""
-                    repositoryBranch = ""
-                    loadRepositoryStatuses()
-                }
-            }
+    /// The **Add Repository** window's Add: `draft` is checked against the list and Raycast's place as they are now,
+    /// in `settings.json`. A refusal, or a save that fails, stays in the draft as its reason, and the window stays
+    /// open; an accepted one is saved on, and the statuses are read again. Returns whether the window can close.
+    func addRepository(_ draft: inout ExtensionRepositoryDraft) -> Bool {
+        let settings = readSettings()
+        guard
+            let added = draft.add(
+                existing: settings.extensionRepositories.map(\.repository),
+                raycastListed: settings.raycastRepositoryListed)
+        else { return false }
+        guard change({ $0.addRepository(added) }) else {
+            draft.saveFailed(settingsProblem ?? unreadableMessage)
+            return false
         }
+        loadRepositoryStatuses()
+        return true
     }
 
-    /// The minus button: asks first, then takes the repository out of `settings.json`. The Extension Store deletes
-    /// its copy the next time it opens, and what was installed from it stays.
+    /// **Add Raycast's Repository**: Raycast's official repository back in the list, first and on, with no window,
+    /// since it's the repository the list starts with.
+    func addRaycastRepository() {
+        guard change({ $0.restoreRaycastRepository() }) else { return }
+        loadRepositoryStatuses()
+    }
+
+    /// The minus button: asks first, then takes the repository out of `settings.json`, Raycast's official one too. The
+    /// Extension Store deletes its copy the next time it opens, and what was installed from it stays.
     func removeRepository(_ copyId: String) {
-        guard let listed = extensionRepositories.first(where: { $0.repository.copyId == copyId }) else { return }
+        let raycast = copyId == ExtensionRepository.raycastCopyId
+        guard
+            let name = raycast
+                ? (raycastRepositoryListed ? ExtensionRepositoryText.raycastName : nil)
+                : extensionRepositories.first(where: { $0.repository.copyId == copyId })?.repository.name
+        else { return }
         Task {
-            guard await confirm(Self.removeRequest(listed.repository)) else { return }
-            change { $0.extensionRepositories.removeAll { $0.repository.copyId == copyId } }
+            guard await confirm(Self.removeRequest(name: name, raycast: raycast)) else { return }
+            change { settings in
+                if raycast {
+                    settings.removeRaycastRepository()
+                } else {
+                    settings.extensionRepositories.removeAll { $0.repository.copyId == copyId }
+                }
+            }
             loadRepositoryStatuses()
         }
     }
 
-    static func addRequest(_ repository: ExtensionRepository) -> LauncherModel.AlertRequest {
+    static func removeRequest(name: String, raycast: Bool) -> LauncherModel.AlertRequest {
         LauncherModel.AlertRequest(
-            title: ExtensionRepositoryText.addTitle(repository.name), message: ExtensionRepositoryText.addMessage,
-            primary: ExtensionRepositoryText.add, dismiss: ExtensionRepositoryText.cancel, destructive: false)
-    }
-
-    static func removeRequest(_ repository: ExtensionRepository) -> LauncherModel.AlertRequest {
-        LauncherModel.AlertRequest(
-            title: ExtensionRepositoryText.removeTitle(repository.name), message: ExtensionRepositoryText.removeMessage,
+            title: ExtensionRepositoryText.removeTitle(name),
+            message: ExtensionRepositoryText.removeMessage(raycast: raycast),
             primary: ExtensionRepositoryText.remove, dismiss: ExtensionRepositoryText.cancel, destructive: true)
     }
 
@@ -1696,6 +1700,7 @@ private struct ExtensionPreferencesForm: View {
             }
         }
         .formStyle(.grouped)
+        .overlay { AddRepositorySnapshotOverlay(model: model) }
     }
 }
 

@@ -2,7 +2,7 @@ import CryptoKit
 import Foundation
 
 /// A repository of extensions added on the Extension Store's Settings page (FUD-182), beside Raycast's official
-/// repository, which is always first in the list and can't be removed.
+/// repository, which is first in the list while it's there (`RaycastRepositoryState`).
 ///
 /// An address is parsed by hand, the same way here and in the Extension Store's `repository-address.ts`, never with
 /// `URL` or the runtime's `new URL`, which disagree on `..`, `\`, tabs, `:443` and hosts outside ASCII.
@@ -44,6 +44,8 @@ public struct ExtensionRepository: Sendable, Equatable {
         case branch
         /// Already `maxAdded` repositories.
         case tooMany
+        /// A branch typed with Raycast's official repository's address, which always follows its default branch.
+        case raycastBranch
         /// One of the folder rule's refusals, characters and ports included.
         case folder(ExtensionRepositoryFolder.Refusal)
 
@@ -55,6 +57,7 @@ public struct ExtensionRepository: Sendable, Equatable {
             case .development: "development"
             case .branch: "branch"
             case .tooMany: "tooMany"
+            case .raycastBranch: "raycastBranch"
             case .folder(let refusal): refusal.rawValue
             }
         }
@@ -66,6 +69,7 @@ public struct ExtensionRepository: Sendable, Equatable {
             case .development: "Fudge keeps your own builds in that repository's folder, so it can't be added."
             case .branch: "That branch name can't be used."
             case .tooMany: "You can add up to 10 repositories."
+            case .raycastBranch: "Raycast's official repository always follows its default branch."
             case .folder(let refusal): refusal.description
             }
         }
@@ -74,9 +78,12 @@ public struct ExtensionRepository: Sendable, Equatable {
     /// The repository at `address` on `branch` (empty or nil for the default branch), when it can be added beside
     /// `existing`, the repositories already in the list; else why not. The checks run in this order, as in the
     /// runtime, so both give the same refusal for an address with more than one problem.
-    public static func parse(address: String, branch: String? = nil, existing: [ExtensionRepository] = [])
-        -> Result<ExtensionRepository, Refusal>
-    {
+    ///
+    /// Raycast's official repository's address is refused while it's in the list (`raycastListed`); while it isn't,
+    /// it gives Raycast's own entry (`raycastEntry`), however many are added, since Raycast's isn't counted.
+    public static func parse(
+        address: String, branch: String? = nil, existing: [ExtensionRepository] = [], raycastListed: Bool = true
+    ) -> Result<ExtensionRepository, Refusal> {
         let text = trimmed(address)
         // Every step works on the UTF-8 bytes, never on Swift's characters: a `/` or an `@` followed by a combining
         // mark is one character to Swift, but the runtime finds the `/` or `@` in it.
@@ -118,7 +125,9 @@ public struct ExtensionRepository: Sendable, Equatable {
         let server = ExtensionRepositoryFolder.lowercased(host) + (port.map { $0 == 443 ? "" : ":\($0)" } ?? "")
         let identityPath = gitHub ? ExtensionRepositoryFolder.lowercased(pathText) : pathText
         let identity = "https://" + server + (pathText.isEmpty ? "" : "/" + identityPath)
-        if identity == raycastIdentity { return .failure(.folder(.alreadyListed)) }
+        if identity == raycastIdentity {
+            return raycastListed ? .failure(.folder(.alreadyListed)) : raycastEntry(address: text, branch: branch)
+        }
         if identity == developmentIdentity { return .failure(.development) }
 
         let folder: String
@@ -135,7 +144,9 @@ public struct ExtensionRepository: Sendable, Equatable {
         }
         // A second guard, last: only github.com with no port or port 443 gives these folders, and the identity check
         // above already refuses those addresses, before the branch and the list are looked at.
-        if folder == ExtensionRepositoryFolder.raycast { return .failure(.folder(.alreadyListed)) }
+        if folder == ExtensionRepositoryFolder.raycast {
+            return raycastListed ? .failure(.folder(.alreadyListed)) : raycastEntry(address: text, branch: branch)
+        }
         if folder == ExtensionRepositoryFolder.development { return .failure(.development) }
         return .success(
             ExtensionRepository(
@@ -143,6 +154,16 @@ public struct ExtensionRepository: Sendable, Equatable {
                 copyId: copyId(of: identity),
                 name: gitHub ? segments.joined(separator: "/") : String(identity.dropFirst(8)),
                 folder: folder))
+    }
+
+    /// Raycast's official repository's own entry, for its address typed while it isn't in the list: copy id
+    /// `raycast`, never a second copy. A branch is refused, since it always follows its default branch.
+    static func raycastEntry(address: String, branch: String?) -> Result<ExtensionRepository, Refusal> {
+        guard trimmed(branch ?? "").isEmpty else { return .failure(.raycastBranch) }
+        return .success(
+            ExtensionRepository(
+                address: address, branch: nil, identity: raycastIdentity, copyId: raycastCopyId,
+                name: ExtensionRepositoryText.raycastName, folder: ExtensionRepositoryFolder.raycast))
     }
 
     /// The copy id of a repository with `identity`: the first 16 hex digits of its SHA-256.
@@ -222,17 +243,126 @@ public struct ListedRepository: Sendable, Equatable {
     }
 }
 
+/// Raycast's official repository in the Extension Store's list (`raycastRepository` in `settings.json`, SPEC-160): in
+/// the list and on, in the list and switched off, or removed from the list. Behind it nothing changes: its copy id stays
+/// `raycast`, and its extensions keep their ids.
+public enum RaycastRepositoryState: String, Sendable, Equatable, CaseIterable {
+    case on, off, removed
+
+    /// The setting's value: absent is on, `"off"` is off, as is a JSON `false` (what Fudge wrote before), and
+    /// `"removed"` is removed; anything else reads as on.
+    init(settingsValue value: Any?) {
+        if FudgeSettings.isJSONFalse(value) {
+            self = .off
+        } else if let text = value as? String, let state = RaycastRepositoryState(rawValue: text), state != .on {
+            self = state
+        } else {
+            self = .on
+        }
+    }
+
+    /// What `settings.json` keeps: nothing while on.
+    var settingsValue: String? { self == .on ? nil : rawValue }
+}
+
+/// The **Add Repository** window's fields and its reason line (SPEC-160). The Settings page keeps one in its own state
+/// while the window is open, made new each time it opens, as the Quicklinks page keeps its sheet's `QuicklinkDraft`.
+public struct ExtensionRepositoryDraft: Sendable, Equatable {
+    public var address = ""
+    public var branch = ""
+    /// Why the last Add was refused, or why saving failed, shown in red in the window until the next Add.
+    public private(set) var reason: String?
+
+    public init() {}
+
+    /// Add can be pressed once the address isn't blank.
+    public var canAdd: Bool { !address.allSatisfy(\.isWhitespace) }
+
+    /// **Add**: the address and branch checked against `existing`, the added repositories as they are at that moment,
+    /// and whether Raycast's official repository is in the list (`raycastListed`). Returns what to save, an added
+    /// repository or Raycast's own entry (copy id `raycast`), and clears the reason; or keeps what was typed, sets the
+    /// reason and returns nil.
+    public mutating func add(existing: [ExtensionRepository], raycastListed: Bool) -> ExtensionRepository? {
+        switch ExtensionRepository.parse(
+            address: address, branch: branch, existing: existing, raycastListed: raycastListed)
+        {
+        case .success(let repository):
+            reason = nil
+            return repository
+        case .failure(let refusal):
+            reason = refusal.description
+            return nil
+        }
+    }
+
+    /// Saving what Add accepted failed (`settings.json` can't be written): the window stays open with what was typed,
+    /// and `problem` as its reason.
+    public mutating func saveFailed(_ problem: String) {
+        reason = problem
+    }
+
+    /// **Cancel** or Esc: the window closes with both fields empty and no reason, as a new one opens.
+    public func cancelled() -> ExtensionRepositoryDraft {
+        ExtensionRepositoryDraft()
+    }
+}
+
+extension FudgeSettings {
+    /// Raycast's official repository's switch on its row, while it's in the list.
+    public var raycastRepository: Bool {
+        get { raycastRepositoryState == .on }
+        set { raycastRepositoryState = newValue ? .on : .off }
+    }
+
+    /// Whether Raycast's official repository is in the list, on or off.
+    public var raycastRepositoryListed: Bool { raycastRepositoryState != .removed }
+
+    /// Whether the page shows **Add Raycast's Repository**: only while Raycast's isn't in the list.
+    public var showsAddRaycastRepository: Bool { raycastRepositoryState == .removed }
+
+    /// Raycast's official repository's remove button, once asked: it leaves the list, so the Extension Store shows
+    /// none of its rows and deletes its copy the next time it opens; what was installed from it stays.
+    public mutating func removeRaycastRepository() {
+        raycastRepositoryState = .removed
+    }
+
+    /// **Add Raycast's Repository**, or its address in the add window: back in the list, first and on, and the key
+    /// leaves `settings.json`.
+    public mutating func restoreRaycastRepository() {
+        raycastRepositoryState = .on
+    }
+
+    /// Saves what the add window accepted (`ExtensionRepositoryDraft.add`): Raycast's own entry puts Raycast's
+    /// official repository back; any other repository is added on, after the others.
+    public mutating func addRepository(_ repository: ExtensionRepository) {
+        if repository.copyId == ExtensionRepository.raycastCopyId {
+            restoreRaycastRepository()
+        } else {
+            extensionRepositories.append(ListedRepository(repository: repository))
+        }
+    }
+}
+
 extension ExtensionRepository {
     /// The answer to the Extension Store's `extensionRepositories()` (`store.repositories`): Raycast's official
-    /// repository first, then each added one in order, from `settings`, which the caller reads afresh for each call.
-    /// `FudgeSettings.load` has already parsed each entry again and left out any the rule refuses.
+    /// repository first while it's in the list, then each added one in order, from `settings`, which the caller reads
+    /// afresh for each call. `FudgeSettings.load` has already parsed each entry again and left out any the rule
+    /// refuses. Raycast's address here is its identity, as any GitHub repository's shows; the Extension Store clones
+    /// it from its own `repositoryURL`, never from this answer.
     public static func storeAnswer(settings: FudgeSettings) -> JSONValue {
-        let raycast: JSONValue = .object([
-            "copyId": .string(raycastCopyId), "folder": .string(ExtensionRepositoryFolder.raycast),
-            "address": .string(raycastAddress), "name": .string("Raycast"), "on": .bool(settings.raycastRepository),
-        ])
+        let state = settings.raycastRepositoryState
+        let raycast: [JSONValue] =
+            state == .removed
+            ? []
+            : [
+                .object([
+                    "copyId": .string(raycastCopyId), "folder": .string(ExtensionRepositoryFolder.raycast),
+                    "address": .string(raycastIdentity), "name": .string(ExtensionRepositoryText.raycastName),
+                    "on": .bool(state == .on),
+                ])
+            ]
         return .array(
-            [raycast]
+            raycast
                 + settings.extensionRepositories.map { listed in
                     let repository = listed.repository
                     var entry: [String: JSONValue] = [
@@ -328,14 +458,12 @@ public enum ExtensionRepositoryStatus: Equatable, Sendable {
 /// The words of the Extension Store page's **Extension Repositories** section and its two sheets (FUD-182).
 public enum ExtensionRepositoryText {
     public static let section = "Extension Repositories"
-    public static let raycastName = "Raycast"
-    /// Raycast's row's secondary text.
-    public static let raycastAddress = "github.com/raycast/extensions"
-    public static let addressLabel = "Address"
-    public static let addressPrompt = "https://github.com/owner/repository"
-    public static let branchLabel = "Branch"
-    public static let branchPrompt = "Default branch"
-    public static let addButton = "Add…"
+    /// Raycast's official repository's name, as any GitHub repository's: `owner/repository`.
+    public static let raycastName = "raycast/extensions"
+    /// Raycast's row's secondary text: its full address, as any repository's.
+    public static let raycastAddress = "https://github.com/raycast/extensions"
+    public static let addRepositoryButton = "Add Repository…"
+    public static let addRaycastButton = "Add Raycast's Repository"
     public static let removeHelp = "Remove this repository"
 
     /// An added repository's secondary text: its address, and its branch when it follows one.
@@ -343,18 +471,24 @@ public enum ExtensionRepositoryText {
         repository.address + (repository.branch.map { ", branch \($0)" } ?? "")
     }
 
-    /// The sheet before adding, which is the warning: shown once per repository added, and nothing warns later.
-    public static func addTitle(_ name: String) -> String { "Add \(name)?" }
-    public static let addMessage =
-        "Extensions from this repository run their own code on your Mac, like any app you install. Fudge checks "
+    /// The **Add Repository** window, which is the warning: shown once per repository added, and nothing warns later.
+    public static let addWindowTitle = "Add Repository"
+    public static let addressLabel = "Address"
+    public static let addressPrompt = "https://github.com/owner/repository"
+    public static let branchLabel = "Branch"
+    public static let branchPrompt = "Default branch"
+    public static let addWarning =
+        "Extensions from a repository run their own code on your Mac, like any app you install. Fudge checks "
         + "where their packages come from, not what their code does, so only add a repository you trust."
     public static let add = "Add"
 
-    /// The sheet before removing an added repository.
+    /// The sheet before removing a repository; Raycast's official repository's says how to get it back.
     public static func removeTitle(_ name: String) -> String { "Remove \(name)?" }
-    public static let removeMessage =
+    public static func removeMessage(raycast: Bool) -> String {
         "Extensions you installed from it stay installed, but get no more updates. You can still uninstall them in "
-        + "the Extension Store. Its downloaded list is deleted."
+            + "the Extension Store. Its downloaded list is deleted." + (raycast ? " " + raycastAddBack : "")
+    }
+    public static let raycastAddBack = "You can add it back with Add Raycast's Repository."
     public static let remove = "Remove"
     public static let cancel = "Cancel"
 }

@@ -81,9 +81,10 @@ public struct FudgeSettings: Sendable, Equatable {
     /// each again beside those before it and skips any `ExtensionRepository.parse` refuses, a duplicate included, so a
     /// hand-edited file never adds what Settings would refuse.
     public var extensionRepositories: [ListedRepository] = []
-    /// Raycast's official repository's switch in that list (`raycastRepository`): on unless `false`, and only `false`
-    /// is written.
-    public var raycastRepository = true
+    /// Raycast's official repository in that list (`raycastRepository`, SPEC-160): absent is in the list and on,
+    /// `"off"` (or the `false` written before) is switched off, `"removed"` is out of the list, and anything else reads
+    /// as on. Only off and removed are written.
+    public var raycastRepositoryState: RaycastRepositoryState = .on
     /// The Color Picker's **Copy Format** (`colorFormat`): HEX unless set. An unknown value reads as HEX.
     public var colorFormat: ColorFormat = .default
     /// The calendars My Schedule leaves out (`calendarHidden`, by EventKit's calendar id), so a new one shows.
@@ -316,7 +317,7 @@ public struct FudgeSettings: Sendable, Equatable {
         settings.notifyInstallFinished = !isJSONFalse(object["notifyInstallFinished"])
         settings.notifyInstallFailed = !isJSONFalse(object["notifyInstallFailed"])
         settings.extensionRepositories = listedRepositories(object["extensionRepositories"])
-        settings.raycastRepository = !isJSONFalse(object["raycastRepository"])
+        settings.raycastRepositoryState = RaycastRepositoryState(settingsValue: object["raycastRepository"])
         settings.colorFormat = (object["colorFormat"] as? String).flatMap(ColorFormat.init(rawValue:)) ?? .default
         settings.calendarHidden = (object["calendarHidden"] as? [Any] ?? []).compactMap { $0 as? String }
         if let days = object["calendarDaysAhead"] as? Int, Schedule.daysAheadChoices.contains(days) {
@@ -376,7 +377,7 @@ public struct FudgeSettings: Sendable, Equatable {
                 entry["off"] = listed.on ? nil : true
                 return entry
             }
-        object["raycastRepository"] = raycastRepository ? nil : false
+        object["raycastRepository"] = raycastRepositoryState.settingsValue
         object["colorFormat"] = colorFormat == .default ? nil : colorFormat.rawValue
         object["calendarHidden"] = calendarHidden.isEmpty ? nil : calendarHidden
         object["calendarDaysAhead"] = calendarDaysAhead == Schedule.defaultDaysAhead ? nil : calendarDaysAhead

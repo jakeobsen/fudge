@@ -182,12 +182,13 @@ In the **Extension Store** command, search the extensions, or pick a category in
 #### Extension repositories
 
 Besides Raycast's official repository, the Extension Store can list the extensions in repositories you add: any Git repository with an `extensions` folder holding one folder per extension, as Raycast's has.
-Add one under **Settings… → Extension Store → Extension Repositories**: type its address, such as `https://github.com/owner/repository`, and a branch if it isn't the default one, then click **Add…**.
+Add one under **Settings… → Extension Store → Extension Repositories**: click **Add Repository…**, type its address, such as `https://github.com/owner/repository`, and a branch if it isn't the default one, then click **Add**.
 Only public `https://` addresses work, without a user name or password, and Fudge never asks for a password.
-Before adding a repository, Fudge asks once, since its extensions run their own code on your Mac like any app you install: only add one you trust.
-Each repository has a switch, Raycast's too; one that's off keeps its copy, but the Extension Store doesn't list or update its extensions.
+The **Add Repository** window says that a repository's extensions run their own code on your Mac, like any app you install: only add one you trust.
+Raycast's official repository is in the list from the start, as `raycast/extensions`, and can be switched off or removed like any other; **Add Raycast's Repository** puts it back.
+Each repository has a switch, Raycast's official repository too; one that's off keeps its copy, but the Extension Store doesn't list or update its extensions.
 Under each one is what the Extension Store last found there: how many extensions it lists, or what went wrong.
-The minus button removes an added repository; the extensions you installed from it stay installed, but get no more updates.
+The minus button removes a repository, Raycast's official repository too; the extensions you installed from it stay installed, but get no more updates.
 You can add up to 10, and `https://github.com/fudgeapp/development` can't be added, since Fudge keeps your own builds in that repository's folder.
 Changes reach the Extension Store the next time you open it, or when you press ⌘R in it.
 

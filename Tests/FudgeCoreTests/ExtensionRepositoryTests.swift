@@ -38,7 +38,8 @@ private func added(_ addresses: [String]) throws -> [ExtensionRepository] {
         let address = try #require(one["address"] as? String)
         let label = Comment(rawValue: "\(address.debugDescription) \(one["branch"] ?? "")")
         let result = ExtensionRepository.parse(
-            address: address, branch: one["branch"] as? String, existing: try added(one["existing"] as? [String] ?? []))
+            address: address, branch: one["branch"] as? String, existing: try added(one["existing"] as? [String] ?? []),
+            raycastListed: one["raycastListed"] as? Bool ?? true)
         if let refused = one["refused"] as? String {
             guard case .failure(let refusal) = result else {
                 Issue.record("accepted, expected \(refused): \(label.rawValue)")
@@ -113,7 +114,7 @@ private func object(_ file: URL) throws -> [String: Any] {
     try settings.save(to: file)
     let written = try object(file)
     #expect(written["theme"] as? String == "dark", "a key Fudge doesn't know is kept")
-    #expect(written["raycastRepository"] as? Bool == false)
+    #expect(written["raycastRepository"] as? String == "off")
     let entries = try #require(written["extensionRepositories"] as? [[String: Any]])
     #expect(entries.count == 2)
     #expect(entries[0]["address"] as? String == "https://github.com/Someone/Tools", "as typed, without the spaces")
@@ -182,7 +183,7 @@ private func entry(_ pairs: KeyValuePairs<String, Any>) -> JSONValue {
             == .array([
                 entry([
                     "copyId": "raycast", "folder": "raycast/extensions",
-                    "address": "https://github.com/raycast/extensions.git", "name": "Raycast", "on": false,
+                    "address": "https://github.com/raycast/extensions", "name": "raycast/extensions", "on": false,
                 ]),
                 entry([
                     "copyId": ExtensionRepository.copyId(of: "https://github.com/someone/tools"),
@@ -200,9 +201,254 @@ private func entry(_ pairs: KeyValuePairs<String, Any>) -> JSONValue {
             == .array([
                 entry([
                     "copyId": "raycast", "folder": "raycast/extensions",
-                    "address": "https://github.com/raycast/extensions.git", "name": "Raycast", "on": true,
+                    "address": "https://github.com/raycast/extensions", "name": "raycast/extensions", "on": true,
                 ])
             ]))
+}
+
+// MARK: - Raycast's official repository like any other (SPEC-160)
+
+/// Ten added repositories, as `settings.json` would hold them.
+private func tenAdded() throws -> [ExtensionRepository] {
+    try added((1...10).map { "https://github.com/owner/repository-\($0)" })
+}
+
+@Test func raycastsRepositoryIsListedFirstAndOnInAFreshFile() throws {
+    let file = try settingsFile("{}")
+    let settings = FudgeSettings.load(from: file)
+    #expect(settings.raycastRepositoryState == .on && settings.raycastRepositoryListed)
+    #expect(!settings.showsAddRaycastRepository)
+    guard case .array(let answer) = ExtensionRepository.storeAnswer(settings: settings),
+        case .object(let first) = try #require(answer.first)
+    else {
+        Issue.record("not an array of objects")
+        return
+    }
+    #expect(first["copyId"] == .string("raycast"))
+    #expect(first["name"] == .string("raycast/extensions"))
+    #expect(first["address"] == .string("https://github.com/raycast/extensions"))
+    #expect(first["on"] == .bool(true))
+    #expect(ExtensionRepositoryText.raycastName == "raycast/extensions")
+    #expect(ExtensionRepositoryText.raycastAddress == "https://github.com/raycast/extensions")
+    #expect(ExtensionRepository.raycastAddress == "https://github.com/raycast/extensions.git", "the clone address")
+}
+
+@Test func removingRaycastsRepositoryTakesItOutOfTheAnswerAndRestoringPutsItFirst() throws {
+    let file = try settingsFile(#"{ "theme": "dark" }"#)
+    var settings = FudgeSettings.load(from: file)
+    let tools = try ExtensionRepository.parse(address: "https://github.com/someone/tools").get()
+    settings.extensionRepositories = [ListedRepository(repository: tools)]
+    settings.removeRaycastRepository()
+    try settings.save(to: file)
+    #expect(try object(file)["raycastRepository"] as? String == "removed")
+    let removed = FudgeSettings.load(from: file)
+    #expect(removed.raycastRepositoryState == .removed && !removed.raycastRepositoryListed)
+    #expect(removed.showsAddRaycastRepository)
+    #expect(
+        ExtensionRepository.storeAnswer(settings: removed)
+            == .array([
+                entry([
+                    "copyId": tools.copyId, "folder": "someone/tools", "address": "https://github.com/someone/tools",
+                    "name": "someone/tools", "on": true,
+                ])
+            ]), "no Raycast entry at all")
+
+    var restored = removed
+    restored.restoreRaycastRepository()
+    try restored.save(to: file)
+    #expect(try object(file)["raycastRepository"] == nil, "the key leaves settings.json")
+    #expect(try object(file)["theme"] as? String == "dark")
+    let back = FudgeSettings.load(from: file)
+    #expect(back.raycastRepositoryState == .on && !back.showsAddRaycastRepository)
+    guard case .array(let answer) = ExtensionRepository.storeAnswer(settings: back) else {
+        Issue.record("not an array")
+        return
+    }
+    #expect(answer.count == 2)
+    guard case .object(let first) = try #require(answer.first) else { return }
+    #expect(first["copyId"] == .string("raycast") && first["on"] == .bool(true), "first and on")
+
+    // Switched off, it stays in the list, and Add Raycast's Repository doesn't show.
+    var off = back
+    off.raycastRepository = false
+    #expect(off.raycastRepositoryState == .off && off.raycastRepositoryListed && !off.showsAddRaycastRepository)
+}
+
+@Test func raycastRepositoryReadsTodaysFalseAsOffAndAnythingUnknownAsOn() throws {
+    let cases: [(String, RaycastRepositoryState)] = [
+        (#"{ "raycastRepository": false }"#, .off),
+        (#"{ "raycastRepository": "off" }"#, .off),
+        (#"{ "raycastRepository": "removed" }"#, .removed),
+        (#"{ "raycastRepository": "on" }"#, .on),
+        (#"{ "raycastRepository": "Removed" }"#, .on),
+        (#"{ "raycastRepository": true }"#, .on),
+        (#"{ "raycastRepository": 0 }"#, .on),
+        (#"{ "raycastRepository": ["removed"] }"#, .on),
+        (#"{ }"#, .on),
+    ]
+    for (text, state) in cases {
+        #expect(FudgeSettings.load(from: try settingsFile(text)).raycastRepositoryState == state, "\(text)")
+    }
+    // Written only when not on, and the old false comes back as "off".
+    let file = try settingsFile(#"{ "raycastRepository": false }"#)
+    try FudgeSettings.load(from: file).save(to: file)
+    #expect(try object(file)["raycastRepository"] as? String == "off")
+    #expect(Backup.consentKeys.contains("raycastRepository"), "an import never takes it")
+
+    // A saved list is parsed as Settings always parses it: Raycast's address written into it by hand is skipped, even
+    // while Raycast's is removed, so it never becomes a second Raycast entry.
+    let handEdited = try settingsFile(
+        #"""
+        { "raycastRepository": "removed", "extensionRepositories": [
+            { "address": "https://github.com/Raycast/Extensions.git" },
+            { "address": "https://github.com/someone/tools" }
+        ] }
+        """#)
+    let settings = FudgeSettings.load(from: handEdited)
+    #expect(settings.raycastRepositoryState == .removed)
+    #expect(settings.extensionRepositories.map(\.repository.address) == ["https://github.com/someone/tools"])
+}
+
+@Test func raycastsAddressGivesRaycastsOwnEntryOnlyWhileItIsRemoved() throws {
+    for address in [
+        "https://github.com/raycast/extensions", " https://github.com/Raycast/Extensions.git ",
+        "https://github.com:443/raycast/extensions/",
+    ] {
+        #expect(
+            ExtensionRepository.parse(address: address) == .failure(.folder(.alreadyListed)),
+            "listed: \(address)")
+        let repository = try ExtensionRepository.parse(address: address, raycastListed: false).get()
+        #expect(repository.copyId == "raycast" && repository.folder == "raycast/extensions")
+        #expect(repository.name == "raycast/extensions" && repository.identity == ExtensionRepository.raycastIdentity)
+        #expect(repository.branch == nil && repository.address == ExtensionRepository.trimmed(address))
+        // However many are added: Raycast's isn't counted.
+        #expect(
+            try ExtensionRepository.parse(address: address, existing: tenAdded(), raycastListed: false).get().copyId
+                == "raycast")
+    }
+    for branch in ["main", "a..b", " dev "] {
+        #expect(
+            ExtensionRepository.parse(
+                address: "https://github.com/Raycast/Extensions", branch: branch, raycastListed: false)
+                == .failure(.raycastBranch), "\(branch)")
+    }
+    #expect(
+        ExtensionRepository.parse(address: "https://github.com/raycast/extensions", branch: "  ", raycastListed: false)
+            .map(\.copyId) == .success("raycast"), "a blank branch is the default one")
+    #expect(
+        ExtensionRepository.Refusal.raycastBranch.description
+            == "Raycast's official repository always follows its default branch.")
+    // Any other address is parsed as always, whether Raycast's is listed or not.
+    #expect(
+        ExtensionRepository.parse(address: "https://github.com/someone/tools", raycastListed: false)
+            == ExtensionRepository.parse(address: "https://github.com/someone/tools"))
+    #expect(
+        ExtensionRepository.parse(
+            address: "https://github.com/owner/repository-11", existing: try tenAdded(),
+            raycastListed: false) == .failure(.tooMany))
+}
+
+// MARK: - The Add Repository window (SPEC-160)
+
+@Test func aNewDraftIsEmpty() {
+    let draft = ExtensionRepositoryDraft()
+    #expect(draft.address.isEmpty && draft.branch.isEmpty && draft.reason == nil)
+    #expect(!draft.canAdd)
+    var spaces = ExtensionRepositoryDraft()
+    spaces.address = "  "
+    #expect(!spaces.canAdd, "Add is off while the address is blank")
+}
+
+@Test func aRefusedAddressKeepsWhatWasTypedAndSaysWhy() {
+    var draft = ExtensionRepositoryDraft()
+    draft.address = "http://github.com/owner/repository"
+    draft.branch = "main"
+    #expect(draft.canAdd)
+    let refused = draft.add(existing: [], raycastListed: true)
+    #expect(refused == nil)
+    #expect(draft.address == "http://github.com/owner/repository" && draft.branch == "main")
+    #expect(draft.reason == "Use an https:// address, such as https://github.com/owner/repository.")
+}
+
+@Test func anAcceptedAddressGivesTheRepositoryWithItsBranch() throws {
+    var draft = ExtensionRepositoryDraft()
+    draft.address = "https://github.com/owner/repository"
+    draft.branch = "main"
+    let accepted = draft.add(existing: [], raycastListed: true)
+    let repository = try #require(accepted)
+    #expect(repository.copyId == ExtensionRepository.copyId(of: "https://github.com/owner/repository"))
+    #expect(repository.branch == "main" && repository.name == "owner/repository")
+    #expect(draft.reason == nil)
+    var settings = FudgeSettings()
+    settings.addRepository(repository)
+    #expect(settings.extensionRepositories == [ListedRepository(repository: repository, on: true)], "saved on")
+}
+
+@Test func theListPassedAtAddCountsNotAnEarlierOne() throws {
+    var draft = ExtensionRepositoryDraft()
+    draft.address = "https://github.com/owner/repository"
+    let early = draft.add(existing: [], raycastListed: true)
+    #expect(early != nil)
+    let now = try added(["https://github.com/Owner/Repository.git"])
+    let atAdd = draft.add(existing: now, raycastListed: true)
+    #expect(atAdd == nil)
+    #expect(draft.reason == "That repository is already in the list.")
+}
+
+@Test func tenAddedRepositoriesAreTheMost() throws {
+    var draft = ExtensionRepositoryDraft()
+    draft.address = "https://github.com/owner/repository-11"
+    let eleventh = draft.add(existing: try tenAdded(), raycastListed: true)
+    #expect(eleventh == nil)
+    #expect(draft.reason == "You can add up to 10 repositories.")
+}
+
+@Test func aCorrectedAddressClearsTheReason() throws {
+    var draft = ExtensionRepositoryDraft()
+    draft.address = "https://user@github.com/owner/repository"
+    let refused = draft.add(existing: [], raycastListed: true)
+    #expect(refused == nil)
+    #expect(draft.reason == "Leave the user name and password out of the address.")
+    draft.address = "https://github.com/owner/repository"
+    let corrected = draft.add(existing: [], raycastListed: true)
+    #expect(corrected != nil)
+    #expect(draft.reason == nil)
+    // A failed save shows its problem until the next Add, and Cancel starts over.
+    draft.saveFailed("settings.json isn't valid JSON.")
+    #expect(draft.reason == "settings.json isn't valid JSON." && draft.address == "https://github.com/owner/repository")
+    #expect(draft.cancelled() == ExtensionRepositoryDraft())
+}
+
+@Test func raycastsAddressInTheWindowPutsRaycastsRepositoryBack() throws {
+    var settings = FudgeSettings()
+    settings.extensionRepositories = try tenAdded().map { ListedRepository(repository: $0) }
+    settings.removeRaycastRepository()
+    var draft = ExtensionRepositoryDraft()
+    draft.address = "https://github.com/Raycast/Extensions.git"
+    draft.branch = "main"
+    let withBranch = draft.add(
+        existing: settings.extensionRepositories.map(\.repository), raycastListed: settings.raycastRepositoryListed)
+    #expect(withBranch == nil)
+    #expect(draft.reason == "Raycast's official repository always follows its default branch.")
+    draft.branch = ""
+    let back = draft.add(
+        existing: settings.extensionRepositories.map(\.repository), raycastListed: settings.raycastRepositoryListed)
+    let raycast = try #require(back)
+    #expect(raycast.copyId == "raycast" && draft.reason == nil, "even with 10 added")
+    settings.addRepository(raycast)
+    #expect(settings.raycastRepositoryState == .on && settings.extensionRepositories.count == 10, "never a second copy")
+    guard case .array(let answer) = ExtensionRepository.storeAnswer(settings: settings),
+        case .object(let first) = try #require(answer.first)
+    else {
+        Issue.record("not an array of objects")
+        return
+    }
+    #expect(answer.count == 11 && first["copyId"] == .string("raycast"), "first")
+    // Once it's back, its address is refused again.
+    let again = draft.add(
+        existing: settings.extensionRepositories.map(\.repository), raycastListed: settings.raycastRepositoryListed)
+    #expect(again == nil)
+    #expect(draft.reason == "That repository is already in the list.")
 }
 
 @Test func onlyTheExtensionStoreMayAskForTheRepositories() {
