@@ -16,7 +16,7 @@ This is its first release.
 - Raycast extensions, from the Extension Store (Raycast's open-source extensions) or built from a folder with the `fudge` tool.
 - Signing in to services for extensions: GitHub and Atlassian (Jira and Confluence) through Fudge's sign-in server, and more through one you run.
   Extensions that sign in with an app of their own work too, once you turn that on under Settings → Sign-in.
-  Some of them come back through a Raycast link, which opens Fudge only while Fudge opens Raycast links is on, on the same page.
+  Some of them come back through a Raycast link, which opens Fudge only while **Fudge opens Raycast links** is on, on the same page.
 - Fudge's own commands: quicklinks, snippets that can expand as you type, a calculator with units, time zones and currencies, Search Files, Search Emoji & Symbols, Clipboard History, a Color Picker, Define Word, window management with your own positions and layouts, Switch Windows, system commands, Search Menu Items and My Schedule.
 - A backup of everything you've set up, encrypted with a password.
 
