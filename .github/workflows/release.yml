@@ -169,6 +169,20 @@ jobs:
           name: notes
           path: notes
 
+      # The website's Download button links to releases/latest/download/Fudge.dmg, so each release also attaches the
+      # disk image under that fixed name, a copy of the one signed and checksummed, with a checksum of its own.
+      - name: Add the disk image as Fudge.dmg
+        working-directory: release
+        run: |
+          set -- Fudge-*.dmg
+          if [ "$#" -ne 1 ] || [ ! -f "$1" ]; then
+            [ -e "$1" ] || set --
+            echo "::error::The release needs exactly one Fudge-<version>.dmg to copy as Fudge.dmg, and has $#${*:+: $*}"
+            exit 1
+          fi
+          cp "$1" Fudge.dmg
+          shasum -a 256 Fudge.dmg > Fudge.dmg.sha256
+
       # The tag is created here, with the Release, on the release commit: GitHub makes it when the release is
       # published, after the disk image is uploaded.
       - name: Publish the release

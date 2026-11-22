@@ -1444,6 +1444,9 @@ Extensions run in a separate Node.js process, the extension host.
     In jakeobsen/fudge, missing signing secrets fail it; a fork, which has none, gets an ad hoc build (`--ad-hoc-without-secrets`).
   - **`publish`** has the only write token, and runs none of the repo's code: it runs `gh release create <version> --target <release commit>`, which creates the tag with the Release, with GitHub's generated notes and one line on opening the app, which depends on how `build` signed it (its `signing` output).
     The "Release Tags" ruleset must let the workflow's token create `v*` tags, or this last step is refused.
+    Before that, a step copies the one `Fudge-<version>.dmg` as `Fudge.dmg` and writes its checksum, `Fudge.dmg.sha256`, so the release attaches both too; with no image or more than one, it fails and nothing is published.
+    The website's Download button links to `https://github.com/jakeobsen/fudge/releases/latest/download/Fudge.dmg`, which GitHub sends to that file in the newest full release.
+    So the name `Fudge.dmg` must never change, or the button breaks.
     **The first release** gets that line and the hand-written `.github/first-release-notes.md` instead of generated notes, which would list every pull request so far (SPEC-117 §5).
     `build` decides it (its `first` output) with `scripts/first-release.sh <version>`: a version is the first when no full release (`v1.2.3`, no pre-release suffix) other than itself is in its history (`git tag --merged HEAD`).
     That needs the whole history, so a shallow checkout fails the step rather than guess; `build` then uploads the file as a second artifact, `notes`.

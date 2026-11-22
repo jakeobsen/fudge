@@ -4,7 +4,7 @@ This is its first release.
 ## Installing
 
 - You need macOS 14 or later and a Mac with Apple silicon.
-- Download the disk image below, open it, and drag Fudge to Applications.
+- Download `Fudge.dmg` below, open it, and drag Fudge to Applications.
 - Fudge includes the Node.js that runs extensions, so there's nothing else to install.
 - Fudge lives in the menu bar, and ⌥Space opens it.
   The first time it starts, it walks you through a few choices.
