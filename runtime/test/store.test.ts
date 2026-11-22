@@ -82,6 +82,7 @@ import {
 import {
     buildArguments,
     bundledNames,
+    doneToast,
     failureDetails,
     install,
     oneAtATime,
@@ -2463,6 +2464,37 @@ test("installNote names what's really on and off, in each case", () => {
         installNote(whole, { ask: ["AI"] }, titles),
         "Turned off: Ask, which uses Raycast AI. You can turn it on in Settings → Commands.",
     );
+});
+
+test("a finished install or update leaves a Success toast, with the note when there is one (SPEC-130)", () => {
+    const note = "Turned off: Ask, which uses Raycast AI. You can turn it on in Settings → Commands.";
+    assert.deepEqual(doneToast("Jira", false, {}), { title: "Installed Jira" });
+    assert.deepEqual(doneToast("Jira", false, { note }), { title: "Installed Jira", message: note });
+    assert.deepEqual(doneToast("Jira", true, {}), { title: "Updated Jira" });
+    assert.deepEqual(doneToast("Jira", true, { note }), { title: "Updated Jira", message: note });
+});
+
+test("the store never closes Fudge's window: no showHUD, closeMainWindow or popToRoot in its source (SPEC-130)", async () => {
+    // Any mention of the names, not only a named import, so every way of reaching them counts, comments included.
+    const closers = (text: string) => [...text.matchAll(/\b(showHUD|closeMainWindow|popToRoot)\b/g)].map((match) => match[1]);
+    for (const [form, text] of [
+        ["named", 'import { Toast, showHUD } from "@raycast/api";'],
+        ["renamed", 'import { closeMainWindow as close } from "@raycast/api";'],
+        ["namespace", 'import * as api from "@raycast/api";\nawait api.popToRoot();'],
+        ["require", 'require("@raycast/api").showHUD("Installed");'],
+        ["dynamic import", '(await import("@raycast/api")).closeMainWindow();'],
+        ["by key", 'api["popToRoot"]();'],
+    ]) {
+        assert.equal(closers(text).length, 1, form);
+    }
+    const source = path.join(import.meta.dirname, "../store-extension/src");
+    const files = (await readdir(source, { recursive: true })).filter((name) => /\.tsx?$/.test(name));
+    assert.ok(files.includes("extension-store.tsx") && files.includes("failure-view.tsx"), "the store's views are read");
+    const found: string[] = [];
+    for (const name of files) {
+        for (const closer of closers(await readFile(path.join(source, name), "utf8"))) found.push(`${name}: ${closer}`);
+    }
+    assert.deepEqual(found, [], "each of these closes the launcher in Raycast and in Fudge");
 });
 
 test("the install's compatibility.json is read as the app reads it", async () => {

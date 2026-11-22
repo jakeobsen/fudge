@@ -210,6 +210,16 @@ export interface InstallDone {
 }
 
 /**
+ * The Success toast a finished install or update leaves, with the install's note as its message when there is one
+ * (SPEC-130). It's a toast and never the HUD, so the launcher stays open on the store's list. Always `Success`, which
+ * the view sets: this module doesn't import `@raycast/api`.
+ */
+export function doneToast(title: string, updating: boolean, done: InstallDone): { title: string; message?: string } {
+    const shown = `${updating ? "Updated" : "Installed"} ${title}`;
+    return done.note ? { title: shown, message: done.note } : { title: shown };
+}
+
+/**
  * Moves an extension the store installed to the Trash, after asking, and forgets it. Anything not in `installed.json`
  * from this row's folder is refused: the store never touches extensions installed another way, nor one another
  * folder with the same name installed.

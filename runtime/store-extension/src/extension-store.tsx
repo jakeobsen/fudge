@@ -6,7 +6,6 @@ import {
     environment,
     Icon,
     List,
-    showHUD,
     showToast,
     Toast,
     trash,
@@ -45,7 +44,16 @@ import { detailMarkdown, fetchReadme, refetching, shownReadme } from "./readme.t
 import { RestingWork } from "./resting.ts";
 import type { FailureDetails } from "./failure.ts";
 import { FailureView, LoadFailure, NeedsGit } from "./failure-view.tsx";
-import { failureDetails, failureLog, install, oneAtATime, readInstalled, uninstall, type StoreContext } from "./store.ts";
+import {
+    doneToast,
+    failureDetails,
+    failureLog,
+    install,
+    oneAtATime,
+    readInstalled,
+    uninstall,
+    type StoreContext,
+} from "./store.ts";
 import { logToFudge } from "fudge:app";
 
 /** A failure the store had goes into `Fudge.log` too, with its output (SPEC-124); writing it never fails a step. */
@@ -259,16 +267,13 @@ function Store({ cli, extensionsDir }: { cli: string; extensionsDir: string }) {
                     return;
                 }
                 await load();
-                const title = `${updating ? "Updated" : "Installed"} ${entry.title}`;
-                if (done.note) {
-                    // What's on and off isn't what the confirmation said (SPEC-121 §2): said where it stays readable.
-                    toast.style = Toast.Style.Success;
-                    toast.title = title;
-                    toast.message = done.note;
-                } else {
-                    await toast.hide();
-                    await showHUD(title);
-                }
+                // A toast, so the launcher stays open on the list (SPEC-130), with the note when what's on and off
+                // isn't what the confirmation said (SPEC-121 §2). Each setter shows the toast again, and with the
+                // window hidden a toast that isn't animated shows as a HUD, so the style changes last.
+                const shown = doneToast(entry.title, updating, done);
+                toast.title = shown.title;
+                if (shown.message) toast.message = shown.message;
+                toast.style = Toast.Style.Success;
             } catch (error) {
                 // The whole error, its likely cause, Copy Error and Try Again, in a view of its own (SPEC-116); the
                 // toast only says where to look.
