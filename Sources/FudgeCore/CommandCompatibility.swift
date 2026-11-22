@@ -58,7 +58,7 @@ public struct CommandCompatibility: Sendable, Equatable {
     /// Reads `directory`'s `compatibility.json`: a regular file, never through a link, read tolerantly. A missing or
     /// broken one, a command name that isn't valid and a category this Fudge doesn't know read as nothing.
     public static func load(from directory: URL) -> CommandCompatibility {
-        guard let data = readRegularFile(directory.appendingPathComponent(fileName), maxBytes: maxBytes),
+        guard let data = RegularFile.read(directory.appendingPathComponent(fileName), maxBytes: maxBytes),
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let commands = object["commands"] as? [String: Any]
         else { return CommandCompatibility() }
@@ -83,17 +83,6 @@ public struct CommandCompatibility: Sendable, Equatable {
         let names = uses.map(\.name)
         let listed = names.count == 1 ? names[0] : names.dropLast().joined(separator: ", ") + " and " + names.last!
         return "Uses \(listed), which Fudge doesn't support."
-    }
-
-    private static func readRegularFile(_ url: URL, maxBytes: Int) -> Data? {
-        let descriptor = open(url.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
-        guard descriptor >= 0 else { return nil }
-        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        var info = stat()
-        guard fstat(descriptor, &info) == 0, (info.st_mode & S_IFMT) == S_IFREG, Int(info.st_size) <= maxBytes else {
-            return nil
-        }
-        return try? handle.readToEnd() ?? Data()
     }
 }
 

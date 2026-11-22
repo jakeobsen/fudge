@@ -694,7 +694,8 @@ Extensions run in a separate Node.js process, the extension host.
       At launch the stream starts first, and then the outcomes already in the folder count as decided, with nothing posted.
       **The notification** (`InstallNotice`) is `<title> is installed` or `<title> is updated`, or `Couldn't install <title>` or `Couldn't update <title>` with "Click to see what went wrong.", with the identifier `store:<name>` and the `userInfo` `{ name, dir, failed }`.
       It shows even while Fudge is the active app (`willPresent` answers `.banner` and `.list`).
-      **A click** (`NotificationClicks`) with a store session on the screen's command shows the panel without the reset and answers the store's waiting `store.nextNotificationClick` call, or keeps the click for its next one; with no store loaded, the store launches as from root search, with `launchContext.storeNotification`.
+      **A click** (`NotificationClicks`) with a store session still running on the screen's command (`ExtensionStore.sessionOnScreen`) shows the panel without the reset and answers the store's waiting `store.nextNotificationClick` call, or keeps the click for its next one.
+      With no store loaded, the command on screen is left and the store launches as from root search, with `launchContext.storeNotification`.
       **macOS is asked** (`requestAuthorization(options: [.alert])`) only while it hasn't been, at most once a run, and only when the user confirms an install or update (`store.askForNotifications`, from a user-initiated store session), turns a switch on, or presses Ask Now.
       It's never asked at launch, at a build's end, in a snapshot run or in a test.
       **Only `SystemInstallNotifications` touches `UNUserNotificationCenter`**, as the poster, the asker and the delegate, made in `applicationWillFinishLaunching` unless the launch is a snapshot run.

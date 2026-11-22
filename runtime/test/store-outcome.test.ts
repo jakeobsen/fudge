@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, open, readdir, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
@@ -24,7 +24,7 @@ import {
     type BuildRecord,
 } from "../store-extension/src/build-records.ts";
 import { causeOf } from "../store-extension/src/failure.ts";
-import { maxOutputBytes, spawnProgram } from "../store-extension/src/git.ts";
+import { maxOutputBytes, readOutputTail, spawnProgram } from "../store-extension/src/git.ts";
 
 const folders: string[] = [];
 after(async () => {
@@ -177,7 +177,7 @@ test("recordBuild renames the output files before it writes the record, and ende
     assert.equal(path.dirname(run.output.stdout), folder);
     assert.match(path.basename(run.output.stdout), /^\.[0-9a-f]{16}\.out$/);
     assert.match(path.basename(run.output.stderr), /^\.[0-9a-f]{16}\.err$/);
-    const result = await spawnProgram("/bin/sh", ["-c", `echo built; echo '{}' > "${folder}/$$.ended.json"; sleep 0.2`], {
+    const result = await spawnProgram("/bin/sh", ["-c", `echo built; sleep 0.2; echo '{}' > "${folder}/$$.ended.json"`], {
         timeout: 10_000,
         output: run.output,
         started: run.started,
@@ -214,6 +214,23 @@ test("recordBuild: a run that never started removes its temporary files; a renam
     assert.equal(lines.length, 1);
     assert.match(lines[0]!, /^Couldn't keep the output of Alpha's build: /);
     assert.equal(await readFile(path.join(folder, "4242.err"), "utf8"), "err", "the other one has its name");
+    await blocked.ended();
+    assert.ok(!existsSync(blocked.output.stdout), "the temporary file that couldn't be renamed goes at the end");
+});
+
+test("the output's cut keeps a line that starts right at it", async () => {
+    const file = path.join(await temporaryFolder(), "out");
+    await writeFile(file, "ab\ncd\nef");
+    const handle = await open(file, "r");
+    try {
+        assert.equal(await readOutputTail(handle, 5), "cd\nef", "a cut at a line's start keeps that line");
+        assert.equal(await readOutputTail(handle, 4), "ef", "a cut inside a line drops the rest of it");
+        assert.equal(await readOutputTail(handle, 2), "ef");
+        assert.equal(await readOutputTail(handle, 1), "");
+        assert.equal(await readOutputTail(handle, 8), "ab\ncd\nef", "no cut");
+    } finally {
+        await handle.close();
+    }
 });
 
 test("the reader keeps a record's companions, deletes old ones without a record, and reads a valid outcome", async () => {

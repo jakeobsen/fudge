@@ -51,10 +51,12 @@ export const maxOutputBytes = 1024 * 1024;
 export async function readOutputTail(handle: FileHandle, limit: number = maxOutputBytes): Promise<string> {
     const { size } = await handle.stat();
     const start = Math.max(0, size - limit);
-    const buffer = Buffer.alloc(size - start);
+    // One byte before the cut too: a newline there means the cut is at a line's start, and that line is kept whole.
+    const from = start > 0 ? start - 1 : 0;
+    const buffer = Buffer.alloc(size - from);
     let read = 0;
     while (read < buffer.length) {
-        const { bytesRead } = await handle.read(buffer, read, buffer.length - read, start + read);
+        const { bytesRead } = await handle.read(buffer, read, buffer.length - read, from + read);
         if (bytesRead === 0) break;
         read += bytesRead;
     }

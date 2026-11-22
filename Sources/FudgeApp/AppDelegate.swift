@@ -47,6 +47,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The only code that touches `UNUserNotificationCenter` (SPEC-156 C.6), made in `applicationWillFinishLaunching`
     /// so a click that launches Fudge is delivered. Never in snapshot runs.
     private var systemNotifications: SystemInstallNotifications?
+    /// The notifications picked at launch (`FixedInstallNotifications.pick`): the system's, or a snapshot run's fixed one.
+    private var installNotifications: (any InstallNotifications)?
     /// The store's builds' outcomes in `installing/` (SPEC-156 C.2). Not in snapshot runs.
     private var installOutcomes: InstallOutcomeWatcher?
     /// The Quick Look preview (SPEC-049). Never in snapshot runs.
@@ -74,8 +76,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self, andSelector: #selector(openLink(_:withReplyEvent:)), forEventClass: AEEventClass(kInternetEventClass),
             andEventID: AEEventID(kAEGetURL))
         // Install notifications' delegate goes in before launch finishes too, so a click that launches Fudge is
-        // delivered; a snapshot run never touches Notification Center.
-        if !Snapshot.isRequested(CommandLine.arguments) { systemNotifications = SystemInstallNotifications() }
+        // delivered; a snapshot run never touches Notification Center, and gets a fixed answer (`--notifications`).
+        let picked = FixedInstallNotifications.pick(
+            snapshot: Snapshot.isRequested(CommandLine.arguments), arguments: CommandLine.arguments
+        ) { SystemInstallNotifications() }
+        installNotifications = picked
+        systemNotifications = picked as? SystemInstallNotifications
     }
 
     /// A `raycast:` or `com.raycast:` link Fudge Links handed on. Only the direct sign-in waiting for it takes it;
@@ -182,13 +188,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.raycastLinks = raycastLinks
         settingsModel.snapshotOwnAppSignIn = Snapshot(arguments: CommandLine.arguments)?.ownAppSignIn ?? false
         // Install notifications (SPEC-156): macOS's in the real app, a fixed answer (`--notifications`) in a snapshot
-        // run, which never posts or asks.
-        let notifications = FixedInstallNotifications.pick(
-            snapshot: Snapshot.isRequested(CommandLine.arguments), arguments: CommandLine.arguments
-        ) { [systemNotifications] () -> any InstallNotifications in
-            if let systemNotifications { return systemNotifications }
-            return FixedInstallNotifications(.unknown)
-        }
+        // run, which never posts or asks; both picked at launch.
+        let notifications = installNotifications ?? FixedInstallNotifications(.unknown)
         let settingsFile = paths.settingsFile
         let notices = InstallNoticeCenter(notifications: notifications) {
             InstallNotificationSwitches(FudgeSettings.load(from: settingsFile))

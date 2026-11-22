@@ -715,10 +715,11 @@ final class LauncherModel {
 
     // MARK: - Install notifications (SPEC-156)
 
-    /// The store session on screen's command, if the screen's command is one (the panel may be hidden).
+    /// The store session on screen's command, if the screen's command is one still running (the panel may be hidden).
     private var storeSessionOnScreen: String? {
-        guard let command, sessionExtensions[command.session] == ExtensionStore.extensionName else { return nil }
-        return command.session
+        ExtensionStore.sessionOnScreen(
+            command?.session, extensionName: command.flatMap { sessionExtensions[$0.session] },
+            isRunning: { hostSessions.isRunning($0) })
     }
 
     /// Whether the store is on screen: the panel is visible and its command is a store session (C.1).
@@ -779,7 +780,11 @@ final class LauncherModel {
         case .kept:
             break
         case .launch(let target):
-            resettingFirst { launchStore(for: target) }
+            resettingFirst {
+                // As a hotkey's launch does: the command on screen is left first, so its session doesn't stay loaded.
+                if case .command = screen { leaveCommand() }
+                launchStore(for: target)
+            }
         }
         show()
     }

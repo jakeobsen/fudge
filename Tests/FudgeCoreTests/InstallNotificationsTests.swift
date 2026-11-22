@@ -267,9 +267,10 @@ private func center(
 }
 
 @Test func theTitleIsPlainTextCutTo100Characters() throws {
-    let long = String(repeating: "é", count: 150)
+    let long = String(repeating: "e\u{301}", count: 150)
     let notice = try #require(InstallNotice(end(title: long, .installed)))
-    #expect(notice.title == String(repeating: "é", count: 100) + " is installed")
+    #expect(
+        notice.title == String(repeating: "e\u{301}", count: 100) + " is installed", "a letter and its mark are one")
     #expect(InstallNotice.plain("Git\nHub\u{2028}\t") == "Git Hub")
     #expect(InstallNotice.plain("  ") == "An extension")
 }
@@ -336,6 +337,25 @@ private func center(
     }
     let next = clicks.wait(session: "s1", call: 2)
     #expect(next.now == target && next.replaced == nil)
+}
+
+@Test func onlyAStoreSessionStillRunningTakesAClick() {
+    let running: (String) -> Bool = { $0 == "s1" }
+    let store = ExtensionStore.extensionName
+    #expect(ExtensionStore.sessionOnScreen("s1", extensionName: store, isRunning: running) == "s1")
+    #expect(ExtensionStore.sessionOnScreen("s2", extensionName: store, isRunning: running) == nil, "its host stopped")
+    #expect(ExtensionStore.sessionOnScreen("s1", extensionName: "github", isRunning: running) == nil, "another's")
+    #expect(ExtensionStore.sessionOnScreen(nil, extensionName: nil, isRunning: running) == nil, "no command on screen")
+    // A click with a stopped store on the screen launches the store with its target.
+    var clicks = NotificationClicks<Int>()
+    _ = clicks.wait(session: "s2", call: 1)
+    let target = NoticeTarget(name: "github", dir: "github", failed: false)
+    let loaded = ExtensionStore.sessionOnScreen("s2", extensionName: store, isRunning: running)
+    guard case .launch(let launched) = clicks.click(target, loadedSession: loaded) else {
+        Issue.record("expected a launch")
+        return
+    }
+    #expect(launched == target)
 }
 
 @Test func aSessionThatEndsDropsItsCallAndItsKeptClick() {
@@ -431,6 +451,9 @@ private func center(
     try Data(#"{"notifyInstallFinished": "no", "notifyInstallFailed": null}"#.utf8).write(to: file)
     settings = FudgeSettings.load(from: file)
     #expect(settings.notifyInstallFinished && settings.notifyInstallFailed, "only false turns one off")
+    try Data(#"{"notifyInstallFinished": 0, "notifyInstallFailed": 0.0}"#.utf8).write(to: file)
+    settings = FudgeSettings.load(from: file)
+    #expect(settings.notifyInstallFinished && settings.notifyInstallFailed, "a number isn't false")
 }
 
 // MARK: - The folder the watcher reads
@@ -467,6 +490,40 @@ private func center(
     for name in ["12.json", "12.out", ".x.ended.json", "012.ended.json", "a.ended.json"] {
         #expect(!InstallOutcomeFolder.isOutcome(name), "\(name)")
     }
+}
+
+@Test func theWatcherReadsOnlyRegularFilesWithinTheirLimits() throws {
+    let folder = try Fixtures.temporaryDirectory()
+    let elsewhere = try Fixtures.temporaryDirectory()
+    func record(_ pid: Int32, name: String) -> String {
+        """
+        {"pid": \(pid), "name": "\(name)", "dir": "\(name)", "title": "\(name)", "commit": "abc", "updating": false, \
+        "startedAt": "2026-11-22T17:00:00.000Z", "deadline": "2026-11-22T17:10:00.000Z", "command": ["fudge", "build"]}
+        """
+    }
+    func write(_ name: String, _ text: String, in place: URL? = nil) throws {
+        try Data(text.utf8).write(to: (place ?? folder).appendingPathComponent(name))
+    }
+    try write("101.json", record(101, name: "jira"))
+    try write("101.ended.json", BuildOutcomeFile(pid: 101, status: 0, endedAt: Date()).text)
+    // A FIFO in an outcome's place: never waited on.
+    try write("102.json", record(102, name: "zoom"))
+    #expect(mkfifo(folder.appendingPathComponent("102.ended.json").path, 0o600) == 0)
+    // An outcome through a link, and a record through a link.
+    try write("103.json", record(103, name: "slack"))
+    try write("103.ended.json", BuildOutcomeFile(pid: 103, status: 0, endedAt: Date()).text, in: elsewhere)
+    try FileManager.default.createSymbolicLink(
+        at: folder.appendingPathComponent("103.ended.json"),
+        withDestinationURL: elsewhere.appendingPathComponent("103.ended.json"))
+    try write("104.json", record(104, name: "linear"), in: elsewhere)
+    try FileManager.default.createSymbolicLink(
+        at: folder.appendingPathComponent("104.json"), withDestinationURL: elsewhere.appendingPathComponent("104.json"))
+    try write("104.ended.json", BuildOutcomeFile(pid: 104, status: 0, endedAt: Date()).text)
+    // An outcome over 4 KiB.
+    try write("105.json", record(105, name: "notion"))
+    let padded = #"{"pid": 105, "status": 0, "endedAt": "2026-11-22T17:00:00.000Z"}"#
+    try write("105.ended.json", padded + String(repeating: " ", count: 4 * 1024))
+    #expect(InstallOutcomeFolder.ends(in: folder).map(\.name) == ["jira"])
 }
 
 @Test func aBuildsStatusNamesItsEnd() {

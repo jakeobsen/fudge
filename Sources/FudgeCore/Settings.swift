@@ -237,6 +237,12 @@ public struct FudgeSettings: Sendable, Equatable {
     }
 
     /// The JSON object in `file`; empty when the file is missing or blank. Throws `Unreadable` for anything else.
+    /// Whether `value` is JSON's `false`: a boolean, never a number.
+    static func isJSONFalse(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return false }
+        return !number.boolValue
+    }
+
     private static func existingObject(at file: URL) throws -> [String: Any] {
         guard FileManager.default.fileExists(atPath: file.path) else { return [:] }
         guard let data = try? Data(contentsOf: file) else { throw Unreadable() }
@@ -272,8 +278,9 @@ public struct FudgeSettings: Sendable, Equatable {
         settings.updateCheck = UpdateCheckSetting(settingsValue: object["updateCheck"])
         settings.hyperkey = object["hyperkey"] as? Bool ?? false
         settings.hyperkeyQuickPress = object["hyperkeyQuickPress"] as? Bool ?? false
-        settings.notifyInstallFinished = object["notifyInstallFinished"] as? Bool != false
-        settings.notifyInstallFailed = object["notifyInstallFailed"] as? Bool != false
+        // Only a JSON false turns one off; `as? Bool` would read a 0 as false too.
+        settings.notifyInstallFinished = !isJSONFalse(object["notifyInstallFinished"])
+        settings.notifyInstallFailed = !isJSONFalse(object["notifyInstallFailed"])
         settings.colorFormat = (object["colorFormat"] as? String).flatMap(ColorFormat.init(rawValue:)) ?? .default
         settings.calendarHidden = (object["calendarHidden"] as? [Any] ?? []).compactMap { $0 as? String }
         if let days = object["calendarDaysAhead"] as? Int, Schedule.daysAheadChoices.contains(days) {

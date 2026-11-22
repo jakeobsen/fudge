@@ -375,12 +375,11 @@ export function recordBuild(
             }
         },
         ended: async () => {
-            if (pid === undefined) {
-                await rm(output.stdout, { force: true }).catch(() => undefined);
-                await rm(output.stderr, { force: true }).catch(() => undefined);
-                return;
-            }
             await write;
+            // Left only when the build never started, or a rename failed.
+            await rm(output.stdout, { force: true }).catch(() => undefined);
+            await rm(output.stderr, { force: true }).catch(() => undefined);
+            if (pid === undefined) return;
             const names = companionNames(pid);
             for (const name of [names.stdout, names.stderr, names.outcome]) {
                 await rm(path.join(folder, name), { force: true }).catch((error) =>

@@ -320,6 +320,18 @@ public struct InstallNotices: Sendable {
 /// Where a notification's click goes (SPEC-156 E.1, E.2): to the store session that's loaded, through the
 /// `store.nextNotificationClick` call it keeps waiting (or kept for its next call when none waits), else a launch of the
 /// store with the target as its launch context. A session that ends drops its waiting call and its kept click.
+extension ExtensionStore {
+    /// The store session on the screen's command (SPEC-156 C.1, E.2): that command's session, when it's the store's and
+    /// still running in the host. One whose host stopped counts as none, so a click launches the store again rather than
+    /// wait for a call that can't come, and the store isn't on screen for an install's end.
+    public static func sessionOnScreen(
+        _ session: String?, extensionName: String?, isRunning: (String) -> Bool
+    ) -> String? {
+        guard let session, extensionName == Self.extensionName, isRunning(session) else { return nil }
+        return session
+    }
+}
+
 public struct NotificationClicks<Call: Sendable>: Sendable {
     public enum Route: Sendable {
         /// Answer this waiting call with the target.

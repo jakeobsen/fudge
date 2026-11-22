@@ -116,6 +116,7 @@ export async function readSavedFailure(supportPath: string, name: string): Promi
             typeof details.output !== "string" ||
             (details.command !== undefined && typeof details.command !== "string") ||
             (details.code !== undefined && typeof details.code !== "number") ||
+            (details.refused !== undefined && typeof details.refused !== "boolean") ||
             (value.repository !== undefined && typeof value.repository !== "string")
         ) {
             return undefined;
@@ -130,6 +131,7 @@ export async function readSavedFailure(supportPath: string, name: string): Promi
                 output: details.output,
                 ...(typeof details.command === "string" ? { command: details.command } : {}),
                 ...(typeof details.code === "number" ? { code: details.code } : {}),
+                ...(details.refused === true ? { refused: true } : {}),
             },
             ...(typeof value.repository === "string" ? { repository: value.repository } : {}),
         };
@@ -186,12 +188,6 @@ export class RowMarks {
         return this.marks.get(dir);
     }
 
-    /** The mark of `name`, whichever row it's on. */
-    byName(name: string): FailureMark | undefined {
-        for (const mark of this.marks.values()) if (mark.name === name) return mark;
-        return undefined;
-    }
-
     mark(failure: FailureMark): void {
         this.marks.set(failure.dir, failure);
         this.changed();
@@ -210,13 +206,52 @@ export class RowMarks {
     }
 }
 
+/**
+ * The row to select once (D.1, D.5, E.1): the list's `selectedItemId`, until the app reports that row selected. The app
+ * follows `selectedItemId` only when it changes, and reports a selection only when it moved, so the row already selected
+ * is never asked for: that ask would never be reported and so never cleared, and the next ask for that row, the same id
+ * again, would change nothing.
+ */
+export class RowSelection {
+    private selected: string | null = null;
+    private asked: string | undefined;
+    private readonly changed: (asked: string | undefined) => void;
+
+    /** `changed` gets the new `selectedItemId` whenever it changes. */
+    constructor(changed: (asked: string | undefined) => void) {
+        this.changed = changed;
+    }
+
+    /** The row asked for, for `selectedItemId`. */
+    get current(): string | undefined {
+        return this.asked;
+    }
+
+    /** Selects the row of `dir`, once; a row already selected stays, and an earlier ask goes. */
+    select(dir: string): void {
+        this.ask(dir === this.selected ? undefined : dir);
+    }
+
+    /** The app's `onSelectionChange`: once the row asked for is selected, from here the user moves it. */
+    reported(id: string | null): void {
+        this.selected = id;
+        if (id !== null && id === this.asked) this.ask(undefined);
+    }
+
+    private ask(dir: string | undefined): void {
+        if (dir === this.asked) return;
+        this.asked = dir;
+        this.changed(dir);
+    }
+}
+
 /** What opening a click's or the launch context's target needs from the store's view. */
 export type TargetSteps = {
     supportPath: string;
     /** Selects the row of that folder, once. */
     select: (dir: string) => void;
     /** This session's marks: a failure it has in memory. */
-    marks: Pick<RowMarks, "byName">;
+    marks: Pick<RowMarks, "get">;
     /** Pushes the failure view. */
     show: (mark: FailureMark) => void;
 };
@@ -228,7 +263,10 @@ export type TargetSteps = {
 export async function openNoticeTarget(target: NoticeTarget, steps: TargetSteps): Promise<void> {
     steps.select(target.dir);
     if (!target.failed) return;
-    const mark = steps.marks.byName(target.name) ?? (await readSavedFailure(steps.supportPath, target.name));
+    // The target's own row's failure: by its folder, since two folders can hold one name.
+    const held = steps.marks.get(target.dir);
+    const saved = held?.name === target.name ? undefined : await readSavedFailure(steps.supportPath, target.name);
+    const mark = held?.name === target.name ? held : saved?.dir === target.dir ? saved : undefined;
     if (!mark) return;
     await removeSavedFailure(steps.supportPath, target.name);
     steps.show(mark);

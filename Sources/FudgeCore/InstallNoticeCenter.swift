@@ -2,8 +2,12 @@ import Foundation
 
 /// The builds that ended in the store's `installing/` folder (SPEC-156 C.2), as the app reads them: each valid
 /// `<pid>.ended.json` whose `<pid>.json` is there and valid, by the store reader's rules. An outcome whose record is gone
-/// is left out, since its store's run ended and reported it.
+/// is left out, since its store's run ended and reported it. Both are read as the store reads them: regular files only,
+/// never through a link, at most 4 KiB for an outcome and 64 KiB for a record.
 public enum InstallOutcomeFolder {
+    static let maxOutcomeBytes = 4 * 1024
+    static let maxRecordBytes = 64 * 1024
+
     /// Whether `name` is an outcome's, the only names the app's watcher counts.
     public static func isOutcome(_ name: String) -> Bool {
         BuildOutcomeFile.pid(ofCompanion: name, suffix: ".ended.json") != nil
@@ -13,11 +17,12 @@ public enum InstallOutcomeFolder {
     public static func ends(in folder: URL, only names: Set<String>? = nil) -> [InstallEnd] {
         let listed = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
         return listed.filter { isOutcome($0) && names?.contains($0) != false }.sorted().compactMap { name in
-            guard let data = try? Data(contentsOf: folder.appendingPathComponent(name)),
+            guard let data = RegularFile.read(folder.appendingPathComponent(name), maxBytes: maxOutcomeBytes),
                 let outcome = BuildOutcomeFile.parse(fileName: name, data: data)
             else { return nil }
             let recordName = "\(outcome.pid).json"
-            guard let recordData = try? Data(contentsOf: folder.appendingPathComponent(recordName)),
+            guard
+                let recordData = RegularFile.read(folder.appendingPathComponent(recordName), maxBytes: maxRecordBytes),
                 let record = StoreBuildRecord.parse(fileName: recordName, data: recordData)
             else { return nil }
             return InstallEnd(record: record, status: outcome.status)

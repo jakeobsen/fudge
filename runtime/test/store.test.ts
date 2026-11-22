@@ -20,6 +20,7 @@ import {
     reportEnd,
     reportLimit,
     RowMarks,
+    RowSelection,
     saveFailure,
     unanswered,
     type FailureMark,
@@ -108,6 +109,7 @@ import {
     storeEnvironment,
     StoreRepository,
     type GitResult,
+    type ProgramOutput,
     type Run,
 } from "../store-extension/src/git.ts";
 import {
@@ -3018,10 +3020,19 @@ test("each build is recorded in installing/<pid>.json while it runs, and the rec
         context.ownBuilds = own;
         const run = context.run!;
         let recorded: unknown;
+        let output: ProgramOutput | undefined;
         context.run = async (program, args, options) => {
             if (args[0] !== "build") return run(program, args, options);
+            output = options.output;
+            // As the build does: its output files, then its start, and its outcome at its end.
+            if (output) {
+                await writeFile(output.stdout, "out");
+                await writeFile(output.stderr, "err");
+            }
             options.started?.(4242);
             recorded = await waitFor(async () => JSON.parse(await readFile(path.join(supportPath, "installing/4242.json"), "utf8")));
+            const outcome = { pid: 4242, status: result.code ?? 0, endedAt: "2026-11-20T12:01:00.000Z" };
+            await writeFile(path.join(supportPath, "installing/4242.ended.json"), JSON.stringify(outcome));
             return { stdout: "", stderr: "", code: 0, ...result };
         };
         const outcome = await install(alphaEntry, context).then(
@@ -3048,9 +3059,33 @@ test("each build is recorded in installing/<pid>.json while it runs, and the rec
             },
             ending,
         );
-        assert.deepEqual(await readdir(installingFolder(supportPath)), [], `${ending}: the record is gone`);
+        // The build's output goes to the two files beside its record (A.1), never to pipes.
+        assert.equal(path.dirname(output?.stdout ?? ""), installingFolder(supportPath), `${ending}: stdout to a file`);
+        assert.equal(path.dirname(output?.stderr ?? ""), installingFolder(supportPath), `${ending}: stderr to a file`);
+        assert.match(path.basename(output!.stdout), /^\..+\.out$/);
+        assert.match(path.basename(output!.stderr), /^\..+\.err$/);
+        assert.deepEqual(await readdir(installingFolder(supportPath)), [], `${ending}: the record, output and outcome are gone`);
         assert.ok(own.has(4242), "it's this session's build");
     }
+});
+
+test("a build whose installing/ folder can't be made runs as before: no output files and no --outcome", async () => {
+    const { context, supportPath } = await storeContext();
+    const lines: string[] = [];
+    context.log = (line) => lines.push(line);
+    // A file in the folder's place.
+    await writeFile(installingFolder(supportPath), "");
+    const run = context.run!;
+    let build: { args: string[]; output?: ProgramOutput } | undefined;
+    context.run = async (program, args, options) => {
+        if (args[0] === "build") build = { args, output: options.output };
+        return run(program, args, options);
+    };
+    await install(alphaEntry, context);
+    assert.ok(build, "it built");
+    assert.equal(build.output, undefined);
+    assert.ok(!build.args.includes("--outcome"), build.args.join(" "));
+    assert.ok(lines.some((line) => line.startsWith("Couldn't keep the output of Alpha's build: ")), lines.join("\n"));
 });
 
 test("a record is removed only once its write has settled, so a run that ends at once leaves none", async () => {
@@ -3595,6 +3630,28 @@ test("a finished install is reported with its build, and the answer decides the 
     }
 });
 
+test("an install that built twice reports its last build", async () => {
+    let runs = 0;
+    const { context } = await storeContext({
+        build: () =>
+            runs++ === 0
+                ? { code: 1, stderr: `✘ [ERROR] ${chooseSwiftPartsMessage} [plugin swift]\n\n    src/index.ts:1:20:` }
+                : { code: 0 },
+    });
+    context.chooseSwiftParts = async () => "leave-out";
+    const run = context.run!;
+    let pid = 500;
+    context.run = async (program, args, options) => {
+        if (args[0] === "build") await options?.started?.(++pid);
+        return run(program, args, options);
+    };
+    const view = noticesView({ onScreen: false, notified: false });
+    await installPressed(alphaEntry, false, context, view.view);
+    assert.equal(runs, 2);
+    assert.equal(view.reports.length, 1);
+    assert.equal(view.reports[0]?.build?.pid, 502);
+});
+
 test("a failure that got a notification is marked, kept and saved, with no failure view; one that didn't pushes it", async () => {
     const notified = await storeContext({ cliCode: 1 });
     withPid(notified.context, 77);
@@ -3707,6 +3764,13 @@ test("saved failures: read back only when valid, older than 7 days deleted at op
     await saveFailure(support, mark);
     assert.deepEqual(await readSavedFailure(support, "alpha"), mark);
     assert.equal(await readSavedFailure(support, "../alpha"), undefined);
+    // A refusal stays one, so its view shows the store's own words rather than a build error.
+    const refusal: FailureMark = { ...mark, name: "zeta", dir: "zeta", details: { output: "Another extension called zeta is installed.", refused: true } };
+    await saveFailure(support, refusal);
+    assert.deepEqual(await readSavedFailure(support, "zeta"), refusal);
+    await writeFile(path.join(failuresFolder(support), "zeta.json"), JSON.stringify({ ...refusal, details: { output: "x", refused: "yes" } }));
+    assert.equal(await readSavedFailure(support, "zeta"), undefined, "refused must be a boolean");
+    await rm(path.join(failuresFolder(support), "zeta.json"));
     await writeFile(path.join(failuresFolder(support), "beta.json"), `{"title": 1}`);
     assert.equal(await readSavedFailure(support, "beta"), undefined);
     const old = new Date(Date.now() - failureKeep - 60_000);
@@ -3738,12 +3802,91 @@ test("row marks are per folder, gone when the name installs", () => {
     const mark: FailureMark = { name: "alpha", dir: "alpha-dir", title: "Alpha", updating: false, failedAt: "t", details: { output: "" } };
     marks.mark(mark);
     assert.equal(marks.get("alpha-dir"), mark);
-    assert.equal(marks.byName("alpha"), mark);
     marks.clear("beta");
     assert.equal(changes, 1, "nothing to clear changes nothing");
     marks.clear("alpha");
     assert.equal(marks.get("alpha-dir"), undefined);
     assert.equal(changes, 2);
+});
+
+/**
+ * The app's side of `selectedItemId` (`ListContent.selection`): it follows the id when it changed since the id it last
+ * followed and the list shows that row, forgets what it followed when the id goes, and reports only a selection that
+ * moved, later, as the bridge does.
+ */
+class FollowingList {
+    selected: string;
+    rendered: (string | undefined)[] = [];
+    private followed: string | undefined;
+    private readonly reports: string[] = [];
+    private readonly shown: Set<string>;
+
+    constructor(rows: string[], selected: string) {
+        this.shown = new Set(rows);
+        this.selected = selected;
+    }
+
+    render(selectedItemId: string | undefined): void {
+        this.rendered.push(selectedItemId);
+        if (selectedItemId !== undefined && selectedItemId !== this.followed && this.shown.has(selectedItemId)) {
+            this.followed = selectedItemId;
+            this.move(selectedItemId);
+        } else if (selectedItemId === undefined) {
+            this.followed = undefined;
+        }
+    }
+
+    /** The user moves the selection. */
+    move(id: string): void {
+        if (id === this.selected) return;
+        this.selected = id;
+        this.reports.push(id);
+    }
+
+    /** The reports reach the store. */
+    deliver(to: RowSelection): void {
+        for (const id of this.reports.splice(0)) to.reported(id);
+    }
+}
+
+test("a row is selected once, whenever it's asked for, even when it was already selected (D.1, D.5, E.1)", () => {
+    const list = new FollowingList(["w", "x", "y"], "x");
+    const rows = new RowSelection((asked) => list.render(asked));
+    rows.reported("x");
+    // X ends while the panel is hidden, with X selected: nothing to ask for.
+    rows.select("x");
+    list.deliver(rows);
+    assert.equal(list.selected, "x");
+    assert.equal(rows.current, undefined, "an already selected row isn't asked for");
+    // The user moves to Y; then the click on "X is installed" selects X.
+    list.move("y");
+    list.deliver(rows);
+    rows.select("x");
+    list.deliver(rows);
+    assert.equal(list.selected, "x", "the click selects its row");
+    assert.equal(rows.current, undefined, "selected once: from here the user moves it");
+    // Again: the user moves away, and another click on the same row selects it again.
+    list.move("w");
+    list.deliver(rows);
+    rows.select("x");
+    list.deliver(rows);
+    assert.equal(list.selected, "x");
+    assert.deepEqual(list.rendered, ["x", undefined, "x", undefined]);
+});
+
+test("an ask waits for its row, and asking for the selected row instead takes it back", () => {
+    const list = new FollowingList(["w", "x"], "x");
+    const rows = new RowSelection((asked) => list.render(asked));
+    rows.reported("x");
+    // A row the list doesn't show (a search hides it) stays asked for.
+    rows.select("z");
+    list.deliver(rows);
+    assert.equal(rows.current, "z");
+    assert.equal(list.selected, "x");
+    rows.select("x");
+    assert.equal(rows.current, undefined, "the newer ask, for the selected row, wins");
+    assert.equal(list.selected, "x");
+    assert.deepEqual(list.rendered, ["z", undefined]);
 });
 
 test("a failed row's mark: its tag and Try Again and Show Error, a busy tag winning while one runs", () => {
@@ -3911,6 +4054,14 @@ test("a target opens its row, and with failed its failure from memory or the sav
     assert.deepEqual(plain.selected, ["delta-dir", "gamma-dir"]);
     assert.deepEqual(plain.shown, []);
     assert.deepEqual(await readdir(failuresFolder(support)), ["gamma.json"], "a success's click leaves a saved failure alone");
+
+    // Two folders hold one name: a click on the other folder's row shows neither its memory nor its file.
+    await saveFailure(support, failureMark("alpha", "saved"));
+    const other = targetSteps(support, marks);
+    await openNoticeTarget({ name: "alpha", dir: "alpha-other", failed: true }, other.steps);
+    assert.deepEqual(other.selected, ["alpha-other"]);
+    assert.deepEqual(other.shown, []);
+    assert.ok((await readdir(failuresFolder(support))).includes("alpha.json"), "the other row's file stays");
 });
 
 test("the launch context opens once, after the first load, once the records found at open have settled", async () => {

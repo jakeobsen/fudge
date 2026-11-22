@@ -72,6 +72,7 @@ import {
     removeSavedFailure,
     reportEnd,
     RowMarks,
+    RowSelection,
     saveFailure,
     type FailureMark,
     type NoticeTarget,
@@ -158,6 +159,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
     const marks = useMemo(() => new RowMarks(busyChanged), [busyChanged]);
     // The row to select once (SPEC-156 D.1, D.5, E.1), until the selection reaches it.
     const [selectOnce, setSelectOnce] = useState<string>();
+    const rows = useMemo(() => new RowSelection(setSelectOnce), []);
     // `showFailure`, for a settled record and a click, which are made before it.
     const showFailureNow = useRef<(mark: FailureMark) => void>(() => {});
 
@@ -178,7 +180,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                             void logToFudge("error", failureLog(title, failure)).catch(() => {}),
                         marks,
                         report: (end) => reportEnd(installEnded, end),
-                        select: (dir) => setSelectOnce(dir),
+                        select: (dir) => rows.select(dir),
                         save: (mark) => saveFailure(environment.supportPath, mark, logLine),
                         toast: async (shown) => {
                             await showToast({
@@ -191,7 +193,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                     });
                 },
             }),
-        [extensionsDir, busyChanged, marks],
+        [extensionsDir, busyChanged, marks, rows],
     );
     useEffect(() => {
         others.start();
@@ -392,7 +394,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             // Install notifications (SPEC-156 D.1): the app's answer decides the toast, the selection and the mark.
             notices: {
                 report: (report) => installEnded(report),
-                select: (dir) => setSelectOnce(dir),
+                select: (dir) => rows.select(dir),
                 failedNotified: (title, error, mark) => {
                     logFailure(title, error);
                     marks.mark(mark);
@@ -429,7 +431,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
     const openTarget = (target: NoticeTarget) =>
         openNoticeTarget(target, {
             supportPath: environment.supportPath,
-            select: (dir) => setSelectOnce(dir),
+            select: (dir) => rows.select(dir),
             marks,
             show: (mark) => pushFailure(mark),
         });
@@ -614,8 +616,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             selectedItemId={selectOnce}
             onSelectionChange={(id) => {
                 setSelected(id);
-                // Selected once: from here the user moves it.
-                if (id !== null && id === selectOnce) setSelectOnce(undefined);
+                rows.reported(id);
             }}
             searchBarAccessory={
                 <List.Dropdown tooltip="Category" value={filter} onChange={setFilter}>
