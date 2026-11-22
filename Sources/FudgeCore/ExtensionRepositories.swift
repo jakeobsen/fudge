@@ -323,3 +323,37 @@ public enum ExtensionRepositoryStatus: Equatable, Sendable {
         return plain.date(from: text) != nil || fractional.date(from: text) != nil
     }
 }
+
+/// The words of the Extension Store page's **Extension Repositories** section and its two sheets (FUD-182).
+public enum ExtensionRepositoryText {
+    public static let section = "Extension Repositories"
+    public static let raycastName = "Raycast"
+    /// Raycast's row's secondary text.
+    public static let raycastAddress = "github.com/raycast/extensions"
+    public static let addressLabel = "Address"
+    public static let addressPrompt = "https://github.com/owner/repository"
+    public static let branchLabel = "Branch"
+    public static let branchPrompt = "Default branch"
+    public static let addButton = "Add…"
+    public static let removeHelp = "Remove this repository"
+
+    /// An added repository's secondary text: its address, and its branch when it follows one.
+    public static func detail(_ repository: ExtensionRepository) -> String {
+        repository.address + (repository.branch.map { ", branch \($0)" } ?? "")
+    }
+
+    /// The sheet before adding, which is the warning: shown once per repository added, and nothing warns later.
+    public static func addTitle(_ name: String) -> String { "Add \(name)?" }
+    public static let addMessage =
+        "Extensions from this repository run their own code on your Mac, like any app you install. Fudge checks "
+        + "where their packages come from, not what their code does, so only add a repository you trust."
+    public static let add = "Add"
+
+    /// The sheet before removing an added repository.
+    public static func removeTitle(_ name: String) -> String { "Remove \(name)?" }
+    public static let removeMessage =
+        "Extensions you installed from it stay installed, but get no more updates. You can still uninstall them in "
+        + "the Extension Store. Its downloaded list is deleted."
+    public static let remove = "Remove"
+    public static let cancel = "Cancel"
+}

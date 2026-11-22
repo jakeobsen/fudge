@@ -154,6 +154,17 @@ export async function nextNotificationClick(): Promise<NotificationClick | null>
     return typeof repository === "string" ? { name, dir, failed, repository } : { name, dir, failed };
 }
 
+// The Extension Store's repositories (FUD-182). Only the store may ask; the app refuses any other extension.
+
+/**
+ * The list of repositories from Settings, as the app answers it: Raycast's official repository first, then each added
+ * one, `{ copyId, folder, address, branch?, name, on }`. It comes as it is; the store checks it again with
+ * `checkRepositoriesAnswer` (`repository-address.ts`) before using any of it.
+ */
+export async function extensionRepositories(): Promise<unknown> {
+    return await callApp("store.repositories");
+}
+
 export function createFudgeAppModule() {
     return Object.freeze({
         logToFudge,
@@ -162,6 +173,7 @@ export function createFudgeAppModule() {
         installEnded,
         askForNotifications,
         nextNotificationClick,
+        extensionRepositories,
         searchFiles,
         listClipboardHistory,
         clipboardImage,

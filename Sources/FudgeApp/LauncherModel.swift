@@ -4443,6 +4443,21 @@ final class LauncherModel {
                     break
                 }
                 storeNotificationCall(method, params: params, session: session, id: id)
+            case "store.repositories":
+                // The list of repositories from Settings (FUD-182), read afresh for each call: the Extension Store's
+                // call, refused for any other extension.
+                guard sessionExtensions[session] == ExtensionStore.extensionName else {
+                    send(
+                        .rpcResult(
+                            session: session, id: id, result: nil,
+                            error: "Only the Extension Store asks for the list of repositories"))
+                    break
+                }
+                let settings = FudgeSettings.load(from: paths.settingsFile)
+                send(
+                    .rpcResult(
+                        session: session, id: id, result: ExtensionRepository.storeAnswer(settings: settings),
+                        error: nil))
             case "commandLineTools.ready", "commandLineTools.openSettings":
                 // The Extension Store's questions about extensions with a part written in Swift (SPEC-145 §3), refused
                 // for any other extension.
