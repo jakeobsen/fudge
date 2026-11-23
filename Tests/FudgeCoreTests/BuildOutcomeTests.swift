@@ -45,6 +45,8 @@ private func sharedCases(_ name: String) throws -> (valid: [[String: Any]], inva
         #expect(record.title == item["title"] as? String)
         #expect(record.updating == item["updating"] as? Bool)
         #expect(record.startedAt == item["startedAt"] as? String)
+        #expect(record.id == item["id"] as? String)
+        #expect(record.repository == item["repository"] as? String)
         #expect(record.build == InstallBuild(pid: 4242, startedAt: record.startedAt))
     }
     for item in cases.invalid {

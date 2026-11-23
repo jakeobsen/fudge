@@ -14,7 +14,9 @@ public enum ExtensionStore {
     /// The switch at the top of the store's Settings page.
     public enum Switch {
         public static let title = "Extension Store"
-        public static let help = "Browse and install extensions from Raycast's open-source repository."
+        public static let help =
+            "Browse and install extensions from Raycast's open-source repository and the extension repositories "
+            + "you add."
     }
 
     /// What opening the store shows while it's off, in place of the store: its code isn't started, so it downloads

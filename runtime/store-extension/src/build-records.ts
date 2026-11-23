@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, readdir, rename, rm, writeFile, type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import { extensionId, isValidRepositoryFolder, raycastFolder } from "../../src/extension-id.ts";
 import { isValidFolder, isValidName } from "./catalog.ts";
 import { readRegularFile } from "./files.ts";
 import { readOutputTail, spawnProgram, type Run } from "./git.ts";
@@ -17,6 +18,11 @@ export type BuildRecord = {
     pid: number;
     name: string;
     dir: string;
+    /** For an added repository's build (SPEC-157 E.3): the id the extension gets there, so an adopted build is recorded
+     * under it. Raycast's builds have neither this nor `repository`. */
+    id?: string;
+    /** The folder of the repository the build is from, as its `--repository` names it; only an added repository's. */
+    repository?: string;
     title: string;
     tree?: string;
     commit: string;
@@ -88,9 +94,19 @@ export function parseBuildRecord(fileName: string, text: string): BuildRecord | 
         return undefined;
     }
     if (typeof object !== "object" || object === null || Array.isArray(object)) return undefined;
-    const { pid, name, dir, title, tree, commit, updating, startedAt, deadline, command } = object as Record<string, unknown>;
+    const { pid, name, dir, id, repository, title, tree, commit, updating, startedAt, deadline, command } = object as Record<
+        string,
+        unknown
+    >;
     if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0 || pid !== Number(match[1])) return undefined;
     if (!isValidName(name) || !isValidFolder(dir)) return undefined;
+    // An added repository's build names its folder and the id it gets there, the folder's segments and the name;
+    // Raycast's names neither (SPEC-157 E.3).
+    if ((id === undefined) !== (repository === undefined)) return undefined;
+    if (repository !== undefined) {
+        if (!isValidRepositoryFolder(repository) || repository === raycastFolder) return undefined;
+        if (typeof id !== "string" || id !== extensionId(name, repository)) return undefined;
+    }
     if (typeof title !== "string" || typeof commit !== "string" || typeof updating !== "boolean") return undefined;
     if (tree !== undefined && typeof tree !== "string") return undefined;
     if (!isTime(startedAt) || !isTime(deadline)) return undefined;
@@ -101,6 +117,7 @@ export function parseBuildRecord(fileName: string, text: string): BuildRecord | 
         pid,
         name,
         dir,
+        ...(typeof id === "string" && typeof repository === "string" ? { id, repository } : {}),
         title,
         ...(tree === undefined ? {} : { tree }),
         commit,

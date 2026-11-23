@@ -2,8 +2,11 @@
 // tests fake git, the fudge CLI, the confirmation and the Trash.
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { extensionId, isValidExtensionId } from "../../src/extension-id.ts";
 import {
+    addedRepository,
     commandTitles,
+    installedRecord,
     isValidFolder,
     isValidName,
     sameFolder,
@@ -34,6 +37,7 @@ import {
     type BuildRecordFiles,
 } from "./build-records.ts";
 import { GitError, spawnProgram, type GitResult, type Run, type StoreRepository } from "./git.ts";
+import type { RepositoryEntry } from "./repository-address.ts";
 import {
     removeSavedFailure,
     reportEnd,
@@ -87,8 +91,15 @@ export function alreadyBuildingTitle(title: string): string {
     return `${title} is already being installed`;
 }
 
+/** A repository that's on and the store's copy of it, as far as a row's work needs them (`StoreCopy`). */
+export type RowCopy = { entry: Pick<RepositoryEntry, "copyId" | "identity">; repo: StoreRepository };
+
+/** What a row installs nothing with: its repository was switched off or removed since it was listed (SPEC-157 D.6). */
+export const offOrRemovedMessage = "This repository is off or was removed.";
+
 export type StoreContext = {
-    repo: StoreRepository;
+    /** The copy of each repository that's on, by its copy id, as the list was last read; none for one that isn't. */
+    copyOf: (copyId: string) => RowCopy | undefined;
     supportPath: string;
     /** `FUDGE_CLI`: the app's `fudge` tool. */
     cli: string;
@@ -117,6 +128,24 @@ export type StoreContext = {
      * confirmed an install or update (SPEC-156 G); not waited for, and its failure never stops the install. */
     askForNotifications?: () => Promise<void>;
 };
+
+/**
+ * A row's own copy (SPEC-157 D.6), by the row's copy id and never another's: its install, its compatibility check and
+ * its README use that copy alone. Refused when its repository is off or was removed meanwhile.
+ */
+export function rowCopy(context: Pick<StoreContext, "copyOf">, copyId: string): RowCopy {
+    const copy = context.copyOf(copyId);
+    if (!copy || copy.entry.copyId !== copyId) throw new StoreError(offOrRemovedMessage);
+    return copy;
+}
+
+/** The confirmation's first line (D.5): where the extension comes from, its repository's identity without `https://`,
+ * and the commit. An added repository's extension also says it's kept apart (E.5). */
+export function confirmationText(identity: string, commit: string, added: boolean, compatibility: string): string {
+    const from = `From ${identity.replace(/^https:\/\//, "")} at ${commit.slice(0, 7)}. It runs its own code on your Mac, like any app you install.`;
+    const apart = added ? "It's kept apart from other extensions with the same name, with its own settings and data." : undefined;
+    return [from, apart, compatibility].filter((part): part is string => part !== undefined).join("\n\n");
+}
 
 /** Calls `askForNotifications` without waiting, swallowing any failure. */
 function askForNotifications(context: StoreContext): void {
@@ -185,12 +214,18 @@ export async function readInstalled(supportPath: string): Promise<Installed> {
     }
     if (typeof object !== "object" || object === null) return {};
     const installed: Installed = {};
-    for (const [name, record] of Object.entries(object)) {
-        if (!isValidName(name) || typeof record !== "object" || record === null) continue;
-        const { tree, commit, installedAt, dir } = record as Record<string, unknown>;
+    for (const [key, record] of Object.entries(object)) {
+        if (!isValidExtensionId(key) || typeof record !== "object" || record === null) continue;
+        const { tree, commit, installedAt, dir, repository } = record as Record<string, unknown>;
         if (typeof tree !== "string" || typeof commit !== "string" || typeof installedAt !== "string") continue;
         if (dir !== undefined && !isValidFolder(dir)) continue;
-        installed[name] = { tree, commit, installedAt, dir: dir ?? name };
+        // A qualified id's record names its repository's folder, the id's own; Raycast's, under the bare name, names
+        // none (SPEC-157 E.1). Swift's `Backup.storeInstalls` reads them the same way.
+        const parts = key.split("+");
+        const name = parts.at(-1)!;
+        const folder = parts.length === 1 ? undefined : parts.slice(0, -1).join("/");
+        if (repository !== folder) continue;
+        installed[key] = { tree, commit, installedAt, dir: dir ?? name, ...(folder === undefined ? {} : { repository: folder }) };
     }
     return installed;
 }
@@ -204,33 +239,47 @@ export async function writeInstalled(supportPath: string, installed: Installed):
     await rename(temporary, file);
 }
 
-/** The CLI's arguments for installing the extension in `source` into `extensionsDir`, and nowhere else, in Raycast's
- * folder there (`--repository raycast/extensions`, FUD-183), with what to do with a part written in Swift when it has
- * one. */
-export function buildArguments(source: string, extensionsDir: string, swiftParts?: SwiftParts): string[] {
+/** The CLI's arguments for installing the extension in `source` into `extensionsDir`, and nowhere else, in its
+ * repository's folder there (`--repository <folder>`, SPEC-157 E.4: `raycast/extensions` for Raycast's rows), with what
+ * to do with a part written in Swift when it has one. */
+export function buildArguments(
+    source: string,
+    extensionsDir: string,
+    repository: string,
+    swiftParts?: SwiftParts,
+): string[] {
     return [
         "build",
         source,
         "--into",
         extensionsDir,
         "--repository",
-        raycastFolder,
+        repository,
         ...(swiftParts ? ["--swift-parts", swiftParts] : []),
     ];
 }
 
-/** The folder of the store's install of `name`: `<extensionsDir>/raycast/extensions/<name>`, Raycast's folder (FUD-183).
- * Every place that works out where a store install is takes it from here. */
-export function installFolder(extensionsDir: string, name: string): string {
-    return path.join(extensionsDir, ...raycastFolder.split("/"), name);
+/** The folder of the install of `name` from the repository whose folder is `repository`:
+ * `<extensionsDir>/<repository>/<name>` (SPEC-158 B.8, SPEC-157 E.4). Every place that works out where an install is
+ * takes it from here. */
+export function installFolder(extensionsDir: string, repository: string, name: string): string {
+    return path.join(extensionsDir, ...repository.split("/"), name);
 }
 
-/** Which of the store's installs of `names` were built without their part written in Swift (SPEC-145 §3), each read
- * from its folder in Raycast's (`installFolder`). */
-export async function installsWithoutSwift(extensionsDir: string, names: Iterable<string>): Promise<Set<string>> {
+/** The repository folder and the name an `installed.json` key names (SPEC-158 C): a bare name is Raycast's, and a
+ * qualified id is the folder's segments and the name joined with `+`. */
+export function installOf(id: string): { repository: string; name: string } {
+    const parts = id.split("+");
+    return { repository: parts.length === 1 ? raycastFolder : parts.slice(0, -1).join("/"), name: parts.at(-1)! };
+}
+
+/** Which of the store's installs, by id, were built without their part written in Swift (SPEC-145 §3), each read from
+ * its own folder (`installFolder`). */
+export async function installsWithoutSwift(extensionsDir: string, ids: Iterable<string>): Promise<Set<string>> {
     const found = new Set<string>();
-    for (const name of names) {
-        if (await installedWithoutSwift(installFolder(extensionsDir, name))) found.add(name);
+    for (const id of ids) {
+        const { repository, name } = installOf(id);
+        if (await installedWithoutSwift(installFolder(extensionsDir, repository, name))) found.add(id);
     }
     return found;
 }
@@ -238,6 +287,13 @@ export async function installsWithoutSwift(extensionsDir: string, names: Iterabl
 function checkedName(name: string): string {
     if (!isValidName(name)) throw new StoreError(`"${name}" isn't a valid extension name`);
     return name;
+}
+
+/** The row's extension id (SPEC-158 C), which every install, record and lock of it is under. */
+function checkedId(entry: Pick<StoreEntry, "name" | "repositoryFolder">): string {
+    const id = extensionId(entry.name, entry.repositoryFolder);
+    if (id === undefined) throw new StoreError(`"${entry.name}" from ${entry.repositoryFolder} has no valid extension id`);
+    return id;
 }
 
 function checkedFolder(dir: string): string {
@@ -282,11 +338,13 @@ async function compatibilityOf(
 
 /**
  * Installs (or updates) `entry`: fetches its source from its folder, checks where its packages come from, finds what
- * it uses (`fudge scan`, or the cached result for this version), asks, builds it with the CLI into `extensionsDir` (as
- * `<extensionsDir>/raycast/extensions/<name>`, `installFolder`), and records it under its name with its folder. Resolves false when the user cancels, else
- * with what the done message adds (`installNote`); throws `StoreError` when a step refuses or fails. An extension of that name that the store didn't install from this
- * folder is never replaced: one installed another way, one from another folder whose manifest has the same name, or one
- * Fudge bundles.
+ * it uses (`fudge scan`, or the cached result for this version), asks, builds it with the CLI into `extensionsDir`, in
+ * its repository's folder there (`<extensionsDir>/<repository>/<name>`, `installFolder`), and records it under its id
+ * with its folder, and its repository's when that's an added one (SPEC-157 E.1, E.4). Resolves false when the user
+ * cancels, else with what the done message adds (`installNote`); throws `StoreError` when a step refuses or fails.
+ * Nothing is installed over what the store didn't install from this row (E.6): an install in this repository's folder
+ * that the store didn't record, one from another folder of this repository whose manifest has the same name, or a name
+ * Fudge bundles. The same name from another repository, or a development build, stays where it is, beside this one.
  */
 export async function install(
     entry: StoreEntry,
@@ -296,17 +354,22 @@ export async function install(
     const name = checkedName(entry.name);
     const dir = checkedFolder(entry.dir);
     if (bundledNames.includes(name)) throw new StoreError(`${entry.title} can't be installed: ${name} is part of Fudge.`);
+    const id = checkedId(entry);
+    const repository = addedRepository(entry);
+    const folder = installFolder(context.extensionsDir, entry.repositoryFolder, name);
     const installed = await readInstalled(context.supportPath);
-    const record = installed[name];
-    // A development build of this name (`fudgeapp/development/<name>`) is kept apart, so it refuses nothing. An
-    // install still at the extensions folder's top level (the app's move gave up, or an older Fudge installed it after
-    // the move) isn't seen here: `fudge build`'s own move files it in Raycast's folder first, where this install then
-    // replaces it.
-    if (record ? !sameFolder(record.dir, dir) : await exists(installFolder(context.extensionsDir, name))) {
+    const record = installed[id];
+    // Only this repository's folder counts: the same name from another repository, or a development build
+    // (`fudgeapp/development/<name>`), is another extension with its own id, so it refuses nothing (E.6). An install
+    // still at the extensions folder's top level (the app's move gave up, or an older Fudge installed it after the move)
+    // isn't seen here: `fudge build`'s own move files it in Raycast's folder first, where this install then replaces it.
+    if (record ? !sameFolder(record.dir, dir) : await exists(folder)) {
         throw new StoreError(nameTakenMessage(name));
     }
-    await context.repo.add(`/extensions/${dir}/`);
-    const source = path.join(context.repo.path, "extensions", dir);
+    // The row's own copy, as the list is now: one switched off or removed since installs nothing.
+    const copy = rowCopy(context, entry.copyId);
+    await copy.repo.add(`/extensions/${dir}/`);
+    const source = path.join(copy.repo.path, "extensions", dir);
     // The build installs under the name in this manifest, so it must still be the one the list showed.
     const current = await readRegularFile(path.join(source, "package.json"), maxManifestBytes)
         .then((text) => (JSON.parse(text) as { name?: unknown }).name)
@@ -315,7 +378,7 @@ export async function install(
     const problem = await sourceProblem(source);
     if (problem) throw new StoreError(`${entry.title} can't be installed. ${problem}.`);
 
-    const tree = (await context.repo.trees()).get(dir);
+    const tree = (await copy.repo.trees()).get(dir);
     const checked = await compatibilityOf(source, tree, context);
     // A part written in Swift (SPEC-145 §3): built whenever the tools are set up, with nothing more said (D-118);
     // without them, the view's choice, before anything is installed.
@@ -324,10 +387,10 @@ export async function install(
     const swift = await decideSwiftParts(hasSwiftPart, context.commandLineToolsReady ?? (async () => false), choose);
     if (!swift) return false;
     const compatibility = compatibilityLine(checked, commandTitles(entry));
-    const commit = await context.repo.commit();
+    const commit = await copy.repo.commit();
     const confirmed = await context.confirm(
         `${record ? "Update" : "Install"} ${entry.title}?`,
-        `From github.com/raycast/extensions at ${commit.slice(0, 7)}. It runs its own code on your Mac, like any app you install.\n\n${compatibility}`,
+        confirmationText(copy.entry.identity, commit, addedRepository(entry) !== undefined, compatibility),
         record ? "Update" : "Install",
     );
     if (!confirmed) return false;
@@ -339,8 +402,16 @@ export async function install(
     const unchecked = checked === undefined || checked.notChecked === true;
     const timeout = (parts?: SwiftParts) =>
         parts === "build" && (hasSwiftPart || unchecked) ? swiftBuildTimeout : buildTimeout;
-    const about = { name, dir, title: entry.title, ...(tree === undefined ? {} : { tree }), commit, updating: record !== undefined };
-    let args = buildArguments(source, context.extensionsDir, swift.swiftParts);
+    const about = {
+        name,
+        dir,
+        ...(repository === undefined ? {} : { id, repository }),
+        title: entry.title,
+        ...(tree === undefined ? {} : { tree }),
+        commit,
+        updating: record !== undefined,
+    };
+    let args = buildArguments(source, context.extensionsDir, entry.repositoryFolder, swift.swiftParts);
     let result = await recordedBuild(context, run, args, timeout(swift.swiftParts), about, ran);
     if (result.code === alreadyBuildingStatus) throw new AlreadyBuilding(entry.title);
     // A `swift:` import the check missed, without the tools: the build stopped at it, asking what to do, so the view
@@ -348,7 +419,7 @@ export async function install(
     if (result.code !== 0 && swift.swiftParts === undefined && askedForSwiftParts(`${result.stdout}\n${result.stderr}`)) {
         const choice = await choose();
         if (choice === "dont-install") return false;
-        args = buildArguments(source, context.extensionsDir, choice);
+        args = buildArguments(source, context.extensionsDir, entry.repositoryFolder, choice);
         result = await recordedBuild(context, run, args, choice === "build" ? swiftBuildTimeout : buildTimeout, about, ran);
         if (result.code === alreadyBuildingStatus) throw new AlreadyBuilding(entry.title);
     }
@@ -357,11 +428,17 @@ export async function install(
         throw new BuildFailed(output, ["fudge", ...args].join(" "), result.code);
     }
     if (!tree) throw new StoreError(`Couldn't read ${name}'s version in the store's copy`);
-    const recorded: InstallRecord = { tree, commit, installedAt: (context.now?.() ?? new Date()).toISOString(), dir };
-    await writeInstalled(context.supportPath, { ...(await readInstalled(context.supportPath)), [name]: recorded });
+    const recorded: InstallRecord = {
+        tree,
+        commit,
+        installedAt: (context.now?.() ?? new Date()).toISOString(),
+        dir,
+        ...(repository === undefined ? {} : { repository }),
+    };
+    await writeInstalled(context.supportPath, { ...(await readInstalled(context.supportPath)), [id]: recorded });
     // The build scanned the source again: what it turned off is what's true, so say so where it differs.
     const built = await builtCompatibility(
-        installFolder(context.extensionsDir, name),
+        folder,
         entry.commands.map((command) => command.name),
     );
     const note = installNote(checked, built, commandTitles(entry));
@@ -384,25 +461,26 @@ export function doneToast(title: string, updating: boolean, done: InstallDone): 
 }
 
 /**
- * Moves an extension the store installed to the Trash, after asking, and forgets it. Anything not in `installed.json`
- * from this row's folder is refused: the store never touches extensions installed another way, nor one another
- * folder with the same name installed.
+ * Moves an extension the store installed to the Trash, after asking, and forgets it: its id's record and its folder in
+ * its repository's (SPEC-157 E.2, E.4). Anything not in `installed.json` from this row is refused: the store never
+ * touches extensions installed another way, nor one another folder with the same name installed, nor the same name from
+ * another repository.
  */
 export async function uninstall(entry: StoreEntry, context: StoreContext): Promise<boolean> {
     const name = checkedName(entry.name);
+    const id = checkedId(entry);
     const installed = await readInstalled(context.supportPath);
-    const record = installed[name];
-    if (!record || !sameFolder(record.dir, entry.dir)) throw new StoreError(`${entry.title} wasn't installed by the store`);
+    if (!installedRecord(entry, installed)) throw new StoreError(`${entry.title} wasn't installed by the Extension Store`);
     const confirmed = await context.confirm(
         `Uninstall ${entry.title}?`,
         "It's moved to the Trash. Its settings and data stay.",
         "Uninstall",
     );
     if (!confirmed) return false;
-    const folder = installFolder(context.extensionsDir, name);
+    const folder = installFolder(context.extensionsDir, entry.repositoryFolder, name);
     if (await exists(folder)) await context.trash(folder);
     const remaining = await readInstalled(context.supportPath);
-    delete remaining[name];
+    delete remaining[id];
     await writeInstalled(context.supportPath, remaining);
     return true;
 }
@@ -436,31 +514,32 @@ export function oneAtATime<T>(work: () => Promise<T>): Promise<T> {
 export type Busy = "installing" | "updating";
 
 /**
- * The names this store is installing or updating, from the press until the install's run ends, after the list has
- * loaded again (SPEC-153 B). The key is the manifest name, since the install folder is `<extensions>/<name>`. A press for
- * a name it holds, or one `busyElsewhere` names, does nothing: no toast, nothing queued. A press for another name waits
- * its turn in `work`, and its row says so meanwhile.
+ * The extensions this store is installing or updating, from the press until the install's run ends, after the list has
+ * loaded again (SPEC-153 B). The key is the extension's id (`entryId`, SPEC-157 E.7), since each id is built under its
+ * own lock into its own folder: the same name from another repository is another extension. A press for an id it
+ * holds, or one `busyElsewhere` names, does nothing: no toast, nothing queued. A press for another id waits its turn in
+ * `work`, and its row says so meanwhile.
  */
 export class InstallPresses {
-    private readonly names = new Map<string, Busy>();
+    private readonly ids = new Map<string, Busy>();
     private readonly changed: () => void;
-    private readonly busyElsewhere: (name: string) => boolean;
+    private readonly busyElsewhere: (id: string) => boolean;
 
-    constructor(changed: () => void = () => {}, busyElsewhere: (name: string) => boolean = () => false) {
+    constructor(changed: () => void = () => {}, busyElsewhere: (id: string) => boolean = () => false) {
         this.changed = changed;
         this.busyElsewhere = busyElsewhere;
     }
 
-    state(name: string): Busy | undefined {
-        return this.names.get(name);
+    state(id: string): Busy | undefined {
+        return this.ids.get(id);
     }
 
-    press(name: string, updating: boolean, work: () => Promise<void>): Promise<void> {
-        if (this.names.has(name) || this.busyElsewhere(name)) return Promise.resolve();
-        this.names.set(name, updating ? "updating" : "installing");
+    press(id: string, updating: boolean, work: () => Promise<void>): Promise<void> {
+        if (this.ids.has(id) || this.busyElsewhere(id)) return Promise.resolve();
+        this.ids.set(id, updating ? "updating" : "installing");
         this.changed();
         const ended = () => {
-            this.names.delete(name);
+            this.ids.delete(id);
             this.changed();
         };
         try {
@@ -492,12 +571,12 @@ export type InstallView = {
 export type InstallNotices = {
     /** `installEnded` in `fudge:app`. */
     report: (report: InstallEndReport) => Promise<InstallAnswer>;
-    /** Selects the row of `dir`, once. */
-    select: (dir: string) => void;
+    /** Selects the row of `dir` in the repository whose folder is `repository` (Raycast's when none), once. */
+    select: (dir: string, repository?: string) => void;
     /** A failure that got a notification: logged, its row marked, and kept for a click; no failure view. */
     failedNotified: (title: string, error: unknown, mark: FailureMark) => void;
-    /** The name installed or updated: its row's mark goes. */
-    succeeded?: (name: string) => void;
+    /** The name installed or updated from that repository (Raycast's when none): its row's mark goes. */
+    succeeded?: (name: string, repository?: string) => void;
     /** How long to wait for the answer (`reportLimit`, 5 s). */
     limit?: number;
 };
@@ -509,8 +588,11 @@ export type InstallNotices = {
  * C.6).
  */
 export async function installPressed(entry: StoreEntry, updating: boolean, context: StoreContext, view: InstallView): Promise<void> {
+    // An added repository's folder, which the report, the mark and the saved failure carry; none for Raycast's.
+    const repository = addedRepository(entry);
+    const fromRepository = repository === undefined ? {} : { repository };
     // Pressed again: a failure saved for a click is out of date (SPEC-156 D.4).
-    if (view.notices) await removeSavedFailure(context.supportPath, entry.name);
+    if (view.notices) await removeSavedFailure(context.supportPath, { name: entry.name, ...fromRepository });
     const toast = await view.toast(`${updating ? "Updating" : "Installing"} ${entry.title}…`);
     // The last `fudge build` the install ran, for the app to know it by (SPEC-156 C.1).
     let build: BuildId | undefined;
@@ -518,6 +600,7 @@ export async function installPressed(entry: StoreEntry, updating: boolean, conte
         ...(build ? { build: { pid: build.pid, startedAt: build.startedAt } } : {}),
         name: entry.name,
         dir: entry.dir,
+        ...fromRepository,
         title: entry.title,
         updating,
         outcome,
@@ -535,10 +618,10 @@ export async function installPressed(entry: StoreEntry, updating: boolean, conte
         const shown = doneToast(entry.title, updating, done);
         // The app decides whether a notification says it (SPEC-156 D.1); then no HUD repeats it.
         const answer = view.notices ? await reportEnd(view.notices.report, end("installed"), view.notices.limit) : unanswered;
-        view.notices?.succeeded?.(entry.name);
+        view.notices?.succeeded?.(entry.name, repository);
         if (answer.notified) await toast.hide();
         else toast.done(shown.title, shown.message);
-        if (!answer.onScreen) view.notices?.select(entry.dir);
+        if (!answer.onScreen) view.notices?.select(entry.dir, repository);
     } catch (error) {
         if (error instanceof AlreadyBuilding) {
             toast.done(error.message);
@@ -554,13 +637,14 @@ export async function installPressed(entry: StoreEntry, updating: boolean, conte
             const mark: FailureMark = {
                 name: entry.name,
                 dir: entry.dir,
+                ...fromRepository,
                 title: entry.title,
                 updating,
                 failedAt: (context.now?.() ?? new Date()).toISOString(),
                 details: failureDetails(error),
             };
             view.notices.failedNotified(title, error, mark);
-            view.notices.select(entry.dir);
+            view.notices.select(entry.dir, repository);
             await saveFailure(context.supportPath, mark, context.log);
             return;
         }

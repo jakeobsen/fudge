@@ -13,8 +13,10 @@ import {
     type FoundBuildRecord,
     type ProcessProbe,
 } from "./build-records.ts";
+import type { InstallRecord } from "./catalog.ts";
 import type { FailureDetails } from "./failure.ts";
 import type { FailureMark, InstallAnswer, InstallEndReport, RowMarks } from "./notices.ts";
+import { raycastFolder } from "./repository-folder.ts";
 import {
     alreadyBuildingStatus,
     doneToast,
@@ -174,13 +176,15 @@ export class OtherBuilds {
      */
     private async settleNow(record: FoundBuildRecord, bound: Date, seen: boolean): Promise<void> {
         const { supportPath, extensionsDir, now = () => new Date(), log } = this.options;
-        const moved = installFolder(extensionsDir, record.name);
+        // Its repository's folder (SPEC-157 E.4): an added repository's when the record names one, else Raycast's.
+        const moved = installFolder(extensionsDir, record.repository ?? raycastFolder, record.name);
         const isFolder = await lstat(moved).then(
             (info) => info.isDirectory(),
             () => false,
         );
-        // The next move files an unmoved one in Raycast's folder, keeping its creation time.
-        const folder = isFolder ? moved : path.join(extensionsDir, record.name);
+        // The next move files an unmoved one in Raycast's folder, keeping its creation time; only Raycast's builds were
+        // ever made at the top level.
+        const folder = isFolder || record.repository !== undefined ? moved : path.join(extensionsDir, record.name);
         const made = async (end: number) =>
             record.tree !== undefined && (await createdBetween(folder, Date.parse(record.startedAt), end));
         const { outcome } = record;
@@ -196,8 +200,16 @@ export class OtherBuilds {
             failed = true;
         }
         if (adopted) {
-            const entry = { tree: record.tree!, commit: record.commit, installedAt: now().toISOString(), dir: record.dir };
-            await writeInstalled(supportPath, { ...(await readInstalled(supportPath)), [record.name]: entry });
+            // The record the dead session would have written (E.1, E.3): under the build's id, with its repository's folder
+            // when that's an added one.
+            const entry: InstallRecord = {
+                tree: record.tree!,
+                commit: record.commit,
+                installedAt: now().toISOString(),
+                dir: record.dir,
+                ...(record.repository === undefined ? {} : { repository: record.repository }),
+            };
+            await writeInstalled(supportPath, { ...(await readInstalled(supportPath)), [record.id ?? record.name]: entry });
         }
         let failure: FailureDetails | undefined;
         if (failed) {
@@ -222,10 +234,11 @@ export class OtherBuilds {
         return [...this.known.values()].map((known) => known.record);
     }
 
-    /** Whether another session's build of `name` is running or not settled yet, as B shows it on every row of that name. */
-    busy(name: string): Busy | undefined {
+    /** Whether another session's build of the extension `id` is running or not settled yet, as B shows it on that
+     * extension's rows (SPEC-157 E.7). A record without an `id` is Raycast's, whose id is its name. */
+    busy(id: string): Busy | undefined {
         for (const known of this.known.values()) {
-            if (known.record.name === name) return known.record.updating ? "updating" : "installing";
+            if ((known.record.id ?? known.record.name) === id) return known.record.updating ? "updating" : "installing";
         }
         return undefined;
     }
@@ -275,11 +288,17 @@ export class OtherBuilds {
 }
 
 /**
- * The store's refresh (⌘R, the day-old refresh on open, the clone again after a copy that can't be read): held by
+ * A copy's refresh (⌘R, the day-old refresh on open, the clone again after a copy that can't be read): held by
  * `others` before it enters the queue, never inside it, so a record settling in the queue can't wait behind it (C.7).
+ * Each copy is held under a key of its own, `refresh:<copyId>` (SPEC-157 C.3), so one copy's waiting refresh never
+ * stands in for another's.
  */
-export function heldRefresh(others: Pick<OtherBuilds, "hold">, work: () => Promise<void>): Promise<void> {
-    return others.hold("refresh", () => oneAtATime(work));
+export function heldRefresh(
+    others: Pick<OtherBuilds, "hold">,
+    copyId: string,
+    work: () => Promise<void>,
+): Promise<void> {
+    return others.hold(`refresh:${copyId}`, () => oneAtATime(work));
 }
 
 /** ⌘R's toast while a build from another session holds the refresh back. */
@@ -312,8 +331,8 @@ export type SettledSteps = {
     marks: Pick<RowMarks, "mark">;
     /** Reports the end to the app, within the report's time limit. */
     report: (end: InstallEndReport) => Promise<InstallAnswer>;
-    /** Selects the row of that folder, once. */
-    select: (dir: string) => void;
+    /** Selects the row of that folder in the repository whose folder is `repository` (Raycast's when none), once. */
+    select: (dir: string, repository?: string) => void;
     /** Saves a failure that got a notification for a click. */
     save: (mark: FailureMark) => Promise<void>;
     toast: (shown: { failed: boolean; title: string; message?: string }) => Promise<void>;
@@ -340,6 +359,7 @@ export async function settledNotice(outcome: Settled, steps: SettledSteps): Prom
             updating: record.updating,
             failedAt: (steps.now?.() ?? new Date()).toISOString(),
             details: failure,
+            ...(record.repository === undefined ? {} : { repository: record.repository }),
         };
         steps.marks.mark(mark);
     }
@@ -350,24 +370,27 @@ export async function settledNotice(outcome: Settled, steps: SettledSteps): Prom
         build: { pid: record.pid, startedAt: record.startedAt },
         name: record.name,
         dir: record.dir,
+        ...(record.repository === undefined ? {} : { repository: record.repository }),
         title: record.title,
         updating: record.updating,
         outcome: mark ? "failed" : "installed",
     });
     if (mark && answer.notified) {
-        steps.select(record.dir);
+        steps.select(record.dir, record.repository);
         await steps.save(mark);
         return;
     }
-    if (!mark && !answer.onScreen) steps.select(record.dir);
+    if (!mark && !answer.onScreen) steps.select(record.dir, record.repository);
     if (answer.notified) return;
     await steps.toast(shown);
     if (mark) steps.show(mark);
 }
 
-/** What `openCopy` works with: the store's copy and these builds. */
+/** What `openCopy` works with: one copy and these builds. */
 export type OpenSteps = {
     others: Pick<OtherBuilds, "check" | "hold">;
+    /** The copy's copy id, which keys its holds. */
+    copyId: string;
     exists: () => Promise<boolean>;
     load: () => Promise<void>;
     remove: () => Promise<void>;
@@ -376,9 +399,9 @@ export type OpenSteps = {
 };
 
 /**
- * The store's `open()` once git is found: the records of builds from another session first (C.2), so a `load()` that
+ * A copy's opening once git is found: the records of builds from another session first (C.2), so a `load()` that
  * throws on the copy still knows them, then the copy. A copy that can't be read is removed and cloned again, after those
- * builds have settled (C.7), as is the day-old refresh (`refresh` holds itself).
+ * builds have settled (C.7), held under `reload:<copyId>`, as is the day-old refresh (`refresh` holds itself).
  */
 export async function openCopy(retry: boolean, steps: OpenSteps): Promise<void> {
     await steps.others.check();
@@ -389,7 +412,7 @@ export async function openCopy(retry: boolean, steps: OpenSteps): Promise<void> 
     try {
         await steps.load();
     } catch {
-        await steps.others.hold("reload", async () => {
+        await steps.others.hold(`reload:${steps.copyId}`, async () => {
             await steps.remove();
             await steps.refresh();
         });

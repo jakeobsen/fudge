@@ -12,14 +12,23 @@ public struct StoreBuildRecord: Sendable, Equatable {
     public var updating: Bool
     /// As written, so it matches the store's report of the same build (`build.startedAt`) exactly.
     public var startedAt: String
+    /// For an added repository's build (SPEC-157 E.3): the id the extension gets there. Raycast's has none.
+    public var id: String?
+    /// The folder of the repository the build is from; only an added repository's.
+    public var repository: String?
 
-    public init(pid: Int32, name: String, dir: String, title: String, updating: Bool, startedAt: String) {
+    public init(
+        pid: Int32, name: String, dir: String, title: String, updating: Bool, startedAt: String, id: String? = nil,
+        repository: String? = nil
+    ) {
         self.pid = pid
         self.name = name
         self.dir = dir
         self.title = title
         self.updating = updating
         self.startedAt = startedAt
+        self.id = id
+        self.repository = repository
     }
 
     /// The build this record is of.
@@ -28,6 +37,8 @@ public struct StoreBuildRecord: Sendable, Equatable {
     /// The record in `data`, read from the file `fileName`, or nil when the name isn't `<pid>.json` or a field isn't
     /// valid: `pid` that number, a valid name and folder, `title` and `commit` strings, `updating` a boolean, `tree` a
     /// string when it's there, `startedAt` and `deadline` times, and `command` a list of strings that isn't empty.
+    /// `id` and `repository` come together or not at all: a repository folder other than Raycast's, and the id the name
+    /// gets in it.
     public static func parse(fileName: String, data: Data) -> StoreBuildRecord? {
         guard let pid = BuildOutcomeFile.pid(ofCompanion: fileName, suffix: ".json"),
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -38,9 +49,28 @@ public struct StoreBuildRecord: Sendable, Equatable {
             let updating = boolean(object["updating"]),
             object["tree"] == nil || object["tree"] is String,
             let startedAt = object["startedAt"] as? String, time(startedAt) != nil, time(object["deadline"]) != nil,
-            let command = object["command"] as? [Any], !command.isEmpty, command.allSatisfy({ $0 is String })
+            let command = object["command"] as? [Any], !command.isEmpty, command.allSatisfy({ $0 is String }),
+            let source = repositorySource(id: object["id"], repository: object["repository"], name: name)
         else { return nil }
-        return StoreBuildRecord(pid: pid, name: name, dir: dir, title: title, updating: updating, startedAt: startedAt)
+        return StoreBuildRecord(
+            pid: pid, name: name, dir: dir, title: title, updating: updating, startedAt: startedAt, id: source.id,
+            repository: source.repository)
+    }
+
+    /// A record's `id` and `repository`, as `parseBuildRecord` reads them: both missing (Raycast's), or a repository
+    /// folder other than Raycast's with the id `name` gets there. Nil when they don't fit.
+    static func repositorySource(id: Any?, repository: Any?, name: String) -> (id: String?, repository: String?)? {
+        switch (id, repository) {
+        case (nil, nil):
+            return (nil, nil)
+        case (let id as String, let folder as String):
+            guard ExtensionRepositoryFolder.isValid(folder), folder != ExtensionRepositoryFolder.raycast,
+                ExtensionID(name: name, repositoryFolder: folder)?.key == id
+            else { return nil }
+            return (id, folder)
+        default:
+            return nil
+        }
     }
 
     /// A folder in Raycast's repository, as `catalog.ts`'s `isValidFolder` has it: one segment of ASCII letters,

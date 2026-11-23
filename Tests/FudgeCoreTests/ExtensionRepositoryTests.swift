@@ -21,7 +21,7 @@ private func added(_ addresses: [String]) throws -> [ExtensionRepository] {
 
 @Test func addressRefusalsHaveTheFixturesSentences() throws {
     let sentences = try #require(try addressFixture()["sentences"] as? [String: String])
-    let own: [ExtensionRepository.Refusal] = [.https, .credentials, .development, .branch, .tooMany]
+    let own: [ExtensionRepository.Refusal] = [.https, .credentials, .development, .branch, .tooMany, .raycastBranch]
     #expect(Set(sentences.keys) == Set(own.map(\.key)))
     for refusal in own { #expect(sentences[refusal.key] == refusal.description, "\(refusal.key)") }
     // The folder rule's refusals say the folder rule's sentences, never words of their own.

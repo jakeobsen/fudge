@@ -104,24 +104,37 @@ public struct InstallEnd: Sendable, Equatable {
     public var title: String
     public var updating: Bool
     public var outcome: Outcome
+    /// The folder of the repository it's from (SPEC-157); nil is Raycast's.
+    public var repository: String?
 
-    public init(build: InstallBuild?, name: String, dir: String, title: String, updating: Bool, outcome: Outcome) {
+    public init(
+        build: InstallBuild?, name: String, dir: String, title: String, updating: Bool, outcome: Outcome,
+        repository: String? = nil
+    ) {
         self.build = build
         self.name = name
         self.dir = dir
         self.title = title
         self.updating = updating
         self.outcome = outcome
+        self.repository = repository
     }
 
-    /// The store's report (`store.installEnded`): `{ build?: { pid, startedAt }, name, dir, title, updating, outcome }`,
-    /// `outcome` "installed" or "failed"; nil when anything is off.
+    /// The store's report (`store.installEnded`): `{ build?: { pid, startedAt }, name, dir, repository?, title,
+    /// updating, outcome }`, `outcome` "installed" or "failed", `repository` a repository folder; nil when anything is
+    /// off.
     public init?(report: JSONValue) {
         guard case .object(let values) = report, case .string(let name) = values["name"],
             ExtensionManifest.isValidName(name), case .string(let dir) = values["dir"],
             StoreBuildRecord.isValidFolder(dir), case .string(let title) = values["title"],
             case .bool(let updating) = values["updating"], case .string(let outcomeName) = values["outcome"]
         else { return nil }
+        var repository: String?
+        switch values["repository"] {
+        case nil: repository = nil
+        case .string(let folder) where ExtensionRepositoryFolder.isValid(folder): repository = folder
+        default: return nil
+        }
         let outcome: Outcome
         switch outcomeName {
         case "installed": outcome = .installed
@@ -140,7 +153,9 @@ public struct InstallEnd: Sendable, Equatable {
         default:
             return nil
         }
-        self.init(build: build, name: name, dir: dir, title: title, updating: updating, outcome: outcome)
+        self.init(
+            build: build, name: name, dir: dir, title: title, updating: updating, outcome: outcome,
+            repository: repository)
     }
 
     /// A build that ended while no store session was loaded, from its record and the status it wrote.
@@ -149,13 +164,18 @@ public struct InstallEnd: Sendable, Equatable {
             status == 0 ? .installed : status == Int32(BuildError.alreadyBuildingStatus) ? .alreadyBuilding : .failed
         self.init(
             build: record.build, name: record.name, dir: record.dir, title: record.title, updating: record.updating,
-            outcome: outcome)
+            outcome: outcome, repository: record.repository)
+    }
+
+    /// The extension's id in its repository (Raycast's keeps its name), which its notification is known by.
+    public var extensionKey: String {
+        ExtensionID(name: name, repositoryFolder: repository ?? ExtensionRepositoryFolder.raycast)?.key ?? name
     }
 }
 
 /// What a notification opens: the extension's row, and its failure view when it failed. It's the notification's
-/// `userInfo`, checked before anything is done with a click (SPEC-156 E.3). `repository` is room for extension
-/// repositories, never set here and passed on untouched.
+/// `userInfo`, checked before anything is done with a click (SPEC-156 E.3). `repository` is the folder of the
+/// repository the row is from (SPEC-157), checked with the folder rule; none is Raycast's.
 public struct NoticeTarget: Sendable, Equatable {
     public var name: String
     public var dir: String
@@ -176,14 +196,17 @@ public struct NoticeTarget: Sendable, Equatable {
     }
 
     /// The target in a notification's `userInfo`, or nil when anything is off: a name that isn't valid, a folder that
-    /// isn't one of the store's (a path), `failed` missing or not a boolean, a `repository` that isn't a string.
+    /// isn't one of the store's (a path), `failed` missing or not a boolean, a `repository` that isn't a repository
+    /// folder.
     public init?(userInfo: [AnyHashable: Any]) {
         guard let name = userInfo["name"] as? String, ExtensionManifest.isValidName(name),
             let dir = userInfo["dir"] as? String, StoreBuildRecord.isValidFolder(dir),
             let failed = StoreBuildRecord.boolean(userInfo["failed"])
         else { return nil }
         let repository = userInfo["repository"]
-        guard repository == nil || repository is String else { return nil }
+        if let repository {
+            guard let folder = repository as? String, ExtensionRepositoryFolder.isValid(folder) else { return nil }
+        }
         self.init(name: name, dir: dir, failed: failed, repository: repository as? String)
     }
 
@@ -194,13 +217,14 @@ public struct NoticeTarget: Sendable, Equatable {
         return .object(object)
     }
 
-    /// The store's `launchContext` for it: `{ "storeNotification": { name, dir, failed } }`.
+    /// The store's `launchContext` for it: `{ "storeNotification": { name, dir, failed, repository? } }`.
     public var launchContext: JSONValue { .object(["storeNotification": json]) }
 }
 
 /// One notification (SPEC-156 C.3): finished `<title> is installed` or `is updated`, with no body; failed `Couldn't
 /// install <title>` or `Couldn't update <title>`, with `Click to see what went wrong.`. Its identifier is
-/// `store:<name>`, so a newer one for the same extension replaces the older one in Notification Center.
+/// `store:<id>`, the extension's id in its repository (Raycast's is its name), so a newer one for the same extension
+/// replaces the older one in Notification Center, and one name from two repositories keeps two.
 public struct InstallNotice: Sendable, Equatable {
     public var identifier: String
     public var title: String
@@ -231,8 +255,8 @@ public struct InstallNotice: Sendable, Equatable {
             ? "Couldn't \(end.updating ? "update" : "install") \(title)"
             : "\(title) is \(end.updating ? "updated" : "installed")"
         self.init(
-            identifier: "store:\(end.name)", title: text, body: failed ? "Click to see what went wrong." : nil,
-            target: NoticeTarget(name: end.name, dir: end.dir, failed: failed))
+            identifier: "store:\(end.extensionKey)", title: text, body: failed ? "Click to see what went wrong." : nil,
+            target: NoticeTarget(name: end.name, dir: end.dir, failed: failed, repository: end.repository))
     }
 
     /// The title as plain text on one line, cut to `maxTitle` characters; an empty one is "An extension".

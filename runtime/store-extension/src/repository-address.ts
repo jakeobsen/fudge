@@ -22,7 +22,7 @@ const raycastIdentity = "https://github.com/raycast/extensions";
 const developmentIdentity = "https://github.com/fudgeapp/development";
 
 /** Why an address can't be added: one of adding's own reasons, or one of the folder rule's. */
-export type AddressRefusal = "https" | "credentials" | "development" | "branch" | "tooMany" | FolderRefusal;
+export type AddressRefusal = "https" | "credentials" | "development" | "branch" | "raycastBranch" | "tooMany" | FolderRefusal;
 
 /** Each refusal's sentence; those of the folder rule are `repository-folder.ts`'s, written there only. */
 export const addressRefusalSentences: Record<AddressRefusal, string> = {
@@ -30,6 +30,7 @@ export const addressRefusalSentences: Record<AddressRefusal, string> = {
     credentials: "Leave the user name and password out of the address.",
     development: "Fudge keeps your own builds in that repository's folder, so it can't be added.",
     branch: "That branch name can't be used.",
+    raycastBranch: "Raycast's official repository always follows its default branch.",
     tooMany: "You can add up to 10 repositories.",
     ...refusalSentences,
 };
@@ -51,17 +52,30 @@ export type ParsedRepository = {
 
 export type ParseResult = ParsedRepository | { refused: string; reason: AddressRefusal };
 
-/** Raycast's official repository, always first in the list: it's never parsed, since parsing refuses its address. */
+/**
+ * Raycast's official repository, first in the list while it's there, named as any GitHub repository is (SPEC-160 point
+ * 6). Its `address` is the one its copy is cloned from; anything shown to a person says its identity.
+ */
 export const RAYCAST_COPY = Object.freeze({
     copyId: "raycast",
     folder: raycastFolder,
     identity: raycastIdentity,
-    name: "Raycast",
+    name: "raycast/extensions",
     address: repositoryURL,
 });
 
 function refuse(reason: AddressRefusal): ParseResult {
     return { refused: addressRefusalSentences[reason], reason };
+}
+
+/**
+ * Raycast's address while it isn't in the list (SPEC-160 point 9): Raycast's own entry, never a second copy, or, with a
+ * branch (trimmed, so spaces are none), the refusal saying it always follows its default branch.
+ */
+function raycastEntry(text: string, branch: string | undefined): ParseResult {
+    if (trimmed(branch ?? "") !== "") return refuse("raycastBranch");
+    const { identity, copyId, name, folder } = RAYCAST_COPY;
+    return { address: text, identity, copyId, name, folder };
 }
 
 /** ASCII spaces, tabs and line breaks only, so both sides trim the same characters. */
@@ -118,12 +132,14 @@ export function isValidCopyId(copyId: unknown): copyId is string {
 /**
  * The repository at `address` on `branch` (empty or undefined for the default branch), when it can be added beside
  * `list`, the repositories already added; else the refusal's sentence and reason. The checks run in the app's order, so
- * both give the same refusal for an address with more than one problem.
+ * both give the same refusal for an address with more than one problem. Raycast's address is refused while
+ * `raycastListed`, and otherwise gives Raycast's own entry, whatever the list holds, since Raycast's isn't counted.
  */
 export function parseRepositoryAddress(
     address: string,
     branch: string | undefined,
     list: readonly { identity: string; folder: string }[],
+    raycastListed = true,
 ): ParseResult {
     const text = trimmed(address);
     const schemeEnd = text.indexOf("://");
@@ -153,7 +169,7 @@ export function parseRepositoryAddress(
     const gitHub = isGitHub(host) && (port === undefined || port === 443);
     const server = asciiLowercase(host) + (port === undefined || port === 443 ? "" : `:${port}`);
     const identity = `https://${server}${path === "" ? "" : `/${gitHub ? asciiLowercase(path) : path}`}`;
-    if (identity === raycastIdentity) return refuse("alreadyListed");
+    if (identity === raycastIdentity) return raycastListed ? refuse("alreadyListed") : raycastEntry(text, branch);
     if (identity === developmentIdentity) return refuse("development");
 
     const found = repositoryFolder(host, port, segments);
@@ -170,7 +186,7 @@ export function parseRepositoryAddress(
     if (conflict !== undefined) return refuse(conflict);
     // A second guard, last: only github.com with no port or port 443 gives these folders, and the identity check above
     // already refuses those addresses, before the branch and the list are looked at.
-    if (folder === raycastFolder) return refuse("alreadyListed");
+    if (folder === raycastFolder) return raycastListed ? refuse("alreadyListed") : raycastEntry(text, branch);
     if (folder === developmentFolder) return refuse("development");
     return {
         address: text,
@@ -201,15 +217,16 @@ export function checkRepositoriesAnswer(value: unknown): RepositoryEntry[] {
     const added: ParsedRepository[] = [];
     value.forEach((entry, index) => {
         if (!isObject(entry) || typeof entry.on !== "boolean") return;
-        if (index === 0) {
-            if (entry.copyId === RAYCAST_COPY.copyId && entry.folder === RAYCAST_COPY.folder) {
-                entries.push({ ...RAYCAST_COPY, on: entry.on });
-            }
+        // Raycast's by its copy id (SPEC-160 point 10b), only in first place and with its folder; with none there, the
+        // first entry is an added one like any other.
+        if (entry.copyId === RAYCAST_COPY.copyId) {
+            if (index === 0 && entry.folder === RAYCAST_COPY.folder) entries.push({ ...RAYCAST_COPY, on: entry.on });
             return;
         }
         if (typeof entry.address !== "string" || (entry.branch !== undefined && typeof entry.branch !== "string")) {
             return;
         }
+        // Parsed with Raycast's listed, so Raycast's address among the added ones is left out, never a second copy of it.
         const parsed = parseRepositoryAddress(entry.address, entry.branch, added);
         if ("refused" in parsed || parsed.copyId !== entry.copyId || parsed.folder !== entry.folder) return;
         added.push(parsed);

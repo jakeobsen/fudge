@@ -4,6 +4,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { extensionId, isValidRepositoryFolder, raycastFolder } from "../../src/extension-id.ts";
 import { isValidFolder, isValidName } from "./catalog.ts";
 import type { FailureDetails } from "./failure.ts";
 
@@ -12,6 +13,8 @@ export type InstallEndReport = {
     build?: { pid: number; startedAt: string };
     name: string;
     dir: string;
+    /** The folder of the repository it's from (SPEC-157); none is Raycast's. */
+    repository?: string;
     title: string;
     updating: boolean;
     outcome: "installed" | "failed";
@@ -67,8 +70,29 @@ export function failuresFolder(supportPath: string): string {
     return path.join(supportPath, "failures");
 }
 
-function failureFile(supportPath: string, name: string): string {
-    return path.join(failuresFolder(supportPath), `${name}.json`);
+/**
+ * The extension a saved failure is of: its name and the folder of the repository it's from, Raycast's when there's
+ * none, as a mark and a click's target have them.
+ */
+export type FailureOwner = { name: string; repository?: string };
+
+/**
+ * The id a failure is saved under (`failures/<id>.json`, SPEC-157): the extension's id in its repository, so two
+ * extensions of one name keep their own; undefined when the name or the folder is refused.
+ */
+export function failureId(owner: FailureOwner): string | undefined {
+    return extensionId(owner.name, owner.repository ?? raycastFolder);
+}
+
+/** Whether a saved file's `repository` belongs under `id`: the id's folder, and for a bare name none or Raycast's. */
+function belongsUnder(id: string, repository: unknown): boolean {
+    const parts = id.split("+");
+    if (parts.length === 1) return repository === undefined || repository === raycastFolder;
+    return repository === parts.slice(0, -1).join("/");
+}
+
+function failureFile(supportPath: string, id: string): string {
+    return path.join(failuresFolder(supportPath), `${id}.json`);
 }
 
 /** How long a saved failure is kept, unopened. */
@@ -76,9 +100,10 @@ export const failureKeep = 7 * 24 * 60 * 60 * 1000;
 
 /** Saves a failure that got a notification, atomically; an error is logged and changes nothing else. */
 export async function saveFailure(supportPath: string, mark: FailureMark, log?: (line: string) => void): Promise<void> {
-    if (!isValidName(mark.name)) return;
+    const id = failureId(mark);
+    if (id === undefined) return;
     const folder = failuresFolder(supportPath);
-    const file = failureFile(supportPath, mark.name);
+    const file = failureFile(supportPath, id);
     const temporary = path.join(folder, `.${randomBytes(8).toString("hex")}.tmp`);
     try {
         await mkdir(folder, { recursive: true });
@@ -98,10 +123,11 @@ export async function saveFailure(supportPath: string, mark: FailureMark, log?: 
     }
 }
 
-/** The failure saved for `name`, or undefined when there's none or it isn't one. */
-export async function readSavedFailure(supportPath: string, name: string): Promise<FailureMark | undefined> {
-    if (!isValidName(name)) return undefined;
-    const text = await readFile(failureFile(supportPath, name), "utf8").catch(() => undefined);
+/** The failure saved for that extension, or undefined when there's none or it isn't one. */
+export async function readSavedFailure(supportPath: string, owner: FailureOwner): Promise<FailureMark | undefined> {
+    const id = failureId(owner);
+    if (id === undefined) return undefined;
+    const text = await readFile(failureFile(supportPath, id), "utf8").catch(() => undefined);
     if (text === undefined) return undefined;
     try {
         const value = JSON.parse(text) as Record<string, unknown>;
@@ -117,12 +143,12 @@ export async function readSavedFailure(supportPath: string, name: string): Promi
             (details.command !== undefined && typeof details.command !== "string") ||
             (details.code !== undefined && typeof details.code !== "number") ||
             (details.refused !== undefined && typeof details.refused !== "boolean") ||
-            (value.repository !== undefined && typeof value.repository !== "string")
+            !belongsUnder(id, value.repository)
         ) {
             return undefined;
         }
         return {
-            name,
+            name: owner.name,
             dir: value.dir,
             title: value.title,
             updating: value.updating,
@@ -140,10 +166,11 @@ export async function readSavedFailure(supportPath: string, name: string): Promi
     }
 }
 
-/** Deletes the failure saved for `name`: it was opened, or the name was pressed again. */
-export async function removeSavedFailure(supportPath: string, name: string): Promise<void> {
-    if (!isValidName(name)) return;
-    await rm(failureFile(supportPath, name), { force: true }).catch(() => {});
+/** Deletes the failure saved for that extension: it was opened, or its row was pressed again. */
+export async function removeSavedFailure(supportPath: string, owner: FailureOwner): Promise<void> {
+    const id = failureId(owner);
+    if (id === undefined) return;
+    await rm(failureFile(supportPath, id), { force: true }).catch(() => {});
 }
 
 /** At the store's open: saved failures older than 7 days go. */
@@ -162,7 +189,8 @@ export function noticeTarget(value: unknown): NoticeTarget | undefined {
     if (typeof value !== "object" || value === null) return undefined;
     const { name, dir, failed, repository } = value as Record<string, unknown>;
     if (!isValidName(name) || !isValidFolder(dir) || typeof failed !== "boolean") return undefined;
-    if (repository !== undefined && typeof repository !== "string") return undefined;
+    // A repository's folder, checked with the folder rule (SPEC-157); a missing one is Raycast's.
+    if (repository !== undefined && !isValidRepositoryFolder(repository)) return undefined;
     return typeof repository === "string" ? { name, dir, failed, repository } : { name, dir, failed };
 }
 
@@ -172,9 +200,14 @@ export function launchTarget(launchContext: unknown): NoticeTarget | undefined {
     return noticeTarget((launchContext as Record<string, unknown>).storeNotification);
 }
 
+/** A row's place for its mark: its repository's folder (Raycast's when none is named) and its folder there. */
+function rowKey(dir: string, repository: string | undefined): string {
+    return `${repository ?? raycastFolder}\0${dir}`;
+}
+
 /**
- * The failed rows of this store session (D.3), by folder, in memory only, so the next session doesn't show them again.
- * A mark goes when that name installs or updates, or with the session.
+ * The failed rows of this store session (D.3), by repository and folder (SPEC-157), in memory only, so the next session
+ * doesn't show them again. A mark goes when that name from that repository installs or updates, or with the session.
  */
 export class RowMarks {
     private readonly marks = new Map<string, FailureMark>();
@@ -184,21 +217,22 @@ export class RowMarks {
         this.changed = changed;
     }
 
-    get(dir: string): FailureMark | undefined {
-        return this.marks.get(dir);
+    /** The mark of the row of `dir` in `repository`'s folder, Raycast's when none is named. */
+    get(dir: string, repository?: string): FailureMark | undefined {
+        return this.marks.get(rowKey(dir, repository));
     }
 
     mark(failure: FailureMark): void {
-        this.marks.set(failure.dir, failure);
+        this.marks.set(rowKey(failure.dir, failure.repository), failure);
         this.changed();
     }
 
-    /** That name installed or updated: its mark goes. */
-    clear(name: string): void {
+    /** That name from that repository (Raycast's when none is named) installed or updated: its mark goes. */
+    clear(name: string, repository?: string): void {
         let removed = false;
-        for (const [dir, mark] of this.marks) {
-            if (mark.name === name) {
-                this.marks.delete(dir);
+        for (const [key, mark] of this.marks) {
+            if (mark.name === name && (mark.repository ?? raycastFolder) === (repository ?? raycastFolder)) {
+                this.marks.delete(key);
                 removed = true;
             }
         }
@@ -227,9 +261,9 @@ export class RowSelection {
         return this.asked;
     }
 
-    /** Selects the row of `dir`, once; a row already selected stays, and an earlier ask goes. */
-    select(dir: string): void {
-        this.ask(dir === this.selected ? undefined : dir);
+    /** Selects the row whose list id is `id` (`rowId`), once; a row already selected stays, and an earlier ask goes. */
+    select(id: string): void {
+        this.ask(id === this.selected ? undefined : id);
     }
 
     /** The app's `onSelectionChange`: once the row asked for is selected, from here the user moves it. */
@@ -238,18 +272,18 @@ export class RowSelection {
         if (id !== null && id === this.asked) this.ask(undefined);
     }
 
-    private ask(dir: string | undefined): void {
-        if (dir === this.asked) return;
-        this.asked = dir;
-        this.changed(dir);
+    private ask(id: string | undefined): void {
+        if (id === this.asked) return;
+        this.asked = id;
+        this.changed(id);
     }
 }
 
 /** What opening a click's or the launch context's target needs from the store's view. */
 export type TargetSteps = {
     supportPath: string;
-    /** Selects the row of that folder, once. */
-    select: (dir: string) => void;
+    /** Selects the row of that folder in the repository whose folder is `repository` (Raycast's when none), once. */
+    select: (dir: string, repository?: string) => void;
     /** This session's marks: a failure it has in memory. */
     marks: Pick<RowMarks, "get">;
     /** Pushes the failure view. */
@@ -261,14 +295,14 @@ export type TargetSteps = {
  * memory or else the file saved for it; the saved file goes once it's opened. With neither, only the selection.
  */
 export async function openNoticeTarget(target: NoticeTarget, steps: TargetSteps): Promise<void> {
-    steps.select(target.dir);
+    steps.select(target.dir, target.repository);
     if (!target.failed) return;
     // The target's own row's failure: by its folder, since two folders can hold one name.
-    const held = steps.marks.get(target.dir);
-    const saved = held?.name === target.name ? undefined : await readSavedFailure(steps.supportPath, target.name);
+    const held = steps.marks.get(target.dir, target.repository);
+    const saved = held?.name === target.name ? undefined : await readSavedFailure(steps.supportPath, target);
     const mark = held?.name === target.name ? held : saved?.dir === target.dir ? saved : undefined;
     if (!mark) return;
-    await removeSavedFailure(steps.supportPath, target.name);
+    await removeSavedFailure(steps.supportPath, target);
     steps.show(mark);
 }
 

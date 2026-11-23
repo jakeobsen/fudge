@@ -289,9 +289,41 @@ private func center(
         ["name": "github", "dir": "github", "failed": NSNumber(value: 1)],
         ["name": "github", "dir": "github", "failed": "true"],
         ["name": "github", "dir": "github", "failed": true, "repository": 3],
+        ["name": "github", "dir": "github", "failed": true, "repository": "Someone/Tools"],
+        ["name": "github", "dir": "github", "failed": true, "repository": "someone/../tools"],
+        ["name": "github", "dir": "github", "failed": true, "repository": "raycast"],
+        ["name": "github", "dir": "github", "failed": true, "repository": ""],
+        ["name": "github", "dir": "github", "failed": true, "repository": NSNull()],
         ["dir": "github", "failed": true],
     ]
     for info in bad { #expect(NoticeTarget(userInfo: info) == nil, "\(info)") }
+}
+
+@Test func anAddedRepositorysEndIsNotifiedUnderItsOwnIdWithItsFolder() throws {
+    var report: [String: JSONValue] = [
+        "build": .object(["pid": .number(4242), "startedAt": .string("2026-11-22T17:00:00.000Z")]),
+        "name": .string("github"), "dir": .string("github"), "title": .string("GitHub"), "updating": .bool(false),
+        "outcome": .string("failed"), "repository": .string("someone/tools"),
+    ]
+    let ended = try #require(InstallEnd(report: .object(report)))
+    #expect(ended.repository == "someone/tools")
+    let notice = try #require(InstallNotice(ended))
+    #expect(notice.identifier == "store:someone+tools+github", "not the same notification as Raycast's github")
+    #expect(notice.target == NoticeTarget(name: "github", dir: "github", failed: true, repository: "someone/tools"))
+    #expect(notice.target.userInfo["repository"] as? String == "someone/tools")
+    let raycast = try #require(InstallNotice(end(.failed)))
+    #expect(raycast.identifier == "store:github" && raycast.target.repository == nil)
+    for bad: JSONValue in [.string("Someone/Tools"), .string("../x"), .number(1), .null] {
+        report["repository"] = bad
+        #expect(InstallEnd(report: .object(report)) == nil, "\(bad)")
+    }
+    // A build that ended with no store session: from its record.
+    let record = StoreBuildRecord(
+        pid: 4242, name: "github", dir: "github", title: "GitHub", updating: false,
+        startedAt: "2026-11-22T17:00:00.000Z", id: "someone+tools+github", repository: "someone/tools")
+    let fromRecord = InstallEnd(record: record, status: 1)
+    #expect(fromRecord.repository == "someone/tools")
+    #expect(InstallNotice(fromRecord)?.target.repository == "someone/tools")
 }
 
 @Test func aRepositoryIsPassedOnUntouched() throws {
@@ -300,6 +332,8 @@ private func center(
     ]
     let target = try #require(NoticeTarget(userInfo: info))
     #expect(target.repository == "raycast/extensions")
+    let added = try #require(NoticeTarget(userInfo: info.merging(["repository": "someone/tools"]) { $1 }))
+    #expect(added.repository == "someone/tools")
     #expect(target.userInfo["repository"] as? String == "raycast/extensions")
     #expect(
         target.launchContext

@@ -11,7 +11,7 @@ import {
 } from "../../src/api/oauth-table.ts";
 import { readRegularFile } from "./files.ts";
 import { RestingWork, type Timers } from "./resting.ts";
-import { spawnProgram } from "./git.ts";
+import { spawnProgram, type StoreRepository } from "./git.ts";
 import type { StoreContext } from "./store.ts";
 import { scanTimeout } from "./timeouts.ts";
 
@@ -518,11 +518,12 @@ export function isRefusedWant(error: unknown): boolean {
 }
 
 /**
- * Fetches `dir`'s source files, scans them with `fudge scan`, and takes the patterns out again. Resolves undefined
- * when `cancelled()` turns true before the fetch or before the scan; throws when git or the scan fails. Call it in
- * the store's git queue (`oneAtATime`). `dir` is a checked folder.
+ * Fetches `dir`'s source files in `repo`, the row's own copy (`rowCopy`, SPEC-157 D.6), scans them with `fudge scan`,
+ * and takes the patterns out again. Resolves undefined when `cancelled()` turns true before the fetch or before the
+ * scan; throws when git or the scan fails. Call it in the store's git queue (`oneAtATime`). `dir` is a checked folder.
  */
 export async function checkFolder(
+    repo: StoreRepository,
     dir: string,
     context: StoreContext,
     cancelled: () => boolean,
@@ -530,14 +531,14 @@ export async function checkFolder(
 ): Promise<Compatibility | undefined> {
     // The fetch brings every file under `src/` of at most `maxScanBytes`, assets included, so the download's cap counts
     // them all; the scan's counts only the source files.
-    const files = await context.repo.srcFiles(dir);
+    const files = await repo.srcFiles(dir);
     const sources = files.filter((file) => isScanned(file.path));
     if (files.length > maxSrcFiles || sources.length > maxScanFiles) return { notChecked: true };
     if (cancelled()) return undefined;
     const patterns = scanPatterns(dir);
     // Only a source file that isn't here matters: an asset left out for its size is never read.
     const missingSources = async () => {
-        const missing = await context.repo.missingObjects(dir);
+        const missing = await repo.missingObjects(dir);
         return sources.filter((file) => missing.has(file.object)).length;
     };
     let bounded = sources.length > 0;
@@ -546,7 +547,7 @@ export async function checkFolder(
         try {
             // The one step a cancel ends (`signal`), since it writes nothing but new packs; every other step runs to
             // its end, and the check stops between steps.
-            await context.repo.fetchSource(dir, maxScanBytes, signal);
+            await repo.fetchSource(dir, maxScanBytes, signal);
         } catch (error) {
             if (cancelled()) return undefined;
             // Only a server that won't send a folder's tree gets the fetch as before (`add`'s lazy fetch: each source
@@ -563,17 +564,17 @@ export async function checkFolder(
         // A source file over the cap wasn't downloaded, and the scan would need it.
         if (bounded && (await missingSources()) > 0) return { notChecked: true };
     }
-    if (bounded) await context.repo.addFetched(...patterns);
-    else await context.repo.add(...patterns);
+    if (bounded) await repo.addFetched(...patterns);
+    else await repo.add(...patterns);
     try {
-        const source = path.join(context.repo.path, "extensions", dir);
+        const source = path.join(repo.path, "extensions", dir);
         if ((await sourceBytes(path.join(source, "src"))) > maxScanBytes) return { notChecked: true };
         if (cancelled()) return undefined;
         const report = await scanExtension(source, context);
         if (!report) throw new Error("fudge scan failed");
         return fromReport(report);
     } finally {
-        await context.repo.drop(patterns);
+        await repo.drop(patterns);
     }
 }
 
@@ -583,7 +584,8 @@ export async function checkFolder(
  * Scans the row the selection rests on, one at a time (`RestingWork`): a check starts only after the selection has
  * stayed on an uncached row for `delay` ms, and a new `select` cancels the last: its timer, or the check itself, which
  * stops before its fetch or scan, and whose fetch is ended (`signal`). So moving through rows fetches nothing, and a
- * cached row never fetches.
+ * cached row never fetches. A row is its copy (`copyId`) and its folder there; the cache is by tree id alone, since a
+ * tree id names the same files in any repository.
  */
 export class CompatibilityChecks {
     readonly #work: RestingWork<Compatibility>;
@@ -593,26 +595,27 @@ export class CompatibilityChecks {
         timers?: Timers;
         cached: (tree: string) => Compatibility | undefined;
         check: (
+            copyId: string,
             dir: string,
             tree: string,
             cancelled: () => boolean,
             signal: AbortSignal,
         ) => Promise<Compatibility | undefined>;
-        changed: (dir: string, tree: string, result: Compatibility | "failed") => void;
+        changed: (copyId: string, dir: string, tree: string, result: Compatibility | "failed") => void;
     }) {
-        const split = (key: string) => key.split("\0") as [string, string];
+        const split = (key: string) => key.split("\0") as [string, string, string];
         this.#work = new RestingWork({
             delay: options.delay,
             timers: options.timers,
-            done: (key) => options.cached(split(key)[1]) !== undefined,
+            done: (key) => options.cached(split(key)[2]) !== undefined,
             run: (key, cancelled, signal) => options.check(...split(key), cancelled, signal),
             changed: (key, result) => options.changed(...split(key), result),
         });
     }
 
-    /** The row now selected with the detail showing, or nothing. */
-    select(dir: string | undefined, tree: string | undefined): void {
-        this.#work.select(dir && tree ? `${dir}\0${tree}` : undefined);
+    /** The row now selected with the detail showing (its copy, its folder and its tree), or nothing. */
+    select(copyId: string | undefined, dir: string | undefined, tree: string | undefined): void {
+        this.#work.select(copyId && dir && tree ? `${copyId}\0${dir}\0${tree}` : undefined);
     }
 
     /** Cancels the waiting or running check. */

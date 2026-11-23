@@ -1,5 +1,5 @@
 {
-  "about": "The store's installing/<pid>.json (SPEC-153 C.1), as the app reads it for a notification (SPEC-156 C.2). StoreBuildRecord.parse (Swift) and parseBuildRecord (the store) read each case alike.",
+  "about": "The store's installing/<pid>.json (SPEC-153 C.1), as the app reads it for a notification (SPEC-156 C.2). StoreBuildRecord.parse (Swift) and parseBuildRecord (the store) read each case alike. An added repository's build also names its `repository` folder and the `id` it gets there (SPEC-157 E.3); Raycast's names neither.",
   "valid": [
     {
       "file": "4242.json",
@@ -27,6 +27,28 @@
       "title": "",
       "updating": false,
       "startedAt": "2026-11-20T12:00:00.000Z"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"someone+tools+github\", \"repository\": \"someone/tools\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"someone/tools\", \"--outcome\", \"/support/installing\"]}",
+      "name": "github",
+      "dir": "github",
+      "title": "GitHub",
+      "updating": false,
+      "startedAt": "2026-11-20T12:00:00.000Z",
+      "id": "someone+tools+github",
+      "repository": "someone/tools"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"git.example.org_8443+team+extensions+github\", \"repository\": \"git.example.org_8443/team/extensions\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"git.example.org_8443/team/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "name": "github",
+      "dir": "github",
+      "title": "GitHub",
+      "updating": false,
+      "startedAt": "2026-11-20T12:00:00.000Z",
+      "id": "git.example.org_8443+team+extensions+github",
+      "repository": "git.example.org_8443/team/extensions"
     }
   ],
   "invalid": [
@@ -109,6 +131,51 @@
       "file": "4242.json",
       "text": "{",
       "why": "broken JSON"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"repository\": \"someone/tools\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"someone/tools\", \"--outcome\", \"/support/installing\"]}",
+      "why": "a repository without its id"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"someone+tools+github\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"raycast/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "an id without its repository"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"someone+tools+gist\", \"repository\": \"someone/tools\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"someone/tools\", \"--outcome\", \"/support/installing\"]}",
+      "why": "an id that isn't the repository's and the name"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"someone+other+github\", \"repository\": \"someone/tools\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"someone/tools\", \"--outcome\", \"/support/installing\"]}",
+      "why": "an id of another repository"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"someone+tools+github\", \"repository\": \"Someone/Tools\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"Someone/Tools\", \"--outcome\", \"/support/installing\"]}",
+      "why": "a repository that isn't a folder"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"github\", \"repository\": \"raycast/extensions\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"raycast/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "Raycast's folder named, which its builds never name"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"someone/tools+github\", \"repository\": \"someone/tools\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"someone/tools\", \"--outcome\", \"/support/installing\"]}",
+      "why": "an id with a /"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"someone+tools+github\", \"repository\": 7, \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"raycast/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "a repository that isn't a string"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": 7, \"repository\": \"someone/tools\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"someone/tools\", \"--outcome\", \"/support/installing\"]}",
+      "why": "an id that isn't a string"
     }
   ]
 }

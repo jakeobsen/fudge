@@ -19,6 +19,7 @@ type AddressCase = {
     address: string;
     branch?: string;
     existing?: string[];
+    raycastListed?: boolean;
     repository?: Omit<ParsedRepository, "address">;
     refused?: AddressRefusal;
 };
@@ -46,17 +47,15 @@ function added(addresses: readonly string[]): ParsedRepository[] {
 test("each refusal has the fixtures' one sentence", async () => {
     const { sentences } = await fixture<AddressFixture>("repository-addresses.json");
     const folders = await fixture<{ sentences: Record<string, string> }>("repository-folders.json");
-    assert.deepEqual(addressRefusalSentences, {
-        ...sentences,
-        ...folders.sentences,
-    });
+    assert.deepEqual(addressRefusalSentences, { ...sentences, ...folders.sentences });
 });
 
 test("an address gives the fixture's repository, or its refusal", async () => {
     const { addresses } = await fixture<AddressFixture>("repository-addresses.json");
     assert.ok(addresses.some((one) => one.repository) && addresses.some((one) => one.refused));
     for (const one of addresses) {
-        const result = parseRepositoryAddress(one.address, one.branch, added(one.existing ?? []));
+        const listed = one.raycastListed ?? true;
+        const result = parseRepositoryAddress(one.address, one.branch, added(one.existing ?? []), listed);
         const label = JSON.stringify(one);
         if (one.refused === undefined) {
             assert.deepEqual(result, { address: one.address.trim(), ...one.repository }, label);
@@ -117,25 +116,88 @@ test("the app's answer is checked again: Raycast's first, then each added one th
     assert.deepEqual(checkRepositoriesAnswer(null), []);
 });
 
-test("Raycast's entry counts only in first place, and only as Raycast's", () => {
+test("Raycast's entry is known by its copy id, and counts only in first place (SPEC-160 point 10b)", () => {
     const tools = parseRepositoryAddress("https://github.com/someone/tools", undefined, []);
     assert.ok(!("refused" in tools));
-    // First place is Raycast's: an added repository there is left out, and the same one in second place is kept.
+    const team = parseRepositoryAddress("https://git.example.org/team/extensions", undefined, [tools]);
+    assert.ok(!("refused" in team));
+    const raycast = { copyId: "raycast", folder: "raycast/extensions", on: true };
+    // With no Raycast entry, the first entry is an added one like any other.
+    assert.deepEqual(
+        checkRepositoriesAnswer([
+            { ...tools, on: false },
+            { ...team, on: true },
+        ]),
+        [
+            { ...tools, on: false },
+            { ...team, on: true },
+        ],
+    );
+    assert.deepEqual(checkRepositoriesAnswer([raycast, { ...tools, on: true }]), [
+        { ...RAYCAST_COPY, on: true },
+        { ...tools, on: true },
+    ]);
+    // Raycast's anywhere but first is left out, never parsed as an added one.
+    assert.deepEqual(checkRepositoriesAnswer([{ ...tools, on: true }, raycast]), [{ ...tools, on: true }]);
+    // A duplicate goes, in first place as anywhere.
     assert.deepEqual(
         checkRepositoriesAnswer([
             { ...tools, on: false },
             { ...tools, on: true },
         ]),
-        [{ ...tools, on: true }],
+        [{ ...tools, on: false }],
     );
+    // Raycast's copy id with another folder is left out, and so is Raycast's address among the added ones: never a
+    // second copy of Raycast's.
+    assert.deepEqual(checkRepositoriesAnswer([{ ...raycast, folder: "someone/tools" }, { ...tools, on: true }]), [
+        { ...tools, on: true },
+    ]);
+    const typed = "https://github.com/Raycast/Extensions";
     assert.deepEqual(
         checkRepositoriesAnswer([
-            { copyId: "raycast", folder: "someone/tools", on: true },
+            { address: typed, copyId: copyIdOf(RAYCAST_COPY.identity), folder: "raycast/extensions", on: true },
             { ...tools, on: true },
         ]),
         [{ ...tools, on: true }],
     );
     assert.deepEqual(checkRepositoriesAnswer([{ copyId: "raycast", folder: "raycast/extensions" }]), []);
+});
+
+test("Raycast's repository is named as any GitHub repository is, and cloned from git.ts' address (SPEC-160 point 6)", () => {
+    assert.equal(RAYCAST_COPY.name, "raycast/extensions");
+    assert.equal(RAYCAST_COPY.identity, "https://github.com/raycast/extensions");
+    assert.equal(RAYCAST_COPY.address, repositoryURL);
+    assert.equal(RAYCAST_COPY.copyId, "raycast");
+    assert.equal(RAYCAST_COPY.folder, "raycast/extensions");
+});
+
+test("Raycast's address while it isn't listed gives Raycast's own entry, or the branch sentence (SPEC-160 point 9)", () => {
+    const ten = added(Array.from({ length: 10 }, (_, index) => `https://git.example.org/team-${index}/extensions`));
+    const raycast = {
+        identity: "https://github.com/raycast/extensions",
+        copyId: "raycast",
+        name: "raycast/extensions",
+        folder: "raycast/extensions",
+    };
+    const refused = (reason: AddressRefusal) => ({ refused: addressRefusalSentences[reason], reason });
+    for (const address of ["https://github.com/Raycast/Extensions.git", " https://github.com:443/raycast/extensions/ "]) {
+        const label = JSON.stringify(address);
+        assert.deepEqual(parseRepositoryAddress(address, undefined, [], false), { address: address.trim(), ...raycast }, label);
+        assert.deepEqual(
+            parseRepositoryAddress(address, " \t", ten, false),
+            { address: address.trim(), ...raycast },
+            `${label}: 10 added don't count, and spaces are no branch`,
+        );
+        assert.deepEqual(parseRepositoryAddress(address, undefined, []), refused("alreadyListed"), `${label}: listed`);
+        assert.deepEqual(parseRepositoryAddress(address, "main", ten, true), refused("alreadyListed"), `${label}: listed`);
+        // Any branch, a name the rule refuses too, gives Raycast's sentence.
+        for (const branch of ["main", " main ", "a..b"]) {
+            assert.deepEqual(parseRepositoryAddress(address, branch, [], false), refused("raycastBranch"), `${label} ${branch}`);
+        }
+    }
+    // Any other address is parsed as before.
+    assert.deepEqual(parseRepositoryAddress("https://github.com/someone/tools", undefined, ten, false), refused("tooMany"));
+    assert.deepEqual(parseRepositoryAddress("https://github.com/someone/tools", "a..b", [], false), refused("branch"));
 });
 
 test("the answer keeps to 10 added repositories, as Settings does", () => {
