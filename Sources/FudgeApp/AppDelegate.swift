@@ -220,6 +220,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.isVisible = { [weak self] in self?.panel.isVisible ?? false }
         model.confirm = { [weak self] request, origin in await self?.confirm(request, origin: origin) ?? false }
         model.openPanel = { [weak self] options in await self?.chooseFiles(options) }
+        // The calculator's towns and countries, read from the app's resources; nothing is downloaded.
+        model.loadPlaces()
         // The calculator's exchange rates: the cached ones now, downloads only while the setting is on.
         exchangeRates = ExchangeRateUpdater(
             fetcher: ECBRatesFetcher(), cacheFile: paths.exchangeRatesFile,
