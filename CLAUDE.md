@@ -1360,6 +1360,8 @@ Extensions run in a separate Node.js process, the extension host.
     - `--run-action <title>`, given once or more, runs those actions in order, half a second apart (e.g. an extension's Create Quicklink, then Save Quicklink).
     - `--search text` types into its search field.
   - `--accessibility allowed|missing`, `--input-monitoring allowed|missing` and `--login-item <status>` fix what Accessibility, the Snippets page's Input Monitoring and Open at Login show, so nothing asks the system.
+  - `--add-repository <address>` draws the Extension Store's page with the Add Repository window over it and that address typed; it implies `--settings` and that page, as `--clipboard-consent` does.
+  - `--add-repository-add`, with `--add-repository`, presses Add in that window, so a refused address shows its reason.
   - `--calendar-events <file>` gives My Schedule made-up events (`FixedCalendarSource.load`), and without it nothing has been asked.
   - `--clipboard-consent` saves Clipboard History's consent sheet, laid out off-screen like the sign-in one; it implies `--settings` and that page, as `--sign-in-consent` does.
   - `--clipboard-entries <file>` gives Clipboard History made-up entries (a JSON array of `clipboardHistory.list` entries); snapshots never read the clipboard or watch it.
