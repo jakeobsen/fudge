@@ -19,7 +19,7 @@ import {
     type ProblemKind,
     type StoreCopy,
 } from "../store-extension/src/repositories.ts";
-import { parseManifest } from "../store-extension/src/catalog.ts";
+import { parseManifest, sections, type RepositoryCopy, type StoreEntry } from "../store-extension/src/catalog.ts";
 import { oneAtATime } from "../store-extension/src/store.ts";
 import { RAYCAST_COPY } from "../store-extension/src/repository-address.ts";
 
@@ -357,6 +357,43 @@ test("the list shows the rows of the copies read so far, by title, with each cop
     assert.equal(shown.trees.get("0123456789abcdef")?.get("alpha"), "t2");
     assert.deepEqual(shownRows([raycast, added, off], new Map()).entries, [], "nothing read yet");
     void off;
+});
+
+test("rows with the same title: Raycast's official repository's first, then the added ones in their Settings order (SPEC-166)", () => {
+    const support = "/support";
+    const raycast = fakeCopy(support, "raycast", {}, []);
+    // Settings order: A, then B, though B's copy id sorts first.
+    const a = fakeCopy(support, "ffffffffffffffff", {}, []);
+    const b = fakeCopy(support, "0000000000000000", {}, []);
+    const github = (name: string, copy?: RepositoryCopy) =>
+        parseManifest(name, { name, title: "GitHub", commands: [{ name: "a", title: "A" }] }, copy)!;
+    const ofRaycast = github("zz");
+    const ofA = github("aa", a.copy);
+    const ofB = github("github", b.copy);
+    const rows = (entries: StoreEntry[]) => ({ rows: { entries, trees: new Map<string, string>(), commit: "c" } });
+    const states = new Map<string, CopyState>([
+        ["0000000000000000", rows([ofB])],
+        ["raycast", rows([ofRaycast])],
+        ["ffffffffffffffff", rows([ofA])],
+    ]);
+    const order = ["raycast", "ffffffffffffffff", "0000000000000000"];
+    const copyIds = (entries: StoreEntry[]) => entries.map((entry) => entry.copyId);
+    assert.deepEqual(copyIds(shownRows([raycast, a, b], states).entries), order);
+    // Both halves of the list: Raycast's and B's installed, A's not.
+    const record = (dir: string, repository?: string) => ({
+        tree: "t",
+        commit: "c",
+        installedAt: "2026-11-23T00:00:00.000Z",
+        dir,
+        ...(repository === undefined ? {} : { repository }),
+    });
+    const installed = { zz: record("zz"), "owner+0000000000000000+github": record("github", "owner/0000000000000000") };
+    const split = sections([ofB, ofA, ofRaycast], installed, order);
+    assert.deepEqual(copyIds(split.installed), ["raycast", "0000000000000000"]);
+    assert.deepEqual(copyIds(split.other), ["ffffffffffffffff"]);
+    assert.deepEqual(copyIds(sections([ofB, ofA, ofRaycast], {}, order).other), order, "all three in one half");
+    // With no order, today's: by name, then copy id.
+    assert.deepEqual(copyIds(sections([ofB, ofA, ofRaycast], {}, []).other), ["ffffffffffffffff", "0000000000000000", "raycast"]);
 });
 
 test("Raycast's load-error view shows only when no copy could be read and Raycast's failed", () => {

@@ -6,8 +6,9 @@
 import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
 import { developmentFolder, isValidName } from "../../src/extension-id.ts";
-import { allFilter, installedFilter } from "./catalog.ts";
+import { allFilter, installedFilter, rowId, type StoreEntry } from "./catalog.ts";
 import { maxManifestBytes, readRegularFile } from "./files.ts";
+import { notUpdatedRowId, type NotUpdatedInstall } from "./not-updated.ts";
 import { installFolder } from "./store.ts";
 
 /** A development build as its row shows it. */
@@ -35,11 +36,50 @@ export function developmentRowsShown(filter: string): boolean {
 /**
  * Whether the rows built from an install alone (development builds, and installs whose repository isn't on) show yet:
  * with the first rows read from a copy (`copyRows`), or once no open or ⌘R is reading copies (`reading`). The installs
- * are read before any copy, and rows read later don't move the selection (C.3), so shown earlier, the list would open
- * on one of them instead of its first row.
+ * are read before any copy, so shown earlier, one of them would be the list's first row, and selected, until the first
+ * copy's rows came.
  */
 export function installOnlyRowsReady(copyRows: number, reading: number): boolean {
     return copyRows > 0 || reading === 0;
+}
+
+/** A row of the Installed section (SPEC-166): an install of the store's, a development build, or an install whose
+ * repository isn't on. */
+export type InstalledSectionRow =
+    | { kind: "entry"; entry: StoreEntry }
+    | { kind: "development"; build: DevelopmentBuild }
+    | { kind: "notUpdated"; install: NotUpdatedInstall };
+
+const kindOrder: Readonly<Record<InstalledSectionRow["kind"], number>> = { entry: 0, development: 1, notUpdated: 2 };
+
+const sectionTitle = (row: InstalledSectionRow) =>
+    row.kind === "entry" ? row.entry.title : row.kind === "development" ? row.build.title : row.install.title;
+
+/**
+ * The Installed section in order (SPEC-166): by title, and on the same title (base sensitivity) the store's installs
+ * first, which come in the copies' order (`byTitleIn`), then the development builds, then the installs whose repository
+ * isn't on. Each kind keeps the order it's given.
+ */
+export function installedSection(
+    entries: readonly StoreEntry[],
+    development: readonly DevelopmentBuild[],
+    notUpdated: readonly NotUpdatedInstall[],
+): InstalledSectionRow[] {
+    const rows: InstalledSectionRow[] = [
+        ...entries.map((entry) => ({ kind: "entry" as const, entry })),
+        ...development.map((build) => ({ kind: "development" as const, build })),
+        ...notUpdated.map((install) => ({ kind: "notUpdated" as const, install })),
+    ];
+    return rows.sort(
+        (a, b) =>
+            sectionTitle(a).localeCompare(sectionTitle(b), "en", { sensitivity: "base" }) || kindOrder[a.kind] - kindOrder[b.kind],
+    );
+}
+
+/** An Installed row's list id (SPEC-166), as its node has it. */
+export function installedSectionRowId(row: InstalledSectionRow): string {
+    if (row.kind === "entry") return rowId(row.entry.repositoryFolder, row.entry.dir);
+    return row.kind === "development" ? developmentRowId(row.build.name) : notUpdatedRowId(row.install.id);
 }
 
 /**
