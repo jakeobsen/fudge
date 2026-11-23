@@ -418,6 +418,7 @@ Extensions run in a separate Node.js process, the extension host.
       Each edit goes to the field's `onChange`.
       A `Form.Dropdown` reads like a search bar dropdown (`SearchBarDropdown`), and a `Form.TagPicker`'s tokens are kept by `TagPicking` (core).
       A `Form.DatePicker` shows its date, with a `DateTime`'s time beside it to edit in place, and a clear button (or ⌫).
+      Its `value: null` is controlled and shows no date, since its value is `Date | null` in Raycast's types; on every other field a null `value` counts as no value (uncontrolled) (`FormContent.controlledValue`).
       Space, ↵ or a click opens its calendar under the field: `DateCalendar` (core) highlights the field's day or today, ←→↑↓ and ⇞⇟ move it within `min` and `max`, and nothing is picked until ↵, Space or a click on a day picks one.
       The field keeps the keyboard, so `handleKey` gives the open calendar its keys first, Esc closes it before anything else, and any other key closes it and does what it always does.
       `FormDates` (core) makes a `Date` picker's value local midnight and a `DateTime` picker's whole minutes (limits with seconds clamp to whole minutes within them), within `min` and `max`, and `null` when cleared.
