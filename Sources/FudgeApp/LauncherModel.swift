@@ -98,6 +98,7 @@ final class LauncherModel {
             followQuickLook()
             builtInFormLeft()
             dropHeldKeyIfLeft()
+            actionMenuFollowsSelection()
             switchWindowsLeft()
             menuItemsLeft()
         }
@@ -910,10 +911,30 @@ final class LauncherModel {
 
     /// The selected item of the running command's List, with its deferred `actions` and `detail` once they've come.
     var selectedListItem: ListContent.Item? {
-        guard let command, let items = command.list?.items,
-            let item = items.first(where: { $0.id == command.selectedNode }) ?? items.first
-        else { return nil }
+        guard let command, let item = Self.shownItem(of: command) else { return nil }
         return item.filled(with: command.slots[item.id])
+    }
+
+    /// The List or Grid item whose actions and detail show: the selected one, else the first.
+    private static func shownItem(of command: CommandScreen) -> ListContent.Item? {
+        guard let items = command.list?.items else { return nil }
+        return items.first(where: { $0.id == command.selectedNode }) ?? items.first
+    }
+
+    /// What a command's action panel would belong to now (`ActionMenuOwner`): the command, its view and the List or
+    /// Grid item whose actions `currentActions` shows. Nil in root search and on a failure screen.
+    private var menuOwner: ActionMenuOwner? {
+        guard let command else { return nil }
+        let item = Self.shownItem(of: command)
+        return ActionMenuOwner(session: command.session, depth: command.depth, item: item?.id, itemId: item?.itemId)
+    }
+
+    /// Closes a command's action panel once what it opened on changed (`ActionMenuOwner.stays`): the selection moved
+    /// to another item, the item or the items went, the first items came, or the view or command changed. Every
+    /// change of a command's selection writes `screen` (a render, a click), so its didSet calls this.
+    private func actionMenuFollowsSelection() {
+        guard let owner = actionMenuOwner, !owner.stays(with: menuOwner) else { return }
+        actionPanel = nil
     }
 
     /// The actions for what's selected: in root search, fudge's own for the selected item (`RootActions`); in a
@@ -1575,7 +1596,19 @@ final class LauncherModel {
         var pick: DatePick?
     }
 
-    private(set) var actionPanel: ActionPanelState?
+    private(set) var actionPanel: ActionPanelState? {
+        didSet {
+            // Every way it opens records what it opened on: ⌘K, a held ⌘K, a submenu's or a picker's shortcut.
+            if actionPanel == nil {
+                actionMenuOwner = nil
+            } else if oldValue == nil {
+                actionMenuOwner = menuOwner
+            }
+        }
+    }
+    /// What the open action panel opened on, in a command (`menuOwner`); nil in root search, which keeps its own rule
+    /// in `selectedItem`'s didSet, and on a failure screen.
+    @ObservationIgnored private var actionMenuOwner: ActionMenuOwner?
 
     /// The entries the open action panel shows: the current submenu's, filtered by its search.
     var actionPanelSections: [ActionSection] {

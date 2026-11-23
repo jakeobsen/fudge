@@ -457,6 +457,8 @@ Extensions run in a separate Node.js process, the extension host.
       A `Form.Checkbox` is `.focusable(true, interactions: .edit)`, as the pickers are, since with macOS's Keyboard navigation off (the default) asking for a plain `Toggle` gives the keyboard to the first text field instead; Space toggles it.
     - **Actions.**
       `ActionPanelReader` (core) turns an `ActionPanel` node into sections of `ActionEntry`. ↵ runs the first entry and ⌘↵ the second; in a Form, where ↵ belongs to the fields, ⌘↵ and ⌘⇧↵. ⌘K opens the action panel overlay, with search, sections and submenus (opening one calls its `onOpen`).
+      A command's action panel belongs to what it opened on: the command, its view and the List or Grid item whose actions it shows, by node and `id` prop (`ActionMenuOwner`, core, SPEC-170).
+      When the selection moves to another item (a render or a click), the item or the items go, or a List's first items come, it closes with any submenu or picker in it, as root search's does when its selection moves; a render that keeps the selection leaves it open.
       Its rows show those keys on the first and second entries, counted across sections, in place of their own shortcuts, which still run them, as Raycast does (`ActionPanelReader.shownKey`, FUD-186); every other entry, and every entry in a submenu or in root search, shows its own.
       Entries are matched against the whole panel, so a search in the panel keeps each key on its action.
       An `Action.PickDate` (an `Action` with a `pickDate` prop and an `onChange`, `ActionEntry.pickDate`) opens a picker there in place of the list, as a submenu does; run with ↵, ⌘↵ or its shortcut, the overlay opens straight to it.
