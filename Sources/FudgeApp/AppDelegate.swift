@@ -227,6 +227,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.openPanel = { [weak self] options in await self?.chooseFiles(options) }
         // The calculator's towns and countries, read from the app's resources; nothing is downloaded.
         model.loadPlaces(waiting: Snapshot(arguments: CommandLine.arguments) != nil)
+        // Other places with Apple Maps, only while the setting is on. A snapshot run never asks Apple, even with the
+        // setting on in its settings.
+        let asksApple = Snapshot(arguments: CommandLine.arguments) == nil
+        model.placeLookups = PlaceLookups(
+            enabled: FudgeSettings.load(from: paths.settingsFile).appleMapsPlaces,
+            makeLookup: {
+                if asksApple { return MapKitPlaceLookup() }
+                return InertPlaceLookup()
+            })
         // The calculator's exchange rates: the cached ones now, downloads only while the setting is on.
         exchangeRates = ExchangeRateUpdater(
             fetcher: ECBRatesFetcher(), cacheFile: paths.exchangeRatesFile,
@@ -280,6 +289,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             Task { await self.exchangeRates.setEnabled(on, now: Date()) }
         }
+        settingsModel.appleMapsPlacesChanged = { [weak self] on in self?.model.placeLookups?.setEnabled(on) }
         // The model reads the setting again, and the open query's card is evaluated again in the new format.
         settingsModel.numberFormatChanged = { [weak self] in self?.model.applySettings() }
         // Update checks: only the real app asks GitHub, and only once a setting is chosen. A snapshot run never asks
@@ -909,6 +919,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         launcherHotkeyChanged()
         applyCommandHotkeys()
         Task { await exchangeRates.setEnabled(settings.currencyRates, now: Date()) }
+        model.placeLookups?.setEnabled(settings.appleMapsPlaces)
         Task { await updates.setSetting(settings.updateCheck, now: Date()) }
         snippetExpansion?.update()
         hyperkey?.update()

@@ -17,8 +17,10 @@ private let january: Date = {
 private let vendorFolder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
     .deletingLastPathComponent().appendingPathComponent("runtime/vendor/geonames", isDirectory: true)
 
-/// The committed table, read once for all the tests (about 20 MB, and 0.2 s or more each time it's read).
-private let committed: PlaceTable = PlaceTable.load(from: vendorFolder, now: january)!
+/// The committed table, read once for all the tests (about 20 MB, and 0.2 s or more each time it's read); the Apple Maps
+/// tests (`PlaceLookupTests`) use it too.
+let committedPlaces: PlaceTable = PlaceTable.load(from: vendorFolder, now: january)!
+private let committed = committedPlaces
 
 private func card(_ query: String, places: PlaceTable? = committed) -> CalculatorResult? {
     Calculator.evaluate(query, locale: enGB, now: january, timeZone: copenhagen, places: places)
@@ -98,9 +100,12 @@ struct PlaceTableTests {
                 "C\t\tXB\t89\tEurope/Paris\t", "D\t\tXB\t11\tAmerica/New_York\t",
                 // Bangkok and Ho Chi Minh City keep the same clock, so together they're 95%.
                 "E\t\tXC\t50\tAsia/Bangkok\t", "F\t\tXC\t45\tAsia/Ho_Chi_Minh\t", "G\t\tXC\t5\tAsia/Tokyo\t",
+                // London and Abidjan are both at UTC in January, but only London has summer time: two clocks.
+                "H\t\tXE\t50\tEurope/London\t", "I\t\tXE\t50\tAfrica/Abidjan\t",
             ],
             countries: [
                 "DK\tDenmark", "XA\tNinety Land", "XB\tEighty-Nine Land", "XC\tTwo Zones Land", "XD\tEmpty Land",
+                "XE\tSame Winter Land",
             ])
         #expect(zone("denmark", in: places) == "Europe/Copenhagen")
         #expect(TimeZoneConversion.place("denmark", places: places)?.name == "Denmark")
@@ -108,6 +113,7 @@ struct PlaceTableTests {
         #expect(zone("eighty-nine land", in: places) == nil, "89% isn't")
         #expect(zone("two zones land", in: places) == "Asia/Bangkok", "one clock, its most populous zone")
         #expect(zone("empty land", in: places) == nil, "no towns")
+        #expect(zone("same winter land", in: places) == nil, "the same offset in January, not the same clock")
         #expect(places.countryCount == 3)
     }
 
@@ -202,8 +208,8 @@ struct PlaceTableTests {
         #expect(zone("washington") == "America/New_York", "otherCities")
     }
 
-    /// Note 7.1: no unit or currency word ever becomes a country or a town, so with the table every `5 <a> to <b>`
-    /// converts in time zones exactly as it does without it.
+    /// Time zones are tried before units and currencies, so no unit or currency word may ever become a country or a
+    /// town: with the table, every `5 <a> to <b>` converts in time zones exactly as it does without it.
     @Test func unitAndCurrencyWordsNeverBecomePlaces() throws {
         var spellings: [String: [String]] = [:]
         for (spelling, known) in UnitConversion.table {

@@ -15,6 +15,9 @@ public struct FudgeSettings: Sendable, Equatable {
     public var currencyRates: Bool
     /// How the calculator reads and shows numbers: the Mac's format unless set. An unknown value reads as the Mac's.
     public var numberFormat: NumberFormatSetting
+    /// **Look up other places with Apple Maps** (`appleMapsPlaces`, SPEC-162 B): the calculator's time zones of places
+    /// its own tables don't know. Off unless set.
+    public var appleMapsPlaces = false
     /// The Extension Store's switch (`extensionStore`); it counts only with the consent date beside it.
     public var extensionStore = false
     /// When the user confirmed the Extension Store's consent sheet (`extensionStoreConsentAt`, ISO 8601).
@@ -292,6 +295,7 @@ public struct FudgeSettings: Sendable, Equatable {
         var settings = FudgeSettings(
             hotkey: object["hotkey"] as? String, currencyRates: object["currencyRates"] as? Bool ?? false,
             numberFormat: (object["numberFormat"] as? String).flatMap(NumberFormatSetting.init(rawValue:)) ?? .system)
+        settings.appleMapsPlaces = object["appleMapsPlaces"] as? Bool ?? false
         settings.extensionStore = object["extensionStore"] as? Bool ?? false
         settings.extensionStoreConsentAt = object["extensionStoreConsentAt"] as? String
         settings.signInServer = object["signInServer"] as? String
@@ -347,6 +351,7 @@ public struct FudgeSettings: Sendable, Equatable {
         object["hotkey"] = hotkey
         object["currencyRates"] = currencyRates ? true : nil
         object["numberFormat"] = numberFormat == .system ? nil : numberFormat.rawValue
+        object["appleMapsPlaces"] = appleMapsPlaces ? true : nil
         object["extensionStore"] = extensionStore ? true : nil
         object["extensionStoreConsentAt"] = extensionStoreConsentAt
         object["signInServer"] = signInServer

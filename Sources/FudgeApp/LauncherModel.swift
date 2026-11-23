@@ -526,6 +526,7 @@ final class LauncherModel {
     /// there: then the selection doesn't change, so the action panel open on it stays open.
     private func refreshResults(keepingSelection: Bool = false) {
         calculator = evaluateCalculator()
+        lookUpPlaces()
         results = RootSearch.rank(items, query: rootQuery, history: history)
         let rows = rootRows
         if keepingSelection, let selectedItem, rows.contains(where: { $0.id == selectedItem }) {
@@ -564,11 +565,35 @@ final class LauncherModel {
     /// build without them (`swift run`), the calculator knows only its own tables. Their arrival evaluates the card
     /// again for the open query, keeping the selection, as the exchange rates do.
     private(set) var places: PlaceTable? {
-        didSet {
-            let wasSelected = selectedItem == Self.calculatorID
-            calculator = evaluateCalculator()
-            if case .root = screen, calculator == nil, wasSelected { selectedItem = results.first?.id }
-        }
+        didSet { evaluateCalculatorAgain() }
+    }
+
+    /// Whether `loadPlaces` has read the table, or found none. Until then nothing goes to Apple Maps, since the table
+    /// may know the name.
+    private var placesRead = false {
+        didSet { lookUpPlaces() }
+    }
+
+    /// Other places, looked up with Apple Maps while its setting is on (SPEC-162 B); set by the app delegate. A place
+    /// found for the open query evaluates the card again, keeping the selection.
+    var placeLookups: PlaceLookups? {
+        didSet { placeLookups?.onChange = { [weak self] in self?.evaluateCalculatorAgain() } }
+    }
+
+    /// Hands the root query to `placeLookups`, which looks up only what it allows, after the typing stops.
+    private func lookUpPlaces() {
+        guard placesRead else { return }
+        placeLookups?.queryChanged(rootQuery, places: places)
+    }
+
+    /// The card for the open query again, keeping the selection: it moves only off a card that's gone, and onto a
+    /// card that came when nothing was selected.
+    private func evaluateCalculatorAgain() {
+        let wasSelected = selectedItem == Self.calculatorID
+        calculator = evaluateCalculator()
+        guard case .root = screen else { return }
+        if calculator == nil, wasSelected { selectedItem = results.first?.id }
+        if calculator != nil, selectedItem == nil { selectedItem = Self.calculatorID }
     }
 
     /// Reads `Contents/Resources/places/` once, at launch, off the main actor (about 0.2 s). A snapshot run reads
@@ -576,15 +601,18 @@ final class LauncherModel {
     /// priority can miss.
     func loadPlaces(waiting: Bool = false) {
         guard let folder = Bundle.main.resourceURL?.appendingPathComponent("places", isDirectory: true) else {
+            placesRead = true
             return
         }
         if waiting {
             places = PlaceTable.load(from: folder, now: Date())
+            placesRead = true
             return
         }
         Task {
             let loaded = await Task.detached(priority: .utility) { PlaceTable.load(from: folder, now: Date()) }.value
             if let loaded { places = loaded }
+            placesRead = true
         }
     }
 
@@ -593,7 +621,7 @@ final class LauncherModel {
         let locale = Locale.current
         return Calculator.evaluate(
             rootQuery, locale: locale, format: settings.numberFormat.resolve(locale), now: Date(), timeZone: .current,
-            currency: currency, places: places)
+            currency: currency, places: places, lookedUp: placeLookups?.found ?? [:])
     }
 
     /// ↵ on the Calculator card: copy its answer, or what the card offers instead (turning currency on, retrying).

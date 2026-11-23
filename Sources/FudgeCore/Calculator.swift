@@ -54,14 +54,17 @@ public enum Calculator {
     /// `currency` is what fudge knows about exchange rates; a currency query gets a card even without them, saying
     /// why it can't answer. Numbers are read and shown in `format`, by default `locale`'s (`NumberFormat.system`);
     /// `locale` still names times, dates, currencies and the spelled-out answer. `places` adds the towns and countries
-    /// to the time zone conversions; until the app has loaded it, they know only their own tables.
+    /// to the time zone conversions; until the app has loaded it, they know only their own tables. `lookedUp` adds the
+    /// places Apple Maps found (`PlaceLookups.found`).
     public static func evaluate(
         _ query: String, locale: Locale, format: NumberFormat? = nil, now: Date, timeZone: TimeZone,
-        currency: CurrencyState = .off, places: PlaceTable? = nil
+        currency: CurrencyState = .off, places: PlaceTable? = nil, lookedUp: [String: TimeZoneConversion.Place] = [:]
     ) -> CalculatorResult? {
         guard query.count <= maximumLength, !query.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
         let format = format ?? .system(locale)
-        if let conversion = TimeZoneConversion.evaluate(query, now: now, timeZone: timeZone, places: places) {
+        if let conversion = TimeZoneConversion.evaluate(
+            query, now: now, timeZone: timeZone, places: places, lookedUp: lookedUp)
+        {
             return timeZoneResult(query, conversion, locale: locale)
         }
         if let conversion = CurrencyConversion.parse(query, locale: locale, format: format) {

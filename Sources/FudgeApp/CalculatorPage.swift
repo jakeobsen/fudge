@@ -1,8 +1,9 @@
 import FudgeCore
 import SwiftUI
 
-/// The Settings window's Calculator page, under Extensions: whether the calculator downloads exchange rates, and the
-/// number format it reads and writes. The "Currency conversion is off" card's ↵ opens it.
+/// The Settings window's Calculator page, under Extensions: whether the calculator downloads exchange rates, whether it
+/// looks up other places with Apple Maps, and the number format it reads and writes. The "Currency conversion is off"
+/// card's ↵ opens it.
 struct CalculatorPage: View {
     @Bindable var model: SettingsModel
 
@@ -16,6 +17,7 @@ struct CalculatorPage: View {
             }
             Section {
                 CurrencyRatesToggle(model: model)
+                AppleMapsPlacesToggle(model: model)
                 Picker(
                     selection: Binding(get: { model.numberFormat }, set: { model.setNumberFormat($0) })
                 ) {
@@ -42,6 +44,19 @@ struct CurrencyRatesToggle: View {
         Toggle(isOn: Binding(get: { model.currencyRates }, set: { model.setCurrencyRates($0) })) {
             Text("Currency conversion")
             Text("Fudge downloads exchange rates from the European Central Bank once a day.")
+        }
+        .toggleStyle(.switch)
+    }
+}
+
+/// The calculator's Apple Maps switch (SPEC-162 B). Onboarding's Apple Maps step uses it too.
+struct AppleMapsPlacesToggle: View {
+    let model: SettingsModel
+
+    var body: some View {
+        Toggle(isOn: Binding(get: { model.appleMapsPlaces }, set: { model.setAppleMapsPlaces($0) })) {
+            Text("Look up other places with Apple Maps")
+            Text("For time zones of places the calculator doesn't know, such as small towns.")
         }
         .toggleStyle(.switch)
     }

@@ -8,6 +8,9 @@ public enum OnboardingStep: String, CaseIterable, Sendable {
     case accessibility
     case openAtLogin
     case currency
+    /// Whether the calculator looks up other places with Apple Maps (SPEC-162 B): an opt-in, with the Calculator
+    /// page's own switch.
+    case appleMaps
     /// Whether to turn on the Extension Store (FUD-128): its consent sheet's own words, Turn On or Not Now.
     case extensionStore
     /// Which sign-in server extensions use (FUD-128): the Sign-in page's own choice, with its consent sheet.
@@ -29,6 +32,7 @@ public enum OnboardingStep: String, CaseIterable, Sendable {
     /// `FudgeSettings` is one of these or listed as not an opt-in.
     public static let optIns: [String: OnboardingStep] = [
         "currencyRates": .currency,
+        "appleMapsPlaces": .appleMaps,
         "extensionStore": .extensionStore,
         "signInServer": .signIn,
         "ownAppSignIn": .raycast,

@@ -367,6 +367,9 @@ In "1.234,5", `1.000 + 1` is 1.001, and `1.5` isn't a number, so it gets no answ
 Currency conversion uses the European Central Bank's daily exchange rates.
 Turn it on under **Settings… → Calculator**; until then, a currency query shows a card that takes you there.
 
+For places the calculator doesn't know, such as small towns, turn on **Look up other places with Apple Maps** under **Settings… → Calculator**.
+Then `time in hirtshals` shows its card once Apple Maps has found the town.
+
 Town and country names come from [GeoNames](https://www.geonames.org), under the [Creative Commons Attribution 4.0 license](https://creativecommons.org/licenses/by/4.0/).
 Fudge keeps only each town's names, country, population and time zone.
 
