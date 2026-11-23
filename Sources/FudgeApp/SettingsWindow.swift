@@ -136,6 +136,18 @@ final class SettingsModel {
         currencyRatesChanged(on)
     }
 
+    /// Whether the calculator looks up other places with Apple Maps (`appleMapsPlaces` in `settings.json`).
+    var appleMapsPlaces: Bool { fudgeSettings.appleMapsPlaces }
+    /// Turns the lookups on or off; set by the app delegate.
+    @ObservationIgnored var appleMapsPlacesChanged: (Bool) -> Void = { _ in }
+
+    func setAppleMapsPlaces(_ on: Bool) {
+        // As for currency: a settings.json that can't be written is refused, with the banner.
+        guard FudgeSettings.load(from: paths.settingsFile).appleMapsPlaces != on, change({ $0.appleMapsPlaces = on })
+        else { return }
+        appleMapsPlacesChanged(on)
+    }
+
     // MARK: - Hyperkey
 
     /// **Hyperkey (Caps Lock)** (`hyperkey` in `settings.json`, SPEC-093).

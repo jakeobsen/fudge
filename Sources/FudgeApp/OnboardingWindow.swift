@@ -290,6 +290,13 @@ struct OnboardingView: View {
                 Text("The calculator can convert currencies, like 100 usd to eur.")
                 SettingsGroup { CurrencyRatesToggle(model: settings) }
             }
+        case .appleMaps:
+            VStack(alignment: .leading, spacing: 14) {
+                title("Look up places with Apple Maps?")
+                Text("The calculator knows the time in towns and countries, like 3pm roskilde to kouvola.")
+                Text("Apple Maps can find the places it doesn't know.")
+                SettingsGroup { AppleMapsPlacesToggle(model: settings) }
+            }
         case .extensionStore:
             VStack(alignment: .leading, spacing: 14) {
                 title("Extension Store")
@@ -389,6 +396,7 @@ struct OnboardingView: View {
                     summary("Accessibility") { Text(settings.accessibility.isTrusted ? "Allowed" : "Not now") }
                     summary("Open at Login") { Text(settings.loginItemState.isOn ? "On" : "Off") }
                     summary("Currency conversion") { Text(settings.currencyRates ? "On" : "Off") }
+                    summary("Places with Apple Maps") { Text(settings.appleMapsPlaces ? "On" : "Off") }
                     summary("Extension Store") { Text(storeOn ? "On" : "Off") }
                     summary("Sign-in") { Text(settings.signInServer.host ?? "Off") }
                     summary("Own sign-in") { Text(settings.ownAppSignIn ? "On" : "Off") }
@@ -409,6 +417,9 @@ struct OnboardingView: View {
             Button("Get Started") { model.next() }.keyboardShortcut(.defaultAction)
         case .accessibility where !settings.accessibility.isTrusted:
             Button("Not Now") { model.next() }
+        case .appleMaps where !settings.appleMapsPlaces:
+            // An opt-in that asks Apple Maps: ↵ is Not Now, never on.
+            Button("Not Now") { model.next() }.keyboardShortcut(.defaultAction)
         case .extensionStore where !storeOn:
             // An opt-in that downloads from GitHub: ↵ is Not Now, never Turn On.
             Button("Turn On Extension Store") {
