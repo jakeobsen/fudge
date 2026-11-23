@@ -9,6 +9,8 @@ import {
     developmentDetailMarkdown,
     developmentRowId,
     developmentRowsShown,
+    installOnlyRowActions,
+    installOnlyRowsReady,
     readDevelopmentBuilds,
     uninstallDevelopmentBuild,
     type DevelopmentBuild,
@@ -164,6 +166,19 @@ test("Uninstall on a development build's row moves only fudgeapp/development/<fo
     assert.equal(await uninstallDevelopmentBuild(bad, refused.context), false);
     assert.deepEqual(refused.asked, []);
     assert.deepEqual(refused.trashed, []);
+});
+
+test("rows built from an install alone wait for the first copy's rows, so the list opens on its first row", () => {
+    // The installs are read before any copy, and rows read later don't move the selection.
+    assert.equal(installOnlyRowsReady(0, 1), false, "the installs are read, no copy yet");
+    assert.equal(installOnlyRowsReady(0, 2), false, "an open and a ⌘R, no copy yet");
+    assert.equal(installOnlyRowsReady(12, 1), true, "the first copy's rows are in, others still reading");
+    assert.equal(installOnlyRowsReady(0, 0), true, "reading ended with no copy's rows: every copy failed, or none is on");
+    assert.equal(installOnlyRowsReady(12, 0), true, "after an install or an uninstall");
+});
+
+test("↵ on a row built from an install alone copies its name, and Uninstall comes after it", () => {
+    assert.deepEqual(installOnlyRowActions, ["copyName", "uninstall"]);
 });
 
 test("development build rows show under All and Installed only, with a detail that says what they are", () => {

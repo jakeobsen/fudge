@@ -60,6 +60,8 @@ import {
     developmentDetailMarkdown,
     developmentRowId,
     developmentRowsShown,
+    installOnlyRowActions,
+    installOnlyRowsReady,
     readDevelopmentBuilds,
     uninstallDevelopmentBuild,
     type DevelopmentBuild,
@@ -846,60 +848,53 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
         );
     };
 
-    /** A development build's row (E.9): its own id, no icon, and only Uninstall and Copy Name. */
+    /** The actions of a row built from an install alone (E.8, E.9): Copy Name (↵), then Uninstall (⌃X), in that order. */
+    const installOnlyActions = (name: string, uninstall: () => void) => (
+        <ActionPanel>
+            {installOnlyRowActions.map((action) => (
+                <ActionPanel.Section key={action}>
+                    {action === "copyName" ? (
+                        <Action.CopyToClipboard title="Copy Name" content={name} />
+                    ) : (
+                        <Action
+                            title="Uninstall"
+                            icon={Icon.Trash}
+                            style={Action.Style.Destructive}
+                            shortcut={{ modifiers: ["ctrl"], key: "x" }}
+                            onAction={uninstall}
+                        />
+                    )}
+                </ActionPanel.Section>
+            ))}
+        </ActionPanel>
+    );
+    /** A development build's row (E.9): its own id, the default icon, and only Copy Name and Uninstall. */
     const developmentItem = (build: DevelopmentBuild) => (
         <List.Item
             key={developmentRowId(build.name)}
             id={developmentRowId(build.name)}
+            icon={Icon.Box}
             title={build.title}
             subtitle={showingDetail ? undefined : build.description}
             keywords={[build.name]}
             accessories={showingDetail ? undefined : [{ text: developmentBuildAccessory }]}
             detail={showingDetail ? <List.Item.Detail markdown={developmentDetailMarkdown(build)} /> : undefined}
-            actions={
-                <ActionPanel>
-                    <ActionPanel.Section>
-                        <Action
-                            title="Uninstall"
-                            icon={Icon.Trash}
-                            style={Action.Style.Destructive}
-                            shortcut={{ modifiers: ["ctrl"], key: "x" }}
-                            onAction={() => runUninstallDevelopment(build)}
-                        />
-                    </ActionPanel.Section>
-                    <ActionPanel.Section>
-                        <Action.CopyToClipboard title="Copy Name" content={build.name} />
-                    </ActionPanel.Section>
-                </ActionPanel>
-            }
+            actions={installOnlyActions(build.name, () => runUninstallDevelopment(build))}
         />
     );
-    /** The row of an install whose repository isn't on (E.8): no icon, "Not updated", and only Uninstall and Copy Name. */
+    /** The row of an install whose repository isn't on (E.8): the default icon, "Not updated", and only Copy Name and
+     * Uninstall. */
     const notUpdatedItem = (install: NotUpdatedInstall) => (
         <List.Item
             key={notUpdatedRowId(install.id)}
             id={notUpdatedRowId(install.id)}
+            icon={Icon.Box}
             title={install.title}
             subtitle={showingDetail ? undefined : install.description}
             keywords={[install.name]}
             accessories={showingDetail ? undefined : [{ text: notUpdatedAccessory }]}
             detail={showingDetail ? <List.Item.Detail markdown={notUpdatedDetailMarkdown(install)} /> : undefined}
-            actions={
-                <ActionPanel>
-                    <ActionPanel.Section>
-                        <Action
-                            title="Uninstall"
-                            icon={Icon.Trash}
-                            style={Action.Style.Destructive}
-                            shortcut={{ modifiers: ["ctrl"], key: "x" }}
-                            onAction={() => runUninstallNotUpdated(install)}
-                        />
-                    </ActionPanel.Section>
-                    <ActionPanel.Section>
-                        <Action.CopyToClipboard title="Copy Name" content={install.name} />
-                    </ActionPanel.Section>
-                </ActionPanel>
-            }
+            actions={installOnlyActions(install.name, () => runUninstallNotUpdated(install))}
         />
     );
     /** A repository's problem row (C.6): Show Details, ⌘R Refresh and ⌘C Copy Error, git's output cleaned. */
@@ -961,14 +956,16 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
     const filteredRepositories = filterRepositories(copies ?? []);
 
     // The Installed section: the store's installs, the development builds and the installs whose repository isn't on,
-    // by title.
+    // by title. The last two come with the first copy's rows, so the list opens on its first row.
+    const installOnly =
+        loaded && !loadFailureShown && installOnlyRowsReady(loaded.entries.length, reading) ? loaded : undefined;
     const installedItems = [
         ...installedRows.map((entry) => ({ title: entry.title, node: item(entry) })),
-        ...(loaded && !loadFailureShown && developmentRowsShown(filter) ? loaded.development : []).map((build) => ({
+        ...(installOnly && developmentRowsShown(filter) ? installOnly.development : []).map((build) => ({
             title: build.title,
             node: developmentItem(build),
         })),
-        ...(loaded && !loadFailureShown && notUpdatedRowsShown(filter) ? loaded.notUpdated : []).map((install) => ({
+        ...(installOnly && notUpdatedRowsShown(filter) ? installOnly.notUpdated : []).map((install) => ({
             title: install.title,
             node: notUpdatedItem(install),
         })),

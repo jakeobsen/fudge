@@ -32,6 +32,22 @@ export function developmentRowsShown(filter: string): boolean {
     return filter === allFilter || filter === installedFilter;
 }
 
+/**
+ * Whether the rows built from an install alone (development builds, and installs whose repository isn't on) show yet:
+ * with the first rows read from a copy (`copyRows`), or once no open or ⌘R is reading copies (`reading`). The installs
+ * are read before any copy, and rows read later don't move the selection (C.3), so shown earlier, the list would open
+ * on one of them instead of its first row.
+ */
+export function installOnlyRowsReady(copyRows: number, reading: number): boolean {
+    return copyRows > 0 || reading === 0;
+}
+
+/**
+ * The actions of a row built from an install alone, in order: Copy Name first, so ↵ never uninstalls, as on every other
+ * row; Uninstall after it, on ⌃X, asking first.
+ */
+export const installOnlyRowActions: readonly ("copyName" | "uninstall")[] = Object.freeze(["copyName", "uninstall"]);
+
 /** The detail pane of a development build's row: what it is and where, since it has no README or commands here. */
 export function developmentDetailMarkdown(build: DevelopmentBuild): string {
     // The folder passed the name rule, so it holds nothing markdown reads; the code span keeps `_` literal.
