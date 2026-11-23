@@ -93,8 +93,24 @@ private func clip(_ text: String) -> PasteboardContents {
 private let me: Int32 = 100
 private let textEdit = FrontmostApplication(pid: 200, bundleIdentifier: "com.apple.TextEdit")
 private let restoreDelay: Duration = .milliseconds(50)
-/// Generous bounds for "it doesn't wait for anything else": a busy CI runner can stall the main actor for seconds.
-private let noHang: Duration = .seconds(30)
+/// A ceiling that only catches a hang: each wait below ends as soon as what it waits for has happened, and one that
+/// hasn't by then fails its test instead of holding up the run (`ended(within:_:)`). It is never compared with a
+/// measured time: the tests run at once on one main actor, so a test's measured time is about the whole run's.
+private let noHang: Duration = .seconds(120)
+
+/// What `task` returns, or nil once `limit` has passed without its answer: a wait that never ends fails its test
+/// instead of holding up the run, and the task is left waiting. The deadline comes from Dispatch
+/// (`OffThePool.after`, FUD-153), so a held-up main actor can't hold it back.
+private func ended<T: Sendable, Failure: Error>(within limit: Duration, _ task: Task<T, Failure>) async throws -> T? {
+    let once = Once()
+    return try await withCheckedThrowingContinuation { continuation in
+        Task {
+            let result = await task.result
+            if once.claim() { continuation.resume(with: result.map(Optional.some).mapError { $0 as any Error }) }
+        }
+        OffThePool.after(limit) { if once.claim() { continuation.resume(returning: nil) } }
+    }
+}
 
 /// A `Paste` and a `SelectedText` sharing one `PasteboardTurns`, as the app's are.
 @MainActor
@@ -156,7 +172,10 @@ private struct Rig {
     let started = ContinuousClock.now
     try await rig.paste("pasted")
     rig.pasteboard.copied("copied meanwhile")
-    #expect(try await rig.read() == "selected")
+    // A dropped restore that never ended the fallback's wait would hold the read for good: it fails at `noHang`.
+    let answer = try await ended(within: noHang, Task { try await rig.read() })
+    let read = try #require(answer, "the dropped restore ended the fallback's wait")
+    #expect(read == "selected")
     let waited = ContinuousClock.now - started
     #expect(
         rig.log.events == [
@@ -165,7 +184,6 @@ private struct Rig {
             "snapshot copied meanwhile", "⌘C", "copied selected", "write copied meanwhile",
         ], "the restore leaves the newer copy, and the fallback keeps it")
     #expect(waited >= restoreDelay, "the restore isn't hurried")
-    #expect(waited < restoreDelay + noHang, "and the fallback waits for nothing after it")
     #expect(rig.pasteboard.plainText() == "copied meanwhile")
 }
 
@@ -205,18 +223,14 @@ private struct Rig {
     #expect(rig.pasteboard.plainText() == "user's clipboard")
 }
 
-@Test @MainActor func restoreSettledReturnsAtOnceWithNothingPendingAndWhenTheRestoreIsCancelled() async {
+@Test @MainActor func restoreSettledReturnsAtOnceWithNothingPendingAndWhenTheRestoreIsCancelled() async throws {
     let turns = PasteboardTurns()
-    let started = ContinuousClock.now
-    await turns.restoreSettled()
-    #expect(ContinuousClock.now - started < noHang, "nothing pending")
+    #expect(try await ended(within: noHang, Task { await turns.restoreSettled() }) != nil, "nothing pending")
 
     // A restore that would wait a long time: a new paste cancels it and keeps its snapshot.
     let restore = Task<Void, Never> { try? await Task.sleep(for: .seconds(600)) }
     turns.restore = restore
     let waiting = Task { await turns.restoreSettled() }
     restore.cancel()
-    let cancelled = ContinuousClock.now
-    await waiting.value
-    #expect(ContinuousClock.now - cancelled < noHang, "the waiter resumes with the cancelled restore")
+    #expect(try await ended(within: noHang, waiting) != nil, "the waiter resumes with the cancelled restore")
 }
