@@ -143,6 +143,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if Snapshot(arguments: CommandLine.arguments)?.signInServicesList == true {
             settingsModel.snapshotServicesList = []
         }
+        if let snapshot = Snapshot(arguments: CommandLine.arguments), let address = snapshot.addRepository {
+            var draft = ExtensionRepositoryDraft()
+            draft.address = address
+            // Add goes through the page's own path, so a refusal's reason shows as the user would see it, and an
+            // accepted address closes the window.
+            let closes = snapshot.addRepositoryAdd && settingsModel.addRepository(&draft)
+            settingsModel.snapshotAddRepository = closes ? nil : draft
+        }
         // One calendar source for both, so the Calendar and Permissions pages say what My Schedule reads.
         settingsModel.calendarSource = model.calendarSource
         settingsModel.loadCalendars()
@@ -977,9 +985,11 @@ struct Snapshot {
     let signInConsent: Bool
     /// `--clipboard-consent`: turns on Clipboard History's switch and saves its consent sheet instead.
     let clipboardConsent: Bool
-    /// `--add-repository <address>`: types the address on the Extension Store's page, presses Add… and saves its
-    /// sheet instead (FUD-182). It implies `--settings`, as `--clipboard-consent` does.
+    /// `--add-repository <address>`: the Extension Store's page with the **Add Repository** window drawn over it, the
+    /// address typed (SPEC-160). It implies `--settings`, as `--clipboard-consent` does.
     let addRepository: String?
+    /// `--add-repository-add`: presses Add in that window, so a refused address shows its reason.
+    let addRepositoryAdd: Bool
     /// `--own-app-sign-in`: **Extensions with their own sign-in** shows as on, in memory only.
     let ownAppSignIn: Bool
     /// `--raycast-links fudge|<app name>[,<app name>]`: who opens Raycast's links (no app without it), and who else
@@ -1053,6 +1063,7 @@ struct Snapshot {
         signInConsent = arguments.contains("--sign-in-consent")
         clipboardConsent = arguments.contains("--clipboard-consent")
         addRepository = value("--add-repository")
+        addRepositoryAdd = arguments.contains("--add-repository-add")
         ownAppSignIn = arguments.contains("--own-app-sign-in")
         raycastLinks = value("--raycast-links")
         foundFiles = value("--found-files").map { URL(fileURLWithPath: $0) }
@@ -1093,13 +1104,10 @@ struct Snapshot {
         // `--settings :commands --search text` searches the Commands page, as typing in its field does.
         controller.model.commandsSearch = search
         controller.renderOffscreen(extension: page)
-        if signInConsent || clipboardConsent || addRepository != nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [signInConsent, addRepository] in
+        if signInConsent || clipboardConsent {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [signInConsent] in
                 if signInConsent {
                     controller.model.setSignInServer(.fudge)
-                } else if let addRepository {
-                    controller.model.repositoryAddress = addRepository
-                    controller.model.addRepository()
                 } else {
                     controller.model.setClipboardHistory(true)
                 }
