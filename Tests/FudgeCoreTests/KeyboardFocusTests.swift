@@ -42,19 +42,31 @@ private func fields(_ ids: [Int], timeBoxes: Set<Int> = []) -> [KeyboardFocus.Ta
             == .actionPanel)
 }
 
+/// `KeyboardFocus.formFieldAfterFieldsChange` with the fields `[3, 5, 7]` by default, starting in 3.
+private func afterFieldsChange(
+    now: KeyboardFocus.FormStop?, editable: [Int] = [3, 5, 7], first: Int? = 3, overlayOpen: Bool = false
+) -> Int? {
+    KeyboardFocus.formFieldAfterFieldsChange(now: now, editable: editable, first: first, overlayOpen: overlayOpen)
+}
+
 @Test func aFormsNewFieldsTakeTheKeyboardOnlyWhenNoFieldAndNoOverlayHasIt() {
-    func after(focused: Int?, editable: [Int] = [3, 5, 7], first: Int? = 3, overlayOpen: Bool = false) -> Int? {
-        KeyboardFocus.formFieldAfterFieldsChange(
-            focused: focused, editable: editable, first: first, overlayOpen: overlayOpen)
-    }
-    #expect(after(focused: nil) == 3, "no field had it: the first takes it")
-    #expect(after(focused: 9) == 3, "the field that had it is gone")
-    #expect(after(focused: 5) == nil, "a field still has it")
-    #expect(after(focused: nil, editable: [], first: nil) == nil, "no fields left")
+    #expect(afterFieldsChange(now: nil) == 3, "no field had it: the first takes it")
+    #expect(afterFieldsChange(now: .field(9)) == 3, "the field that had it is gone")
+    #expect(afterFieldsChange(now: .field(5)) == nil, "a field still has it")
+    #expect(afterFieldsChange(now: nil, editable: [], first: nil) == nil, "no fields left")
     #expect(
-        after(focused: nil, overlayOpen: true) == nil,
+        afterFieldsChange(now: nil, overlayOpen: true) == nil,
         "an Action.PickDate picker or another overlay holds the keyboard: nothing takes it from there")
-    #expect(after(focused: 9, overlayOpen: true) == nil)
+    #expect(afterFieldsChange(now: .field(9), overlayOpen: true) == nil)
+}
+
+@Test func fieldsThatComeOrGoLeaveTheKeyboardInATimeBox() {
+    #expect(afterFieldsChange(now: .timeBox(5), editable: [3, 5, 7, 9]) == nil, "a field added")
+    #expect(afterFieldsChange(now: .timeBox(5), editable: [5, 7]) == nil, "a field removed")
+    #expect(afterFieldsChange(now: .timeBox(5), editable: [3, 7]) == 3, "the time box's own field is gone")
+    #expect(
+        afterFieldsChange(now: .timeBox(5), editable: [3, 7], overlayOpen: true) == nil,
+        "its field gone, with an overlay holding the keyboard: the overlay's closing gives it")
 }
 
 @Test func closingAnOverlayGivesTheLastFieldTheKeyboardOrElseTheFirst() {
@@ -435,6 +447,19 @@ private func inTimeBox() -> FormKeyboard {
     #expect(gone(inTheDate, cleared) == nil, "the keyboard in the date field itself")
     #expect(gone(stillThere, dated) == nil, "the time box still shown")
     #expect(gone(stillThere, fields([2, 4, 5])) == nil, "its field is gone")
+}
+
+@Test func aFieldAddedAsTheDateIsClearedGivesTheDateField() {
+    // One render adds field 6 and clears field 3's date, with the keyboard in field 3's time box.
+    let keyboard = inTimeBox()
+    #expect(
+        KeyboardFocus.formFieldAfterFieldsChange(
+            now: keyboard.now, editable: [2, 3, 4, 5, 6], first: 2, overlayOpen: false) == nil,
+        "the fields changing leave the time box alone")
+    #expect(
+        KeyboardFocus.formFieldAfterTimeBoxGone(
+            keyboard: keyboard, fields: fields([2, 3, 4, 5, 6]), overlayOpen: false) == 3,
+        "the time box going gives its date field")
 }
 
 @Test func thePanelsShowingGivesTheSamePlaceAsAnOverlaysClosing() {

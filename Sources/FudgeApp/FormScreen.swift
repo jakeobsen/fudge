@@ -44,11 +44,14 @@ struct FormScreen: View {
             }
         }
         // Fields that arrive after the form (loaded text, a remounted field) take focus if nothing has it, unless an
-        // overlay holds the keyboard: then they take it when the overlay closes.
+        // overlay holds the keyboard: then they take it when the overlay closes. A field or a time box that has it
+        // keeps it while other fields come or go. A time box that went with its field is cleared first, since SwiftUI
+        // doesn't report its focus going, or `place` would still name it.
         .onChange(of: editableIDs) { _, ids in
             if let field = KeyboardFocus.formFieldAfterFieldsChange(
-                focused: focused, editable: ids, first: firstField, overlayOpen: overlayHoldsKeyboard)
+                now: place, editable: ids, first: firstField, overlayOpen: overlayHoldsKeyboard)
             {
+                timeBox = nil
                 focused = field
             }
         }
