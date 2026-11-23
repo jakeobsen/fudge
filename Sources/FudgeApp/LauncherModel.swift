@@ -560,12 +560,40 @@ final class LauncherModel {
         }
     }
 
+    /// The calculator's towns and countries (`PlaceTable`), once `loadPlaces` has read them. Until then, and in a
+    /// build without them (`swift run`), the calculator knows only its own tables. Their arrival evaluates the card
+    /// again for the open query, keeping the selection, as the exchange rates do.
+    private(set) var places: PlaceTable? {
+        didSet {
+            let wasSelected = selectedItem == Self.calculatorID
+            calculator = evaluateCalculator()
+            if case .root = screen, calculator == nil, wasSelected { selectedItem = results.first?.id }
+        }
+    }
+
+    /// Reads `Contents/Resources/places/` once, at launch, off the main actor (about 0.2 s). A snapshot run reads
+    /// them before it goes on (`waiting`), since it takes its picture a second after the query, which a load at low
+    /// priority can miss.
+    func loadPlaces(waiting: Bool = false) {
+        guard let folder = Bundle.main.resourceURL?.appendingPathComponent("places", isDirectory: true) else {
+            return
+        }
+        if waiting {
+            places = PlaceTable.load(from: folder, now: Date())
+            return
+        }
+        Task {
+            let loaded = await Task.detached(priority: .utility) { PlaceTable.load(from: folder, now: Date()) }.value
+            if let loaded { places = loaded }
+        }
+    }
+
     /// "Same as macOS" is resolved here, for each query, so a change in System Settings applies at once.
     private func evaluateCalculator() -> CalculatorResult? {
         let locale = Locale.current
         return Calculator.evaluate(
             rootQuery, locale: locale, format: settings.numberFormat.resolve(locale), now: Date(), timeZone: .current,
-            currency: currency)
+            currency: currency, places: places)
     }
 
     /// ↵ on the Calculator card: copy its answer, or what the card offers instead (turning currency on, retrying).

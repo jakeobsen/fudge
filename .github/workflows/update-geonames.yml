@@ -1,0 +1,27 @@
+name: Update GeoNames database
+
+# Only when someone starts it: downloads GeoNames' town list, rebuilds the calculator's place files, and opens a
+# pull request into development.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    # Only the repository's owner may start it; a dispatch or re-run by any other account skips with no runner time.
+    if: github.triggering_actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: development
+      - name: Download and rebuild
+        run: scripts/geonames/update.sh
+      - name: Open a pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/geonames/open-pull-request.sh

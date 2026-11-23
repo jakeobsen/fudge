@@ -353,11 +353,16 @@ No keyword can contain another, so a keyword never expands inside a longer one.
 
 Type a calculation in root search and the answer shows above the results: arithmetic (`5+5/10*39`), units (`13kg to lbs`), time zones (`3pm cet in pst`) and currencies (`100 usd to eur`, `€100 in usd`, `100 € in kr`). ↵ copies the answer.
 
+Time zones also know towns of 15,000 people or more (`3pm roskilde to kouvola`), countries with one time zone (`denmark time`) and offsets from UTC (`gmt+2 to utc`).
+
 Numbers follow your Mac's number format, or the one you pick under **Settings… → Calculator → Number format** (in the Extensions part of the sidebar): "1,234.5" or "1.234,5".
 In "1.234,5", `1.000 + 1` is 1.001, and `1.5` isn't a number, so it gets no answer rather than a wrong one.
 
 Currency conversion uses the European Central Bank's daily exchange rates.
 Turn it on under **Settings… → Calculator**; until then, a currency query shows a card that takes you there.
+
+Town and country names come from [GeoNames](https://www.geonames.org), under the [Creative Commons Attribution 4.0 license](https://creativecommons.org/licenses/by/4.0/).
+Fudge keeps only each town's names, country, population and time zone.
 
 ### Search Files
 
@@ -573,6 +578,8 @@ The app icon was made with ChatGPT for this project.
 The app also ships third-party code and data, each under its own license: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) lists them, and Fudge.app carries the same as `Third-Party Notices.txt`, linked from **About Fudge**.
 
 `runtime/vendor/unicode/` holds Unicode's emoji data and CLDR's English annotations, under the Unicode License v3; see [the license next to them](runtime/vendor/unicode/LICENSE).
+
+`runtime/vendor/geonames/` holds the calculator's towns and countries, made from GeoNames' files, under the Creative Commons Attribution 4.0 license; see [the license next to them](runtime/vendor/geonames/LICENSE).
 
 `runtime/vendor/raycast-api/index.d.ts` contains the type definitions from the `@raycast/api` package.
 They are Copyright (c) 2021 Raycast and MIT-licensed; see [the notice next to them](runtime/vendor/raycast-api/LICENSE).
