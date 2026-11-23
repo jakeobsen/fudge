@@ -4759,7 +4759,7 @@ test("links follow the row's repository: its owner and name on github.com, none 
 
 test("every row's detail has a Repository line with its repository's name (D.2)", () => {
     const fromTools = parseManifest("alpha", manifest("alpha"), copyOfRepository(toolsRepository))!;
-    assert.match(detailMarkdown(alphaEntry, raycastRow, "c0ffee", ""), /\*\*Repository:\*\* Raycast(  \n|$)/m);
+    assert.match(detailMarkdown(alphaEntry, raycastRow, "c0ffee", ""), /\*\*Repository:\*\* raycast\\\/extensions(  \n|$)/m);
     assert.match(detailMarkdown(fromTools, { name: "Someone/Tools", gitHub: "someone/tools" }, "c0ffee", ""), /\*\*Repository:\*\* Someone\\\/Tools/);
     // The name's marks are escaped, so none of it reads as Markdown.
     assert.match(detailMarkdown(fromTools, { name: "gitlab.com/a_b/~c" }, "c0ffee", ""), /\*\*Repository:\*\* gitlab\\\.com\\\/a\\_b\\\/\\~c/);

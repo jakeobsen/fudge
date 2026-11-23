@@ -18,6 +18,7 @@ import {
     problemRows,
     problemSentence,
     readCopy,
+    readRepositoryList,
     readStatus,
     removeCopy,
     removeUnlistedCopies,
@@ -60,8 +61,8 @@ function added(address: string, branch?: string, on = true, list: ParsedReposito
 const raycastAnswer = (on = true) => ({
     copyId: "raycast",
     folder: "raycast/extensions",
-    address: "github.com/raycast/extensions",
-    name: "Raycast",
+    address: "https://github.com/raycast/extensions",
+    name: "raycast/extensions",
     on,
 });
 
@@ -140,8 +141,24 @@ test("with Raycast's switched off, only the added ones have copies; an answer th
         [tools.parsed.copyId],
     );
     assert.deepEqual(storeCopies([raycastAnswer(false)], support).copies, []);
-    assert.deepEqual(storeCopies(undefined, support), { listed: [], copies: [] });
-    assert.deepEqual(storeCopies({ copyId: "raycast" }, support), { listed: [], copies: [] });
+    assert.deepEqual(storeCopies(undefined, support), { listed: [], copies: [], raycastRemoved: false });
+    assert.deepEqual(storeCopies({ copyId: "raycast" }, support), { listed: [], copies: [], raycastRemoved: false });
+});
+
+test("Raycast's is removed only by an array answer with no entry of its copy id at all (SPEC-160 point 8)", async () => {
+    const support = await temporary();
+    const tools = added("https://github.com/owner/tools");
+    assert.equal(storeCopies([tools.answer], support).raycastRemoved, true);
+    assert.equal(storeCopies([], support).raycastRemoved, true, "an empty list");
+    assert.equal(storeCopies([raycastAnswer(false), tools.answer], support).raycastRemoved, false, "switched off");
+    assert.equal(storeCopies([tools.answer, raycastAnswer()], support).raycastRemoved, false, "not in first place");
+    assert.equal(
+        storeCopies([{ ...raycastAnswer(), on: "yes" }, tools.answer], support).raycastRemoved,
+        false,
+        "an entry the check leaves out",
+    );
+    assert.equal(storeCopies({ repositories: [tools.answer] }, support).raycastRemoved, false, "not an array");
+    assert.equal(storeCopies(undefined, support).raycastRemoved, false);
 });
 
 // MARK: - Problems
@@ -337,10 +354,12 @@ test("a removed repository's copy is deleted, held under remove:<copyId>; listed
     assert.deepEqual(await unlistedCopies(path.join(support, "missing"), listed), [], "no repositories folder");
 });
 
-test("removing a copy takes only an added copy id, and a failed removal leaves the rest going", async () => {
+test("removing a copy takes only a copy id, and a failed removal leaves the rest going", async () => {
     const support = await temporary();
-    await assert.rejects(removeCopy(support, "raycast"));
+    await mkdir(path.join(support, "repo"));
     await assert.rejects(removeCopy(support, "../repo"));
+    await assert.rejects(removeCopy(support, "repo"));
+    assert.ok(await lstat(path.join(support, "repo")));
     const first = added("https://github.com/owner/first");
     const second = added("https://github.com/owner/second");
     for (const copyId of [first.parsed.copyId, second.parsed.copyId]) {
@@ -354,6 +373,82 @@ test("removing a copy takes only an added copy id, and a failed removal leaves t
     });
     assert.deepEqual(keys.sort(), [`remove:${first.parsed.copyId}`, `remove:${second.parsed.copyId}`].sort());
     assert.deepEqual(await readdir(path.join(support, "repositories")), [first.parsed.copyId]);
+    assert.ok(await lstat(path.join(support, "repo")), "Raycast's stays unless the answer removed it");
+});
+
+/** Raycast's copy as the store keeps it: `repo/` with git's files in it, and `repo-status.json` beside it. */
+async function makeRaycastCopy(support: string): Promise<void> {
+    await mkdir(path.join(support, "repo", ".git"), { recursive: true });
+    await writeFile(path.join(support, "repo", ".git", "HEAD"), "ref: refs/heads/main\n");
+    await writeFile(path.join(support, "repo-status.json"), "{}");
+}
+
+async function exists(file: string): Promise<boolean> {
+    return lstat(file).then(
+        () => true,
+        () => false,
+    );
+}
+
+test("Raycast's removed: its copy and status file are deleted at open, held under remove:raycast (SPEC-160 point 8)", async () => {
+    const support = await temporary();
+    await makeRaycastCopy(support);
+    const tools = added("https://github.com/owner/tools");
+    await mkdir(path.join(support, "repositories", tools.parsed.copyId, "repo"), { recursive: true });
+    await writeFile(path.join(support, "installed.json"), "{}");
+    const held: { key: string; step: () => Promise<void> }[] = [];
+    const { listed, copies, removed } = await readRepositoryList(
+        async () => [tools.answer],
+        support,
+        (key, step) => new Promise<void>((resolve, reject) => held.push({ key, step: () => step().then(resolve, reject) })),
+    );
+    assert.deepEqual(listed.map((entry) => entry.copyId), [tools.parsed.copyId]);
+    assert.deepEqual(copies.map((copy) => copy.entry.copyId), [tools.parsed.copyId]);
+    for (let waited = 0; held.length === 0 && waited < 10_000; waited += 10) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.deepEqual(held.map((entry) => entry.key), ["remove:raycast"]);
+    assert.ok(await exists(path.join(support, "repo")), "nothing is deleted while the hold waits");
+    await held[0]!.step();
+    await removed;
+    assert.equal(await exists(path.join(support, "repo")), false);
+    assert.equal(await exists(path.join(support, "repo-status.json")), false);
+    assert.deepEqual((await readdir(support)).sort(), ["installed.json", "repositories"], "nothing else of the support folder");
+    assert.deepEqual(await readdir(path.join(support, "repositories")), [tools.parsed.copyId]);
+});
+
+test("Raycast's copy stays after a failed call, an answer that isn't an array, or a Raycast entry the check leaves out", async () => {
+    const support = await temporary();
+    await makeRaycastCopy(support);
+    const tools = added("https://github.com/owner/tools");
+    const keys: string[] = [];
+    const hold = async (key: string, step: () => Promise<void>) => {
+        keys.push(key);
+        await step();
+    };
+    await assert.rejects(
+        readRepositoryList(
+            async () => {
+                throw new Error("no answer");
+            },
+            support,
+            hold,
+        ),
+        /no answer/,
+    );
+    const answers: unknown[] = [
+        { repositories: [tools.answer] },
+        undefined,
+        [{ ...raycastAnswer(), on: "yes" }, tools.answer],
+        [{ ...raycastAnswer(), folder: "someone/tools" }, tools.answer],
+        [tools.answer, raycastAnswer()],
+        [raycastAnswer(false), tools.answer],
+        [raycastAnswer(), tools.answer],
+    ];
+    for (const answer of answers) await (await readRepositoryList(async () => answer, support, hold)).removed;
+    assert.deepEqual(keys, []);
+    assert.ok(await exists(path.join(support, "repo", ".git", "HEAD")));
+    assert.ok(await exists(path.join(support, "repo-status.json")));
 });
 
 // MARK: - Problem rows (C.6)
@@ -378,7 +473,7 @@ test("each repository with a problem gets one row, in the list's order, with its
     assert.deepEqual(
         rows.map((row) => [row.copyId, row.title]),
         [
-            ["raycast", "Raycast: This repository's server can't send only the files the Extension Store needs."],
+            ["raycast", "raycast/extensions: This repository's server can't send only the files the Extension Store needs."],
             [tools.parsed.copyId, "gitlab.com/group/tools: Couldn't reach this repository. It may be private, or the address may be wrong."],
             [pinned.parsed.copyId, "Someone/Pinned: This repository has no branch called release."],
         ],

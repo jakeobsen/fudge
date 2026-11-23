@@ -50,7 +50,7 @@ export function storeCopies(
     answer: unknown,
     supportPath: string,
     options: CopyOptions = {},
-): { listed: RepositoryEntry[]; copies: StoreCopy[] } {
+): { listed: RepositoryEntry[]; copies: StoreCopy[]; raycastRemoved: boolean } {
     const listed = checkRepositoriesAnswer(answer);
     const copies = listed
         .filter((entry) => entry.on)
@@ -68,7 +68,17 @@ export function storeCopies(
                 statusPath: statusPath(supportPath, entry.copyId),
             };
         });
-    return { listed, copies };
+    return { listed, copies, raycastRemoved: raycastRemoved(answer) };
+}
+
+/**
+ * Whether the answer says Raycast's official repository was removed (SPEC-160 point 8): an array with no entry of copy
+ * id `raycast` at all. An answer that isn't an array, or whose Raycast entry the check leaves out, says nothing of the
+ * kind, so its copy stays.
+ */
+export function raycastRemoved(answer: unknown): boolean {
+    if (!Array.isArray(answer)) return false;
+    return !answer.some((entry) => (entry as { copyId?: unknown } | null)?.copyId === RAYCAST_COPY.copyId);
 }
 
 /** Why a copy has no rows, or only those of an earlier refresh (C.6). */
@@ -237,27 +247,53 @@ export async function unlistedCopies(supportPath: string, listed: readonly Repos
         .sort();
 }
 
-/** Deletes a removed repository's copy and its status file: its folder under `repositories/`. */
+/**
+ * Deletes a removed repository's copy and its status file: an added one's folder under `repositories/`, or Raycast's
+ * `repo/` and `repo-status.json`.
+ */
 export async function removeCopy(supportPath: string, copyId: string): Promise<void> {
-    if (!isValidCopyId(copyId) || copyId === RAYCAST_COPY.copyId) throw new Error(`Not an added copy id: ${copyId}`);
+    if (!isValidCopyId(copyId)) throw new Error(`Not a copy id: ${copyId}`);
+    if (copyId === RAYCAST_COPY.copyId) {
+        await rm(copyPath(supportPath, copyId), { recursive: true, force: true });
+        await rm(statusPath(supportPath, copyId), { force: true });
+        return;
+    }
     await rm(path.join(supportPath, repositoriesFolder, copyId), { recursive: true, force: true });
 }
 
 /**
  * Deletes every removed repository's copy (C.5), each held while a build from another session runs, under
- * `remove:<copyId>`, since such a build's source may be in it. A copy that can't be deleted stays for the next open.
+ * `remove:<copyId>`, since such a build's source may be in it: Raycast's too when `raycastRemoved` (SPEC-160 point 8).
+ * A copy that can't be deleted stays for the next open.
  */
 export async function removeUnlistedCopies(
     supportPath: string,
     listed: readonly RepositoryEntry[],
     hold: (key: string, step: () => Promise<void>) => Promise<void>,
+    raycastRemoved = false,
 ): Promise<void> {
-    const unlisted = await unlistedCopies(supportPath, listed);
+    const unlisted = [...(raycastRemoved ? [RAYCAST_COPY.copyId] : []), ...(await unlistedCopies(supportPath, listed))];
     await Promise.all(
         unlisted.map((copyId) =>
             hold(`remove:${copyId}`, () => removeCopy(supportPath, copyId)).catch(() => undefined),
         ),
     );
+}
+
+/**
+ * Asks the app for the list (C.1), then starts deleting the copies of repositories no longer listed (C.5), Raycast's
+ * only when the answer is an array with no entry of its copy id (SPEC-160 point 8). A failed call throws before anything
+ * is deleted. `removed` settles once the deletions have.
+ */
+export async function readRepositoryList(
+    ask: () => Promise<unknown>,
+    supportPath: string,
+    hold: (key: string, step: () => Promise<void>) => Promise<void>,
+    options: CopyOptions = {},
+): Promise<{ listed: RepositoryEntry[]; copies: StoreCopy[]; removed: Promise<void> }> {
+    const answer = await ask();
+    const { listed, copies, raycastRemoved } = storeCopies(answer, supportPath, options);
+    return { listed, copies, removed: removeUnlistedCopies(supportPath, listed, hold, raycastRemoved) };
 }
 
 /** A copy's rows as last read: its entries, each folder's tree id, and its commit. */

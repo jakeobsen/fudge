@@ -93,15 +93,15 @@ import {
 import { systemProbe } from "./build-records.ts";
 import { heldRefreshMessage, OtherBuilds, settledNotice } from "./other-builds.ts";
 import { openCopies, refreshCopies, type CopySteps } from "./copy-turns.ts";
+import { RAYCAST_COPY } from "./repository-address.ts";
 import {
     problemReport,
     problemRows,
     problemSentence,
     raycastLoadFailure,
     readCopy,
-    removeUnlistedCopies,
+    readRepositoryList,
     shownRows,
-    storeCopies,
     type CopyState,
     type ProblemRow,
     type StoreCopy,
@@ -380,21 +380,21 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
      * the app couldn't answer, which the load-error view says.
      */
     const readList = useCallback(async (): Promise<StoreCopy[] | undefined> => {
-        let answer: unknown;
+        let on: StoreCopy[];
         try {
-            answer = await extensionRepositories();
+            ({ copies: on } = await readRepositoryList(extensionRepositories, environment.supportPath, (key, step) =>
+                others.hold(key, () => oneAtATime(step)),
+            ));
         } catch (error) {
             const title = "Couldn't read the Extension Store's repositories";
             logFailure(title, error);
             setLoadError({ title, details: failureDetails(error) });
             return undefined;
         }
-        const { listed, copies: on } = storeCopies(answer, environment.supportPath);
         setCopies(on);
         const kept = new Map([...copyStatesNow.current].filter(([copyId]) => on.some((copy) => copy.entry.copyId === copyId)));
         copyStatesNow.current = kept;
         setCopyStates(kept);
-        void removeUnlistedCopies(environment.supportPath, listed, (key, step) => others.hold(key, () => oneAtATime(step)));
         return on;
     }, [others]);
 
@@ -418,7 +418,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             const failure = raycastLoadFailure(on, copyStatesNow.current);
             setLoadError(
                 failure
-                    ? { title: "Couldn't download the list from Raycast", details: failureDetails(failure.error) }
+                    ? { title: `Couldn't download the list from ${RAYCAST_COPY.name}`, details: failureDetails(failure.error) }
                     : undefined,
             );
         },
