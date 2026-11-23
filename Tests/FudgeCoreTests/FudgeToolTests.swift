@@ -25,9 +25,9 @@ enum Tool {
 
     static func isGone(_ pid: pid_t) -> Bool { kill(pid, 0) == -1 && errno == ESRCH }
 
-    /// A ceiling that only catches a hang: each wait ends as soon as what it waits for has happened, so a CI runner
-    /// that stalls for seconds can't fail it.
-    static let noHang: Duration = .seconds(30)
+    /// A ceiling that only catches a hang: each wait ends as soon as what it waits for has happened, so a machine that
+    /// stalls can't fail it. Stalls of about 30 s have been seen in full runs at background priority (`taskpolicy -b`).
+    static let noHang: Duration = .seconds(120)
 
     /// The pinned Node.js `make test` hands the tests.
     static let node = Fixtures.node
