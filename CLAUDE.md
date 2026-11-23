@@ -408,7 +408,7 @@ Extensions run in a separate Node.js process, the extension host.
       One whose first load comes from the disk cache that old is shown at once and refreshed straight away, not at the next ask.
       Nothing starts while a load for that source runs.
       A source that leaves memory in back-off, or failed for good, keeps that (`RemoteImageRetries`, at most 1,000, oldest out): asked for again, it shows the fallback and loads only when it's due.
-    - **Detail and Form** have no search field: their navigation title takes its place, and `handleKey` takes ↵ and Esc.
+    - **Detail and Form** have no search field: their navigation title takes its place, and `handleKey` takes ↵ and Esc, and Tab and ⇧Tab in a Form.
       `DetailScreen` shows the markdown with the metadata in a column beside it.
       `FormContent` (core) reads a Form's fields for `FormScreen`, and its `searchBarAccessory` when that's a `Form.LinkAccessory` with a text and a target (`LinkAccessory`):
       the title bar shows it at the right as a link (`ViewTitle`), mouse-only as in Raycast, truncating before the title and never wider than 40% of the bar, and a click opens the target as `Action.OpenInBrowser` does, then hides the panel.
@@ -428,8 +428,23 @@ Extensions run in a separate Node.js process, the extension host.
       A Dropdown's or TagPicker's stored value waits for the field's items when they arrive after the first render, unless the field is changed first (`FormContent.Field.start`).
       When a field starts on something the extension's Form didn't register, such as a stored value or a dropdown's first item, the app reports it with `onChange`.
       `onFocus` and `onBlur` fire with Raycast's `FormEvent` when the keyboard moves from one field to another.
+      **A Form's first field gets the keyboard** (FUD-185): `FormScreen.onAppear` asks for it through `refocus` (nil, then the field a turn later), never by setting `focused` at once, since the launcher swaps its search field for the form's title in the same update and the search field going away leaves the panel itself as first responder.
+      The field is the first editable one with `autoFocus`, else the first editable one, and none while an overlay holds the keyboard (`KeyboardFocus.formFieldOnAppear`); that covers a form as the first view, pushed from the action panel and pushed by a shortcut.
+      **Tab and ⇧Tab** move between a Form's fields whichever field has the keyboard, a text area and the bare panel included, because AppKit's key view loop doesn't reach the fields in the launcher's panel (the hosting view sits in an `NSVisualEffectView`).
+      `LauncherKeys.outcome` answers `.moveInForm` for them in a Form, after an open overlay, which keeps its own Tab, and before any action's shortcut, as Raycast's manual says Tab moves (`LauncherKeys.formTab`); ⌥Tab isn't taken, so a text area types a tab.
+      The place to go is `KeyboardFocus.formFieldAfterTab`'s, from where the keyboard is now: the next or previous editable field, wrapping at both ends; the first (or, backwards, the last) from nowhere; and nothing in a form with no editable field, which still takes the key.
+      A `DateTime` field with a date counts its time box as a stop after its date (`FormContent.tabFields`, `FormContent.Field.showsTimeBox`).
+      `LauncherModel.formMove` hands it to `FormScreen`, which gives it the keyboard through `refocus`, and an open calendar closes on Tab first, as on any key.
+      `FormScreen` also scrolls that field into view (`ScrollViewReader`), since giving it the keyboard there doesn't scroll as AppKit's key view loop does.
+      **Where the keyboard is now** is `FormKeyboard` (core), which `CommandScreen` holds and `FormScreen` reports every move to, nowhere included (`formKeyboardMoved`).
+      Its `now` goes to nil when the keyboard leaves every field (a click on the form's background), so Tab starts from the first field again, while its last place ignores nil, so `onBlur` and the panel's showing (`KeyboardFocus.Target.formTimeBox` for a time box) still go by it.
+      A time box counts as its field for `onBlur` and `onFocus`.
+      The places Tab asked for that the keyboard hasn't reached yet are kept in order, and Tab goes on from the last of them, so several Tabs at once each move one place, even when an earlier one lands late.
+      A `Form.Checkbox` is `.focusable(true, interactions: .edit)`, as the pickers are, since with macOS's Keyboard navigation off (the default) asking for a plain `Toggle` gives the keyboard to the first text field instead; Space toggles it.
     - **Actions.**
       `ActionPanelReader` (core) turns an `ActionPanel` node into sections of `ActionEntry`. ↵ runs the first entry and ⌘↵ the second; in a Form, where ↵ belongs to the fields, ⌘↵ and ⌘⇧↵. ⌘K opens the action panel overlay, with search, sections and submenus (opening one calls its `onOpen`).
+      Its rows show those keys on the first and second entries, counted across sections, in place of their own shortcuts, which still run them, as Raycast does (`ActionPanelReader.shownKey`, FUD-186); every other entry, and every entry in a submenu or in root search, shows its own.
+      Entries are matched against the whole panel, so a search in the panel keeps each key on its action.
       An `Action.PickDate` (an `Action` with a `pickDate` prop and an `onChange`, `ActionEntry.pickDate`) opens a picker there in place of the list, as a submenu does; run with ↵, ⌘↵ or its shortcut, the overlay opens straight to it.
       `DatePick` (core) holds it: Form.DatePicker's calendar (`DateCalendar`, drawn by the shared `MonthView`) and a `DateTime`'s time, which Tab moves to. ↵, Space or a click on a day picks and calls `onChange` once with `FormDates`' value, ⌫ calls it with null, and Esc goes back to the list it came from, or closes the overlay, calling nothing.
       Closing the overlay any other way calls nothing either.

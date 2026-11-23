@@ -352,6 +352,24 @@ public enum ActionPanelReader {
 
     public static func secondary(_ sections: [ActionSection]) -> ActionEntry? { flat(sections).dropFirst().first }
 
+    /// The key the action panel shows on `entry`. At the panel's top level in a command's view, the primary key
+    /// (`primaryKey`: ↵, or ⌘↵ in a Form) goes on the panel's first entry and the secondary key on its second, counted
+    /// across sections as `primary` and `secondary` count. Their own shortcuts aren't shown, though they still run
+    /// them (Raycast: "while you can specify an alternative shortcut for the primary and secondary actions, it won't
+    /// be displayed in the Action Panel"). Every other entry shows its own shortcut, and so does every entry in a
+    /// submenu (`inSubmenu`) or where there are no such keys (nil: root search and its notices, whose entries carry
+    /// their keys themselves). `sections` is the whole panel, never the filtered one, so a search in the panel keeps
+    /// the keys on the same actions.
+    public static func shownKey(
+        of entry: ActionEntry, in sections: [ActionSection], primaryKey: KeyShortcut?, secondaryKey: KeyShortcut?,
+        inSubmenu: Bool
+    ) -> KeyShortcut? {
+        guard !inSubmenu else { return entry.shortcut }
+        if let primaryKey, primary(sections)?.id == entry.id { return primaryKey }
+        if let secondaryKey, secondary(sections)?.id == entry.id { return secondaryKey }
+        return entry.shortcut
+    }
+
     /// The action whose shortcut is `pressed`, searching submenus too. A submenu's own shortcut (`Action.OpenWith`'s
     /// ⌘O) finds the submenu, which running opens in the action panel.
     public static func action(for pressed: KeyShortcut, in sections: [ActionSection]) -> ActionEntry? {
