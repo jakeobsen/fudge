@@ -463,6 +463,28 @@ private func launchCommandTellsInstallsOfOneNameApartByID(_ three: ThreeGitHubs)
     #expect(other.installed.id == raycasts.raycast.id && other.isOtherExtension)
 }
 
+@Test func anUnsetPreferenceNamesWhichGitHubNeedsIt() throws {
+    try anUnsetPreferenceNamesWhichGitHubNeedsIt(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+/// A background launch refused for an unset required preference names the extension as Fudge shows it, as the
+/// permission refusals do, so the message says which of the three needs it.
+private func anUnsetPreferenceNamesWhichGitHubNeedsIt(_ three: ThreeGitHubs) throws {
+    let token = try JSONDecoder().decode(
+        ExtensionManifest.Preference.self,
+        from: Data(#"{"name":"token","type":"password","title":"API Token","required":true}"#.utf8))
+    for (installed, title) in zip(three.all, ["GitHub", "GitHub (someone/tools)", "GitHub (development)"]) {
+        let target = try CommandLocator.locate(
+            LaunchRequest(name: "search", type: .background), caller: installed, in: three.all)
+        #expect(throws: LaunchCommandError.missingPreferences(extensionTitle: title, names: ["API Token"])) {
+            try CommandLocator.checkPreferences([token], of: target, type: .background)
+        }
+    }
+    #expect(
+        LaunchCommandError.missingPreferences(extensionTitle: "GitHub (someone/tools)", names: ["API Token"])
+            .description == #""GitHub (someone/tools)" needs these preferences set: API Token"#)
+}
+
 @Test func aLaunchPermissionIsKeptByID() throws {
     try aLaunchPermissionIsKeptByID(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
 }
@@ -641,6 +663,7 @@ struct SideBySideEndToEndTests {
         try launchCommandPicksTheCallersRepositoryThenRaycastsThenTheDevelopmentBuild(three)
         try launchCommandRefusesTwoAddedOnesItCantTellApart(three)
         try launchCommandTellsInstallsOfOneNameApartByID(three)
+        try anUnsetPreferenceNamesWhichGitHubNeedsIt(three)
         try aLaunchPermissionIsKeptByID(three)
         try aBackupListsEachGitHubWithWhereItsFrom(three)
         try anImportListsTheGitHubThatIsntInstalledByItsID(three)

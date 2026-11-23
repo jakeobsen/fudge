@@ -256,7 +256,7 @@ public enum CommandLocator {
         guard !missing.isEmpty else { return true }
         guard type == .userInitiated else {
             throw LaunchCommandError.missingPreferences(
-                extensionTitle: target.installed.manifest.title, names: missing.map { $0.title ?? $0.name })
+                extensionTitle: target.installed.displayTitle, names: missing.map { $0.title ?? $0.name })
         }
         return false
     }
