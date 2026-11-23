@@ -139,6 +139,7 @@ import {
     type RowRepository,
 } from "../store-extension/src/readme.ts";
 import { parseRepositoryAddress, RAYCAST_COPY, type ParsedRepository } from "../store-extension/src/repository-address.ts";
+import { problemOf } from "../store-extension/src/repositories.ts";
 import { RestingWork } from "../store-extension/src/resting.ts";
 import {
     caseClash,
@@ -876,7 +877,7 @@ test("the exact git calls: clone, refresh keeping only what it reaches, add, com
             ["-c", "credential.helper=", "clone", "--depth", "1", "--filter=blob:none", "--sparse", "--no-checkout", "--", "https://example.invalid/repo.git", repoPath],
             ["sparse-checkout", "set", "--no-cone", "/extensions/*/package.json"],
             ["checkout"],
-            ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+            ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
             ["-c", "credential.helper=", "fetch", "--depth", "1", "--filter=blob:none", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"],
             ["checkout", "--quiet", "-B", "main", "refs/remotes/origin/main", "--"],
             ["for-each-ref", "--format=%(refname)"],
@@ -2828,6 +2829,92 @@ test("a default branch name is used only when it's a plain branch name", async (
         calls.map((call) => call.args[0]),
         ["symbolic-ref"],
         "nothing is fetched with it",
+    );
+});
+
+// MARK: - A copy with no origin/HEAD asks the remote (SPEC-167)
+
+/** A copy whose `symbolic-ref --quiet` exits 1 (it has no `origin/HEAD`), whose `ls-remote` answers `listing`. */
+function noOriginHead(listing: Partial<GitResult>, other: (args: string[]) => Partial<GitResult> = () => ({})) {
+    return fakeRun((_program, args) => {
+        const command = gitArgs(args)[0];
+        if (command === "symbolic-ref" && args.includes("--quiet")) return { code: 1 };
+        if (command === "ls-remote") return listing;
+        return other(args);
+    });
+}
+
+/** Each call's git command, after any `-c` pair. */
+function commands(calls: { args: string[] }[]): (string | undefined)[] {
+    return calls.map((call) => gitArgs(call.args)[0]);
+}
+
+async function refreshFailure(repo: StoreRepository): Promise<unknown> {
+    return repo.refresh().then(
+        () => undefined,
+        (error: unknown) => error,
+    );
+}
+
+test("no origin/HEAD, and a remote that names no default branch: failed, with nothing written or fetched", async () => {
+    for (const stdout of ["", "1111111111111111111111111111111111111111\tHEAD\n"]) {
+        const { run, calls } = noOriginHead({ stdout });
+        const repo = new StoreRepository(await temporary(), { allowProtocols: "file", run });
+        const error = await refreshFailure(repo);
+        assert.ok(error instanceof GitError && /doesn't name a default branch/.test(error.message), String(error));
+        assert.equal(problemOf(error), "failed");
+        assert.deepEqual(commands(calls), ["symbolic-ref", "ls-remote"], JSON.stringify(stdout));
+    }
+});
+
+test("no origin/HEAD, and a name from the remote that isn't a plain branch name: refused, with nothing written", async () => {
+    for (const [stdout, refused] of [
+        ["ref: refs/heads/--upload-pack=x\tHEAD\n", /default branch it can't use: "--upload-pack=x"/],
+        ["ref: refs/tags/v1\tHEAD\n", /doesn't name a default branch/],
+    ] as const) {
+        const { run, calls } = noOriginHead({ stdout });
+        const repo = new StoreRepository(await temporary(), { allowProtocols: "file", run });
+        await assert.rejects(repo.refresh(), refused);
+        assert.deepEqual(commands(calls), ["symbolic-ref", "ls-remote"], stdout);
+    }
+});
+
+test("no origin/HEAD, offline: the ask fails as a fetch would, unreachable, with nothing written", async () => {
+    const { run, calls } = noOriginHead({
+        code: 128,
+        stderr: "fatal: unable to access 'https://example.invalid/repo.git/': Could not resolve host: example.invalid\n",
+    });
+    const repo = new StoreRepository(await temporary(), { run, url: "https://example.invalid/repo.git" });
+    const error = await refreshFailure(repo);
+    assert.ok(error instanceof GitError, String(error));
+    assert.equal(problemOf(error), "unreachable");
+    assert.deepEqual(commands(calls), ["symbolic-ref", "ls-remote"]);
+});
+
+test("symbolic-ref's other failures still throw, and nothing asks the remote", async () => {
+    const { run, calls } = fakeRun((_program, args) =>
+        gitArgs(args)[0] === "symbolic-ref"
+            ? { code: 128, stderr: "fatal: not a git repository (or any of the parent directories): .git\n" }
+            : {},
+    );
+    const repo = new StoreRepository(await temporary(), { allowProtocols: "file", run });
+    await assert.rejects(repo.refresh(), /not a git repository/);
+    assert.deepEqual(commands(calls), ["symbolic-ref"]);
+});
+
+test("a refresh that asked already never asks again: the same name's missing branch is the fetch's own error", async () => {
+    const { run, calls } = noOriginHead(
+        { stdout: "ref: refs/heads/main\tHEAD\n1111111111111111111111111111111111111111\tHEAD\n" },
+        (args) =>
+            gitArgs(args)[0] === "fetch" ? { code: 128, stderr: "fatal: couldn't find remote ref refs/heads/main\n" } : {},
+    );
+    const repo = new StoreRepository(await temporary(), { allowProtocols: "file", run });
+    await assert.rejects(repo.refresh(), /couldn't find remote ref refs\/heads\/main/);
+    assert.deepEqual(commands(calls), ["symbolic-ref", "ls-remote", "symbolic-ref", "fetch"]);
+    assert.deepEqual(
+        calls[2]!.args,
+        ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"],
+        "the asked name is kept as origin/HEAD",
     );
 });
 
