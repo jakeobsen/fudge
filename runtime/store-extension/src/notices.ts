@@ -245,10 +245,18 @@ export class RowMarks {
  * follows `selectedItemId` only when it changes, and reports a selection only when it moved, so the row already selected
  * is never asked for: that ask would never be reported and so never cleared, and the next ask for that row, the same id
  * again, would change nothing.
+ *
+ * Until the user acts, it also follows the list's top row (SPEC-166): the top row of each committed render is recorded
+ * at commit (`seen`), and asked for after it (`follow`), so a copy read later that adds a row above leaves the list on its
+ * top row, as if every copy had been read before it showed anything. The first of these ends it: the user moving the
+ * selection (with no ask out, a report of another row than the top one), the view's `stopFollowing` (typing, the detail
+ * pane, an action that changes the list), a row selected for the user (`select`), and the end of the open.
  */
 export class RowSelection {
     private selected: string | null = null;
     private asked: string | undefined;
+    private following = true;
+    private top: string | undefined;
     private readonly changed: (asked: string | undefined) => void;
 
     /** `changed` gets the new `selectedItemId` whenever it changes. */
@@ -261,13 +269,43 @@ export class RowSelection {
         return this.asked;
     }
 
-    /** Selects the row whose list id is `id` (`rowId`), once; a row already selected stays, and an earlier ask goes. */
+    /** Whether the top row is still followed. */
+    get followsTop(): boolean {
+        return this.following;
+    }
+
+    /** Selects the row whose list id is `id` (`rowId`), once; a row already selected stays, and an earlier ask goes. A
+     * row selected for the user ends following the top row. */
     select(id: string): void {
+        this.following = false;
         this.ask(id === this.selected ? undefined : id);
     }
 
-    /** The app's `onSelectionChange`: once the row asked for is selected, from here the user moves it. */
+    /** The top row of a committed render, recorded at commit (no ask), before its snapshot goes out, so a report that
+     * render causes finds it. */
+    seen(top: string | undefined): void {
+        this.top = top;
+    }
+
+    /** After a render: while following, asks for the recorded top row as `select` does; once the open has ended
+     * (`opening` false), stops following, after that last ask. */
+    follow(opening: boolean): void {
+        if (!this.following) return;
+        if (this.top !== undefined) this.ask(this.top === this.selected ? undefined : this.top);
+        if (!opening) this.following = false;
+    }
+
+    /** The user acted (typed, opened the detail pane, ran an action that changes the list): the top row is no longer
+     * followed. An ask already made stays until its row is reported. */
+    stopFollowing(): void {
+        this.following = false;
+    }
+
+    /** The app's `onSelectionChange`: once the row asked for is selected, from here the user moves it. While following
+     * with no ask out, a row other than the top one is the user's move, which ends following. While an ask is out, the
+     * report of another row was sent before the app followed it, since reports come in order. */
     reported(id: string | null): void {
+        if (this.following && this.asked === undefined && id !== null && id !== this.top) this.following = false;
         this.selected = id;
         if (id !== null && id === this.asked) this.ask(undefined);
     }
@@ -277,6 +315,16 @@ export class RowSelection {
         this.asked = id;
         this.changed(id);
     }
+}
+
+/** The list's top row (SPEC-166): the first row of its sections in their order (Repositories, Installed, Extensions),
+ * by list id; none when the list has no row. */
+export function topRowId(
+    problems: readonly string[],
+    installed: readonly string[],
+    other: readonly string[],
+): string | undefined {
+    return problems[0] ?? installed[0] ?? other[0];
 }
 
 /** What opening a click's or the launch context's target needs from the store's view. */

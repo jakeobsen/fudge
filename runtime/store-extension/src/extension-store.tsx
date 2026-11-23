@@ -14,7 +14,7 @@ import {
     type LaunchProps,
 } from "@raycast/api";
 import path from "node:path";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
     accessoryTexts,
     addedRepository,
@@ -60,6 +60,8 @@ import {
     developmentDetailMarkdown,
     developmentRowId,
     developmentRowsShown,
+    installedSection,
+    installedSectionRowId,
     installOnlyRowActions,
     installOnlyRowsReady,
     readDevelopmentBuilds,
@@ -126,6 +128,7 @@ import {
     RowMarks,
     RowSelection,
     saveFailure,
+    topRowId,
     type FailureMark,
     type NoticeTarget,
 } from "./notices.ts";
@@ -168,6 +171,9 @@ const tagColor = (tag: string) =>
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+/** A repository's problem row's list id (C.6). */
+const problemRowId = (row: ProblemRow) => `problem:${row.copyId}`;
+
 export default function Command(props: LaunchProps) {
     const cli = process.env.FUDGE_CLI;
     const extensionsDir = process.env.FUDGE_EXTENSIONS_DIR;
@@ -203,6 +209,9 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
     const [shared, setShared] = useState<Shared>();
     // Opens and ⌘Rs still reading copies: the list shows as loading until the last copy is read (C.3).
     const [reading, setReading] = useState(0);
+    // Until the first open has read every copy, whichever way it ends: while it is, the list's top row is followed
+    // (SPEC-166).
+    const [opening, setOpening] = useState(true);
     // The rows of every copy read so far, once the installs are read.
     const loaded = useMemo<Loaded | undefined>(
         () => (shared ? { ...shared, ...shownRows(copies ?? [], copyStates) } : undefined),
@@ -458,7 +467,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
     );
 
     useEffect(() => {
-        void open(false);
+        void open(false).finally(() => setOpening(false));
         // Unloading the store (leaving it, or turning it off) ends its git, which mustn't go on writing into a copy.
         return stopRunningGit;
     }, [open]);
@@ -538,6 +547,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
 
     // ↵ Install, ⌘U Update and Try Again: one press per extension id at a time (SPEC-153 B), each in the queue.
     const runInstall = (entry: StoreEntry, updating: boolean): Promise<void> => {
+        rows.stopFollowing();
         const view: InstallView = {
             toast: async (title) => {
                 const toast = await showToast({ style: Toast.Style.Animated, title });
@@ -606,6 +616,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
     };
     /** Show Error and a settled failure: the view, and the failure saved for its notification goes (D.4). */
     const showFailure = (mark: FailureMark) => {
+        rows.stopFollowing();
         void removeSavedFailure(environment.supportPath, mark);
         pushFailure(mark);
     };
@@ -635,8 +646,9 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
         };
     }, []);
 
-    const runUninstall = (entry: StoreEntry) =>
-        oneAtATime(async () => {
+    const runUninstall = (entry: StoreEntry) => {
+        rows.stopFollowing();
+        return oneAtATime(async () => {
             try {
                 if (!(await uninstall(entry, context))) return;
                 await load();
@@ -650,10 +662,12 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                 });
             }
         });
+    };
 
     /** Uninstall on a development build's row (E.9): its folder to the Trash, no record read or written. */
-    const runUninstallDevelopment = (build: DevelopmentBuild) =>
-        oneAtATime(async () => {
+    const runUninstallDevelopment = (build: DevelopmentBuild) => {
+        rows.stopFollowing();
+        return oneAtATime(async () => {
             try {
                 if (!(await uninstallDevelopmentBuild(build, context))) return;
                 await load();
@@ -667,10 +681,12 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                 });
             }
         });
+    };
 
     /** Uninstall on the row of an install whose repository isn't on (E.8): its folder to the Trash, and its record gone. */
-    const runUninstallNotUpdated = (install: NotUpdatedInstall) =>
-        oneAtATime(async () => {
+    const runUninstallNotUpdated = (install: NotUpdatedInstall) => {
+        rows.stopFollowing();
+        return oneAtATime(async () => {
             try {
                 if (!(await uninstallNotUpdated(install, context))) return;
                 await load();
@@ -684,9 +700,11 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                 });
             }
         });
+    };
 
     /** ⌘R on any row: a README that couldn't be fetched is tried again too, and the list and every copy are read again. */
     const refreshPressed = () => {
+        rows.stopFollowing();
         readmeFetches.again();
         // Held while a build from another session runs, which the toast says (SPEC-153 C.7).
         const waiting = others.records();
@@ -695,9 +713,33 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
     };
 
     const shown = loaded ? filterEntries(loaded.entries, filter, loaded.installed) : [];
-    const { installed: installedRows, other } = sections(shown, loaded?.installed ?? {});
+    const { installed: installedRows, other } = sections(
+        shown,
+        loaded?.installed ?? {},
+        (copies ?? []).map((copy) => copy.entry.copyId),
+    );
     // A row's id is its repository's folder and its folder there (`rowId`), which `readCatalog` checked.
     const entryRowId = (entry: StoreEntry) => rowId(entry.repositoryFolder, entry.dir);
+    // The load-error view while no copy has rows (C.6): Raycast's failure, in place of the whole list, as today. Any copy
+    // read since makes every problem a row, Raycast's too.
+    const loadFailureShown = loadError !== undefined && (loaded?.entries.length ?? 0) === 0;
+    const problems = loadFailureShown ? [] : problemRows(copies ?? [], copyStates);
+    // The Installed section: the store's installs, the development builds and the installs whose repository isn't on, by
+    // title and in that order on the same title (SPEC-166). The last two come with the first copy's rows, so none is
+    // selected before them.
+    const installOnly =
+        loaded && !loadFailureShown && installOnlyRowsReady(loaded.entries.length, reading) ? loaded : undefined;
+    const installedRowsShown = installedSection(
+        installedRows,
+        installOnly && developmentRowsShown(filter) ? installOnly.development : [],
+        installOnly && notUpdatedRowsShown(filter) ? installOnly.notUpdated : [],
+    );
+    // The list's top row as drawn, followed until the user acts (SPEC-166): recorded at commit, asked for after.
+    const topRow = noGit
+        ? undefined
+        : topRowId(problems.map(problemRowId), installedRowsShown.map(installedSectionRowId), other.map(entryRowId));
+    useLayoutEffect(() => rows.seen(topRow), [rows, topRow]);
+    useEffect(() => rows.follow(opening), [rows, topRow, opening]);
     const byRowId = useMemo(() => new Map((loaded?.entries ?? []).map((entry) => [entryRowId(entry), entry])), [loaded]);
     const treeOf = (entry: StoreEntry) => loaded?.trees.get(entry.copyId)?.get(entry.dir);
     const commitOf = (entry: StoreEntry) => loaded?.commits.get(entry.copyId);
@@ -817,7 +859,10 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                                 title={showingDetail ? "Hide Details" : "Show Details"}
                                 icon={Icon.Sidebar}
                                 shortcut={{ modifiers: ["cmd"], key: "d" }}
-                                onAction={() => setShowingDetail((value) => !value)}
+                                onAction={() => {
+                                    rows.stopFollowing();
+                                    setShowingDetail((value) => !value);
+                                }}
                             />
                             {offered.uninstall && (
                                 <Action
@@ -899,7 +944,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
     );
     /** A repository's problem row (C.6): Show Details, ⌘R Refresh and ⌘C Copy Error, git's output cleaned. */
     const problemItem = (row: ProblemRow) => {
-        const id = `problem:${row.copyId}`;
+        const id = problemRowId(row);
         return (
             <List.Item
                 key={id}
@@ -919,7 +964,8 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                             <Action
                                 title="Show Details"
                                 icon={Icon.Document}
-                                onAction={() =>
+                                onAction={() => {
+                                    rows.stopFollowing();
                                     push(
                                         <FailureView
                                             title={row.title}
@@ -928,8 +974,8 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                                             retry={refreshPressed}
                                             retryTitle="Refresh"
                                         />,
-                                    )
-                                }
+                                    );
+                                }}
                             />
                             <Action
                                 title="Refresh"
@@ -948,34 +994,28 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             />
         );
     };
-    // The load-error view while no copy has rows (C.6): Raycast's failure, in place of the whole list, as today. Any copy
-    // read since makes every problem a row, Raycast's too.
-    const loadFailureShown = loadError !== undefined && (loaded?.entries.length ?? 0) === 0;
-    const problems = loadFailureShown ? [] : problemRows(copies ?? [], copyStates);
     // The dropdown's repositories (D.3), when more than one is on.
     const filteredRepositories = filterRepositories(copies ?? []);
+    const installedItems = installedRowsShown.map((row) =>
+        row.kind === "entry"
+            ? item(row.entry)
+            : row.kind === "development"
+              ? developmentItem(row.build)
+              : notUpdatedItem(row.install),
+    );
 
-    // The Installed section: the store's installs, the development builds and the installs whose repository isn't on,
-    // by title. The last two come with the first copy's rows, so the list opens on its first row.
-    const installOnly =
-        loaded && !loadFailureShown && installOnlyRowsReady(loaded.entries.length, reading) ? loaded : undefined;
-    const installedItems = [
-        ...installedRows.map((entry) => ({ title: entry.title, node: item(entry) })),
-        ...(installOnly && developmentRowsShown(filter) ? installOnly.development : []).map((build) => ({
-            title: build.title,
-            node: developmentItem(build),
-        })),
-        ...(installOnly && notUpdatedRowsShown(filter) ? installOnly.notUpdated : []).map((install) => ({
-            title: install.title,
-            node: notUpdatedItem(install),
-        })),
-    ].sort((a, b) => a.title.localeCompare(b.title, "en", { sensitivity: "base" }));
+    // Fudge filters the list itself, as before (`filtering`); the search text only says the user typed, which ends
+    // following the top row (SPEC-166), since the app then ranks the matches itself.
 
     return (
         <List
             isLoading={(!loaded && !loadError) || reading > 0}
             isShowingDetail={showingDetail}
             searchBarPlaceholder="Search extensions"
+            filtering={true}
+            onSearchTextChange={(text) => {
+                if (text !== "") rows.stopFollowing();
+            }}
             selectedItemId={selectOnce}
             onSelectionChange={(id) => {
                 setSelected(id);
@@ -1031,7 +1071,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                 <List.EmptyView icon={Icon.MagnifyingGlass} title="No extensions found" />
             )}
             <List.Section title="Repositories">{problems.map(problemItem)}</List.Section>
-            <List.Section title="Installed">{installedItems.map((row) => row.node)}</List.Section>
+            <List.Section title="Installed">{installedItems}</List.Section>
             <List.Section title="Extensions">{other.map(item)}</List.Section>
         </List>
     );

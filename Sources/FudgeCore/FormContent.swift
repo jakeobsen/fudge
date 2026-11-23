@@ -19,7 +19,8 @@ public struct FormContent: Sendable, Equatable {
         public var placeholder: String?
         public var info: String?
         public var error: String?
-        /// Set when the extension controls the value.
+        /// Set when the extension controls the value. A DatePicker's can be `.null`, which shows no date
+        /// (`FormContent.controlledValue`).
         public var value: JSONValue?
         public var defaultValue: JSONValue?
         /// A checkbox's label, or a description's text.
@@ -185,7 +186,7 @@ public struct FormContent: Sendable, Equatable {
             placeholder: node.string("placeholder"),
             info: node.string("info"),
             error: node.string("error"),
-            value: node.props["value"].flatMap(ListContent.present),
+            value: controlledValue(node.props["value"], kind: kind),
             defaultValue: node.props["defaultValue"].flatMap(ListContent.present),
             text: kind == .checkbox ? node.string("label") : node.string("text"),
             autoFocus: node.bool("autoFocus") == true,
@@ -197,6 +198,14 @@ public struct FormContent: Sendable, Equatable {
             dates: kind == .datePicker ? DatePickerOptions(node) : nil,
             files: kind == .filePicker ? FilePickerOptions(node) : nil
         )
+    }
+
+    /// A field's `value` prop as the extension controls it: nil when it sets none. JSON null is none too, except on a
+    /// DatePicker, whose value is `Date | null` in Raycast's types: there `null` is a controlled value that shows no
+    /// date. Raycast's types allow no `null` on the other fields.
+    static func controlledValue(_ json: JSONValue?, kind: Kind) -> JSONValue? {
+        guard let json else { return nil }
+        return kind == .datePicker ? json : ListContent.present(json)
     }
 
     static func tag(_ node: UINode) -> SearchBarDropdown.Item? {

@@ -9,13 +9,14 @@ import {
     developmentDetailMarkdown,
     developmentRowId,
     developmentRowsShown,
+    installedSection,
     installOnlyRowActions,
     installOnlyRowsReady,
     readDevelopmentBuilds,
     uninstallDevelopmentBuild,
     type DevelopmentBuild,
 } from "../store-extension/src/development-builds.ts";
-import { allFilter, installedFilter } from "../store-extension/src/catalog.ts";
+import { allFilter, installedFilter, parseManifest } from "../store-extension/src/catalog.ts";
 import { maxManifestBytes } from "../store-extension/src/files.ts";
 import { bundledNames } from "../store-extension/src/store.ts";
 
@@ -179,6 +180,26 @@ test("rows built from an install alone wait for the first copy's rows, so the li
 
 test("↵ on a row built from an install alone copies its name, and Uninstall comes after it", () => {
     assert.deepEqual(installOnlyRowActions, ["copyName", "uninstall"]);
+});
+
+test("the Installed section: by title, and on the same title the installs, then the development build, then Not updated (SPEC-166)", () => {
+    const entry = (name: string, title: string) =>
+        parseManifest(name, { name, title, commands: [{ name: "a", title: "A" }] })!;
+    const github = entry("github", "GitHub");
+    const github2 = entry("github-2", "GitHub");
+    const alpha = entry("alpha", "Alpha");
+    const build = { name: "github", title: "GitHub", description: "" };
+    const notUpdated = { id: "owner+tools+github", name: "github", repository: "owner/tools", title: "github", description: "" };
+    const rows = installedSection([alpha, github, github2], [build], [notUpdated]);
+    assert.deepEqual(
+        rows.map((row) => (row.kind === "entry" ? `entry ${row.entry.name}` : row.kind === "development" ? "development" : "not updated")),
+        ["entry alpha", "entry github", "entry github-2", "development", "not updated"],
+        "the same title in any case; two entries keep the order they come in",
+    );
+    assert.deepEqual(
+        installedSection([github2, github], [], []).map((row) => (row.kind === "entry" ? row.entry.name : "")),
+        ["github-2", "github"],
+    );
 });
 
 test("development build rows show under All and Installed only, with a detail that says what they are", () => {

@@ -4,9 +4,9 @@
  * `reflog`, `sparse-checkout set`, and `xcode-select -p` and `git --version`. */
 export const shortTimeout = 30_000;
 
-/** A git command that downloads, or rewrites the whole copy: `clone`, `fetch`, a checkout that fetches files (the
- * list's manifests after a clone or refresh, a README, an extension's source through `sparse-checkout add`), and the
- * refresh's `rev-list`, `pack-objects` and `prune`. A slow connection can take a while. */
+/** A git command that downloads, or rewrites the whole copy: `clone`, `fetch`, `ls-remote`, a checkout that fetches
+ * files (the list's manifests after a clone or refresh, a README, an extension's source through `sparse-checkout add`),
+ * and the refresh's `rev-list`, `pack-objects` and `prune`. A slow connection can take a while. */
 export const longTimeout = 120_000;
 
 /** `fudge scan`, which reads an extension's source without building it. */

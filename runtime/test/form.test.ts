@@ -227,3 +227,46 @@ test("a stored Date goes to the app as a $date marker", async () => {
         connect(null);
     }
 });
+
+test("a controlled DatePicker set to null sends value null, and the submit gives null", async () => {
+    const submitted: Record<string, unknown>[] = [];
+    let clear: () => void = () => {};
+    function Controlled() {
+        const [due, setDue] = useState<Date | null>(new Date("2026-11-20T12:30:00.000Z"));
+        clear = () => setDue(null);
+        return h(
+            Form,
+            { actions: submitAction((values) => submitted.push(values)) },
+            h(Form.DatePicker, { id: "due", value: due, onChange: setDue }),
+        );
+    }
+    const mounted = await mount(h(Controlled));
+    let field = find(mounted.snapshots.at(-1)!.view, "Form.DatePicker") as UINode;
+    assert.deepEqual(field.props.value, { $date: "2026-11-20T12:30:00.000Z" });
+    clear();
+    await mounted.settle();
+    field = find(mounted.snapshots.at(-1)!.view, "Form.DatePicker") as UINode;
+    assert.ok("value" in field.props, "the app gets the value key, so it knows the field is controlled");
+    assert.equal(field.props.value, null);
+    await submit(mounted);
+    assert.deepEqual(submitted, [{ due: null }]);
+});
+
+test("a DatePicker whose value goes away keeps its last date for the submit, and the app gets no value key", async () => {
+    const submitted: Record<string, unknown>[] = [];
+    let release: () => void = () => {};
+    function Released() {
+        const [controlled, setControlled] = useState(true);
+        release = () => setControlled(false);
+        const due = controlled ? new Date("2026-11-20T12:30:00.000Z") : undefined;
+        return h(Form, { actions: submitAction((values) => submitted.push(values)) }, h(Form.DatePicker, { id: "due", value: due }));
+    }
+    const mounted = await mount(h(Released));
+    release();
+    await mounted.settle();
+    const field = find(mounted.snapshots.at(-1)!.view, "Form.DatePicker") as UINode;
+    assert.ok(!("value" in field.props), "no value key: the app leaves the field uncontrolled");
+    await submit(mounted);
+    const values = submitted.at(-1)!;
+    assert.ok(values.due instanceof Date && values.due.toISOString() === "2026-11-20T12:30:00.000Z", String(values.due));
+});

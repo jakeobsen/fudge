@@ -17,6 +17,7 @@ import {
     StoreRepository,
     type Run,
 } from "../store-extension/src/git.ts";
+import { longTimeout } from "../store-extension/src/timeouts.ts";
 
 const folders: string[] = [];
 after(async () => {
@@ -169,6 +170,121 @@ test("a branch given: the clone and the refresh follow it; a missing branch is n
     assert.ok(refreshed instanceof NoBranch, String(refreshed));
     assert.ok(await repo.exists());
     assert.throws(() => new StoreRepository(path.join(root, "x"), { branch: "-bad" }), /Not a branch name/);
+});
+
+// MARK: - The default branch, asked for (SPEC-167)
+
+/** A remote with `main` (alpha) and `tools` (alpha and beta). */
+async function twoBranches(root: string): Promise<{ source: string; bare: string }> {
+    const { source, bare } = await remote(root, ["alpha"]);
+    await sh(source, "checkout", "--quiet", "-b", "tools");
+    await mkdir(path.join(source, "extensions/beta"), { recursive: true });
+    await writeFile(path.join(source, "extensions/beta/package.json"), JSON.stringify({ name: "beta", title: "Beta" }));
+    await sh(source, "add", ".");
+    await sh(source, "commit", "--quiet", "-m", "beta on tools");
+    await sh(source, "push", "--quiet", bare, "tools");
+    await sh(source, "checkout", "--quiet", "main");
+    return { source, bare };
+}
+
+/** The copy's refs, sorted, and where its `origin/HEAD` points: "" when it has none. */
+async function refsOf(repoPath: string): Promise<{ refs: string[]; head: string }> {
+    const refs = (await sh(repoPath, "for-each-ref", "--format=%(refname)")).trim().split("\n").sort();
+    const head = await spawnProgram("/usr/bin/git", ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], {
+        cwd: repoPath,
+        timeout: 60_000,
+    });
+    return { refs, head: head.stdout.trim() };
+}
+
+async function branchOf(repoPath: string): Promise<string> {
+    return (await sh(repoPath, "rev-parse", "--abbrev-ref", "HEAD")).trim();
+}
+
+/** The calls that asked the remote for its default branch. */
+function asks(calls: { args: string[] }[]): { args: string[]; options?: Parameters<Run>[2] }[] {
+    return calls.filter((call) => call.args.includes("ls-remote"));
+}
+
+test("a copy cloned on a named branch goes back to the default branch: it asks the remote once, and keeps the answer", async () => {
+    for (const named of ["tools", "main"]) {
+        const root = await temporary();
+        const { bare } = await twoBranches(root);
+        const repoPath = path.join(root, "support/repo");
+        const options = { url: `file://${bare}`, allowProtocols: "file" };
+        await new StoreRepository(repoPath, { ...options, branch: named }).clone();
+        assert.equal((await refsOf(repoPath)).head, "", `a clone on ${named} has no origin/HEAD`);
+
+        const { run, calls } = recording();
+        const repo = new StoreRepository(repoPath, { ...options, run });
+        await repo.refresh();
+        assert.equal(await branchOf(repoPath), "main", named);
+        assert.deepEqual((await readdir(path.join(repoPath, "extensions"))).sort(), ["alpha"], "main's files only");
+        assert.deepEqual(await refsOf(repoPath), {
+            refs: ["refs/heads/main", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"],
+            head: "refs/remotes/origin/main",
+        });
+        const asked = asks(calls);
+        assert.equal(asked.length, 1, named);
+        assert.deepEqual(asked[0]!.args, ["-c", "credential.helper=", "ls-remote", "--symref", "origin", "HEAD"]);
+        assert.equal(asked[0]!.options?.env?.LC_ALL, "C");
+        assert.equal(asked[0]!.options?.env?.GIT_ALLOW_PROTOCOL, "file");
+        assert.equal(asked[0]!.options?.timeout, longTimeout);
+
+        calls.length = 0;
+        await repo.refresh();
+        assert.equal(asks(calls).length, 0, "a second refresh reads origin/HEAD");
+    }
+});
+
+test("default, named, default: the copy keeps origin/HEAD, and never asks the remote", async () => {
+    const root = await temporary();
+    const { bare } = await twoBranches(root);
+    const repoPath = path.join(root, "support/repo");
+    const { run, calls } = recording();
+    const options = { url: `file://${bare}`, allowProtocols: "file", run };
+    await new StoreRepository(repoPath, options).clone();
+    await new StoreRepository(repoPath, { ...options, branch: "tools" }).refresh();
+    assert.equal(await branchOf(repoPath), "tools");
+    await new StoreRepository(repoPath, options).refresh();
+    assert.equal(await branchOf(repoPath), "main");
+    assert.deepEqual(await refsOf(repoPath), {
+        refs: ["refs/heads/main", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"],
+        head: "refs/remotes/origin/main",
+    });
+    assert.equal(asks(calls).length, 0);
+});
+
+test("a default branch the remote renamed: the refresh asks once and follows it; a remote naming none fails, and the copy stays", async () => {
+    const root = await temporary();
+    const { bare } = await remote(root, ["alpha"]);
+    const options = { url: `file://${bare}`, allowProtocols: "file" };
+    const first = path.join(root, "support/first");
+    const second = path.join(root, "support/second");
+    await new StoreRepository(first, options).clone();
+    await new StoreRepository(second, options).clone();
+    // The bare remote's HEAD follows the rename.
+    await sh(bare, "branch", "-m", "main", "trunk");
+
+    const { run, calls } = recording();
+    const repo = new StoreRepository(first, { ...options, run });
+    await repo.refresh();
+    assert.equal(await branchOf(first), "trunk");
+    assert.deepEqual(await refsOf(first), {
+        refs: ["refs/heads/trunk", "refs/remotes/origin/HEAD", "refs/remotes/origin/trunk"],
+        head: "refs/remotes/origin/trunk",
+    });
+    assert.equal(asks(calls).length, 1);
+    calls.length = 0;
+    await repo.refresh();
+    assert.equal(asks(calls).length, 0, "a second refresh reads origin/HEAD");
+
+    await sh(bare, "symbolic-ref", "HEAD", "refs/heads/gone");
+    calls.length = 0;
+    await assert.rejects(new StoreRepository(second, { ...options, run }).refresh(), /doesn't name a default branch/);
+    assert.equal(asks(calls).length, 1);
+    assert.equal(await branchOf(second), "main", "the copy stays as it was");
+    assert.ok(await stat(path.join(second, "extensions/alpha/package.json")));
 });
 
 // MARK: - stopOn (C.7)
