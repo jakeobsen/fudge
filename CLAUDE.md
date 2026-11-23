@@ -979,6 +979,7 @@ Extensions run in a separate Node.js process, the extension host.
     It fills every manifest argument, and its checks turn away what can't run: view commands in the background, a menu-bar command in the background unless it's active (`checkMode`), and missing required arguments or preferences in the background.
     A menu-bar command goes to `MenuBarController`: Background refreshes it like an interval tick, and UserInitiated activates it if needed and refreshes it, without opening its menu.
     A user-initiated launch with a required argument empty shows root search with the command's fields instead; an unset required preference opens Settings.
+    The refusals for unset preferences and for a missing permission name the extension by its `displayTitle`, so they say which of two installs of one name they mean.
     The first time an extension opens another extension's command, the user is asked through `confirm`, and `LaunchPermissions` keeps the answer in `launch-permissions.json`, by the caller's and the target's ids; only a call from a session the user is using may ask, whatever `LaunchType` it requests.
     The caller's origin is read when the call comes in, and a background caller's request runs as Background (`LaunchRequest.asCalled(from:)`), so it fails where a Background launch would instead of showing the panel, argument fields or Settings.
     It never overwrites a file it can't read (`Unreadable`), which the Permissions page then says.
@@ -1393,6 +1394,8 @@ Extensions run in a separate Node.js process, the extension host.
     - `--run-action <title>`, given once or more, runs those actions in order, half a second apart (e.g. an extension's Create Quicklink, then Save Quicklink).
     - `--search text` types into its search field.
   - `--accessibility allowed|missing`, `--input-monitoring allowed|missing` and `--login-item <status>` fix what Accessibility, the Snippets page's Input Monitoring and Open at Login show, so nothing asks the system.
+  - `--add-repository <address>` draws the Extension Store's page with the Add Repository window over it and that address typed; it implies `--settings` and that page, as `--clipboard-consent` does.
+  - `--add-repository-add`, with `--add-repository`, presses Add in that window, so a refused address shows its reason.
   - `--calendar-events <file>` gives My Schedule made-up events (`FixedCalendarSource.load`), and without it nothing has been asked.
   - `--clipboard-consent` saves Clipboard History's consent sheet, laid out off-screen like the sign-in one; it implies `--settings` and that page, as `--sign-in-consent` does.
   - `--clipboard-entries <file>` gives Clipboard History made-up entries (a JSON array of `clipboardHistory.list` entries); snapshots never read the clipboard or watch it.
