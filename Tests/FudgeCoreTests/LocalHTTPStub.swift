@@ -9,7 +9,8 @@ final class LocalHTTPStub: @unchecked Sendable {
         /// The status, header lines ("Name: value") and body, then the connection closes.
         case answer(status: Int, headers: [String], body: Data)
         /// A 200 with the header lines and `first`, then `chunk` every `interval` seconds, `count` times, then the
-        /// close.
+        /// close. With `count: 0` nothing follows `first`, and the connection stays open until the client closes it or
+        /// `stop()`.
         case drip(headers: [String], first: Data, chunk: Data, interval: TimeInterval, count: Int)
     }
 
@@ -46,7 +47,8 @@ final class LocalHTTPStub: @unchecked Sendable {
     var requests: [String] { lock.withLock { heads } }
 
     /// For a `.drip` reply: how long after its connection opened the client closed each one, so far. A connection the
-    /// stub ends itself, after its last chunk, isn't counted.
+    /// stub ends itself, after its last chunk, isn't counted. `stop()` isn't the stub ending one, so its closes count:
+    /// read this before `stop()`.
     var clientCloses: [TimeInterval] { lock.withLock { closes } }
 
     func stop() {

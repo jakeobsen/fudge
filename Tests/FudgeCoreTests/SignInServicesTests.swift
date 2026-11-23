@@ -465,20 +465,22 @@ private func names(from base: URL, path: String = "", timeout: TimeInterval = 30
 }
 
 @Test func readingStopsAndTheConnectionClosesPast64KB() async throws {
-    // 70 KB at once, then a byte every 5 s; the stub would end the connection itself at 15 s, and the request allows
-    // 30 s. Only a client that stops reading past 64 KB hangs up before that.
+    // 70 KB at once, then nothing; the stub never ends the connection and the request allows 10 minutes, so within the
+    // test's minute only a client that stops reading past 64 KB hangs up.
     let (stub, base) = try await LocalHTTPStub.start(
         .drip(
             headers: [], first: Data(String(repeating: " ", count: 70 * 1024).utf8), chunk: Data(" ".utf8),
-            interval: 5, count: 3))
+            interval: 5, count: 0))
     defer { stub.stop() }
-    #expect(await names(from: base) == [])
-    let deadline = ContinuousClock.now + .seconds(16)
+    async let answer = names(from: base, timeout: 600)
+    let deadline = ContinuousClock.now + .seconds(60)
     while stub.clientCloses.isEmpty && ContinuousClock.now < deadline {
         try await Task.sleep(for: .milliseconds(20))
     }
-    let closed = try #require(stub.clientCloses.first)
-    #expect(closed < 15)
+    #expect(!stub.clientCloses.isEmpty, "the client hung up past 64 KB")
+    // A client that didn't stop gets its end here, so the test ends at its minute, not at 10.
+    stub.stop()
+    #expect(await answer == [])
 }
 
 @Test func anAnswerSlowerThanFiveSecondsInAllIsThePlainLine() async throws {

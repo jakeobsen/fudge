@@ -134,10 +134,15 @@ function compile(
 }
 
 /** Runs `file` as a no-view command in the extension host, with its assets in `assets`, and returns its logs and
- * errors. */
-async function run(file: string, assets: string): Promise<{ logs: unknown[]; errors: unknown[] }> {
+ * errors, and the host's own stderr. */
+async function run(file: string, assets: string): Promise<{ logs: unknown[]; errors: unknown[]; stderr: string }> {
     const host = spawn(process.execPath, [hostPath], { stdio: ["pipe", "pipe", "pipe"] });
     const messages: Record<string, unknown>[] = [];
+    let stderr = "";
+    host.stderr.setEncoding("utf8");
+    host.stderr.on("data", (text: string) => {
+        stderr += text;
+    });
     try {
         await new Promise<void>((resolve) => {
             createInterface({ input: host.stdout }).on("line", (line) => {
@@ -166,7 +171,15 @@ async function run(file: string, assets: string): Promise<{ logs: unknown[]; err
     return {
         logs: messages.filter((m) => m.type === "log").map((m) => m.message),
         errors: messages.filter((m) => m.type === "error").map((m) => m.message),
+        stderr,
     };
+}
+
+/** The lines the made-up program wrote to `program-runs.log` beside its copy in `assets`, one per run and one more
+ * for each `fail` past its echo. */
+function programRuns(assets: string): string {
+    const log = path.join(assets, "compiled_raycast_swift/program-runs.log");
+    return existsSync(log) ? readFileSync(log, "utf8") : "(no program-runs.log: the program never ran)\n";
 }
 
 test("the plugin's messages, word for word (SPEC-145 §2), and Raycast's about the package", () => {
@@ -295,7 +308,11 @@ test("--swift-parts build: SwiftPM builds a copy in the scratch folder, and the 
     assert.deepEqual(greeted.errors, []);
     assert.equal(statSync(path.join(assets, "compiled_raycast_swift/swift")).mode & 0o777, 0o755, "chmod 755 first");
     const failed = await run(path.join(build.outdir, "fails.cjs"), assets);
-    assert.deepEqual(failed.errors, ["the Swift part failed"], "stderr is the message");
+    assert.deepEqual(
+        failed.errors,
+        ["the Swift part failed"],
+        `stderr is the message\nprogram-runs.log:\n${programRuns(assets)}the host's stderr:\n${failed.stderr}`,
+    );
     assert.deepEqual((await run(path.join(build.outdir, "plain.cjs"), assets)).logs, ["works without its Swift part"]);
 });
 

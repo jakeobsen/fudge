@@ -288,15 +288,19 @@ private final class Overlap: @unchecked Sendable {
     #expect(try names(in: extensions) == [".move.lock", "github"], "nothing moved")
 }
 
-/// A lock given back within the bound is taken, and the move runs.
+/// A lock given back within the bound is taken, and the move runs. The lock comes back from a thread of its own, not
+/// from Dispatch, and the wait is the build's minute, so a stalled run can't pass the bound.
 @Test func aMoveWaitsForALockGivenBackWithinItsBound() async throws {
     let extensions = try Fixtures.temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: extensions) }
     try Layout.install("github", at: "github", in: extensions)
     let held = try ExtensionLayout.lockMove(in: extensions, waitingAtMost: .zero, every: .milliseconds(100))
-    OffThePool.after(.milliseconds(300)) { ExtensionLayout.unlockMove(held) }
-    let report = try await OffThePool.run(within: Tool.noHang) {
-        try ExtensionLayout.moveIntoRepositories(extensions: extensions, waitingAtMost: .seconds(20))
+    Thread {
+        Thread.sleep(forTimeInterval: 0.3)
+        ExtensionLayout.unlockMove(held)
+    }.start()
+    let report = try await OffThePool.run(within: ExtensionLayout.buildMoveWait + Tool.noHang) {
+        try ExtensionLayout.moveIntoRepositories(extensions: extensions, waitingAtMost: ExtensionLayout.buildMoveWait)
     }
     #expect(report?.moved == ["github"])
 }
