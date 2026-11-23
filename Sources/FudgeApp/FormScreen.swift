@@ -8,7 +8,6 @@ struct FormScreen: View {
     @FocusState private var focused: Int?
     /// The DateTime field whose time box has the keyboard, if any: a Tab stop of its own, after the field's date.
     @FocusState private var timeBox: Int?
-    @State private var lastFocused: Int?
 
     var body: some View {
         ScrollViewReader { scroller in
@@ -32,13 +31,16 @@ struct FormScreen: View {
             }
         }
         .font(.system(size: 13))
-        // Through `refocus`: the launcher swaps its search field for the form's title in the same update, and the
-        // search field going away would take the keyboard from a field given it at once (FUD-185).
+        // Through `give`: the launcher swaps its search field for the form's title in the same update, and the
+        // search field going away would take the keyboard from a field given it at once (FUD-185). A form that comes
+        // back from the sign-in prompt, which took its place on screen, gets the place it was last in, a time box
+        // included; any other starts in its first field.
         .onAppear {
-            if let field = KeyboardFocus.formFieldOnAppear(
-                editable: editableIDs, first: form.autoFocusID, overlayOpen: overlayHoldsKeyboard)
+            if let place = KeyboardFocus.formPlaceOnAppear(
+                last: model.command?.formKeyboard.last, fields: tabFields, autoFocus: form.autoFocusID,
+                overlayOpen: overlayHoldsKeyboard)
             {
-                refocus(field)
+                give(place)
             }
         }
         // Fields that arrive after the form (loaded text, a remounted field) take focus if nothing has it, unless an
@@ -53,13 +55,21 @@ struct FormScreen: View {
         // The model hears every move, nowhere included, so Tab goes on from where the keyboard is now.
         .onChange(of: focused) { _, field in
             model.formKeyboardMoved(to: place)
-            if let field {
-                lastFocused = field
-                // Another field took the keyboard: a DatePicker's calendar closes.
-                if let open = model.datePanel?.node, open != field { model.closeDatePanel() }
-            }
+            // Another field took the keyboard: a DatePicker's calendar closes.
+            if let field, let open = model.datePanel?.node, open != field { model.closeDatePanel() }
         }
         .onChange(of: timeBox) { _, _ in model.formKeyboardMoved(to: place) }
+        // A time box that had the keyboard went (its date was cleared): its field takes it, unless an overlay holds
+        // it. `onBlur` and `onFocus` don't fire, since a time box counts as its field. SwiftUI doesn't report the
+        // time box's focus going with it, so that's cleared first, or `place` would still name the time box.
+        .onChange(of: tabFields) { _, fields in
+            guard let keyboard = model.command?.formKeyboard,
+                let field = KeyboardFocus.formFieldAfterTimeBoxGone(
+                    keyboard: keyboard, fields: fields, overlayOpen: overlayHoldsKeyboard)
+            else { return }
+            timeBox = nil
+            give(.field(field))
+        }
         // Each showing of the panel puts the keyboard back in the place the model names (the last one, or the first
         // field). Through nil, since setting what `focused` already says does nothing.
         .onChange(of: model.keyboardRequests) { _, _ in
@@ -69,25 +79,31 @@ struct FormScreen: View {
             default: break
             }
         }
-        // The action panel takes the keyboard; give it back to the field after.
+        // The action panel takes the keyboard; give it back to the place it came from after, a time box included.
         .onChange(of: model.actionPanel == nil) { _, closed in
-            if closed { focused = fieldAfterOverlay }
+            if closed, let place = placeAfterOverlay { give(place) }
         }
         // An Action.PickDate picker has no field of its own to take the keyboard (its keys come through the
-        // launcher's key monitor), so the field lets go of it here, or ⌘V and ⌥⌫ would still edit it. It comes back
-        // when the overlay closes, above.
+        // launcher's key monitor), so the field or time box lets go of it here, or ⌘V and ⌥⌫ would still edit it. It
+        // comes back when the overlay closes, above.
         .onChange(of: model.actionPanel?.pick != nil) { _, open in
-            if open { focused = nil }
+            if open {
+                focused = nil
+                timeBox = nil
+            }
         }
         // So does a Dropdown's or TagPicker's panel. The launcher view moves its own focus as the panel closes, so
         // this goes after it, through nil.
         .onChange(of: model.dropdownPanel == nil) { _, closed in
-            guard closed, let field = fieldAfterOverlay else { return }
-            refocus(field)
+            guard closed, let place = placeAfterOverlay else { return }
+            give(place)
         }
     }
 
     private var editableIDs: [Int] { form.editableIDs }
+
+    /// The editable fields as Tab sees them now: whether each shows a time box goes by its value.
+    private var tabFields: [KeyboardFocus.TabField] { form.tabFields { model.fieldValue($0) } }
 
     /// The field the form starts in: the first with `autoFocus`, else the first.
     private var firstField: Int? {
@@ -117,9 +133,11 @@ struct FormScreen: View {
         model.actionPanel != nil || model.dropdownPanel != nil
     }
 
-    /// The field that takes the keyboard back when an overlay closes: the last one, or the first if that's gone.
-    private var fieldAfterOverlay: Int? {
-        KeyboardFocus.formFieldAfterOverlay(last: lastFocused, editable: editableIDs, first: firstField)
+    /// The place that takes the keyboard back when an overlay closes: the one the model says it was last in, a time
+    /// box while its field still shows one, or the first field if that's gone.
+    private var placeAfterOverlay: KeyboardFocus.FormStop? {
+        KeyboardFocus.formPlaceAfterOverlay(
+            last: model.command?.formKeyboard.last, fields: tabFields, first: firstField)
     }
 
     /// Gives `field` the keyboard through nil, since setting what `focused` already says does nothing. That lands a

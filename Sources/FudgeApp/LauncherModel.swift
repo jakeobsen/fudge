@@ -711,14 +711,9 @@ final class LauncherModel {
         case .command(let command):
             if command.failure != nil || command.view == nil || command.list != nil { return .search }
             guard let form = command.form else { return .noField }
-            let editable = form.fields.filter(\.isEditable)
+            let editable = form.editableFields
             let first = (editable.first(where: \.autoFocus) ?? editable.first)?.id
-            let last = command.formKeyboard.last.flatMap { place in
-                editable.contains { $0.id == place.field } ? place : nil
-            }
-            var lastInTimeBox = false
-            if case .timeBox = last { lastInTimeBox = true }
-            return .form(lastField: last?.field, firstField: first, lastInTimeBox: lastInTimeBox)
+            return .form(last: command.formKeyboard.last, fields: form.tabFields { fieldValue($0) }, firstField: first)
         }
     }
 
@@ -1333,9 +1328,12 @@ final class LauncherModel {
         }
     }
 
-    /// Opens a Form.Dropdown's panel under it (Space, ↵ or a click).
+    /// Opens a Form.Dropdown's panel under it (Space, ↵ or a click). The field is where the keyboard is, so the
+    /// panel's closing gives it back to the field, whatever order SwiftUI reports focus in (`formKeyboardMoved`,
+    /// which sends `onBlur` and `onFocus` only when the field changed).
     func openFormDropdown(_ node: Int) {
         guard formField(node)?.kind == .dropdown else { return }
+        formKeyboardMoved(to: .field(node))
         actionPanel = nil
         datePanel = nil
         let current: String? = if case .string(let value) = fieldValue(node) { value } else { nil }
@@ -1356,9 +1354,11 @@ final class LauncherModel {
         return dropdownPanel != nil || datePanel != nil
     }
 
-    /// Opens a TagPicker's list of items to pick, starting the search with what was typed, if anything.
+    /// Opens a TagPicker's list of items to pick, starting the search with what was typed, if anything. The field is
+    /// where the keyboard is, as for `openFormDropdown`.
     func openTagPicker(_ node: Int, typing text: String = "") {
         guard formField(node)?.kind == .tagPicker else { return }
+        formKeyboardMoved(to: .field(node))
         actionPanel = nil
         datePanel = nil
         dropdownPanel = DropdownPanelState(source: .tagPicker(node), query: text)
@@ -4384,6 +4384,8 @@ final class LauncherModel {
                 actionPanel = nil
                 dropdownPanel = nil
                 datePanel = nil
+                // A Form on the new top view starts in its first field, never in a place of the view before it.
+                command.formKeyboard = FormKeyboard()
             }
             command.view = view
             command.depth = depth

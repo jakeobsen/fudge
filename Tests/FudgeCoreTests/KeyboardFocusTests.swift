@@ -12,18 +12,30 @@ import Testing
     #expect(KeyboardFocus.target(for: .failure) == .search)
 }
 
+/// A Form's editable fields as Tab sees them: `ids` in order, those in `timeBoxes` showing a time box.
+private func fields(_ ids: [Int], timeBoxes: Set<Int> = []) -> [KeyboardFocus.TabField] {
+    ids.map { KeyboardFocus.TabField(id: $0, hasTimeBox: timeBoxes.contains($0)) }
+}
+
 @Test func commandScreensWantTheirOwnField() {
     #expect(KeyboardFocus.target(for: .search) == .search, "a List's search field")
-    #expect(KeyboardFocus.target(for: .form(lastField: 7, firstField: 3)) == .formField(7), "the last field")
-    #expect(KeyboardFocus.target(for: .form(lastField: nil, firstField: 3)) == .formField(3), "else the first")
-    #expect(KeyboardFocus.target(for: .form(lastField: nil, firstField: nil)) == .none, "a form with no fields")
+    #expect(
+        KeyboardFocus.target(for: .form(last: .field(7), fields: fields([3, 7]), firstField: 3)) == .formField(7),
+        "the last field")
+    #expect(
+        KeyboardFocus.target(for: .form(last: nil, fields: fields([3, 7]), firstField: 3)) == .formField(3),
+        "else the first")
+    #expect(
+        KeyboardFocus.target(for: .form(last: nil, fields: [], firstField: nil)) == .none, "a form with no fields")
     #expect(KeyboardFocus.target(for: .noField) == .none, "a Detail")
 }
 
 @Test func anOpenPanelKeepsTheKeyboardInItsSearchField() {
     #expect(KeyboardFocus.target(for: .search, actionPanelOpen: true) == .actionPanel)
     #expect(KeyboardFocus.target(for: .noField, actionPanelOpen: true) == .actionPanel, "⌘K in a Detail")
-    #expect(KeyboardFocus.target(for: .form(lastField: 2, firstField: 1), actionPanelOpen: true) == .actionPanel)
+    #expect(
+        KeyboardFocus.target(for: .form(last: .field(2), fields: fields([1, 2]), firstField: 1), actionPanelOpen: true)
+            == .actionPanel)
     #expect(KeyboardFocus.target(for: .search, dropdownPanelOpen: true) == .dropdownPanel)
     #expect(
         KeyboardFocus.target(for: .root(argument: 1, argumentIsDropdown: false), actionPanelOpen: true)
@@ -46,17 +58,20 @@ import Testing
 }
 
 @Test func closingAnOverlayGivesTheLastFieldTheKeyboardOrElseTheFirst() {
-    #expect(KeyboardFocus.formFieldAfterOverlay(last: 5, editable: [3, 5, 7], first: 3) == 5)
-    #expect(
-        KeyboardFocus.formFieldAfterOverlay(last: 9, editable: [3, 7], first: 3) == 3,
-        "the last field went while the overlay was open")
-    #expect(KeyboardFocus.formFieldAfterOverlay(last: nil, editable: [3, 7], first: 7) == 7)
-    #expect(KeyboardFocus.formFieldAfterOverlay(last: 5, editable: [], first: nil) == nil)
+    func after(_ last: KeyboardFocus.FormStop?, _ ids: [Int], first: Int?) -> KeyboardFocus.FormStop? {
+        KeyboardFocus.formPlaceAfterOverlay(last: last, fields: fields(ids), first: first)
+    }
+    #expect(after(.field(5), [3, 5, 7], first: 3) == .field(5))
+    #expect(after(.field(9), [3, 7], first: 3) == .field(3), "the last field went while the overlay was open")
+    #expect(after(nil, [3, 7], first: 7) == .field(7))
+    #expect(after(.field(5), [], first: nil) == nil)
 }
 
 @Test func showingThePanelWithAPickerOpenLeavesTheKeyboardWithTheOverlay() {
     // An Action.PickDate picker lives in the action panel overlay, so a Form under it gets no field back.
-    #expect(KeyboardFocus.target(for: .form(lastField: 2, firstField: 1), actionPanelOpen: true) == .actionPanel)
+    #expect(
+        KeyboardFocus.target(for: .form(last: .field(2), fields: fields([1, 2]), firstField: 1), actionPanelOpen: true)
+            == .actionPanel)
 }
 
 // MARK: - A Form's first field, and Tab between fields (FUD-185)
@@ -243,13 +258,14 @@ private func tabFields(_ form: FormContent, timeBoxes: Set<Int> = []) -> [Keyboa
 }
 
 @Test func showingThePanelAgainGivesTheTimeBoxBackWhenItHadTheKeyboard() {
-    #expect(KeyboardFocus.target(for: .form(lastField: 3, firstField: 2, lastInTimeBox: true)) == .formTimeBox(3))
-    #expect(KeyboardFocus.target(for: .form(lastField: 3, firstField: 2, lastInTimeBox: false)) == .formField(3))
+    let dated = fields([2, 3], timeBoxes: [3])
+    #expect(KeyboardFocus.target(for: .form(last: .timeBox(3), fields: dated, firstField: 2)) == .formTimeBox(3))
+    #expect(KeyboardFocus.target(for: .form(last: .field(3), fields: dated, firstField: 2)) == .formField(3))
     #expect(
-        KeyboardFocus.target(for: .form(lastField: nil, firstField: 2, lastInTimeBox: true)) == .formField(2),
+        KeyboardFocus.target(for: .form(last: nil, fields: dated, firstField: 2)) == .formField(2),
         "no last field: the first")
     #expect(
-        KeyboardFocus.target(for: .form(lastField: 3, firstField: 2, lastInTimeBox: true), actionPanelOpen: true)
+        KeyboardFocus.target(for: .form(last: .timeBox(3), fields: dated, firstField: 2), actionPanelOpen: true)
             == .actionPanel)
 }
 
@@ -302,4 +318,134 @@ private func tabFields(_ form: FormContent, timeBoxes: Set<Int> = []) -> [Keyboa
     #expect(keyboard.tabFrom == .field(4) && keyboard.now == .field(4))
     _ = keyboard.moved(to: nil)
     #expect(keyboard.tabFrom == nil, "every place asked for was reached")
+}
+
+// MARK: - The place an overlay's closing gives back, a time box included (FUD-191)
+
+// A Form of 2 TextField, 3 DateTime, 4 TextField and 5 Dropdown: `dated` while field 3 has a date, so its time box
+// shows, and `cleared` once its date was cleared.
+private let dated = fields([2, 3, 4, 5], timeBoxes: [3])
+private let cleared = fields([2, 3, 4, 5])
+
+/// The keyboard in field 3's time box, as the app reports it after Tab, Tab from field 2.
+private func inTimeBox() -> FormKeyboard {
+    var keyboard = FormKeyboard()
+    _ = keyboard.moved(to: .field(2))
+    _ = keyboard.moved(to: .field(3))
+    _ = keyboard.moved(to: .timeBox(3))
+    return keyboard
+}
+
+@Test func anOverlaysClosingGivesBackTheTimeBoxWhileItsFieldShowsOneElseTheField() {
+    func after(_ last: KeyboardFocus.FormStop?, _ fields: [KeyboardFocus.TabField]) -> KeyboardFocus.FormStop? {
+        KeyboardFocus.formPlaceAfterOverlay(last: last, fields: fields, first: 2)
+    }
+    #expect(after(.timeBox(3), dated) == .timeBox(3), "the time box, still shown")
+    #expect(after(.timeBox(3), cleared) == .field(3), "its date was cleared meanwhile: the date field")
+    #expect(after(.field(3), dated) == .field(3), "the date field itself, not its time box")
+    #expect(after(.field(9), dated) == .field(2), "a field that's gone: the first")
+    #expect(after(.timeBox(9), dated) == .field(2), "a time box whose field is gone: the first")
+    #expect(after(nil, dated) == .field(2), "no last place: the first")
+    #expect(KeyboardFocus.formPlaceAfterOverlay(last: .timeBox(3), fields: [], first: nil) == nil, "no editable field")
+}
+
+@Test func closingTheActionsMenuGivesTheKeyboardBackToTheTimeBox() {
+    var keyboard = inTimeBox()
+    // ⌘K: the menu's search field takes the keyboard.
+    _ = keyboard.moved(to: nil)
+    #expect(KeyboardFocus.formPlaceAfterOverlay(last: keyboard.last, fields: dated, first: 2) == .timeBox(3))
+}
+
+@Test func closingAPickerOpenedByItsShortcutGivesTheKeyboardBackToTheTimeBox() {
+    var keyboard = inTimeBox()
+    // The picker's opening: the time box lets go of the keyboard, as a field does.
+    _ = keyboard.moved(to: nil)
+    #expect(
+        KeyboardFocus.formFieldAfterTimeBoxGone(keyboard: keyboard, fields: dated, overlayOpen: true) == nil,
+        "nothing takes the keyboard while the picker is open")
+    #expect(KeyboardFocus.formPlaceAfterOverlay(last: keyboard.last, fields: dated, first: 2) == .timeBox(3))
+}
+
+@Test func clearingTheDateInThePickerGivesTheTimeBoxThenItsDateField() {
+    var keyboard = inTimeBox()
+    _ = keyboard.moved(to: nil)
+    // ⌫ closes the overlay before the extension hears onChange(null), so the date is still there.
+    let place = KeyboardFocus.formPlaceAfterOverlay(last: keyboard.last, fields: dated, first: 2)
+    #expect(place == .timeBox(3))
+    _ = keyboard.moved(to: place)
+    #expect(
+        KeyboardFocus.formFieldAfterTimeBoxGone(keyboard: keyboard, fields: dated, overlayOpen: false) == nil,
+        "the keyboard reached the time box, which is still shown")
+    // The render with the date cleared: the time box goes, and the keyboard with it.
+    _ = keyboard.moved(to: nil)
+    #expect(KeyboardFocus.formFieldAfterTimeBoxGone(keyboard: keyboard, fields: cleared, overlayOpen: false) == 3)
+    #expect(keyboard.moved(to: .field(3)) == nil, "no onBlur or onFocus: a time box counts as its field")
+}
+
+@Test func closingADropdownsPanelGivesTheKeyboardBackToTheDropdownNotTheTimeBox() {
+    var keyboard = inTimeBox()
+    // A click on the Dropdown: `openFormDropdown` records its field, then SwiftUI reports the click's focus.
+    let change = keyboard.moved(to: .field(5))
+    #expect(change?.left == 3 && change?.entered == 5, "onBlur for the date, onFocus for the Dropdown")
+    #expect(keyboard.moved(to: .field(5)) == nil, "the click's own report sends neither again")
+    // The panel's search field takes the keyboard.
+    _ = keyboard.moved(to: nil)
+    #expect(KeyboardFocus.formPlaceAfterOverlay(last: keyboard.last, fields: dated, first: 2) == .field(5))
+}
+
+@Test func aFormBackFromTheSignInPromptGetsTheTimeBoxBack() {
+    // The prompt takes the form's place on screen, so nothing is reported while it's gone; then the form shows again.
+    let keyboard = inTimeBox()
+    #expect(
+        KeyboardFocus.formPlaceOnAppear(last: keyboard.last, fields: dated, autoFocus: nil, overlayOpen: false)
+            == .timeBox(3))
+    #expect(
+        KeyboardFocus.formPlaceOnAppear(last: keyboard.last, fields: dated, autoFocus: nil, overlayOpen: true) == nil,
+        "an overlay holds the keyboard as it shows: its closing gives the place")
+}
+
+@Test func aNewFormKeyboardStartsTheFormInItsAutoFocusFieldElseItsFirst() {
+    // A push or a pop starts a new FormKeyboard, with no last place.
+    let fresh = FormKeyboard()
+    #expect(
+        KeyboardFocus.formPlaceOnAppear(last: fresh.last, fields: dated, autoFocus: 4, overlayOpen: false) == .field(4))
+    #expect(
+        KeyboardFocus.formPlaceOnAppear(last: fresh.last, fields: dated, autoFocus: nil, overlayOpen: false)
+            == .field(2))
+    #expect(
+        KeyboardFocus.formPlaceOnAppear(last: fresh.last, fields: [], autoFocus: nil, overlayOpen: false) == nil,
+        "no editable field")
+}
+
+@Test func aTimeBoxThatGoesWithTheKeyboardGivesItToItsField() {
+    func gone(_ keyboard: FormKeyboard, _ fields: [KeyboardFocus.TabField], overlayOpen: Bool = false) -> Int? {
+        KeyboardFocus.formFieldAfterTimeBoxGone(keyboard: keyboard, fields: fields, overlayOpen: overlayOpen)
+    }
+    let stillThere = inTimeBox()
+    #expect(gone(stillThere, cleared) == 3, "the keyboard still in the time box as the fields change")
+    var nowhere = inTimeBox()
+    _ = nowhere.moved(to: nil)
+    #expect(gone(nowhere, cleared) == 3, "the time box took the keyboard with it first")
+    #expect(gone(stillThere, cleared, overlayOpen: true) == nil, "an overlay holds the keyboard: its closing gives it")
+    var inAnotherField = inTimeBox()
+    _ = inAnotherField.moved(to: .field(4))
+    #expect(gone(inAnotherField, cleared) == nil, "the keyboard in another field")
+    var inTheDate = inTimeBox()
+    _ = inTheDate.moved(to: .field(3))
+    #expect(gone(inTheDate, cleared) == nil, "the keyboard in the date field itself")
+    #expect(gone(stillThere, dated) == nil, "the time box still shown")
+    #expect(gone(stillThere, fields([2, 4, 5])) == nil, "its field is gone")
+}
+
+@Test func thePanelsShowingGivesTheSamePlaceAsAnOverlaysClosing() {
+    func target(_ last: KeyboardFocus.FormStop?, _ fields: [KeyboardFocus.TabField], menuOpen: Bool = false)
+        -> KeyboardFocus.Target
+    {
+        KeyboardFocus.target(for: .form(last: last, fields: fields, firstField: 2), actionPanelOpen: menuOpen)
+    }
+    #expect(target(.timeBox(3), dated) == .formTimeBox(3), "a time box still shown")
+    #expect(target(.timeBox(3), cleared) == .formField(3), "its date was cleared: the date field, not nowhere")
+    #expect(target(.field(3), dated) == .formField(3), "the field as the last place")
+    #expect(target(nil, dated) == .formField(2), "no last place: the first")
+    #expect(target(.timeBox(3), dated, menuOpen: true) == .actionPanel, "the actions menu open")
 }
