@@ -136,6 +136,8 @@ import {
     AlreadyBuilding,
     alreadyBuildingStatus,
     buildArguments,
+    installFolder,
+    installsWithoutSwift,
     bundledNames,
     doneToast,
     failureDetails,
@@ -959,7 +961,9 @@ async function storeContext(
         if (args[0] === "scan") return { code: 0, stdout: JSON.stringify(supportedScan), ...options.scan };
         if (args[0] === "build" && options.build) return options.build(args);
         if (args[0] === "build" && options.built !== undefined && !options.cliCode) {
-            const installed = path.join(args[3]!, path.basename(args[1]!));
+            const into = args[args.indexOf("--into") + 1]!;
+            const repository = args.includes("--repository") ? args[args.indexOf("--repository") + 1]! : "fudgeapp/development";
+            const installed = path.join(into, ...repository.split("/"), path.basename(args[1]!));
             mkdirSync(installed, { recursive: true });
             writeFileSync(path.join(installed, "compatibility.json"), JSON.stringify(options.built));
         }
@@ -1008,9 +1012,18 @@ test("install fetches the source, checks it, asks, builds into FUDGE_EXTENSIONS_
     ]);
     assert.deepEqual(cli.calls.map((call) => [call.program, ...(call.args[0] === "build" ? withoutOutcome(call.args) : call.args)]), [
         ["/Applications/Fudge.app/Contents/Helpers/fudge", "scan", path.join(repoPath, "extensions/alpha"), "--json"],
-        ["/Applications/Fudge.app/Contents/Helpers/fudge", "build", path.join(repoPath, "extensions/alpha"), "--into", extensionsDir],
+        [
+            "/Applications/Fudge.app/Contents/Helpers/fudge",
+            "build",
+            path.join(repoPath, "extensions/alpha"),
+            "--into",
+            extensionsDir,
+            "--repository",
+            "raycast/extensions",
+        ],
     ]);
-    assert.deepEqual(buildArguments("/src", "/dest"), ["build", "/src", "--into", "/dest"]);
+    assert.deepEqual(buildArguments("/src", "/dest"), ["build", "/src", "--into", "/dest", "--repository", "raycast/extensions"]);
+    assert.equal(installFolder("/dest", "alpha"), "/dest/raycast/extensions/alpha", "Raycast's folder (FUD-183)");
     assert.deepEqual(await readInstalled(supportPath), {
         alpha: { tree: "aaa1", commit: "c0ffee1234", installedAt: "2026-11-20T12:00:00.000Z", dir: "alpha" },
     });
@@ -1038,7 +1051,8 @@ test("with the Command Line Tools set up, an extension with a Swift part install
     assert.equal(asked.length, 1, "only the install's own confirmation");
     assert.equal(asked[0]!.message.includes("Swift"), false, "and nothing in it about Swift");
     assert.deepEqual(withoutOutcome(cli.calls.at(-1)!.args), [
-        "build", path.join(repoPath, "extensions/alpha"), "--into", extensionsDir, "--swift-parts", "build",
+        "build", path.join(repoPath, "extensions/alpha"), "--into", extensionsDir, "--repository", "raycast/extensions",
+        "--swift-parts", "build",
     ]);
     assert.equal(cli.calls.at(-1)!.timeout, swiftBuildTimeout, "a first Swift build fetches and compiles its packages");
     // Asked again at the next install, never cached: an extension without one gets build too, which changes nothing.
@@ -1115,7 +1129,7 @@ test("a swift: import the check missed: without the tools, the build's question 
             return choice;
         };
         const done = await install(alphaEntry, context);
-        const builds = cli.calls.filter((call) => call.args[0] === "build").map((call) => withoutOutcome(call.args).slice(4));
+        const builds = cli.calls.filter((call) => call.args[0] === "build").map((call) => withoutOutcome(call.args).slice(6));
         assert.deepEqual(views, ["Alpha"]);
         if (choice === "dont-install") {
             assert.equal(done, false);
@@ -1170,6 +1184,20 @@ test("an extension installed without its Swift part says so on its detail page, 
     assert.equal(detailMarkdown(alphaEntry, "c0ffee1234", "", undefined).includes("Swift"), false);
 });
 
+test("the list reads each install's Swift part choice from its folder in Raycast's, not the top level", async () => {
+    const extensionsDir = await temporary();
+    const leaveOut = JSON.stringify({ swiftParts: "leave-out" });
+    // The store's install, filed in Raycast's folder, and one of another name still at the top level (FUD-183).
+    await mkdir(installFolder(extensionsDir, "say"), { recursive: true });
+    await writeFile(path.join(installFolder(extensionsDir, "say"), swiftPartsFile), leaveOut);
+    await mkdir(path.join(extensionsDir, "speak"), { recursive: true });
+    await writeFile(path.join(extensionsDir, "speak", swiftPartsFile), leaveOut);
+    await mkdir(installFolder(extensionsDir, "built"), { recursive: true });
+    const build = JSON.stringify({ swiftParts: "build" });
+    await writeFile(path.join(installFolder(extensionsDir, "built"), swiftPartsFile), build);
+    assert.deepEqual([...(await installsWithoutSwift(extensionsDir, ["say", "speak", "built", "missing"]))], ["say"]);
+});
+
 test("a scan's swift: imports become the store's swiftPart, kept in the cache", () => {
     assert.equal((fromReport(JSON.parse(swiftScan)) as { swiftPart?: boolean }).swiftPart, true);
     assert.equal("swiftPart" in fromReport(supportedScan), false, "none, from a scanner that names none too");
@@ -1182,15 +1210,23 @@ test("a folder whose manifest has another name installs from the folder, under t
     const aws = parseManifest("amazon-aws", manifest("aws", { title: "Amazon AWS" }))!;
     assert.deepEqual(await install(aws, context), {});
     assert.deepEqual(git.calls[0]!.args, ["sparse-checkout", "add", "/extensions/amazon-aws/"]);
-    assert.deepEqual(withoutOutcome(cli.calls.at(-1)!.args), ["build", path.join(repoPath, "extensions/amazon-aws"), "--into", extensionsDir]);
+    assert.deepEqual(withoutOutcome(cli.calls.at(-1)!.args), [
+        "build",
+        path.join(repoPath, "extensions/amazon-aws"),
+        "--into",
+        extensionsDir,
+        "--repository",
+        "raycast/extensions",
+    ]);
     assert.deepEqual((await readInstalled(supportPath)).aws, {
         tree: "a5a1",
         commit: "c0ffee1234",
         installedAt: "2026-11-20T12:00:00.000Z",
         dir: "amazon-aws",
     });
-    // fudge build installs under the manifest's name, so `<extensions>/aws` is what's checked and trashed.
-    await mkdir(path.join(extensionsDir, "aws"));
+    // fudge build installs under the manifest's name, so `<extensions>/raycast/extensions/aws` is what's checked and
+    // trashed.
+    await mkdir(installFolder(extensionsDir, "aws"), { recursive: true });
     assert.equal(await uninstall(aws, context), true);
 });
 
@@ -1204,7 +1240,7 @@ test("two folders with one name: the second can't install over the first, and up
     const first = parseManifest("world-clock", manifest("world-clock"))!;
     const second = parseManifest("world-clock-2", manifest("world-clock"))!;
     assert.deepEqual(await install(first, context), {});
-    await mkdir(path.join(extensionsDir, "world-clock"));
+    await mkdir(installFolder(extensionsDir, "world-clock"), { recursive: true });
     await assert.rejects(install(second, context), (error: unknown) => {
         assert.ok(error instanceof StoreError);
         assert.equal(error.message, "Another extension called world-clock is installed. Uninstall it first.");
@@ -1251,7 +1287,7 @@ test("cancelling builds nothing and records nothing", async () => {
 
 test("a name clash with an extension the store didn't install is refused before anything else", async () => {
     const { context, git, cli, extensionsDir } = await storeContext();
-    await mkdir(path.join(extensionsDir, "alpha"));
+    await mkdir(installFolder(extensionsDir, "alpha"), { recursive: true });
     await assert.rejects(install(alphaEntry, context), (error: unknown) => {
         assert.ok(error instanceof StoreError);
         assert.equal(error.message, "Another extension called alpha is installed. Uninstall it first.");
@@ -1259,6 +1295,19 @@ test("a name clash with an extension the store didn't install is refused before 
     });
     assert.equal(git.calls.length, 0);
     assert.equal(cli.calls.length, 0);
+});
+
+test("a development build of the name is kept apart, so an install goes ahead into Raycast's folder and leaves it", async () => {
+    const { context, cli, extensionsDir, supportPath } = await storeContext({ built: { disabled: [] } });
+    const development = path.join(extensionsDir, "fudgeapp/development/alpha");
+    await mkdir(development, { recursive: true });
+    await writeFile(path.join(development, "package.json"), "mine");
+    assert.deepEqual(await install(alphaEntry, context), {});
+    assert.deepEqual(withoutOutcome(cli.calls.at(-1)!.args).slice(-2), ["--repository", "raycast/extensions"]);
+    assert.ok((await readInstalled(supportPath)).alpha);
+    assert.deepEqual(await readdir(development), ["package.json"]);
+    assert.equal(await readFile(path.join(development, "package.json"), "utf8"), "mine");
+    assert.deepEqual(await readdir(installFolder(extensionsDir, "alpha")), ["compatibility.json"], "the fake build's install");
 });
 
 test("an extension with another package source is refused before asking", async () => {
@@ -1280,7 +1329,7 @@ test("a failed build shows the CLI's message and records nothing", async () => {
     // The failure view gets the whole output, the command and its exit (SPEC-116).
     assert.deepEqual(failureDetails(thrown), {
         output: "error: esbuild failed",
-        command: `fudge build ${path.join(repoPath, "extensions/alpha")} --into ${extensionsDir}`,
+        command: `fudge build ${path.join(repoPath, "extensions/alpha")} --into ${extensionsDir} --repository raycast/extensions`,
         code: 1,
     });
 });
@@ -1301,7 +1350,7 @@ test("a failure's details say what failed: a build, a git step, or one of the st
 test("updating an installed extension asks to update and records the new tree", async () => {
     const { context, asked, supportPath, extensionsDir } = await storeContext({ tree: "bbb2" });
     await writeInstalled(supportPath, { alpha: { tree: "aaa1", commit: "old", installedAt: "x", dir: "alpha" } });
-    await mkdir(path.join(extensionsDir, "alpha"));
+    await mkdir(installFolder(extensionsDir, "alpha"), { recursive: true });
     assert.deepEqual(await install(alphaEntry, context), {}, "its own folder isn't a clash");
     assert.equal(asked[0]!.title, "Update Alpha?");
     assert.equal((await readInstalled(supportPath)).alpha?.tree, "bbb2");
@@ -1310,10 +1359,10 @@ test("updating an installed extension asks to update and records the new tree", 
 test("uninstall trashes only what the store installed, and forgets it", async () => {
     const { context, trashed, supportPath, extensionsDir } = await storeContext();
     await assert.rejects(uninstall(alphaEntry, context), /wasn't installed by the store/);
-    await mkdir(path.join(extensionsDir, "alpha"));
+    await mkdir(installFolder(extensionsDir, "alpha"), { recursive: true });
     await writeInstalled(supportPath, { alpha: { tree: "t", commit: "c", installedAt: "x", dir: "alpha" } });
     assert.equal(await uninstall(alphaEntry, context), true);
-    assert.deepEqual(trashed, [path.join(extensionsDir, "alpha")]);
+    assert.deepEqual(trashed, [path.join(extensionsDir, "raycast/extensions/alpha")]);
     assert.deepEqual(await readInstalled(supportPath), {});
 });
 
@@ -2897,7 +2946,7 @@ test("a second press on a name that's installing does nothing; a press on anothe
 test("two ⌘U presses run one update, and two Try Agains one install", async () => {
     const updating = await storeContext({ tree: "bbb2" });
     await writeInstalled(updating.supportPath, { alpha: { tree: "aaa1", commit: "old", installedAt: "x", dir: "alpha" } });
-    await mkdir(path.join(updating.extensionsDir, "alpha"));
+    await mkdir(installFolder(updating.extensionsDir, "alpha"), { recursive: true });
     const gated = gatedBuilds(updating.context);
     const shown = pressView();
     const press = pressing(updating.context, shown.view);
@@ -3054,7 +3103,7 @@ test("each build is recorded in installing/<pid>.json while it runs, and the rec
                 deadline: "2026-11-20T12:10:00.000Z",
                 command: [
                     context.cli, "build", path.join(repoPath, "extensions/alpha"), "--into", extensionsDir,
-                    "--outcome", installingFolder(supportPath),
+                    "--repository", "raycast/extensions", "--outcome", installingFolder(supportPath),
                 ],
             },
             ending,
@@ -3188,7 +3237,15 @@ function otherRecord(overrides: Partial<BuildRecord> = {}): BuildRecord {
         updating: false,
         startedAt: new Date(start).toISOString(),
         deadline: new Date(start + 600_000).toISOString(),
-        command: ["/Applications/Fudge.app/Contents/Helpers/fudge", "build", "/repo/extensions/alpha", "--into", "/Users/someone/Library/Application Support/Fudge/extensions"],
+        command: [
+            "/Applications/Fudge.app/Contents/Helpers/fudge",
+            "build",
+            "/repo/extensions/alpha",
+            "--into",
+            "/Users/someone/Library/Application Support/Fudge/extensions",
+            "--repository",
+            "raycast/extensions",
+        ],
         ...overrides,
     };
 }
@@ -3311,7 +3368,7 @@ test("an ended build is adopted only when its folder was made between its start 
     // Found ended at open: the end bound is the deadline.
     const record = otherRecord();
     const adopted = await otherSession([record]);
-    await mkdir(path.join(adopted.extensionsDir, "alpha"));
+    await mkdir(installFolder(adopted.extensionsDir, "alpha"), { recursive: true });
     adopted.setClock(() => new Date("2026-11-22T16:00:00.000Z"));
     await adopted.builds.check();
     await adopted.allSettled();
@@ -3324,7 +3381,7 @@ test("an ended build is adopted only when its folder was made between its start 
     // Found ended at open, its folder made after the deadline (a build from Terminal, say).
     const start = Date.now() - 2 * 60 * 60 * 1000;
     const late = await otherSession([otherRecord({ startedAt: new Date(start).toISOString(), deadline: new Date(start + 600_000).toISOString() })]);
-    await mkdir(path.join(late.extensionsDir, "alpha"));
+    await mkdir(installFolder(late.extensionsDir, "alpha"), { recursive: true });
     await late.builds.check();
     await late.allSettled();
     assert.deepEqual(late.settled.map((outcome) => outcome.adopted), [false]);
@@ -3339,7 +3396,7 @@ test("an ended build is adopted only when its folder was made between its start 
 
     // A failed update leaves the older folder, made before the start; the older entry stays.
     const failed = await otherSession([]);
-    await mkdir(path.join(failed.extensionsDir, "alpha"));
+    await mkdir(installFolder(failed.extensionsDir, "alpha"), { recursive: true });
     const older = { alpha: { tree: "t-old", commit: "c-old", installedAt: "x", dir: "alpha" } };
     await writeInstalled(failed.supportPath, older);
     await delay(20);
@@ -3352,7 +3409,7 @@ test("an ended build is adopted only when its folder was made between its start 
 
     // No tree: the store couldn't have recorded it.
     const treeless = await otherSession([otherRecord({ tree: undefined })]);
-    await mkdir(path.join(treeless.extensionsDir, "alpha"));
+    await mkdir(installFolder(treeless.extensionsDir, "alpha"), { recursive: true });
     await treeless.builds.check();
     await treeless.allSettled();
     assert.deepEqual(treeless.settled.map((outcome) => outcome.adopted), [false]);
@@ -3364,7 +3421,7 @@ test("a build seen ending while the store is open: the end bound is that moment"
     const seen = await otherSession([record]);
     seen.fake.running(record);
     await seen.builds.check();
-    await mkdir(path.join(seen.extensionsDir, "alpha"));
+    await mkdir(installFolder(seen.extensionsDir, "alpha"), { recursive: true });
     seen.fake.processes.delete(record.pid);
     await seen.builds.check();
     await seen.allSettled();
@@ -3375,7 +3432,7 @@ test("a build seen ending while the store is open: the end bound is that moment"
     const after = await otherSession([record]);
     after.fake.running(record);
     await after.builds.check();
-    await mkdir(path.join(after.extensionsDir, "alpha"));
+    await mkdir(installFolder(after.extensionsDir, "alpha"), { recursive: true });
     after.fake.processes.delete(record.pid);
     after.setClock(() => new Date(Date.now() - 30_000));
     await after.builds.check();
@@ -3413,7 +3470,7 @@ test("a reused pid isn't the build: it has ended, and its process is never signa
     const record = otherRecord({ deadline: new Date(Date.now() - 1000).toISOString() });
     const session = await otherSession([record]);
     session.fake.processes.set(record.pid, { stat: "S", args: "/usr/bin/vim notes.txt" });
-    await mkdir(path.join(session.extensionsDir, "alpha"));
+    await mkdir(installFolder(session.extensionsDir, "alpha"), { recursive: true });
     await session.builds.check();
     await session.allSettled();
     assert.equal(session.settled.length, 1);
@@ -3707,7 +3764,7 @@ test("another build running and a cancel report nothing; a refusal before any bu
     assert.deepEqual(view.reports, []);
 
     const refused = await storeContext();
-    await mkdir(path.join(refused.extensionsDir, "alpha"), { recursive: true });
+    await mkdir(installFolder(refused.extensionsDir, "alpha"), { recursive: true });
     const refusal = noticesView({ onScreen: false, notified: false });
     await installPressed(alphaEntry, false, refused.context, refusal.view);
     assert.equal(refusal.reports.length, 1);
@@ -3925,7 +3982,13 @@ test("a notified failure selects its row, and a success clears its mark", async 
 
 /** Settles one record from another session that wrote `status` as its outcome (none: killed), with its output files,
  * and `<extensions>/alpha` made now when `folder`. */
-async function settleWithOutcome(options: { status?: number; endedAt?: string; folder: boolean; output?: [string, string] }) {
+async function settleWithOutcome(options: {
+    status?: number;
+    endedAt?: string;
+    /** Where `alpha`'s folder is made: Raycast's folder (`true`), the top level an older `fudge build` used, or none. */
+    folder: boolean | "top level";
+    output?: [string, string];
+}) {
     const supportPath = await temporary();
     const extensionsDir = await temporary();
     const record = otherRecord();
@@ -3939,7 +4002,8 @@ async function settleWithOutcome(options: { status?: number; endedAt?: string; f
         const endedAt = options.endedAt ?? new Date(Date.now() + 10_000).toISOString();
         await writeFile(path.join(folder, `${record.pid}.ended.json`), JSON.stringify({ pid: record.pid, status: options.status, endedAt }));
     }
-    if (options.folder) await mkdir(path.join(extensionsDir, "alpha"));
+    if (options.folder === "top level") await mkdir(path.join(extensionsDir, "alpha"));
+    else if (options.folder) await mkdir(installFolder(extensionsDir, "alpha"), { recursive: true });
     const settled: Settled[] = [];
     const lines: string[] = [];
     // No process is running: the probe finds none.
@@ -3963,6 +4027,12 @@ test("settling with an outcome: 0 adopted by the build's own end, 75 quiet, any 
     assert.ok(adopted.installed.alpha);
     assert.deepEqual(adopted.left, [], "all of the pid's files go");
 
+    // An older `fudge build` finished it at the top level (FUD-183): adopted from there, and the next move files it
+    // in Raycast's folder.
+    const unmoved = await settleWithOutcome({ status: 0, folder: "top level" });
+    assert.equal(unmoved.settled[0]?.adopted, true);
+    assert.ok(unmoved.installed.alpha);
+
     // The folder made after the build's own end, though before the deadline: dropped quietly, with one line.
     const changed = await settleWithOutcome({ status: 0, endedAt: new Date(Date.now() - 30_000).toISOString(), folder: true });
     assert.equal(changed.settled[0]?.adopted, false);
@@ -3982,7 +4052,8 @@ test("settling with an outcome: 0 adopted by the build's own end, 75 quiet, any 
     assert.equal(failed.settled[0]?.adopted, false, "a failed build's folder isn't adopted");
     assert.deepEqual(failed.settled[0]?.failure, {
         output: "building\n\nerror: esbuild failed\n",
-        command: "fudge build /repo/extensions/alpha --into /Users/someone/Library/Application Support/Fudge/extensions",
+        command:
+            "fudge build /repo/extensions/alpha --into /Users/someone/Library/Application Support/Fudge/extensions --repository raycast/extensions",
         code: 1,
     });
     assert.deepEqual(failed.left, []);
@@ -3995,7 +4066,8 @@ test("settling without an outcome is as before, and a failed drop's output ends 
     assert.equal(killed.settled[0]?.adopted, false);
     assert.deepEqual(killed.settled[0]?.failure, {
         output: `half a build\n${stoppedLine}`,
-        command: "fudge build /repo/extensions/alpha --into /Users/someone/Library/Application Support/Fudge/extensions",
+        command:
+            "fudge build /repo/extensions/alpha --into /Users/someone/Library/Application Support/Fudge/extensions --repository raycast/extensions",
     });
     assert.equal(stoppedLine, "Its build stopped before it finished.");
     const silent = await settleWithOutcome({ folder: false });

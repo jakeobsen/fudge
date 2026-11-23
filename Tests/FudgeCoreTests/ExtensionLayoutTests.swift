@@ -219,7 +219,7 @@ struct OwnFilesTests {
         }
         #expect(error.message.contains("ENOENT"), "\(error.message)")
 
-        #expect(ExtensionLayout.moveUp(in: extensions) == ["own-files": .moved])
+        #expect(ExtensionLayout.moveUp(in: extensions) == ["fudgeapp/development/own-files": .moved])
         let installed = try #require(InstalledExtension.all(in: extensions).first)
         #expect(try names(in: installed.directory) == ["assets", "package.json", "plain.cjs", "read.cjs"])
         #expect(try await run("read", of: installed) == .success(["own-files: s3, ec2; read.cjs"]))
@@ -240,7 +240,7 @@ struct OwnFilesTests {
         #expect(try await run("read", of: installed) == .success(["own-files: s3, ec2; read.cjs"]))
         #expect(try await run("plain", of: installed) == .success(["plain ran: hi"]))
 
-        #expect(ExtensionLayout.moveUp(in: extensions) == ["own-files": .moved])
+        #expect(ExtensionLayout.moveUp(in: extensions) == ["fudgeapp/development/own-files": .moved])
         #expect(try await run("plain", of: installed) == .success(["plain ran: hi"]))
         #expect(!files.fileExists(atPath: dist.path))
     }
@@ -255,7 +255,7 @@ struct OwnFilesTests {
             at: built.directory.appendingPathComponent("plain.cjs"), to: dist.appendingPathComponent("plain.cjs"))
         try write("", to: dist.appendingPathComponent("plain.cjs.map"))
 
-        #expect(ExtensionLayout.moveUp(in: extensions) == ["own-files": .leftAlone(.unknownItem)])
+        #expect(ExtensionLayout.moveUp(in: extensions) == ["fudgeapp/development/own-files": .leftAlone(.unknownItem)])
         let installed = try #require(InstalledExtension.all(in: extensions).first)
         #expect(try await run("plain", of: installed) == .success(["plain ran: hi"]))
         #expect(try await run("read", of: installed) == .success(["own-files: s3, ec2; read.cjs"]))

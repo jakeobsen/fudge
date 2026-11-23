@@ -208,7 +208,8 @@ func fromTheStoreSwiftPMGetsTheStoresEnvironmentAndDeveloperDir() async throws {
     #expect(
         tools.runs.contains { $0.contains("--cache-path \(support.path)/Caches/SwiftPM") },
         "the shared cache follows FUDGE_SUPPORT_DIR")
-    let program = extensions.appendingPathComponent("swift-part/assets/compiled_raycast_swift/swift")
+    let program = Development.folder(in: extensions).appendingPathComponent(
+        "swift-part/assets/compiled_raycast_swift/swift")
     #expect(FileManager.default.isExecutableFile(atPath: program.path))
 }
 

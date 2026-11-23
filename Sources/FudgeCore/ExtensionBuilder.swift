@@ -97,25 +97,17 @@ public struct InstalledExtension: Sendable, Equatable {
         )
     }
 
-    /// Every installed extension, sorted by title. Folders that fail to load are skipped.
-    ///
-    /// Only the top level is read for now, and each install there is Raycast's, with its manifest name as its id: the
-    /// key it has always had, and the one it keeps when it's filed in `raycast/extensions`.
+    /// Every installed extension, sorted by title, as the walk finds them (`load(walking:)`). Each folder skipped gets
+    /// one line in `Fudge.log`, once per run (`ExtensionsFolderLog`).
     public static func all(in extensionsDirectory: URL) -> [InstalledExtension] {
-        let folders =
-            (try? FileManager.default.contentsOfDirectory(
-                at: extensionsDirectory,
-                includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles]
-            )) ?? []
-        return
-            folders
-            .compactMap { try? loadUnmoved(from: $0) }
-            .sorted { $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending }
+        let load = load(walking: extensionsDirectory)
+        ExtensionsFolderLog.shared.report(load.skipped)
+        return load.installed
     }
 
-    /// An install at the extensions folder's top level: Raycast's, keyed by its manifest name as before, or nil when
-    /// that name isn't one the id rule accepts.
+    /// An install at the extensions folder's top level, which the move (`ExtensionLayout.moveIntoRepositories`) files
+    /// in Raycast's folder: Raycast's, keyed by its manifest name as before, or nil when that name isn't one the id rule
+    /// accepts.
     static func loadUnmoved(from directory: URL) throws -> InstalledExtension? {
         let manifest = try ExtensionManifest.load(from: directory.appendingPathComponent("package.json"))
         guard let id = ExtensionID(stored: manifest.name) else { return nil }
@@ -150,6 +142,15 @@ public enum BuildError: Error, Equatable, CustomStringConvertible {
     case alreadyBuilding(String, String)
     /// The build's lock file couldn't be opened or locked, for a reason other than another build holding it.
     case cantLock(path: String, reason: String)
+    /// `--repository` isn't a repository folder (`ExtensionRepositoryFolder.isValid`).
+    case invalidRepository(String)
+    /// A folder on the way from the extensions folder to the repository's holds `package.json` (FUD-183): the build
+    /// would write inside an install.
+    case repositoryInsideInstall(String)
+    /// Something on the way to the repository's folder isn't a folder: a file, or a link, which the walk doesn't follow.
+    case notAFolder(String)
+    /// The extension's id would be over `ExtensionID.maxBytes`, so its log file's name wouldn't fit.
+    case idTooLong(String)
 
     /// `fudge build`'s exit status for `alreadyBuilding` (`EX_TEMPFAIL`), which it uses for nothing else; the Extension
     /// Store reads it (`alreadyBuildingStatus` in `store.ts`), and `runtime/test/fixtures/build-statuses.json` pins both.
@@ -190,6 +191,14 @@ public enum BuildError: Error, Equatable, CustomStringConvertible {
             "another fudge build is installing \(name) into \(folder); try again when it has finished"
         case .cantLock(let path, let reason):
             "couldn't lock \(path): \(reason)"
+        case .invalidRepository(let folder):
+            "\(folder) isn't a repository folder, such as raycast/extensions or owner/repository"
+        case .repositoryInsideInstall:
+            "That repository's folder is inside an installed extension."
+        case .notAFolder(let path):
+            "\(path) isn't a folder, so nothing can be installed in it"
+        case .idTooLong:
+            "That extension's name is too long for Fudge to keep its files."
         }
     }
 }
@@ -234,6 +243,9 @@ public struct ExtensionBuilder: Sendable {
     /// Called with the build's lock held, just before the finished build replaces the install: a seam for the test of
     /// two builds of one extension racing to `replace`.
     var beforeReplace: (@Sendable () -> Void)?
+    /// How long a build waits for another Fudge's move into the layout (`ExtensionLayout.moveIntoRepositories`) before
+    /// it stops with `cantLock`: a seam for the test that gives up.
+    var moveLockWait = ExtensionLayout.buildMoveWait
 
     public init(
         esbuild: URL, node: BundledNode? = nil, bundler: URL? = nil,
@@ -247,20 +259,47 @@ public struct ExtensionBuilder: Sendable {
         self.scanCommands = scanCommands
     }
 
+    /// Builds the extension in `source` into `<extensionsDirectory>/<repository>/<name>` (FUD-183). `repository` is a
+    /// repository folder: `raycast/extensions` for Raycast's, where the Extension Store installs, or an added one's
+    /// (`owner/repository`). Without it, or with `fudgeapp/development`, the build is a development build, in
+    /// `fudgeapp/development/<name>`, with the id `fudgeapp+development+<name>`, beside any other install of that name.
     @discardableResult
-    public func build(source: URL, into extensionsDirectory: URL) throws -> InstalledExtension {
+    public func build(source: URL, into extensionsDirectory: URL, repository: String? = nil) throws
+        -> InstalledExtension
+    {
         let files = FileManager.default
         let manifest = try ExtensionManifest.load(from: source.appendingPathComponent("package.json"))
         guard ExtensionManifest.isValidName(manifest.name) else { throw BuildError.invalidName(manifest.name) }
         guard !manifest.commands.isEmpty else { throw BuildError.noCommands }
         try Self.checkCommandNames(manifest.commands.map(\.name))
         let entries = try manifest.commands.map { try Self.entry(for: $0.name, in: source) }
-        // One build of this extension into this folder at a time (SPEC-153 A): a second stops here, before writing
-        // anything. The kernel drops the lock when this process ends, however it ends.
+        let folder = repository ?? ExtensionRepositoryFolder.development
+        guard folder == ExtensionRepositoryFolder.raycast || ExtensionRepositoryFolder.isValid(folder),
+            let kind = InstalledExtension.Repository(folder: folder)
+        else { throw BuildError.invalidRepository(folder) }
+        // Each install's id is its own, so a build into one repository's folder never touches another's install.
+        guard let id = ExtensionID(name: manifest.name, repositoryFolder: folder) else {
+            throw BuildError.idTooLong(manifest.name)
+        }
+        // The extensions folder first, then the move into the layout, so the build never meets an install still at the
+        // top level on its way (a legacy `fudgeapp` one, say). The move's lock is given back before the build's own is
+        // taken.
+        let destination = extensionsDirectory.appendingPathComponent(folder, isDirectory: true)
+            .appendingPathComponent(manifest.name, isDirectory: true)
+        try Self.checkSource(source, against: destination)
         try files.createDirectory(at: extensionsDirectory, withIntermediateDirectories: true)
-        let lock = try Self.lockBuild(of: manifest.name, in: extensionsDirectory)
+        try moveInstallsFromBefore(in: extensionsDirectory)
+        let ways = try Self.waysToRepository(folder, in: extensionsDirectory)
+        let repositoryDirectory = ways[ways.count - 1]
+        // One build of this id at a time (SPEC-153 A): a second stops here, before writing anything. The kernel drops
+        // the lock when this process ends, however it ends.
+        let lock = try Self.lockBuild(of: id, in: extensionsDirectory, installingInto: repositoryDirectory)
         defer { Self.unlockBuild(lock) }
-        try Self.checkDestination(extensionsDirectory.appendingPathComponent(manifest.name), source: source)
+        // The folders it makes go again when the build fails, so a failed build leaves nothing new behind.
+        let made = try Self.makeFolders(ways)
+        var finished = false
+        defer { if !finished { Self.removeEmpty(made) } }
+        try Self.checkDestination(destination, source: source)
         // Every build runs Fudge's own Node.js: the bundling script compiles, and its npm installs the dependencies.
         let installsDependencies =
             manifest.hasDependencies && !files.fileExists(atPath: source.appendingPathComponent("node_modules").path)
@@ -284,7 +323,8 @@ public struct ExtensionBuilder: Sendable {
             nodePaths = [try Self.installDependencies(of: source, into: scratch, with: node).path]
         }
 
-        let staging = extensionsDirectory.appendingPathComponent(".staging-\(manifest.name)-\(UUID().uuidString)")
+        // Beside the destination, so the swap is a rename on one volume.
+        let staging = repositoryDirectory.appendingPathComponent(".staging-\(manifest.name)-\(UUID().uuidString)")
         children.deleteOnSignal(staging)
         defer {
             try? files.removeItem(at: staging)
@@ -338,16 +378,72 @@ public struct ExtensionBuilder: Sendable {
         }
         try Self.installSwiftParts(swift, into: staging)
 
-        let destination = extensionsDirectory.appendingPathComponent(manifest.name, isDirectory: true)
         // From here the staging folder is the install: a signal no longer deletes it.
         children.forget(staging)
         beforeReplace?()
         try Self.replace(destination, with: staging)
-        // An install at the top level is Raycast's, keyed by its name (`InstalledExtension.all(in:)`); the name is
-        // valid, checked above.
-        guard let id = ExtensionID(stored: manifest.name) else { throw BuildError.invalidName(manifest.name) }
+        finished = true
         return InstalledExtension(
-            manifest: manifest, directory: destination, id: id, repository: .raycast, compatibility: compatibility)
+            manifest: manifest, directory: destination, id: id, repository: kind, compatibility: compatibility)
+    }
+
+    /// The move into the layout, as the app runs it at launch (`ExtensionLayout.moveIntoRepositories`), waiting
+    /// `moveLockWait` at most for another Fudge's. What it leaves where it is is said in the build's output.
+    func moveInstallsFromBefore(in extensionsDirectory: URL) throws {
+        do throws(ExtensionLayout.MoveLockFailure) {
+            let report = try ExtensionLayout.moveIntoRepositories(
+                extensions: extensionsDirectory, waitingAtMost: moveLockWait)
+            for line in report.left { log(line) }
+        } catch {
+            switch error {
+            case .timedOut(let path):
+                throw BuildError.cantLock(
+                    path: path,
+                    reason: "another Fudge was still moving the installed extensions into their repositories' folders")
+            case .cantLock(let path, let reason):
+                throw BuildError.cantLock(path: path, reason: reason)
+            }
+        }
+    }
+
+    /// The folders on the way from the extensions folder to the repository's `folder` in it, both included. When any
+    /// of them holds `package.json`, it refuses, and the build stops before writing anything: a destination that
+    /// doesn't exist yet passes `checkDestination`, so without this a build could write inside an install.
+    static func waysToRepository(_ folder: String, in extensionsDirectory: URL) throws -> [URL] {
+        var ways = [extensionsDirectory]
+        for part in folder.split(separator: "/") {
+            ways.append(ways[ways.count - 1].appendingPathComponent(String(part), isDirectory: true))
+        }
+        if let install = ways.first(where: ExtensionWalk.holdsManifest) {
+            throw BuildError.repositoryInsideInstall(install.path)
+        }
+        return ways
+    }
+
+    /// Makes each of `ways` after the first (0755) when it's missing, and returns those it made. Something there that
+    /// isn't a folder (a file, a link) is refused, since nothing is followed.
+    static func makeFolders(_ ways: [URL]) throws -> [URL] {
+        var made: [URL] = []
+        for way in ways.dropFirst() {
+            var info = stat()
+            if lstat(way.path, &info) != 0 {
+                if mkdir(way.path, 0o755) == 0 {
+                    chmod(way.path, 0o755)
+                    made.append(way)
+                } else if errno != EEXIST {
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+                guard lstat(way.path, &info) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            }
+            guard info.st_mode & S_IFMT == S_IFDIR else { throw BuildError.notAFolder(way.path) }
+        }
+        return made
+    }
+
+    /// Removes the folders of `made` that are still empty, innermost first: `rmdir` never removes one that another
+    /// build has put something in meanwhile.
+    static func removeEmpty(_ made: [URL]) {
+        for folder in made.reversed() { rmdir(folder.path) }
     }
 
     /// Refuses a command name that isn't valid (`ExtensionManifest.isValidCommandName`), and two that differ only in
@@ -527,13 +623,27 @@ public struct ExtensionBuilder: Sendable {
     /// symlinks and ignoring case (the file system does), since replacing it would delete the source. Refuses
     /// anything there that isn't a fudge build too.
     static func checkDestination(_ destination: URL, source: URL) throws {
-        func key(_ url: URL) -> String { url.standardizedFileURL.resolvingSymlinksInPath().path.lowercased() }
-        let target = key(destination.deletingLastPathComponent()) + "/" + destination.lastPathComponent.lowercased()
+        try checkSource(source, against: destination)
+        if !holdsOnlyABuild(destination) { throw BuildError.notAnInstall(destination.path) }
+    }
+
+    /// Refuses a destination that is the source folder, holds it or sits inside it, before anything is written. The
+    /// folders on the way to it needn't exist yet: each part that doesn't is compared as it's written.
+    static func checkSource(_ source: URL, against destination: URL) throws {
+        func key(_ url: URL) -> String {
+            var existing = url.standardizedFileURL
+            var missing: [String] = []
+            while !FileManager.default.fileExists(atPath: existing.path), existing.path != "/" {
+                missing.insert(existing.lastPathComponent, at: 0)
+                existing = existing.deletingLastPathComponent()
+            }
+            return ([existing.resolvingSymlinksInPath().path] + missing).joined(separator: "/").lowercased()
+        }
+        let target = key(destination)
         let origin = key(source)
         if origin == target || origin.hasPrefix(target + "/") || target.hasPrefix(origin + "/") {
             throw BuildError.sourceIsDestination(destination.path)
         }
-        if !holdsOnlyABuild(destination) { throw BuildError.notAnInstall(destination.path) }
     }
 
     /// Where the build's scratch folder goes: an absolute `$TMPDIR` when it's set, as for any command-line tool, else
@@ -545,21 +655,25 @@ public struct ExtensionBuilder: Sendable {
         return URL(fileURLWithPath: path, isDirectory: true)
     }
 
-    /// The lock file of the builds of `name` into `extensionsDirectory`: a dot file, which the watcher, the layout and
-    /// `InstalledExtension.all` skip. It stays after the build, since deleting a lock file another build may have open
-    /// would break the lock.
-    static func lockFile(of name: String, in extensionsDirectory: URL) -> URL {
-        extensionsDirectory.appendingPathComponent(".build-\(name).lock")
+    /// The lock file of the builds of the extension `id` into `extensionsDirectory`, at its top whatever the
+    /// repository (`.build-github.lock`, `.build-fudgeapp+development+github.lock`): a dot file, which the watcher, the
+    /// layout and `InstalledExtension.all` skip. It stays after the build, since deleting a lock file another build may
+    /// have open would break the lock.
+    static func lockFile(of id: ExtensionID, in extensionsDirectory: URL) -> URL {
+        extensionsDirectory.appendingPathComponent(".build-\(id.key).lock")
     }
 
-    /// Takes the exclusive lock of the builds of `name` into `extensionsDirectory`, without waiting, and returns its
-    /// descriptor, which the caller gives back with `unlockBuild`. Another build holding it throws `alreadyBuilding`.
+    /// Takes the exclusive lock of the builds of `id` into `extensionsDirectory`, without waiting, and returns its
+    /// descriptor, which the caller gives back with `unlockBuild`. Another build holding it throws `alreadyBuilding`,
+    /// naming the extension and `folder`, the repository's folder it installs into.
     /// The lock belongs to this open of the file, so a second open in this process conflicts too, and the kernel drops
     /// it when the process ends.
     /// `O_CLOEXEC` keeps it out of any program the build starts, on top of `ChildProcesses.spawn`'s
     /// `POSIX_SPAWN_CLOEXEC_DEFAULT`, so a child left running never holds it.
-    static func lockBuild(of name: String, in extensionsDirectory: URL) throws -> Int32 {
-        let file = lockFile(of: name, in: extensionsDirectory)
+    static func lockBuild(
+        of id: ExtensionID, in extensionsDirectory: URL, installingInto folder: URL? = nil
+    ) throws -> Int32 {
+        let file = lockFile(of: id, in: extensionsDirectory)
         let descriptor = open(file.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o644)
         guard descriptor >= 0 else {
             throw BuildError.cantLock(path: file.path, reason: String(cString: strerror(errno)))
@@ -567,7 +681,10 @@ public struct ExtensionBuilder: Sendable {
         guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
             let error = errno
             close(descriptor)
-            if error == EWOULDBLOCK { throw BuildError.alreadyBuilding(name, extensionsDirectory.path) }
+            if error == EWOULDBLOCK {
+                let name = String(id.key.split(separator: Character(ExtensionID.separator)).last ?? "")
+                throw BuildError.alreadyBuilding(name, (folder ?? extensionsDirectory).path)
+            }
             throw BuildError.cantLock(path: file.path, reason: String(cString: strerror(error)))
         }
         return descriptor

@@ -170,12 +170,13 @@ app: release-check build
 	@cp LICENSE '$(APP)/Contents/Resources/LICENSE.txt'
 	@cd runtime && node scripts/notices.ts --text '$(abspath $(APP))/Contents/Resources/Third-Party Notices.txt'
 	@# The bundled extensions (BundledExtensions in core), each built like any other into a scratch folder and
-	@# moved to Contents/Resources/<folder>. Their sources are runtime/<folder>; no source, no extension.
+	@# moved to Contents/Resources/<folder>. Their sources are runtime/<folder>; no source, no extension. Built with
+	@# no --repository, each lands in the scratch folder's fudgeapp/development, beside nothing but hidden lock files.
 	@for folder in $(BUNDLED_EXTENSIONS); do \
 		[ -f "runtime/$$folder/package.json" ] || continue; \
 		scratch="$(abspath build)/$$folder-build" && rm -rf "$$scratch" && mkdir -p "$$scratch" && \
 		'$(APP)/Contents/Helpers/fudge' build "runtime/$$folder" --into "$$scratch" >/dev/null && \
-		mv "$$scratch"/* "$(APP)/Contents/Resources/$$folder" && rm -rf "$$scratch" \
+		mv "$$scratch"/fudgeapp/development/* "$(APP)/Contents/Resources/$$folder" && rm -rf "$$scratch" \
 		|| { echo "make app: building runtime/$$folder failed"; exit 1; }; \
 	done
 	@# A release ships without the binaries' debug and local symbols, which name the builder's folders (/Users/…).

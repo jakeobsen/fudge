@@ -83,6 +83,24 @@ private func alreadyBuilding(_ name: String, _ folder: URL) -> BuildOutcome {
     .refused(String(describing: BuildError.alreadyBuilding(name, folder.path)))
 }
 
+/// Where a build without `--repository` goes (FUD-183): the development folder, with the id
+/// `fudgeapp+development+<name>`.
+enum Development {
+    static func id(_ name: String) -> ExtensionID {
+        guard let id = ExtensionID(name: name, repositoryFolder: ExtensionRepositoryFolder.development) else {
+            fatalError("Not a valid name: \(name)")
+        }
+        return id
+    }
+
+    static func folder(in extensions: URL) -> URL {
+        extensions.appendingPathComponent(ExtensionRepositoryFolder.development, isDirectory: true)
+    }
+
+    /// A development build's lock file, at the extensions folder's top.
+    static func lock(_ name: String) -> String { ".build-fudgeapp+development+\(name).lock" }
+}
+
 /// One build of an extension into one extensions folder at a time (SPEC-153 A).
 @Suite(.enabled(if: Fixtures.canBuild, "needs esbuild and Fudge's Node.js: run `make test`"))
 struct BuildLockTests {
@@ -93,16 +111,18 @@ struct BuildLockTests {
         let created = try FileManager.default.attributesOfItem(atPath: installed.directory.path)[.creationDate] as? Date
         let files = try FileManager.default.subpathsOfDirectory(atPath: installed.directory.path).sorted()
 
-        let holder = try await LockHolder.start(locking: ExtensionBuilder.lockFile(of: "greeter", in: extensions))
+        let holder = try await LockHolder.start(
+            locking: ExtensionBuilder.lockFile(of: Development.id("greeter"), in: extensions))
         defer { holder.stop() }
         let log = LockTestLog()
         let builder = Fixtures.builder(log: { log.append($0) })
         // The holder sleeps for 10 minutes, so a build that waited for the lock would hang until `noHang`.
         #expect(
             try await BuildOutcome.of { try builder.build(source: Fixtures.greeter, into: extensions) }
-                == alreadyBuilding("greeter", extensions))
+                == alreadyBuilding("greeter", Development.folder(in: extensions)))
         #expect(log.lines.isEmpty, "nothing was installed or compiled")
-        #expect(try names(in: extensions) == [".build-greeter.lock", "greeter"], "no .staging-* folder")
+        #expect(try names(in: extensions) == [Development.lock("greeter"), ".move.lock", "fudgeapp"])
+        #expect(try names(in: Development.folder(in: extensions)) == ["greeter"], "no .staging-* folder")
         #expect(
             try FileManager.default.attributesOfItem(atPath: installed.directory.path)[.creationDate] as? Date
                 == created, "the install from before is the same folder")
@@ -112,12 +132,14 @@ struct BuildLockTests {
     @Test func aLockHolderKilledWithSIGKILLLeavesNoLock() async throws {
         let extensions = try Fixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: extensions) }
-        let holder = try await LockHolder.start(locking: ExtensionBuilder.lockFile(of: "greeter", in: extensions))
+        let holder = try await LockHolder.start(
+            locking: ExtensionBuilder.lockFile(of: Development.id("greeter"), in: extensions))
         holder.stop(SIGKILL)
         #expect(
             try await BuildOutcome.of { try Fixtures.builder().build(source: Fixtures.greeter, into: extensions) }
                 == .installed, "the kernel dropped the lock with the process")
-        #expect(try names(in: extensions) == [".build-greeter.lock", "greeter"], "the lock file stays")
+        #expect(
+            try names(in: extensions) == [Development.lock("greeter"), ".move.lock", "fudgeapp"], "the lock file stays")
     }
 
     @Test func theLockIsPerNameAndPerFolder() async throws {
@@ -127,7 +149,8 @@ struct BuildLockTests {
             try? FileManager.default.removeItem(at: extensions)
             try? FileManager.default.removeItem(at: other)
         }
-        let holder = try await LockHolder.start(locking: ExtensionBuilder.lockFile(of: "greeter", in: extensions))
+        let holder = try await LockHolder.start(
+            locking: ExtensionBuilder.lockFile(of: Development.id("greeter"), in: extensions))
         defer { holder.stop() }
         #expect(
             try await BuildOutcome.of { try Fixtures.builder().build(source: Fixtures.commandNames, into: extensions) }
@@ -135,6 +158,30 @@ struct BuildLockTests {
         #expect(
             try await BuildOutcome.of { try Fixtures.builder().build(source: Fixtures.greeter, into: other) }
                 == .installed, "the same name, into another folder")
+    }
+
+    /// FUD-183: the lock is by id. While a development build of greeter holds its lock, a second is refused, and
+    /// Raycast's greeter and someone/tools' each take their own lock and run.
+    @Test func theLockIsById() async throws {
+        let extensions = try Fixtures.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: extensions) }
+        let holder = try await LockHolder.start(
+            locking: ExtensionBuilder.lockFile(of: Development.id("greeter"), in: extensions))
+        defer { holder.stop() }
+        #expect(
+            try await BuildOutcome.of { try Fixtures.builder().build(source: Fixtures.greeter, into: extensions) }
+                == alreadyBuilding("greeter", Development.folder(in: extensions)))
+        for repository in ["raycast/extensions", "someone/tools"] {
+            #expect(
+                try await BuildOutcome.of {
+                    try Fixtures.builder().build(source: Fixtures.greeter, into: extensions, repository: repository)
+                } == .installed, "\(repository)")
+        }
+        #expect(
+            try names(in: extensions) == [
+                Development.lock("greeter"), ".build-greeter.lock", ".build-someone+tools+greeter.lock", ".move.lock",
+                "raycast", "someone",
+            ])
     }
 
     /// Two builds of one extension into one folder, in one process: the first holds the lock just before `replace`
@@ -161,12 +208,13 @@ struct BuildLockTests {
 
         #expect(
             try await BuildOutcome.of { try Fixtures.builder().build(source: Fixtures.greeter, into: extensions) }
-                == alreadyBuilding("greeter", extensions))
+                == alreadyBuilding("greeter", Development.folder(in: extensions)))
         release.signal()
         #expect(try await firstBuild.value == .installed)
 
-        #expect(try names(in: extensions) == [".build-greeter.lock", "greeter"], "no .staging-* or .old-* is left")
-        let installed = try InstalledExtension.topLevel(from: extensions.appendingPathComponent("greeter"))
+        #expect(try names(in: extensions) == [Development.lock("greeter"), ".move.lock", "fudgeapp"])
+        #expect(try names(in: Development.folder(in: extensions)) == ["greeter"], "no .staging-* or .old-* is left")
+        let installed = try #require(InstalledExtension.all(in: extensions).first)
         #expect(
             try names(in: installed.directory) == ["assets", "greet.cjs", "package.json", "quiet.cjs"],
             "one whole build")
@@ -237,7 +285,8 @@ struct BuildLockTests {
     for made in [extensions, temporary] {
         try FileManager.default.createDirectory(at: made, withIntermediateDirectories: true)
     }
-    let holder = try await LockHolder.start(locking: ExtensionBuilder.lockFile(of: "greeter", in: extensions))
+    let holder = try await LockHolder.start(
+        locking: ExtensionBuilder.lockFile(of: Development.id("greeter"), in: extensions))
     defer { holder.stop() }
     let (status, out, err) = try await Tool.run(
         tool, ["build", Fixtures.greeter.path, "--into", extensions.path],
@@ -249,9 +298,10 @@ struct BuildLockTests {
     #expect(!out.contains("installed"), "\(out)")
     #expect(
         err
-            == "fudge: another fudge build is installing greeter into \(extensions.path); try again when it has finished\n"
+            == "fudge: another fudge build is installing greeter into \(Development.folder(in: extensions).path); "
+            + "try again when it has finished\n"
     )
-    #expect(try names(in: extensions) == [".build-greeter.lock"], "no .staging-* folder")
+    #expect(try names(in: extensions) == [Development.lock("greeter"), ".move.lock"], "no folder and no .staging-*")
     #expect(try names(in: temporary) == [], "no fudge-build-* folder")
 }
 
@@ -303,7 +353,8 @@ private final class StopFlag: @unchecked Sendable {
         var refused = 0
         for _ in 0..<20_000 {
             do {
-                ExtensionBuilder.unlockBuild(try ExtensionBuilder.lockBuild(of: "greeter", in: extensions))
+                ExtensionBuilder.unlockBuild(
+                    try ExtensionBuilder.lockBuild(of: Development.id("greeter"), in: extensions))
             } catch BuildError.alreadyBuilding {
                 refused += 1
             }

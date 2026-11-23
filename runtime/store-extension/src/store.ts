@@ -43,8 +43,15 @@ import {
     type InstallAnswer,
     type InstallEndReport,
 } from "./notices.ts";
+import { raycastFolder } from "./repository-folder.ts";
 import { sourceProblem } from "./sources.ts";
-import { askedForSwiftParts, decideSwiftParts, type SwiftParts, type SwiftPartsChoice } from "./swift-parts.ts";
+import {
+    askedForSwiftParts,
+    decideSwiftParts,
+    installedWithoutSwift,
+    type SwiftParts,
+    type SwiftPartsChoice,
+} from "./swift-parts.ts";
 import { buildTimeout, swiftBuildTimeout } from "./timeouts.ts";
 
 /** A step that refused or failed; its message is shown in a failure toast. */
@@ -197,10 +204,35 @@ export async function writeInstalled(supportPath: string, installed: Installed):
     await rename(temporary, file);
 }
 
-/** The CLI's arguments for installing the extension in `source` into `extensionsDir`, and nowhere else, with what to do
- * with a part written in Swift when it has one. */
+/** The CLI's arguments for installing the extension in `source` into `extensionsDir`, and nowhere else, in Raycast's
+ * folder there (`--repository raycast/extensions`, FUD-183), with what to do with a part written in Swift when it has
+ * one. */
 export function buildArguments(source: string, extensionsDir: string, swiftParts?: SwiftParts): string[] {
-    return ["build", source, "--into", extensionsDir, ...(swiftParts ? ["--swift-parts", swiftParts] : [])];
+    return [
+        "build",
+        source,
+        "--into",
+        extensionsDir,
+        "--repository",
+        raycastFolder,
+        ...(swiftParts ? ["--swift-parts", swiftParts] : []),
+    ];
+}
+
+/** The folder of the store's install of `name`: `<extensionsDir>/raycast/extensions/<name>`, Raycast's folder (FUD-183).
+ * Every place that works out where a store install is takes it from here. */
+export function installFolder(extensionsDir: string, name: string): string {
+    return path.join(extensionsDir, ...raycastFolder.split("/"), name);
+}
+
+/** Which of the store's installs of `names` were built without their part written in Swift (SPEC-145 §3), each read
+ * from its folder in Raycast's (`installFolder`). */
+export async function installsWithoutSwift(extensionsDir: string, names: Iterable<string>): Promise<Set<string>> {
+    const found = new Set<string>();
+    for (const name of names) {
+        if (await installedWithoutSwift(installFolder(extensionsDir, name))) found.add(name);
+    }
+    return found;
 }
 
 function checkedName(name: string): string {
@@ -251,7 +283,7 @@ async function compatibilityOf(
 /**
  * Installs (or updates) `entry`: fetches its source from its folder, checks where its packages come from, finds what
  * it uses (`fudge scan`, or the cached result for this version), asks, builds it with the CLI into `extensionsDir` (as
- * `<extensionsDir>/<name>`), and records it under its name with its folder. Resolves false when the user cancels, else
+ * `<extensionsDir>/raycast/extensions/<name>`, `installFolder`), and records it under its name with its folder. Resolves false when the user cancels, else
  * with what the done message adds (`installNote`); throws `StoreError` when a step refuses or fails. An extension of that name that the store didn't install from this
  * folder is never replaced: one installed another way, one from another folder whose manifest has the same name, or one
  * Fudge bundles.
@@ -266,7 +298,11 @@ export async function install(
     if (bundledNames.includes(name)) throw new StoreError(`${entry.title} can't be installed: ${name} is part of Fudge.`);
     const installed = await readInstalled(context.supportPath);
     const record = installed[name];
-    if (record ? !sameFolder(record.dir, dir) : await exists(path.join(context.extensionsDir, name))) {
+    // A development build of this name (`fudgeapp/development/<name>`) is kept apart, so it refuses nothing. An
+    // install still at the extensions folder's top level (the app's move gave up, or an older Fudge installed it after
+    // the move) isn't seen here: `fudge build`'s own move files it in Raycast's folder first, where this install then
+    // replaces it.
+    if (record ? !sameFolder(record.dir, dir) : await exists(installFolder(context.extensionsDir, name))) {
         throw new StoreError(nameTakenMessage(name));
     }
     await context.repo.add(`/extensions/${dir}/`);
@@ -325,7 +361,7 @@ export async function install(
     await writeInstalled(context.supportPath, { ...(await readInstalled(context.supportPath)), [name]: recorded });
     // The build scanned the source again: what it turned off is what's true, so say so where it differs.
     const built = await builtCompatibility(
-        path.join(context.extensionsDir, name),
+        installFolder(context.extensionsDir, name),
         entry.commands.map((command) => command.name),
     );
     const note = installNote(checked, built, commandTitles(entry));
@@ -363,7 +399,7 @@ export async function uninstall(entry: StoreEntry, context: StoreContext): Promi
         "Uninstall",
     );
     if (!confirmed) return false;
-    const folder = path.join(context.extensionsDir, name);
+    const folder = installFolder(context.extensionsDir, name);
     if (await exists(folder)) await context.trash(folder);
     const remaining = await readInstalled(context.supportPath);
     delete remaining[name];

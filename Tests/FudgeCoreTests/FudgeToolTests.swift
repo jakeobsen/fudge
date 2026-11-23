@@ -330,8 +330,11 @@ func buildInstallsDependenciesWithTheBundledNpm() async throws {
         #expect(
             err == "fudge: compiling needs Fudge's own Node.js and its bundling script, which aren't beside this fudge "
                 + "tool; use the fudge inside Fudge.app\n")
-        // The build's lock comes first, and its file stays (SPEC-153 A); nothing else is made.
-        #expect(try FileManager.default.contentsOfDirectory(atPath: extensions.path) == [".build-greeter.lock"])
+        // The move's lock and the build's come first, and their files stay (SPEC-153 A); nothing else is made.
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: extensions.path).sorted() == [
+                Development.lock("greeter"), ".move.lock",
+            ])
     }
 }
 
@@ -357,11 +360,18 @@ func buildInstallsDependenciesWithTheBundledNpm() async throws {
             "FUDGE_BUNDLER": "/nonexistent/bundle-extension.cjs", "TMPDIR": temporary.path + "/",
         ],
         pids: pids, tool: tool)
-    #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("extensions/greeter").path))
-    // The compile step runs once both folders exist, so a terminated build has both to delete.
     #expect(
-        try FileManager.default.contentsOfDirectory(atPath: extensions.path) == [".build-greeter.lock"],
-        "no .staging-* is left, only the lock file")
+        !FileManager.default.fileExists(
+            atPath: Development.folder(in: extensions).appendingPathComponent("greeter").path))
+    // The compile step runs once both folders exist, so a terminated build has both to delete. The development folder
+    // it made stays, empty: a signal skips the build's own clean-up, and the handler deletes only its own folders.
+    #expect(
+        try FileManager.default.contentsOfDirectory(atPath: extensions.path).sorted() == [
+            Development.lock("greeter"), ".move.lock", "fudgeapp",
+        ], "only the lock files")
+    #expect(
+        try FileManager.default.contentsOfDirectory(atPath: Development.folder(in: extensions).path) == [],
+        "no .staging-* is left")
     #expect(try FileManager.default.contentsOfDirectory(atPath: temporary.path) == [], "no fudge-build-* is left")
 }
 

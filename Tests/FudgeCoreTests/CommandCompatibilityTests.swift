@@ -220,7 +220,7 @@ struct BuildScansEndToEnd {
     @Test func fudgeBuildListsTheCommandThatUsesRaycastAI() async throws {
         let installed = try await fudgeBuild(ask: "ask", plain: "plain")
         #expect(installed.compatibility.commands == ["ask": [.ai]])
-        #expect(InstalledExtension.offByDefault([installed]) == ["made-up/ask"])
+        #expect(InstalledExtension.offByDefault([installed]) == ["fudgeapp+development+made-up/ask"])
     }
 
     /// SPEC-143: a command named as Raycast accepts it (`caffeinateWhile`) is scanned too, so one that uses AI is
@@ -228,7 +228,7 @@ struct BuildScansEndToEnd {
     @Test func fudgeBuildListsACamelCaseCommandThatUsesRaycastAI() async throws {
         let installed = try await fudgeBuild(ask: "askAway", plain: "plain.command")
         #expect(installed.compatibility.commands == ["askAway": [.ai]])
-        #expect(InstalledExtension.offByDefault([installed]) == ["made-up/askAway"])
+        #expect(InstalledExtension.offByDefault([installed]) == ["fudgeapp+development+made-up/askAway"])
     }
 
     /// Builds a made-up extension with the real `fudge build`: a command named `ask` that reaches Raycast AI through
@@ -276,6 +276,6 @@ struct BuildScansEndToEnd {
         if exited != true { process.terminate() }
         try #require(exited == true, "fudge build exited")
         try #require(process.terminationStatus == 0)
-        return try InstalledExtension.topLevel(from: extensions.appendingPathComponent("made-up"))
+        return try #require(InstalledExtension.all(in: extensions).first { $0.manifest.name == "made-up" })
     }
 }

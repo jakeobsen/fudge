@@ -9,12 +9,20 @@ private let root = URL(fileURLWithPath: "/tmp/fudge-watch/extensions", isDirecto
 private let staging = ".staging-x-8D1B2E0C-6F2A-4C1E-9E52-3F0D4B7A9C11"
 private let old = ".old-x-0B7C1D3E-2F4A-4B5C-8D6E-7F8091A2B3C4"
 
-@Test(arguments: ["\(staging)/dist/x.cjs", staging, old, "\(old)/package.json", ".DS_Store"])
+@Test(arguments: [
+    "\(staging)/dist/x.cjs", staging, old, "\(old)/package.json", ".DS_Store", "x/.DS_Store",
+    // In a repository's folder (FUD-183): a build's staging folder, its old copy and a lock.
+    "someone/tools/\(staging)", "someone/tools/\(staging)/package.json", "someone/tools/\(old)",
+    "raycast/extensions/\(staging)/x.cjs", "git.example.org/team/.lock", "someone/.tools/x/package.json",
+])
 func pathsUnderADotFolderOrFileDontCount(_ relative: String) {
     #expect(!ExtensionsWatcher.counts(path: root.path + "/" + relative, in: root))
 }
 
-@Test(arguments: ["x", "x/package.json", "x/x.cjs", "x/dist/x.cjs", "x/.DS_Store"])
+@Test(arguments: [
+    "x", "x/package.json", "x/x.cjs", "x/dist/x.cjs", "someone/tools/github", "someone/tools/github/package.json",
+    "raycast/extensions/x/x.cjs", "fudgeapp/development/x", "git.example.org/team/extensions/x/x.cjs",
+])
 func pathsUnderAnExtensionFolderCount(_ relative: String) {
     #expect(ExtensionsWatcher.counts(path: root.path + "/" + relative, in: root))
 }
@@ -407,6 +415,64 @@ struct ExtensionsWatcherTests {
         #expect(await reloads.first(within: .seconds(1.5)) == nil, "reloads: \(reloads.all)")
     }
 
+    /// FUD-183: an install renamed into `raycast/extensions/` changes that folder's time, not the top one's, and one
+    /// into a new repository folder changes its owner's; the startup check stamps both, so either, made between
+    /// `start` and the stream starting, is one reload.
+    @Test(arguments: [false, true])
+    func anInstallIntoARepositorysFolderBeforeTheStreamStartsReloadsOnce(newRepository: Bool) async throws {
+        let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
+        let staging = try Layout.install("x", at: "raycast/extensions/.staging-x", in: extensions)
+        try FileManager.default.createDirectory(
+            at: extensions.appendingPathComponent("someone"), withIntermediateDirectories: true)
+        let slow = DispatchQueue(label: "a slow fseventsd")
+        slow.suspend()
+        var resumed = false
+        defer { if !resumed { slow.resume() } }
+        let reloads = Reloads()
+        let watcher = ExtensionsWatcher(directory: extensions, queue: slow) { reloads.record() }
+        // Past FSEvents' latency, so what was made before `start` isn't reported.
+        try await Task.sleep(for: .milliseconds(500))
+        let top = try #require(FolderStamp(path: extensions.path))
+        try watcher.start()
+        defer { watcher.stop() }
+        if newRepository {
+            try Layout.install("x", at: "someone/tools/x", in: extensions)
+        } else {
+            try FileManager.default.moveItem(at: staging, to: extensions.appendingPathComponent("raycast/extensions/x"))
+        }
+        #expect(FolderStamp(path: extensions.path) == top, "the top folder didn't change")
+        try await Task.sleep(for: .milliseconds(500))
+        let started = ContinuousClock.now
+        slow.resume()
+        resumed = true
+        try #require(await streamStarted(on: slow), "the watcher's stream didn't start")
+        _ = await reloads.first(within: noHang)
+        try await Task.sleep(for: .seconds(1))
+        expectOnce(reloads.all.map { $0 - started })
+    }
+
+    @Test func theStampsSeeEveryFolderAnInstallCanLandIn() throws {
+        let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
+        try Layout.install("github", at: "someone/tools/github", in: extensions)
+        try Layout.install("github", at: "git.example.org/team/extensions/github", in: extensions)
+        let before = FolderStamps(directory: extensions)
+        #expect(
+            before.stamps.keys.sorted() == [
+                "", "git.example.org", "git.example.org/team", "git.example.org/team/extensions", "someone",
+                "someone/tools",
+            ], "raycast/extensions and fudgeapp/development aren't there yet")
+        #expect(FolderStamps(directory: extensions) == before)
+        try FileManager.default.createDirectory(
+            at: extensions.appendingPathComponent("git.example.org/team/extensions/.staging-x"),
+            withIntermediateDirectories: false)
+        let staged = FolderStamps(directory: extensions)
+        #expect(staged != before, "a host's repository folder")
+        try Layout.install("weather", at: "fudgeapp/development/weather", in: extensions)
+        let developed = FolderStamps(directory: extensions)
+        #expect(developed != staged)
+        #expect(developed.stamps.keys.contains("fudgeapp/development"))
+    }
+
     @Test func aFolderStampChangesWithAnEntryAddedOrRemovedOrTheFolderReplaced() throws {
         let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
         try FileManager.default.createDirectory(at: extensions, withIntermediateDirectories: true)
@@ -459,8 +525,21 @@ struct ExtensionsWatcherBuildTests {
         _ = try await OffThePool.run { try builder.build(source: Fixtures.greeter, into: extensions) }
     }
 
+    /// Into a development folder that's there already, as after the first build, an install is one reload.
     @Test func installingWithTheBuilderReloadsOnce() async throws {
-        expectOnce(try await reloads { extensions in try await build(into: extensions) })
+        expectOnce(
+            try await reloads(preparing: { extensions in
+                try FileManager.default.createDirectory(
+                    at: Development.folder(in: extensions), withIntermediateDirectories: true)
+            }) { extensions in try await build(into: extensions) })
+    }
+
+    /// The first build into an empty extensions folder makes `fudgeapp/development` before it compiles, which can be a
+    /// reload of its own when the compile outlasts the debounce; then the install is one more. Never more than two.
+    @Test func theFirstBuildIntoANewRepositoryFolderReloadsAtMostTwice() async throws {
+        let times = try await reloads { extensions in try await build(into: extensions) }
+        #expect((1...2).contains(times.count), "reloads: \(times)")
+        #expect(times.last.map { $0 >= .zero } == true, "the last one comes once the install has landed: \(times)")
     }
 
     @Test func rebuildingWithTheBuilderReloadsOnce() async throws {
