@@ -158,6 +158,22 @@ export function byTitle(a: StoreEntry, b: StoreEntry): number {
 }
 
 /**
+ * Rows from several copies by title (SPEC-166): the same title (base sensitivity) puts the copies in `order`, the copy
+ * ids of the list as read (Raycast's official repository first, then the added ones in their Settings order), a copy not
+ * in it after every one that is; then `byTitle`'s name, folder and copy id.
+ */
+export function byTitleIn(order: readonly string[]): (a: StoreEntry, b: StoreEntry) => number {
+    const place = (copyId: string) => {
+        const index = order.indexOf(copyId);
+        return index === -1 ? order.length : index;
+    };
+    return (a, b) =>
+        a.title.localeCompare(b.title, "en", { sensitivity: "base" }) ||
+        place(a.copyId) - place(b.copyId) ||
+        byTitle(a, b);
+}
+
+/**
  * The id of the extension a row installs (SPEC-158 C): its name in Raycast's repository, else its repository's
  * segments and its name joined with `+`. It keys the row's record and its busy state, so the same name from two
  * repositories is two extensions. A name too long for the id rule still gets that joined text, which no record has
@@ -239,9 +255,13 @@ export function filterEntries(entries: StoreEntry[], filter: string, installed: 
     return entries;
 }
 
-/** The installed ones first, then the rest; each by title. */
-export function sections(entries: StoreEntry[], installed: Installed): { installed: StoreEntry[]; other: StoreEntry[] } {
-    const sorted = [...entries].sort(byTitle);
+/** The installed ones first, then the rest; each by title, with the copies in `order` on the same title (`byTitleIn`). */
+export function sections(
+    entries: StoreEntry[],
+    installed: Installed,
+    order: readonly string[],
+): { installed: StoreEntry[]; other: StoreEntry[] } {
+    const sorted = [...entries].sort(byTitleIn(order));
     return {
         installed: sorted.filter((entry) => installedRecord(entry, installed) !== undefined),
         other: sorted.filter((entry) => installedRecord(entry, installed) === undefined),

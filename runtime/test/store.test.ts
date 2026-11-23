@@ -22,6 +22,7 @@ import {
     RowMarks,
     RowSelection,
     saveFailure,
+    topRowId,
     unanswered,
     type FailureMark,
     type InstallAnswer,
@@ -60,6 +61,7 @@ import {
     updatingTag,
     type StoreEntry,
 } from "../store-extension/src/catalog.ts";
+import { installedSection, installedSectionRowId } from "../store-extension/src/development-builds.ts";
 import {
     installingFolder,
     parseProcessLine,
@@ -425,7 +427,7 @@ test("two folders with one name: only the folder it was installed from is instal
     assert.equal(status(first, installed, new Map([["world-clock", "t2"]])), "update");
     assert.equal(status(parseManifest("World-Clock", manifest("world-clock"))!, installed, trees), "installed", "APFS ignores case");
     assert.deepEqual(filterEntries([first, second], installedFilter, installed), [first]);
-    assert.deepEqual(sections([first, second], installed).other, [second]);
+    assert.deepEqual(sections([first, second], installed, []).other, [second]);
 });
 
 test("rows show the author, the commands and the state; search includes keywords, author and name", () => {
@@ -447,7 +449,7 @@ test("the category and Installed filters, and installed ones first", () => {
         filterEntries(entries, "category:Productivity", installed).map((entry) => entry.name),
         ["beta", "alpha"],
     );
-    const split = sections(entries, installed);
+    const split = sections(entries, installed, []);
     assert.deepEqual(
         split.installed.map((entry) => entry.name),
         ["gamma"],
@@ -4248,15 +4250,23 @@ test("row marks are per repository and folder: one name from two repositories ke
  * moved, later, as the bridge does.
  */
 class FollowingList {
-    selected: string;
+    selected: string | undefined;
     rendered: (string | undefined)[] = [];
     private followed: string | undefined;
     private readonly reports: string[] = [];
-    private readonly shown: Set<string>;
+    private shown: Set<string>;
 
-    constructor(rows: string[], selected: string) {
+    constructor(rows: string[], selected?: string) {
         this.shown = new Set(rows);
         this.selected = selected;
+    }
+
+    /** A render with these rows: the selection stays on its row while it's shown, else goes to the first row, as
+     * `reselect` does, and is reported when it moved. */
+    show(rows: string[]): void {
+        this.shown = new Set(rows);
+        const first = rows[0];
+        if ((this.selected === undefined || !this.shown.has(this.selected)) && first !== undefined) this.move(first);
     }
 
     render(selectedItemId: string | undefined): void {
@@ -4320,6 +4330,149 @@ test("an ask waits for its row, and asking for the selected row instead takes it
     assert.equal(rows.current, undefined, "the newer ask, for the selected row, wins");
     assert.equal(list.selected, "x");
     assert.deepEqual(list.rendered, ["z", undefined]);
+});
+
+/** A list as it opens (SPEC-166): each render records its top row, and the effect after it follows. */
+function opening(): { list: FollowingList; rows: RowSelection; render: (shown: string[]) => void } {
+    const list = new FollowingList([]);
+    const rows = new RowSelection((asked) => list.render(asked));
+    const render = (shown: string[]) => {
+        rows.seen(shown[0]);
+        list.show(shown);
+    };
+    return { list, rows, render };
+}
+
+test("until the user acts, the list's top row stays selected as later copies' rows come (SPEC-166)", () => {
+    const { list, rows, render } = opening();
+    // The first copy's rows: the list selects its first row and reports it, before the effect: nothing to ask for.
+    render(["r1", "r2"]);
+    list.deliver(rows);
+    rows.follow(true);
+    assert.equal(list.selected, "r1");
+    assert.deepEqual(list.rendered, [], "the top row is already selected");
+    // A later copy's row above it: asked for, followed, and the report clears the ask.
+    render(["t", "r1", "r2"]);
+    rows.follow(true);
+    list.deliver(rows);
+    assert.equal(list.selected, "t");
+    // A problem row above that: the same.
+    render(["p", "t", "r1", "r2"]);
+    rows.follow(true);
+    list.deliver(rows);
+    assert.equal(list.selected, "p");
+    assert.deepEqual(list.rendered, ["t", undefined, "p", undefined]);
+    assert.equal(rows.followsTop, true);
+});
+
+test("a report the app sent before it followed a newer ask leaves the top row followed (SPEC-166)", () => {
+    const { list, rows, render } = opening();
+    // The effect asks for the first row before the list's report of it comes back.
+    render(["r1", "r2"]);
+    rows.follow(true);
+    // A later copy's row above, asked for, all before the reports come: r1's first, then t's.
+    render(["t", "r1", "r2"]);
+    rows.follow(true);
+    list.deliver(rows);
+    assert.equal(rows.followsTop, true, "r1's report was sent before the list followed t");
+    assert.equal(list.selected, "t");
+    render(["p", "t", "r1", "r2"]);
+    rows.follow(true);
+    list.deliver(rows);
+    assert.equal(list.selected, "p");
+    assert.deepEqual(list.rendered, ["r1", "t", undefined, "p", undefined]);
+});
+
+test("the first report can come before or after its effect, and leaves the top row followed (SPEC-166)", () => {
+    // The report first: it comes after the render recorded its top row, before the effect.
+    const before = opening();
+    before.render(["r1", "r2"]);
+    before.list.deliver(before.rows);
+    assert.equal(before.rows.followsTop, true, "the list's own selection of its first row isn't the user's");
+    before.rows.follow(true);
+    assert.deepEqual(before.list.rendered, [], "the top row is already selected");
+    // The effect first: it asks for the row the list has just selected, and the list's report of it clears the ask.
+    const after = opening();
+    after.render(["r1", "r2"]);
+    after.rows.follow(true);
+    after.list.deliver(after.rows);
+    assert.equal(after.list.selected, "r1");
+    assert.equal(after.rows.current, undefined);
+    assert.equal(after.rows.followsTop, true);
+    assert.deepEqual(after.list.rendered, ["r1", undefined]);
+});
+
+test("once the user moves the selection, later rows never move it (SPEC-166, C.3)", () => {
+    const { list, rows, render } = opening();
+    render(["r1", "r2"]);
+    list.deliver(rows);
+    rows.follow(true);
+    list.move("r2");
+    list.deliver(rows);
+    assert.equal(rows.followsTop, false);
+    render(["t", "r1", "r2"]);
+    rows.follow(true);
+    list.deliver(rows);
+    assert.equal(list.selected, "r2");
+    assert.deepEqual(list.rendered, []);
+});
+
+test("typing, the detail pane or an action ends following the top row (SPEC-166)", () => {
+    const { list, rows, render } = opening();
+    render(["r1", "r2"]);
+    list.deliver(rows);
+    rows.follow(true);
+    rows.stopFollowing();
+    render(["t", "r1", "r2"]);
+    rows.follow(true);
+    list.deliver(rows);
+    assert.equal(list.selected, "r1");
+    assert.deepEqual(list.rendered, []);
+});
+
+test("a row the store selects for the user wins over the top row (SPEC-166, D.1)", () => {
+    const { list, rows, render } = opening();
+    render(["r1", "r2"]);
+    list.deliver(rows);
+    rows.follow(true);
+    rows.select("r2");
+    list.deliver(rows);
+    assert.equal(list.selected, "r2");
+    render(["t", "r1", "r2"]);
+    rows.follow(true);
+    list.deliver(rows);
+    assert.equal(list.selected, "r2");
+    assert.deepEqual(list.rendered, ["r2", undefined]);
+});
+
+test("the end of the open asks for the last top row once, and then nothing moves it (SPEC-166)", () => {
+    const { list, rows, render } = opening();
+    render(["r1", "r2"]);
+    list.deliver(rows);
+    rows.follow(true);
+    // The last copy's rows and the end of the open: its top row is still asked for.
+    render(["t", "r1", "r2"]);
+    rows.follow(false);
+    list.deliver(rows);
+    assert.equal(list.selected, "t");
+    assert.equal(rows.followsTop, false);
+    // An install afterwards puts a row above: the selection stays.
+    render(["a", "t", "r1", "r2"]);
+    rows.follow(false);
+    list.deliver(rows);
+    assert.equal(list.selected, "t");
+    assert.deepEqual(list.rendered, ["t", undefined]);
+});
+
+test("the list's top row is the first of its sections' rows: Repositories, Installed, Extensions (SPEC-166)", () => {
+    assert.equal(topRowId(["problem:a"], ["x"], ["y"]), "problem:a");
+    assert.equal(topRowId([], ["x"], ["y"]), "x");
+    assert.equal(topRowId([], [], ["y"]), "y");
+    assert.equal(topRowId([], [], []), undefined);
+    // The Installed section as drawn: a development build titled Alpha comes before an install titled GitHub.
+    const github = parseManifest("github", { name: "github", title: "GitHub", commands: [{ name: "a", title: "A" }] })!;
+    const drawn = installedSection([github], [{ name: "alpha-dev", title: "Alpha", description: "" }], []);
+    assert.equal(topRowId([], drawn.map(installedSectionRowId), ["y"]), "development:alpha-dev");
 });
 
 test("a failed row's mark: its tag and Try Again and Show Error, a busy tag winning while one runs", () => {
