@@ -59,6 +59,11 @@ public enum UnitConversion {
         var name: UnitName
     }
 
+    /// Whether `text` is a spelling of a unit, any case: such a word is never a town (`TimeZoneConversion.place`).
+    static func knows(_ text: String) -> Bool {
+        unit(text.lowercased()) != nil
+    }
+
     private static func unit(_ text: String) -> Known? {
         var key = text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "°", with: "")
         key = key.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)

@@ -59,6 +59,12 @@ public enum CurrencyConversion {
         }
     }
 
+    /// Whether `text` names a currency: an ECB code in any case, a symbol, or `kr` (in any case). Such a word is
+    /// never a town (`TimeZoneConversion.place`).
+    static func knows(_ text: String) -> Bool {
+        currency(text.lowercased(), locale: Locale(identifier: "en_DK")) != nil
+    }
+
     /// The code `text` names: an ECB code in any case, a symbol, or `kr`.
     static func currency(_ text: String, locale: Locale) -> String? {
         if let code = symbols[text] { return code }
