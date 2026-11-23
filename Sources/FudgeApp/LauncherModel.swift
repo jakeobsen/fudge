@@ -571,9 +571,15 @@ final class LauncherModel {
         }
     }
 
-    /// Reads `Contents/Resources/places/` once, at launch, off the main actor (about 0.2 s).
-    func loadPlaces() {
+    /// Reads `Contents/Resources/places/` once, at launch, off the main actor (about 0.2 s). A snapshot run reads
+    /// them before it goes on (`waiting`), since it takes its picture a second after the query, which a load at low
+    /// priority can miss.
+    func loadPlaces(waiting: Bool = false) {
         guard let folder = Bundle.main.resourceURL?.appendingPathComponent("places", isDirectory: true) else {
+            return
+        }
+        if waiting {
+            places = PlaceTable.load(from: folder, now: Date())
             return
         }
         Task {
