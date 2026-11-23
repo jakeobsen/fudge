@@ -54,14 +54,16 @@ public enum KeyboardFocus {
 
 extension KeyboardFocus {
     /// A Form's fields changed (`editable`, in order; `first` is the one it starts in). The field to give the
-    /// keyboard to, or nil to leave it as it is: `first`, when no field of the form has it (`focused` is nil or gone).
+    /// keyboard to, or nil to leave it as it is: `first`, when no field of the form has it (`now`, where the keyboard
+    /// is, is nowhere or in a field that's gone). A time box counts as its field, so fields that come or go elsewhere
+    /// leave the keyboard in it; a time box that goes while its field stays is `formFieldAfterTimeBoxGone`'s.
     /// Never while an overlay holds the keyboard (`overlayOpen`: the action panel, an `Action.PickDate` picker in it,
     /// or a dropdown's panel): the overlay's closing hands it back (`formPlaceAfterOverlay`).
-    public static func formFieldAfterFieldsChange(focused: Int?, editable: [Int], first: Int?, overlayOpen: Bool)
+    public static func formFieldAfterFieldsChange(now: FormStop?, editable: [Int], first: Int?, overlayOpen: Bool)
         -> Int?
     {
         guard !overlayOpen else { return nil }
-        if let focused, editable.contains(focused) { return nil }
+        if let now, editable.contains(now.field) { return nil }
         return first
     }
 
