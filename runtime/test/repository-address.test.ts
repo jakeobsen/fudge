@@ -19,6 +19,7 @@ type AddressCase = {
     address: string;
     branch?: string;
     existing?: string[];
+    raycastListed?: boolean;
     repository?: Omit<ParsedRepository, "address">;
     refused?: AddressRefusal;
 };
@@ -46,19 +47,15 @@ function added(addresses: readonly string[]): ParsedRepository[] {
 test("each refusal has the fixtures' one sentence", async () => {
     const { sentences } = await fixture<AddressFixture>("repository-addresses.json");
     const folders = await fixture<{ sentences: Record<string, string> }>("repository-folders.json");
-    // Raycast's branch sentence is checked here until the fixture has it (SPEC-160 point 9).
-    assert.deepEqual(addressRefusalSentences, {
-        ...sentences,
-        ...folders.sentences,
-        raycastBranch: "Raycast's official repository always follows its default branch.",
-    });
+    assert.deepEqual(addressRefusalSentences, { ...sentences, ...folders.sentences });
 });
 
 test("an address gives the fixture's repository, or its refusal", async () => {
     const { addresses } = await fixture<AddressFixture>("repository-addresses.json");
     assert.ok(addresses.some((one) => one.repository) && addresses.some((one) => one.refused));
     for (const one of addresses) {
-        const result = parseRepositoryAddress(one.address, one.branch, added(one.existing ?? []));
+        const listed = one.raycastListed ?? true;
+        const result = parseRepositoryAddress(one.address, one.branch, added(one.existing ?? []), listed);
         const label = JSON.stringify(one);
         if (one.refused === undefined) {
             assert.deepEqual(result, { address: one.address.trim(), ...one.repository }, label);
