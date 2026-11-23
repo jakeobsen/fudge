@@ -319,6 +319,24 @@ Extensions run in a separate Node.js process, the extension host.
       The `CalculatorResult` shows as a card above the results: the question and answer, and a label under each.
       The card's answer has 10 significant digits, or, while it's written out (below 1e15), as many as its integer part has, up to 15, so it never rounds the integer part; a copied answer has up to 15, so floating-point noise (`0.1+0.2`) rounds away.
       A zone's label is its familiar abbreviation where `TimeZoneConversion.named` has one (`Copenhagen, CET`), else Foundation's offset (`GMT+8`).
+      **Places** (SPEC-162): `TimeZoneConversion.place` looks a name up in this order: the abbreviations, offsets from UTC, the IANA zones' cities, `otherCities`, then from the `PlaceTable`, the countries, the towns' own and ASCII names, and the towns' alternate names.
+      So `jamaica` is the zone's city before the town in New York, and `armenia` is the country before the town in Colombia.
+      **Offsets** are `utc` or `gmt`, a sign (`+`, `-` or `−`) and `h`, `hh`, `h:mm`, `hh:mm` or `hhmm`, up to 14 hours, shown normalized (`gmt+0530` is `GMT+5:30`, `utc-0` is `UTC+0`) and with no abbreviation after them.
+      They're `TimeZone(secondsFromGMT:)`, never `Etc/GMT-2`, whose sign is the other way round.
+      A split at `to` or `in` still needs a clock time or the word `time`, so `copenhagen to new york` stays a search, unless both sides are abbreviations or offsets (`gmt+2 to utc`, `cet to pst`).
+      `<place> time` alone (`denmark time`, `utc time`) is the time there now, but never in a town, since `sunrise time` and `tea time` would each find one.
+      **A unit or currency word is never a country or a town** (`UnitConversion.knows`, `CurrencyConversion.knows`): time zones are tried first, so a town named like a unit would take `5 kgs to lbs` away; a test pairs every two spellings of each dimension, and every two currencies.
+      **State and province names** of the US, Canada and Australia (`TimeZoneConversion.states`) never answer from the table either: `arizona` would be Arizona, Honduras, and `georgia` the country, so they give no card unless an earlier table knows them (`new york`, `washington`).
+      **`PlaceTable`** (core) holds GeoNames' towns of 15,000 people or more and its country names, from `runtime/vendor/geonames/places.tsv` and `countries.tsv`, which `make app` copies into `Contents/Resources/places/`.
+      `LauncherModel.loadPlaces` reads them once at launch, off the main actor (about 0.2 s and 20 MB); until then, and in `swift run`, the calculator knows only its own tables, and their arrival evaluates the card again, keeping the selection.
+      Names are folded (`PlaceTable.fold`: no case, no diacritics), and a town's ASCII name is a name too, since `ø` isn't a diacritic (`hillerod`).
+      A town is shown by its own name; of towns sharing a name, the bigger one has it, and a town's own name always beats another town's alternate name.
+      Rows with a missing column, a population that isn't a number or a zone Foundation doesn't know are skipped.
+      **Countries** are worked out at load, never by the generator: two zones share a clock when their offset at the start of the year and their summer time changes that year are the same, and a country answers when one clock covers at least 90% of its towns' people, with that clock's most populous zone (`canada` and `united states` don't).
+      **The files** come from `scripts/geonames/make-places.py` (Python's standard library only, no Unicode tables, so the same download gives the same bytes anywhere), which `scripts/geonames/update.sh` runs on GeoNames' download.
+      Their folder's `SOURCE` lists each downloaded file's address, sha256 and dates, and its `LICENSE` is GeoNames' licence, credited in the README and the notices.
+      **The "Update GeoNames database" workflow** (`.github/workflows/update-geonames.yml`, on Linux) downloads them again and opens a pull request into `development` (`scripts/geonames/open-pull-request.sh`); only the repository's owner can start it, and no agent ever runs, dispatches or re-runs it.
+      Builds never go online for the list.
       The card is selected first, and ↵ copies the answer (`RootActions.calculatorSections`, plus Copy Question and Answer ⌘⇧C) and closes the panel with a HUD.
       `now` and the time zone are parameters, so tests fix them.
     - **Currency rates** come from the European Central Bank, and only while `currencyRates` is on in `settings.json` (off by default; the Calculator page's switch).
@@ -1426,6 +1444,7 @@ Extensions run in a separate Node.js process, the extension host.
   If CI is red, the pull request is closed and the branch deleted, nothing is published, and the fix goes into `development` and a later release.
 - **GitHub Actions run only on a release's pull request into `mainline` (CI) and on its merge (the release)**, because macOS runners cost money.
   Never run, re-run or dispatch a workflow by hand, and never add another trigger.
+  The one other workflow, "Update GeoNames database" (the calculator's places), runs on Linux and only when the repository's owner starts it.
   Pull requests into `development` run nothing: their builder and the reviewer run `make lint` and `make test` locally.
 - **The version is worked out, never written down.**
   `scripts/next-version.sh [<commit>]` prints the next version, with its `v`, from the conventional commit subjects since the highest `v1.2.3` tag in the commit's history, merges left out:
