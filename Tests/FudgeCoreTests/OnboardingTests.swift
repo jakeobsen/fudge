@@ -7,8 +7,8 @@ import Testing
     let onboarding = Onboarding()
     #expect(
         onboarding.pending == [
-            .welcome, .hotkey, .accessibility, .openAtLogin, .currency, .extensionStore, .signIn, .raycast,
-            .clipboardHistory, .snippetExpansion, .hyperkey, .updates, .done,
+            .welcome, .hotkey, .accessibility, .openAtLogin, .currency, .appleMaps, .extensionStore, .signIn,
+            .raycast, .clipboardHistory, .snippetExpansion, .hyperkey, .updates, .done,
         ])
     #expect(onboarding.pending == OnboardingStep.allCases, "the cases are the one step list")
     #expect(!onboarding.isComplete)
@@ -21,8 +21,8 @@ import Testing
     onboarding.answer(.hotkey)
     #expect(
         onboarding.pending == [
-            .accessibility, .openAtLogin, .currency, .extensionStore, .signIn, .raycast, .clipboardHistory,
-            .snippetExpansion, .hyperkey, .updates, .done,
+            .accessibility, .openAtLogin, .currency, .appleMaps, .extensionStore, .signIn, .raycast,
+            .clipboardHistory, .snippetExpansion, .hyperkey, .updates, .done,
         ], "Welcome isn't shown again")
     #expect(!onboarding.hasSomethingNew, "not completed yet, so nothing is new")
 }
@@ -46,8 +46,8 @@ import Testing
     onboarding.answer(.accessibility)
     #expect(
         onboarding.pending == [
-            .openAtLogin, .currency, .extensionStore, .signIn, .raycast, .clipboardHistory, .snippetExpansion,
-            .hyperkey, .updates, .done,
+            .openAtLogin, .currency, .appleMaps, .extensionStore, .signIn, .raycast, .clipboardHistory,
+            .snippetExpansion, .hyperkey, .updates, .done,
         ])
 }
 
@@ -56,8 +56,8 @@ import Testing
     let onboarding = Onboarding(answered: ["welcome", "hotkey", "accessibility", "openAtLogin", "done"])
     #expect(
         onboarding.pending == [
-            .currency, .extensionStore, .signIn, .raycast, .clipboardHistory, .snippetExpansion, .hyperkey, .updates,
-            .done,
+            .currency, .appleMaps, .extensionStore, .signIn, .raycast, .clipboardHistory, .snippetExpansion,
+            .hyperkey, .updates, .done,
         ])
     #expect(onboarding.hasSomethingNew)
     #expect(!onboarding.isComplete)
@@ -65,7 +65,8 @@ import Testing
     let noWelcome = Onboarding(answered: ["hotkey", "accessibility", "openAtLogin", "currency", "done"])
     #expect(
         noWelcome.pending == [
-            .extensionStore, .signIn, .raycast, .clipboardHistory, .snippetExpansion, .hyperkey, .updates, .done,
+            .appleMaps, .extensionStore, .signIn, .raycast, .clipboardHistory, .snippetExpansion, .hyperkey,
+            .updates, .done,
         ])
     let complete = Onboarding(answered: OnboardingStep.allCases.map(\.rawValue) + ["retiredStep"])
     #expect(complete.isComplete, "ids that aren't a step any more don't count")
@@ -175,8 +176,8 @@ import Testing
 @Test func theStepsAreInTheirAgreedOrder() {
     #expect(
         OnboardingStep.allCases == [
-            .welcome, .hotkey, .accessibility, .openAtLogin, .currency, .extensionStore, .signIn, .raycast,
-            .clipboardHistory, .snippetExpansion, .hyperkey, .updates, .done,
+            .welcome, .hotkey, .accessibility, .openAtLogin, .currency, .appleMaps, .extensionStore, .signIn,
+            .raycast, .clipboardHistory, .snippetExpansion, .hyperkey, .updates, .done,
         ])
     #expect(OnboardingStep.extensionStore.rawValue == "extensionStore", "the id kept in onboarding.json")
     #expect(OnboardingStep.signIn.rawValue == "signIn")
@@ -188,8 +189,10 @@ import Testing
         .welcome, .hotkey, .accessibility, .openAtLogin, .currency, .clipboardHistory, .updates, .done,
     ]
     var onboarding = Onboarding(answered: before.map(\.rawValue))
-    #expect(onboarding.pending == [.extensionStore, .signIn, .raycast, .snippetExpansion, .hyperkey, .done])
+    #expect(
+        onboarding.pending == [.appleMaps, .extensionStore, .signIn, .raycast, .snippetExpansion, .hyperkey, .done])
     #expect(onboarding.hasSomethingNew)
+    onboarding.answer(.appleMaps)
     onboarding.answer(.extensionStore)
     onboarding.answer(.signIn)
     onboarding.answer(.raycast)
@@ -243,8 +246,23 @@ import Testing
     }
     #expect(
         Set(OnboardingStep.optIns.values) == [
-            .currency, .extensionStore, .signIn, .raycast, .clipboardHistory, .snippetExpansion, .hyperkey, .updates,
+            .currency, .appleMaps, .extensionStore, .signIn, .raycast, .clipboardHistory, .snippetExpansion,
+            .hyperkey, .updates,
         ])
+}
+
+@Test func theAppleMapsStepComesRightAfterCurrencyAndShowsAloneToThoseWhoFinished() {
+    let steps = OnboardingStep.allCases
+    #expect(steps.firstIndex(of: .appleMaps) == steps.firstIndex(of: .currency).map { $0 + 1 })
+    #expect(OnboardingStep.appleMaps.rawValue == "appleMaps", "the id kept in onboarding.json")
+    #expect(OnboardingStep.optIns["appleMapsPlaces"] == .appleMaps)
+    // Someone who finished onboarding before it existed sees just this step, then Done.
+    let before = OnboardingStep.allCases.filter { $0 != .appleMaps }.map(\.rawValue)
+    var onboarding = Onboarding(answered: before)
+    #expect(onboarding.pending == [.appleMaps, .done])
+    #expect(onboarding.hasSomethingNew)
+    onboarding.answer(.appleMaps)
+    #expect(onboarding.isComplete)
 }
 
 @Test func turningOnTheStoreInOnboardingWritesWhatTheSwitchWritesAndEnablesIt() {
