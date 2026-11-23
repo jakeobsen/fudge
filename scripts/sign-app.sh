@@ -1,6 +1,7 @@
 #!/bin/bash
-# Signs Fudge.app as it is, inside-out: each executable in Contents/Helpers (the `fudge` tool, esbuild and Node.js),
-# then the app with App/Fudge.entitlements. Every signature has the hardened runtime, which notarizing needs (FUD-44).
+# Signs Fudge.app as it is, inside-out: each item in Contents/Helpers (the `fudge` tool, esbuild, Node.js and the
+# Fudge Links app), then the app with App/Fudge.entitlements. Every signature has the hardened runtime, which
+# notarizing needs (FUD-44).
 # A helper that needs entitlements of its own has them in App/Helpers/<its file name>.entitlements, so every signing,
 # a release's again with the Developer ID included, gives them; the others get none.
 #

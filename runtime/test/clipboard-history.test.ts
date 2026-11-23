@@ -10,12 +10,19 @@ import { createApiModule } from "../src/api/module.ts";
 import { Clipboard } from "../src/api/system.ts";
 import { connect, settle, type RpcRequest } from "../src/bridge.ts";
 import {
+    askForNotifications,
     clearClipboardHistory,
     clipboardImage,
+    commandLineToolsReady,
     copyClipboardEntry,
     createFudgeAppModule,
     deleteClipboardEntry,
+    extensionRepositories,
+    installEnded,
     listClipboardHistory,
+    logToFudge,
+    nextNotificationClick,
+    openDevelopmentSettings,
     pasteClipboardEntry,
     pinClipboardEntry,
     searchFiles,
@@ -73,6 +80,7 @@ beforeEach(() => {
             if (failure !== undefined) settle(request.id, null, failure);
             else if (request.method === "clipboardHistory.list") settle(request.id, history);
             else if (request.method === "alert.confirm") settle(request.id, confirms);
+            else if (request.method === "store.repositories") settle(request.id, [{ copyId: "raycast", on: true }]);
             else settle(request.id, null);
         });
     });
@@ -169,6 +177,13 @@ test("the fudge:app module is frozen and holds every call", () => {
     const module = createFudgeAppModule();
     assert.ok(Object.isFrozen(module));
     assert.deepEqual(module, {
+        logToFudge,
+        commandLineToolsReady,
+        openDevelopmentSettings,
+        installEnded,
+        askForNotifications,
+        nextNotificationClick,
+        extensionRepositories,
         searchFiles,
         listClipboardHistory,
         clipboardImage,
@@ -178,6 +193,13 @@ test("the fudge:app module is frozen and holds every call", () => {
         deleteClipboardEntry,
         clearClipboardHistory,
     });
+});
+
+test("extensionRepositories asks the app for the list and gives its answer as it is", async () => {
+    assert.deepEqual(await extensionRepositories(), [{ copyId: "raycast", on: true }]);
+    assert.deepEqual(methods(), ["store.repositories"]);
+    failures["store.repositories"] = "Only the Extension Store asks for the list of repositories";
+    await assert.rejects(extensionRepositories(), /Only the Extension Store asks for the list of repositories/);
 });
 
 // Raycast's `offset` (§5)

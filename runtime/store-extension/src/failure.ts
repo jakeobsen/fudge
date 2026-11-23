@@ -10,6 +10,7 @@ export const shownLines = 40;
 export const keptOutput = 200_000;
 
 export type FailureKind =
+    | "bundlerMissing"
     | "npmMissing"
     | "registryUnreachable"
     | "githubUnreachable"
@@ -18,8 +19,9 @@ export type FailureKind =
     | "refused"
     | "other";
 
-/** A failed step: what ran, how it ended and what it printed. A `refused` failure is the store's own words. */
-export type FailureDetails = { output: string; command?: string; code?: number; refused?: boolean };
+/** A failed step: what ran, how it ended and what it printed. A `refused` failure is the store's own words. `host` is
+ * the server of the repository the step's git talked to, when it isn't GitHub (SPEC-157 C.6). */
+export type FailureDetails = { output: string; command?: string; code?: number; refused?: boolean; host?: string };
 
 export type FailureCause = { kind: FailureKind; text: string };
 
@@ -75,8 +77,13 @@ const network =
  */
 const npmMissing =
     /Fudge's own Node\.js|couldn't run \S*\/Helpers\/node:|Cannot find module '[^'\n]*\/npm-cli\.js'|env: (?:npm|node): No such file or directory|\b(?:npm|node): command not found/;
+/**
+ * `fudge build` without its compile step, Fudge's own Node.js and bundling script (`BuildError.noBundler`). Both come
+ * with Fudge too, but npm isn't what's missing, so it has its own words. Checked before `npmMissing`, which it matches.
+ */
+const bundlerMissing = /compiling needs Fudge's own Node\.js and its bundling script/;
 const gitNetwork =
-    /Could not resolve (?:host|proxy)|Failed to connect to|Connection (?:timed out|refused|reset)|SSL certificate problem|unable to access 'https:\/\/github\.com|Proxy CONNECT aborted|The requested URL returned error: 40[37]|Operation timed out/i;
+    /Could not resolve (?:host|proxy)|Failed to connect to|Connection (?:timed out|refused|reset)|SSL certificate problem|unable to access 'https:\/\/|Proxy CONNECT aborted|The requested URL returned error: 40[37]|Operation timed out/i;
 
 /** The likely cause of a failure, in one plain sentence, from the output's own words and the exit code. */
 export function causeOf(failure: FailureDetails, proxy: ProxyFacts = { autoConfig: false }): FailureCause {
@@ -85,6 +92,14 @@ export function causeOf(failure: FailureDetails, proxy: ProxyFacts = { autoConfi
     const pac = proxy.autoConfig
         ? " Your Mac picks its proxy with an automatic configuration file, which npm and git can't read."
         : "";
+    if (bundlerMissing.test(output)) {
+        return {
+            kind: "bundlerMissing",
+            text:
+                "Fudge couldn't find a part it needs to build extensions. It comes with Fudge, so this copy of Fudge " +
+                "is damaged. Reinstall Fudge.",
+        };
+    }
     if (npmMissing.test(output) || (code === 127 && /\bnpm\b/.test(command + output))) {
         return {
             kind: "npmMissing",
@@ -106,10 +121,11 @@ export function causeOf(failure: FailureDetails, proxy: ProxyFacts = { autoConfi
     }
     const fromGit = /^git\b/.test(command) || /^fatal: /m.test(output);
     if (fromGit && gitNetwork.test(output)) {
+        // A list and an extension's source come from the row's own repository: GitHub, unless `host` names another.
+        const server = failure.host === undefined || failure.host === "github.com" ? "GitHub (github.com)" : failure.host;
         return {
             kind: "githubUnreachable",
-            // The store's list and every extension's source come from GitHub, so this fits a list download too.
-            text: "Fudge couldn't reach GitHub (github.com). A proxy or firewall may be blocking it." + pac,
+            text: `Fudge couldn't reach ${server}. A proxy or firewall may be blocking it.` + pac,
         };
     }
     const buildError = /\[ERROR\]\s*(.+)/.exec(output);

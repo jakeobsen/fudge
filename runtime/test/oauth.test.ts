@@ -14,6 +14,7 @@ import {
     codeChallenge,
     codeVerifier,
     explainRenderError,
+    randomState,
     signInOffMessage,
     signInOffNotice,
     storedTokens,
@@ -112,11 +113,12 @@ test("authorizationRequest points at the relay with OAuthService's parameters", 
         endpoint: "https://github.oauth.raycast.com/authorize",
         providerName: "GitHub",
         providerId: "github",
+        redirectMethod: "web",
     });
     assert.equal(request.redirectURI, redirectURI);
     assert.equal(request.clientId, "raycast-client");
     assert.equal(request.codeChallenge, codeChallenge(request.codeVerifier));
-    assert.match(request.state, /^[A-Za-z0-9_-]{22}$/);
+    assert.match(request.state, /^[A-Za-z0-9_-]{42}$/);
 
     const url = new URL(request.toURL());
     assert.equal(`${url.origin}${url.pathname}`, `${relay}/github/authorize`);
@@ -130,6 +132,100 @@ test("authorizationRequest points at the relay with OAuthService's parameters", 
         code_challenge_method: "S256",
         actor: "user",
     });
+});
+
+/** How raycast.com's return page reads a state (SPEC-132 spike §2 step 1): base64url-decoded JSON, then plain JSON. */
+function pageReadsState(state: string): Record<string, unknown> | null {
+    for (const text of [Buffer.from(state, "base64url").toString("utf8"), state]) {
+        try {
+            const value = JSON.parse(text);
+            if (value !== null && typeof value === "object" && !Array.isArray(value)) return value;
+        } catch {}
+    }
+    return null;
+}
+
+test("the state is base64url JSON holding only a random id, which raycast.com's page passes on", () => {
+    const states = new Set<string>();
+    for (let i = 0; i < 50; i++) {
+        const state = randomState();
+        assert.equal(state.length, 42);
+        assert.match(state, /^[A-Za-z0-9_-]+$/, "base64url, unpadded");
+        const read = pageReadsState(state);
+        assert.ok(read, "the page reads it as JSON");
+        assert.deepEqual(Object.keys(read), ["id"], "nothing but the id: no scheme, flavor or provider name");
+        assert.match(String(read.id), /^[A-Za-z0-9_-]{22}$/);
+        assert.equal(Buffer.from(String(read.id), "base64url").length, 16);
+        assert.equal(Buffer.from(JSON.stringify(read), "utf8").toString("base64url"), state, "passed on unchanged");
+        states.add(state);
+    }
+    assert.equal(states.size, 50);
+});
+
+test("a direct sign-in sends its redirect method and uses the app's authorize URL and Raycast's redirect", async () => {
+    const own = "https://auth.example.com/oauth/authorize";
+    const calls = fakeApp({
+        "oauth.prepare": ({ redirectMethod }) => ({
+            provider: null,
+            authorizeURL: own,
+            redirectURI:
+                redirectMethod === "appURI"
+                    ? "com.raycast:/oauth?package_name=Extension"
+                    : "https://raycast.com/redirect?packageName=Extension",
+        }),
+        "oauth.tokens.set": () => null,
+    });
+    const client = new OAuth.PKCEClient({ redirectMethod: OAuth.RedirectMethod.AppURI, providerName: "Example" });
+    const request = await client.authorizationRequest({ endpoint: own, clientId: "own-app", scope: "read" });
+    assert.deepEqual(calls[0].params, {
+        endpoint: own,
+        providerName: "Example",
+        providerId: "example",
+        redirectMethod: "appURI",
+    });
+    assert.equal(request.redirectURI, "com.raycast:/oauth?package_name=Extension");
+    const url = new URL(request.toURL());
+    assert.equal(`${url.origin}${url.pathname}`, own);
+    assert.equal(url.searchParams.get("redirect_uri"), "com.raycast:/oauth?package_name=Extension");
+    assert.equal(url.searchParams.get("state"), request.state);
+    // A direct sign-in's tokens carry no relay provider.
+    await client.setTokens({ accessToken: "a" });
+    assert.equal((calls[1].params as any).tokens.relayProvider, undefined);
+});
+
+test("on the direct path the extension's redirect_uri wins and becomes the request's; on the relay path it never does", async () => {
+    const override = "https://raycast.com/redirect/extension";
+    fakeApp({
+        "oauth.prepare": ({ endpoint }) =>
+            endpoint === "https://github.oauth.raycast.com/authorize"
+                ? { provider: "github", authorizeURL: `${relay}/github/authorize`, redirectURI }
+                : {
+                      provider: null,
+                      authorizeURL: endpoint,
+                      redirectURI: "https://raycast.com/redirect?packageName=Extension",
+                  },
+    });
+    const client = new OAuth.PKCEClient({ redirectMethod: OAuth.RedirectMethod.Web, providerName: "Example" });
+    const direct = await client.authorizationRequest({
+        endpoint: "https://auth.example.com/authorize",
+        clientId: "own-app",
+        extraParameters: { redirect_uri: override, prompt: "consent" },
+    });
+    assert.equal(direct.redirectURI, override);
+    const directURL = new URL(direct.toURL());
+    assert.equal(directURL.searchParams.get("redirect_uri"), override);
+    assert.equal(directURL.searchParams.getAll("redirect_uri").length, 1);
+    assert.equal(directURL.searchParams.get("prompt"), "consent");
+
+    const relayed = await client.authorizationRequest({
+        endpoint: "https://github.oauth.raycast.com/authorize",
+        clientId: "x",
+        extraParameters: { redirect_uri: override },
+    });
+    assert.equal(relayed.redirectURI, redirectURI);
+    const relayedURL = new URL(relayed.toURL());
+    assert.equal(relayedURL.searchParams.get("redirect_uri"), redirectURI);
+    assert.equal(relayedURL.searchParams.getAll("redirect_uri").length, 1);
 });
 
 /** The app's refusal while sign-in is off: its message, with the `signInOff` notice (SPEC-095). */

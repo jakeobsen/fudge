@@ -196,7 +196,7 @@ private func sample(title: String = "Add", isLoading: Bool = false) -> UINode {
 
     var settings = FudgeSettings(commands: ["b/two": .init(enabled: false), "a/one": .init(enabled: true)])
     #expect(store.shown(installed: installed, settings: settings) == ["a/one", "a/three"], "a disabled command")
-    settings.extensions["a"] = .init(enabled: false)
+    settings.extensions[.extension(ExtensionID(stored: "a")!)] = .init(enabled: false)
     #expect(store.shown(installed: installed, settings: settings) == [], "a disabled extension")
     #expect(store.active == ["a/one", "b/two", "a/three", "gone/x"], "all stay active, so they come back")
     settings = FudgeSettings()
@@ -207,7 +207,7 @@ private func sample(title: String = "Add", isLoading: Bool = false) -> UINode {
 @Test func isEnabledReadsACommandID() {
     let settings = FudgeSettings(
         commands: ["tools/off": .init(enabled: false), "tools/sub/x": .init(enabled: false)],
-        extensions: ["quiet": .init(enabled: false)])
+        extensions: [.extension(ExtensionID(stored: "quiet")!): .init(enabled: false)])
     #expect(settings.isEnabled(commandID: "tools/on"))
     #expect(!settings.isEnabled(commandID: "tools/off"))
     #expect(!settings.isEnabled(commandID: "quiet/anything"))

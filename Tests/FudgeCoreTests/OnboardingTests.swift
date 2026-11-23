@@ -7,8 +7,8 @@ import Testing
     let onboarding = Onboarding()
     #expect(
         onboarding.pending == [
-            .welcome, .hotkey, .accessibility, .openAtLogin, .currency, .extensionStore, .signIn, .clipboardHistory,
-            .snippetExpansion, .hyperkey, .updates, .done,
+            .welcome, .hotkey, .accessibility, .openAtLogin, .currency, .appleMaps, .extensionStore, .signIn,
+            .raycast, .clipboardHistory, .snippetExpansion, .hyperkey, .updates, .done,
         ])
     #expect(onboarding.pending == OnboardingStep.allCases, "the cases are the one step list")
     #expect(!onboarding.isComplete)
@@ -21,9 +21,8 @@ import Testing
     onboarding.answer(.hotkey)
     #expect(
         onboarding.pending == [
-            .accessibility, .openAtLogin, .currency, .extensionStore, .signIn, .clipboardHistory, .snippetExpansion,
-            .hyperkey,
-            .updates, .done,
+            .accessibility, .openAtLogin, .currency, .appleMaps, .extensionStore, .signIn, .raycast,
+            .clipboardHistory, .snippetExpansion, .hyperkey, .updates, .done,
         ], "Welcome isn't shown again")
     #expect(!onboarding.hasSomethingNew, "not completed yet, so nothing is new")
 }
@@ -47,8 +46,8 @@ import Testing
     onboarding.answer(.accessibility)
     #expect(
         onboarding.pending == [
-            .openAtLogin, .currency, .extensionStore, .signIn, .clipboardHistory, .snippetExpansion, .hyperkey,
-            .updates, .done,
+            .openAtLogin, .currency, .appleMaps, .extensionStore, .signIn, .raycast, .clipboardHistory,
+            .snippetExpansion, .hyperkey, .updates, .done,
         ])
 }
 
@@ -57,7 +56,8 @@ import Testing
     let onboarding = Onboarding(answered: ["welcome", "hotkey", "accessibility", "openAtLogin", "done"])
     #expect(
         onboarding.pending == [
-            .currency, .extensionStore, .signIn, .clipboardHistory, .snippetExpansion, .hyperkey, .updates, .done,
+            .currency, .appleMaps, .extensionStore, .signIn, .raycast, .clipboardHistory, .snippetExpansion,
+            .hyperkey, .updates, .done,
         ])
     #expect(onboarding.hasSomethingNew)
     #expect(!onboarding.isComplete)
@@ -65,7 +65,8 @@ import Testing
     let noWelcome = Onboarding(answered: ["hotkey", "accessibility", "openAtLogin", "currency", "done"])
     #expect(
         noWelcome.pending == [
-            .extensionStore, .signIn, .clipboardHistory, .snippetExpansion, .hyperkey, .updates, .done,
+            .appleMaps, .extensionStore, .signIn, .raycast, .clipboardHistory, .snippetExpansion, .hyperkey,
+            .updates, .done,
         ])
     let complete = Onboarding(answered: OnboardingStep.allCases.map(\.rawValue) + ["retiredStep"])
     #expect(complete.isComplete, "ids that aren't a step any more don't count")
@@ -140,7 +141,9 @@ import Testing
 
 @Test func clipboardHistoryComesAfterSignInAndExistingUsersSeeJustIt() {
     let steps = OnboardingStep.allCases
-    #expect(steps.firstIndex(of: .clipboardHistory) == steps.firstIndex(of: .signIn)! + 1)
+    // SPEC-132's Raycast step (D-88) sits between them, right after Sign-in.
+    #expect(steps.firstIndex(of: .raycast) == steps.firstIndex(of: .signIn)! + 1)
+    #expect(steps.firstIndex(of: .clipboardHistory) == steps.firstIndex(of: .raycast)! + 1)
     #expect(steps.last == .done)
 
     // Someone who finished onboarding before the step existed: just it, then Done, as something new.
@@ -173,8 +176,8 @@ import Testing
 @Test func theStepsAreInTheirAgreedOrder() {
     #expect(
         OnboardingStep.allCases == [
-            .welcome, .hotkey, .accessibility, .openAtLogin, .currency, .extensionStore, .signIn, .clipboardHistory,
-            .snippetExpansion, .hyperkey, .updates, .done,
+            .welcome, .hotkey, .accessibility, .openAtLogin, .currency, .appleMaps, .extensionStore, .signIn,
+            .raycast, .clipboardHistory, .snippetExpansion, .hyperkey, .updates, .done,
         ])
     #expect(OnboardingStep.extensionStore.rawValue == "extensionStore", "the id kept in onboarding.json")
     #expect(OnboardingStep.signIn.rawValue == "signIn")
@@ -186,10 +189,13 @@ import Testing
         .welcome, .hotkey, .accessibility, .openAtLogin, .currency, .clipboardHistory, .updates, .done,
     ]
     var onboarding = Onboarding(answered: before.map(\.rawValue))
-    #expect(onboarding.pending == [.extensionStore, .signIn, .snippetExpansion, .hyperkey, .done])
+    #expect(
+        onboarding.pending == [.appleMaps, .extensionStore, .signIn, .raycast, .snippetExpansion, .hyperkey, .done])
     #expect(onboarding.hasSomethingNew)
+    onboarding.answer(.appleMaps)
     onboarding.answer(.extensionStore)
     onboarding.answer(.signIn)
+    onboarding.answer(.raycast)
     onboarding.answer(.snippetExpansion)
     onboarding.answer(.hyperkey)
     #expect(onboarding.isComplete, "Done was clicked before")
@@ -205,17 +211,24 @@ import Testing
         "numberFormat": "a format, not a feature",
         "extensionStoreConsentAt": "the store's consent date, written with it",
         "signInServerConsentAt": "the sign-in server's consent date, written with it",
+        "ownAppSignInConsentAt": "the consent date for extensions with their own sign-in, written with it",
         "clipboardHistoryConsentAt": "clipboard history's consent date, written with it",
         "clipboardHistoryKeepDays": "a detail of clipboard history",
         "clipboardHistoryIgnoredApps": "a detail of clipboard history",
         "resetAfter": "a choice that's on by default",
         "showOnScreen": "a choice, not a feature",
         "escapeBehavior": "a choice, not a feature",
+        "logLevel": "a plain setting, on by default at Errors (SPEC-124)",
         "hyperkeyQuickPress": "a detail of Hyperkey, which has its own step",
+        "notifyInstallFinished": "on by default; macOS asks at the first confirmed install (SPEC-156 G)",
+        "notifyInstallFailed": "on by default; macOS asks at the first confirmed install (SPEC-156 G)",
+        "extensionRepositories": "repositories the user adds on the Extension Store's page, none until then",
+        "raycastRepositoryState": "Raycast's official repository in the Extension Store, on with the store itself",
         "colorFormat": "the Color Picker's format, not a feature",
         "calendarHidden": "which calendars My Schedule shows; it asks for access when first run",
         "calendarDaysAhead": "a detail of My Schedule",
         "offByDefault": "worked out from the installed extensions at each load, never saved (SPEC-109)",
+        "commandLineTools": "a folder, found by itself until chosen; asked about only when an extension needs it",
     ]
     let defaults = FudgeSettings()
     let properties = Mirror(reflecting: defaults).children.compactMap { child in child.label.map { ($0, child.value) } }
@@ -233,8 +246,23 @@ import Testing
     }
     #expect(
         Set(OnboardingStep.optIns.values) == [
-            .currency, .extensionStore, .signIn, .clipboardHistory, .snippetExpansion, .hyperkey, .updates,
+            .currency, .appleMaps, .extensionStore, .signIn, .raycast, .clipboardHistory, .snippetExpansion,
+            .hyperkey, .updates,
         ])
+}
+
+@Test func theAppleMapsStepComesRightAfterCurrencyAndShowsAloneToThoseWhoFinished() {
+    let steps = OnboardingStep.allCases
+    #expect(steps.firstIndex(of: .appleMaps) == steps.firstIndex(of: .currency).map { $0 + 1 })
+    #expect(OnboardingStep.appleMaps.rawValue == "appleMaps", "the id kept in onboarding.json")
+    #expect(OnboardingStep.optIns["appleMapsPlaces"] == .appleMaps)
+    // Someone who finished onboarding before it existed sees just this step, then Done.
+    let before = OnboardingStep.allCases.filter { $0 != .appleMaps }.map(\.rawValue)
+    var onboarding = Onboarding(answered: before)
+    #expect(onboarding.pending == [.appleMaps, .done])
+    #expect(onboarding.hasSomethingNew)
+    onboarding.answer(.appleMaps)
+    #expect(onboarding.isComplete)
 }
 
 @Test func turningOnTheStoreInOnboardingWritesWhatTheSwitchWritesAndEnablesIt() {
@@ -248,15 +276,15 @@ import Testing
     #expect(onboarded.extensionStoreConsentAt == switched.extensionStoreConsentAt)
     #expect(onboarded.extensionStoreConsentAt == ISO8601DateFormatter().string(from: now))
     // The switch alone never enables it on the Commands page; onboarding's Turn On does, so it's in root search.
-    #expect(!switched.isEnabled(extension: ExtensionStore.extensionName))
-    #expect(onboarded.isEnabled(extension: ExtensionStore.extensionName))
+    #expect(!switched.isEnabled(owner: .extension(ExtensionStore.id)))
+    #expect(onboarded.isEnabled(owner: .extension(ExtensionStore.id)))
     // Not Now writes nothing: the defaults stay off.
-    #expect(!FudgeSettings().isExtensionStoreOn && !FudgeSettings().isEnabled(extension: ExtensionStore.extensionName))
+    #expect(!FudgeSettings().isExtensionStoreOn && !FudgeSettings().isEnabled(owner: .extension(ExtensionStore.id)))
 }
 
 @Test func theStepsShowTheirSettingsOwnWords() {
     // One string each, shared with the store's consent sheet and the Sign-in page.
-    #expect(SignInServer.explanation == "Extensions sign in to services like GitHub and Linear through this server.")
+    #expect(SignInServer.explanation == "Extensions sign in to services through this server.")
     #expect(ExtensionStore.Consent.message.hasPrefix("This adds the Extension Store to Fudge."))
     #expect(ExtensionStore.Consent.note.contains(ExtensionStore.Consent.issueLinkText))
     #expect(FudgeSettings().signIn == .off, "Sign-in starts Off, which ↵ keeps")

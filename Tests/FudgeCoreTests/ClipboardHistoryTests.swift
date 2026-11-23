@@ -356,8 +356,7 @@ extension JSONValue {
     #expect(installed.map(\.manifest.name) == [ClipboardHistory.extensionName])
     #expect(InstalledExtension.settingsPages(of: installed).map(\.manifest.name) == [ClipboardHistory.extensionName])
     #expect(
-        FudgeSettings().isEnabled(extension: ClipboardHistory.extensionName), "the command is there; the switch decides"
-    )
+        FudgeSettings().isEnabled(owner: .extension(ClipboardHistory.id)), "the command is there; the switch decides")
 }
 
 @Test func anOffsetReadsOnlyRaycastsSixAndNeverTraps() {
@@ -382,15 +381,15 @@ extension JSONValue {
     #expect(ClipboardOffset(params: .null) == .current)
 }
 
-@Test func onlyClipboardHistoryMayCallItsCalls() {
-    #expect(ClipboardHistory.mayCall("fudge-clipboard-history"))
-    for caller in [
-        "fudge-file-search", "fudge-extension-store", "clipboard-history", "fudge-clipboard-history2", "", nil,
-    ]
-        as [String?]
-    {
-        #expect(!ClipboardHistory.mayCall(caller), "\(caller ?? "nil")")
+@Test func onlyClipboardHistoryMayCallItsCalls() throws {
+    let own = try #require(ExtensionID(stored: "fudge-clipboard-history"))
+    #expect(ClipboardHistory.mayCall(own))
+    for caller in ["fudge-file-search", "fudge-extension-store", "clipboard-history", "fudge-clipboard-history2"] {
+        let id = try #require(ExtensionID(stored: caller))
+        #expect(!ClipboardHistory.mayCall(id), "\(caller)")
     }
+    #expect(!ClipboardHistory.mayCall(nil))
+    #expect(ExtensionID(stored: "") == nil, "an empty name is no caller at all")
 }
 
 /// A Keychain that fails to read, as a locked one does.

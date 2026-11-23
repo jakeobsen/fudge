@@ -3,6 +3,7 @@
 // them; a toast's actions come back as `toastAction` messages (see worker.ts).
 
 import { callApp } from "../bridge.ts";
+import { logLine } from "../log.ts";
 import { RAYCAST_ENUMS } from "./raycast-enums.generated.ts";
 
 const ToastStyle = Object.freeze({ ...RAYCAST_ENUMS.ToastStyle_2 });
@@ -29,6 +30,7 @@ export class Toast {
     readonly #id = nextToastId++;
     #options: ToastOptions;
     #shown = false;
+    #failureLogged = false;
 
     constructor(options: ToastOptions) {
         this.#options = { style: ToastStyle.Success, ...options };
@@ -68,6 +70,7 @@ export class Toast {
     async show(): Promise<void> {
         this.#shown = true;
         toasts.set(this.#id, this);
+        this.#logFailure();
         await callApp("toast.show", this.#payload());
     }
 
@@ -86,7 +89,25 @@ export class Toast {
 
     #change(changes: Partial<ToastOptions>): void {
         this.#options = { ...this.#options, ...changes };
-        if (this.#shown) void callApp("toast.show", this.#payload()).catch(() => {});
+        if (changes.style !== undefined && changes.style !== ToastStyle.Failure) this.#failureLogged = false;
+        if (!this.#shown) return;
+        this.#logFailure();
+        void callApp("toast.show", this.#payload()).catch(() => {});
+    }
+
+    /**
+     * A shown toast that is, or becomes, a failure goes into the command's log file once, with its title and message
+     * (SPEC-124). Written after the current code has run, since an animated toast usually gets its failure title and
+     * message right after its style.
+     */
+    #logFailure(): void {
+        if (this.style !== ToastStyle.Failure || this.#failureLogged) return;
+        this.#failureLogged = true;
+        queueMicrotask(() => {
+            if (this.style !== ToastStyle.Failure) return;
+            const message = this.#options.message ? `\n${this.#options.message}` : "";
+            logLine("error", `Failure toast: ${this.#options.title}${message}`);
+        });
     }
 
     #payload() {

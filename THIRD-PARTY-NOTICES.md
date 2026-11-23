@@ -3021,7 +3021,7 @@ The externally maintained libraries used by Node.js are:
 
 ## esbuild 0.28.2
 
-The `esbuild` program in `Contents/Helpers`, which `fudge build` compiles extensions with. License: MIT.
+The `esbuild` program in `Contents/Helpers`, which `fudge build` compiles extensions with, and esbuild's JavaScript API, bundled into `fudge build`'s compile step (`runtime/bundle-extension.cjs`), which drives it. License: MIT.
 
 ```text
 MIT License
@@ -3091,6 +3091,18 @@ Except as contained in this notice, the name of a copyright holder shall
 not be used in advertising or otherwise to promote the sale, use or other
 dealings in these Data Files or Software without prior written
 authorization of the copyright holder.
+```
+
+## GeoNames town and country names (cities15000)
+
+The calculator's towns and countries (`Contents/Resources/places`), made from GeoNames' cities15000 and countryInfo files. License: CC-BY-4.0.
+
+```text
+This work is licensed under a Creative Commons Attribution 4.0 License,
+see https://creativecommons.org/licenses/by/4.0/
+The Data is provided "as is" without warranty or any representation of accuracy, timeliness or completeness.
+
+Fudge keeps only each town's names, country, population and time zone.
 ```
 
 ## Raycast API type definitions (@raycast/api 2.13.1)

@@ -106,18 +106,19 @@ public struct LaunchEnvironment: Sendable, Equatable, Encodable {
         paths: FudgePaths,
         appearance: String
     ) -> LaunchEnvironment {
-        let name = installed.manifest.name
-        let support = paths.supportDirectory(forExtension: name)
+        // The extension sees its own manifest name, as in Raycast; its folders are its id's, so two installs of one
+        // name never share them.
+        let support = paths.supportDirectory(forExtension: installed.id)
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
         return LaunchEnvironment(
-            extensionName: name,
+            extensionName: installed.manifest.name,
             commandName: command.name,
             commandMode: command.mode,
             assetsPath: installed.assetsDirectory.path,
             manifestPath: installed.directory.appendingPathComponent("package.json").path,
             supportPath: support.path,
-            cachePath: paths.cacheDirectory(forExtension: name).path,
-            localStoragePath: paths.localStorageFile(forExtension: name).path,
+            cachePath: paths.cacheDirectory(forExtension: installed.id).path,
+            localStoragePath: paths.localStorageFile(forExtension: installed.id).path,
             ownerOrAuthorName: installed.manifest.ownerOrAuthorName,
             appearance: appearance,
             isDevelopment: false
@@ -134,7 +135,10 @@ public enum AppMessage: Sendable, Equatable, Encodable {
         mode: String,
         launchProps: LaunchProps,
         preferences: [String: JSONValue] = [:],
-        environment: LaunchEnvironment? = nil
+        environment: LaunchEnvironment? = nil,
+        /// The extension's id, beside `environment` and never in it: the host names the command's log lines by it,
+        /// and the extension itself isn't given it.
+        extensionId: ExtensionID? = nil
     )
     case event(session: String, node: Int, path: [String], args: [JSONValue])
     /// Asks for these List or Grid items' `actions` and `detail`, which renders send only for some (`ItemSlots`).
@@ -146,10 +150,13 @@ public enum AppMessage: Sendable, Equatable, Encodable {
     case rpcResult(session: String, id: Int, result: JSONValue?, error: String?, notice: String? = nil)
     /// The user picked a toast's primary or secondary action.
     case toastAction(session: String, toast: Int, action: String)
+    /// The Log level, for every running command and every one launched after (SPEC-124).
+    case logLevel(LogLevel)
 
     enum Keys: String, CodingKey {
-        case type, id, session, entry, mode, launchProps, preferences, environment, node, path, args, result, error
-        case toast, action, nodes, notice
+        case type, id, session, entry, mode, launchProps, preferences, environment, extensionId, node, path, args,
+            result, error
+        case toast, action, nodes, notice, level
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -158,7 +165,8 @@ public enum AppMessage: Sendable, Equatable, Encodable {
         case .ping(let id):
             try container.encode("ping", forKey: .type)
             try container.encode(id, forKey: .id)
-        case .launch(let session, let entry, let mode, let launchProps, let preferences, let environment):
+        case .launch(
+            let session, let entry, let mode, let launchProps, let preferences, let environment, let extensionId):
             try container.encode("launch", forKey: .type)
             try container.encode(session, forKey: .session)
             try container.encode(entry, forKey: .entry)
@@ -166,6 +174,7 @@ public enum AppMessage: Sendable, Equatable, Encodable {
             try container.encode(launchProps, forKey: .launchProps)
             try container.encode(preferences, forKey: .preferences)
             try container.encodeIfPresent(environment, forKey: .environment)
+            try container.encodeIfPresent(extensionId, forKey: .extensionId)
         case .event(let session, let node, let path, let args):
             try container.encode("event", forKey: .type)
             try container.encode(session, forKey: .session)
@@ -194,7 +203,25 @@ public enum AppMessage: Sendable, Equatable, Encodable {
             try container.encode(session, forKey: .session)
             try container.encode(toast, forKey: .toast)
             try container.encode(action, forKey: .action)
+        case .logLevel(let level):
+            try container.encode("logLevel", forKey: .type)
+            try container.encode(level.rawValue, forKey: .level)
         }
+    }
+}
+
+/// What the host adds to a command's log line, from its launch (SPEC-124): the extension's id, from the launch
+/// message's `extensionId`, and the command's name.
+public struct LogSource: Sendable, Equatable {
+    /// Nil when the line names no extension, or one the id rule refuses, which names no file.
+    public let extensionID: ExtensionID?
+    public let command: String?
+
+    /// Nil when the line names neither.
+    public init?(extension key: String?, command: String?) {
+        if key == nil, command == nil { return nil }
+        self.extensionID = key.flatMap(ExtensionID.init(stored:))
+        self.command = command
     }
 }
 
@@ -209,7 +236,8 @@ public enum HostMessage: Sendable, Equatable, Decodable {
     /// `notice`: the error is a refusal on purpose (the `rpcResult` notice it came from), shown as a notice with no
     /// trace (`SignInNotice`), and `message` is the refusal's own.
     case error(session: String, message: String, stack: String?, fatal: Bool, notice: String? = nil)
-    case log(session: String, level: String, message: String)
+    /// A line for the command's log file, with the extension's and the command's names the host adds (SPEC-124).
+    case log(session: String, level: String, message: String, source: LogSource? = nil)
     /// The worker's answer to an `event`, once its handler has returned or its promise has settled.
     case eventSettled(session: String)
     case exit(session: String, reason: String)
@@ -218,6 +246,8 @@ public enum HostMessage: Sendable, Equatable, Decodable {
 
     enum Keys: String, CodingKey {
         case type, id, session, view, depth, method, params, message, stack, fatal, level, reason, items, notice
+        case extensionName = "extension"
+        case command
     }
 
     public init(from decoder: Decoder) throws {
@@ -258,7 +288,10 @@ public enum HostMessage: Sendable, Equatable, Decodable {
             self = .log(
                 session: try container.decode(String.self, forKey: .session),
                 level: try container.decode(String.self, forKey: .level),
-                message: try container.decode(String.self, forKey: .message)
+                message: try container.decode(String.self, forKey: .message),
+                source: LogSource(
+                    extension: try container.decodeIfPresent(String.self, forKey: .extensionName),
+                    command: try container.decodeIfPresent(String.self, forKey: .command))
             )
         case "eventSettled":
             self = .eventSettled(session: try container.decode(String.self, forKey: .session))
@@ -276,7 +309,8 @@ public enum HostMessage: Sendable, Equatable, Decodable {
     public var session: String? {
         switch self {
         case .render(let session, _, _), .slots(let session, _), .rpc(let session, _, _, _),
-            .error(let session, _, _, _, _), .log(let session, _, _), .eventSettled(let session), .exit(let session, _):
+            .error(let session, _, _, _, _), .log(let session, _, _, _), .eventSettled(let session),
+            .exit(let session, _):
             session
         case .pong, .protocolError, .unknown:
             nil
@@ -337,10 +371,12 @@ extension HostMessage {
             else { return nil }
             self = .error(session: session, message: message, stack: stack, fatal: fatal, notice: notice)
         case "log":
-            guard let session = string("session"), let level = string("level"), let message = string("message") else {
-                return nil
-            }
-            self = .log(session: session, level: level, message: message)
+            guard let session = string("session"), let level = string("level"), let message = string("message"),
+                let extensionKey = optionalString("extension"), let command = optionalString("command")
+            else { return nil }
+            self = .log(
+                session: session, level: level, message: message,
+                source: LogSource(extension: extensionKey, command: command))
         case "eventSettled":
             guard let session = string("session") else { return nil }
             self = .eventSettled(session: session)
@@ -384,9 +420,9 @@ extension AppMessage {
     /// The session the message is for, if any.
     public var session: String? {
         switch self {
-        case .ping:
+        case .ping, .logLevel:
             nil
-        case .launch(let session, _, _, _, _, _), .event(let session, _, _, _), .slots(let session, _),
+        case .launch(let session, _, _, _, _, _, _), .event(let session, _, _, _), .slots(let session, _),
             .pop(let session), .unload(let session), .rpcResult(let session, _, _, _, _),
             .toastAction(let session, _, _):
             session

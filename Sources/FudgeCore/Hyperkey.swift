@@ -42,18 +42,23 @@ public protocol KeyMappingSystem: Sendable {
     func readModifierKeys() throws -> String
     /// `hidutil property --set <argument>`.
     func writeMapping(_ argument: String) throws
-    /// Whether Fudge's entry took the place of a Caps Lock → Caps Lock one, which removing it puts back. Kept across
-    /// launches (the app's is `hyperkey.json` in the support folder), so the cleanup after a crash puts it back too.
-    func replacedCapsLock() -> Bool
-    func setReplacedCapsLock(_ replaced: Bool) throws
+    /// How many Caps Lock → Caps Lock entries Fudge's entry took the place of (0 for none), which removing it puts
+    /// back. Kept across launches (the app's is `hyperkey.json` in the support folder, `HyperkeyMapping.state`), so the
+    /// cleanup after a crash puts them back too.
+    func replacedCapsLock() -> Int
+    /// Remembers `count` entries replaced; 0 forgets.
+    func setReplacedCapsLock(_ count: Int) throws
 }
 
 /// Fudge's entry in `UserKeyMapping`, Caps Lock → F18, added and removed without touching the others (SPEC-093).
 public enum HyperkeyMapping {
     public static let entry = KeyRemap(source: Hyperkey.capsLockUsage, destination: Hyperkey.f18Usage)
     /// Caps Lock → Caps Lock, which some tools write. It isn't a mapping, but two entries for Caps Lock would be, so
-    /// Fudge's takes its place, and removing Fudge's puts it back where it was (SPEC-118 §1).
+    /// Fudge's takes the first one's place and the others go, and removing Fudge's puts them all back where it was
+    /// (SPEC-118 §1, SPEC-126 §4). They're all alike, so they go back together.
     public static let capsLockItself = KeyRemap(source: Hyperkey.capsLockUsage, destination: Hyperkey.capsLockUsage)
+    /// The most replaced entries `state` reads back; a bigger count is a file Fudge didn't write.
+    static let maxReplaced = 100
 
     public enum Problem: Error, Equatable {
         /// Caps Lock is already mapped to another key, by the user or another app: Fudge doesn't take it.
@@ -91,10 +96,11 @@ public enum HyperkeyMapping {
         }
         let merged = try adding(to: current, keyboards: keyboards)
         guard merged != current else { return }
-        // Remembered before the write, so a crash right after it still puts the user's entry back.
-        if replacesCapsLockItself(current) {
+        // Remembered before the write, so a crash right after it still puts the user's entries back.
+        let replacing = replacedCapsLockItself(current)
+        if replacing > 0 {
             do {
-                try system.setReplacedCapsLock(true)
+                try system.setReplacedCapsLock(replacing)
             } catch {
                 throw .failed("Fudge couldn't remember the Caps Lock → Caps Lock entry it would replace")
             }
@@ -102,19 +108,37 @@ public enum HyperkeyMapping {
         try write(merged, to: system)
     }
 
-    /// Removes Fudge's entry only, keeping every other one, and puts back a Caps Lock → Caps Lock entry it took the
+    /// Removes Fudge's entry only, keeping every other one, and puts back the Caps Lock → Caps Lock entries it took the
     /// place of. What it remembered is forgotten once the mapping no longer holds Fudge's entry.
     public static func remove(_ system: any KeyMappingSystem) throws(Problem) {
         let current = try read(system)
         let restoring = system.replacedCapsLock()
         let kept = removing(from: current, restoringCapsLockItself: restoring)
         if kept != current { try write(kept, to: system) }
-        if restoring { try? system.setReplacedCapsLock(false) }
+        if restoring > 0 { try? system.setReplacedCapsLock(0) }
     }
 
-    /// Whether adding Fudge's entry to `current` takes a Caps Lock → Caps Lock entry's place.
-    static func replacesCapsLockItself(_ current: [KeyRemap]) -> Bool {
-        !current.contains(entry) && current.contains(capsLockItself)
+    /// How many Caps Lock → Caps Lock entries adding Fudge's entry to `current` replaces.
+    static func replacedCapsLockItself(_ current: [KeyRemap]) -> Int {
+        current.contains(entry) ? 0 : current.filter { $0 == capsLockItself }.count
+    }
+
+    /// The count `hyperkey.json` holds (`{"replacedCapsLock": 2}`), or 0. A file from before SPEC-126 says
+    /// `{"replacedCapsLock": true}`, one entry; anything else, or a count past `maxReplaced`, is none.
+    public static func replacedCount(inState data: Data?) -> Int {
+        guard let data, let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let value = object["replacedCapsLock"] as? NSNumber
+        else { return 0 }
+        if CFGetTypeID(value) == CFBooleanGetTypeID() { return value.boolValue ? 1 : 0 }
+        let count = value.intValue
+        guard Double(count) == value.doubleValue, (1...maxReplaced).contains(count) else { return 0 }
+        return count
+    }
+
+    /// `hyperkey.json`'s contents for `count` replaced entries (more than 0).
+    public static func state(replaced count: Int) -> Data {
+        // A dictionary of one Int: JSONSerialization can't fail on it.
+        (try? JSONSerialization.data(withJSONObject: ["replacedCapsLock": count])) ?? Data()
     }
 
     public static func adding(to current: [KeyRemap], keyboards: [[KeyRemap]] = []) throws(Problem) -> [KeyRemap] {
@@ -124,19 +148,20 @@ public enum HyperkeyMapping {
             guard remap == entry else { throw .capsLockTaken(destination: remap.destination) }
         }
         if current.contains(entry) { return current }
+        // Fudge's takes the first Caps Lock → Caps Lock entry's place, and the others go: none stays beside F18.
         guard let index = current.firstIndex(of: capsLockItself) else { return current + [entry] }
-        var merged = current
-        merged[index] = entry
-        return merged
+        return current.enumerated().compactMap { offset, remap in
+            offset == index ? entry : (remap == capsLockItself ? nil : remap)
+        }
     }
 
-    /// `current` without Fudge's entry. When it took a Caps Lock → Caps Lock entry's place (and the user hasn't
-    /// written one since), that entry goes back exactly where Fudge's was.
-    public static func removing(from current: [KeyRemap], restoringCapsLockItself: Bool = false) -> [KeyRemap] {
-        guard restoringCapsLockItself, !current.contains(capsLockItself), let index = current.firstIndex(of: entry)
+    /// `current` without Fudge's entry. When it took the place of `count` Caps Lock → Caps Lock entries (and the user
+    /// hasn't written one since), they all go back exactly where Fudge's was.
+    public static func removing(from current: [KeyRemap], restoringCapsLockItself count: Int = 0) -> [KeyRemap] {
+        guard count > 0, !current.contains(capsLockItself), let index = current.firstIndex(of: entry)
         else { return current.filter { $0 != entry } }
-        return current.enumerated().compactMap { offset, remap in
-            offset == index ? capsLockItself : (remap == entry ? nil : remap)
+        return current.enumerated().flatMap { offset, remap in
+            offset == index ? Array(repeating: capsLockItself, count: count) : (remap == entry ? [] : [remap])
         }
     }
 

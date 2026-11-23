@@ -114,6 +114,8 @@ public enum LaunchCommandError: Error, Equatable, CustomStringConvertible {
     /// A background call can't ask "Allow A to open B?"; the question comes when the user opens the caller.
     case permissionNeeded(extensionTitle: String)
     case disabled(command: String)
+    /// Two or more installs of the name, from repositories the order doesn't choose between (F).
+    case ambiguous(name: String)
 
     public var description: String {
         switch self {
@@ -130,6 +132,8 @@ public enum LaunchCommandError: Error, Equatable, CustomStringConvertible {
         case .permissionNeeded(let title):
             "Not allowed to launch commands of \"\(title)\" yet: Fudge asks the user when they open this command"
         case .disabled(let command): "Command \"\(command)\" is disabled"
+        case .ambiguous(let name):
+            "More than one extension called \(name) is installed, so Fudge can't tell which one to open."
         }
     }
 }
@@ -145,7 +149,7 @@ public struct LaunchTarget: Sendable, Equatable {
     public var isOtherExtension: Bool
 
     /// The command's root search item.
-    public var rootItemID: String { RootItem.commandID(extension: installed.manifest.name, command: command.name) }
+    public var rootItemID: String { RootItem.commandID(owner: .extension(installed.id), command: command.name) }
 
     /// The first required argument without a value.
     public var missingArgument: ExtensionManifest.Argument? {
@@ -155,24 +159,25 @@ public struct LaunchTarget: Sendable, Equatable {
 
 /// Finds the command a `launchCommand` call names, and decides whether it can run as asked.
 public enum CommandLocator {
-    /// The command `request` names: in `caller`'s own extension, or in the installed extension with that `name`
-    /// whose owner (or, without one, author) is `ownerOrAuthorName`.
+    /// The command `request` names: in `caller`'s own extension, or in an installed extension with that `name` whose
+    /// owner (or, without one, author) is `ownerOrAuthorName`, picked by `pick`'s order when there are several.
     public static func locate(
-        _ request: LaunchRequest, caller: String, in installed: [InstalledExtension],
+        _ request: LaunchRequest, caller: InstalledExtension, in installed: [InstalledExtension],
         settings: FudgeSettings = FudgeSettings()
     ) throws -> LaunchTarget {
         let found: InstalledExtension
         if let extensionName = request.extensionName {
             let owner = request.ownerOrAuthorName ?? ""
-            guard
-                let match = installed.first(where: {
-                    $0.manifest.name == extensionName && $0.manifest.ownerOrAuthorName == owner
-                })
-            else { throw LaunchCommandError.extensionNotInstalled(owner: owner, name: extensionName) }
-            found = match
+            let matches = installed.filter {
+                $0.manifest.name == extensionName && $0.manifest.ownerOrAuthorName == owner
+            }
+            guard !matches.isEmpty else {
+                throw LaunchCommandError.extensionNotInstalled(owner: owner, name: extensionName)
+            }
+            found = try pick(matches, caller: caller)
         } else {
-            guard let match = installed.first(where: { $0.manifest.name == caller }) else {
-                throw LaunchCommandError.extensionNotInstalled(owner: "", name: caller)
+            guard let match = installed.first(where: { $0.id == caller.id }) else {
+                throw LaunchCommandError.extensionNotInstalled(owner: "", name: caller.manifest.name)
             }
             found = match
         }
@@ -180,7 +185,7 @@ public enum CommandLocator {
             throw LaunchCommandError.commandNotFound(command: request.name, extension: found.manifest.name)
         }
         // A disabled command, or one of a disabled extension, can't be launched (as in Raycast).
-        guard settings.isEnabled(extension: found.manifest.name, command: command.name) else {
+        guard settings.isEnabled(owner: .extension(found.id), command: command.name) else {
             throw LaunchCommandError.disabled(command: request.name)
         }
         let arguments = Dictionary(
@@ -195,8 +200,25 @@ public enum CommandLocator {
                 fallbackText: request.fallbackText,
                 launchContext: request.context
             ),
-            isOtherExtension: found.manifest.name != caller
+            isOtherExtension: found.id != caller.id
         )
+    }
+
+    /// Which of several installs of one name and owner a call means (F): the caller itself, then the one from the
+    /// caller's own repository, then Raycast's, then the development build. Two or more left after that, from
+    /// repositories none of those name, are refused. A bundled extension is the only one with its name.
+    static func pick(_ matches: [InstalledExtension], caller: InstalledExtension) throws -> InstalledExtension {
+        if matches.count == 1 { return matches[0] }
+        let order: [(InstalledExtension) -> Bool] = [
+            { $0.id == caller.id },
+            { $0.repository == caller.repository },
+            { $0.repository == .raycast },
+            { $0.repository == .development },
+        ]
+        for step in order {
+            if let found = matches.first(where: step) { return found }
+        }
+        throw LaunchCommandError.ambiguous(name: matches[0].manifest.name)
     }
 
     /// Whether the command's mode can be launched as `type`. A view command never runs in the background. A
@@ -234,59 +256,81 @@ public enum CommandLocator {
         guard !missing.isEmpty else { return true }
         guard type == .userInitiated else {
             throw LaunchCommandError.missingPreferences(
-                extensionTitle: target.installed.manifest.title, names: missing.map { $0.title ?? $0.name })
+                extensionTitle: target.installed.displayTitle, names: missing.map { $0.title ?? $0.name })
         }
         return false
     }
 }
 
-/// The user's answers to "may this extension open that extension's commands?", by caller and target extension name.
-/// Stored as JSON in `launch-permissions.json`.
+/// The user's answers to "may this extension open that extension's commands?", by caller and target extension id.
+/// Stored as JSON in `launch-permissions.json`, `{"<caller>": {"<target>": true}}`, as before ids.
 public struct LaunchPermissions: Sendable, Equatable, Codable {
-    public private(set) var answers: [String: [String: Bool]]
+    public private(set) var answers: [ExtensionID: [ExtensionID: Bool]]
+    /// The file's answers under a caller or target key that isn't an id (a hand edit, a newer Fudge's), by the keys as
+    /// written: left out of `answers`, and written back unchanged.
+    private var otherAnswers: [String: [String: Bool]] = [:]
 
-    public init(answers: [String: [String: Bool]] = [:]) {
+    public init(answers: [ExtensionID: [ExtensionID: Bool]] = [:]) {
         self.answers = answers
     }
 
+    /// Read as strings and split, never decoded by id in one piece, so one key that isn't an id costs only itself.
     public init(from decoder: Decoder) throws {
-        answers = try decoder.singleValueContainer().decode([String: [String: Bool]].self)
+        let all = try decoder.singleValueContainer().decode([String: [String: Bool]].self)
+        answers = [:]
+        for (callerKey, targets) in all {
+            guard let caller = ExtensionID(stored: callerKey) else {
+                otherAnswers[callerKey] = targets
+                continue
+            }
+            for (targetKey, allowed) in targets {
+                if let target = ExtensionID(stored: targetKey) {
+                    answers[caller, default: [:]][target] = allowed
+                } else {
+                    otherAnswers[callerKey, default: [:]][targetKey] = allowed
+                }
+            }
+        }
     }
 
     public func encode(to encoder: Encoder) throws {
+        var all = otherAnswers
+        for (caller, targets) in answers {
+            for (target, allowed) in targets { all[caller.key, default: [:]][target.key] = allowed }
+        }
         var container = encoder.singleValueContainer()
-        try container.encode(answers)
+        try container.encode(all)
     }
 
     /// The stored answer, or nil when the user hasn't been asked.
-    public func answer(caller: String, target: String) -> Bool? {
+    public func answer(caller: ExtensionID, target: ExtensionID) -> Bool? {
         answers[caller]?[target]
     }
 
-    public mutating func record(_ allowed: Bool, caller: String, target: String) {
+    public mutating func record(_ allowed: Bool, caller: ExtensionID, target: ExtensionID) {
         answers[caller, default: [:]][target] = allowed
     }
 
     /// Removes an answer, so the user is asked again next time.
-    public mutating func forget(caller: String, target: String) {
+    public mutating func forget(caller: ExtensionID, target: ExtensionID) {
         answers[caller]?[target] = nil
         if answers[caller]?.isEmpty == true { answers[caller] = nil }
     }
 
     /// One stored answer: whether `caller` may open `target`'s commands.
     public struct Entry: Sendable, Hashable, Identifiable {
-        public var caller: String
-        public var target: String
+        public var caller: ExtensionID
+        public var target: ExtensionID
         public var allowed: Bool
 
         /// The caller and target, not the answer, so changing an answer updates its row instead of replacing it.
-        public var id: [String] { [caller, target] }
+        public var id: [String] { [caller.key, target.key] }
     }
 
     /// Every stored answer, sorted by caller, then target.
     public var entries: [Entry] {
-        answers.keys.sorted().flatMap { caller in
-            (answers[caller] ?? [:]).sorted { $0.key < $1.key }.map {
+        answers.keys.sorted { $0.key < $1.key }.flatMap { caller in
+            (answers[caller] ?? [:]).sorted { $0.key.key < $1.key.key }.map {
                 Entry(caller: caller, target: $0.key, allowed: $0.value)
             }
         }

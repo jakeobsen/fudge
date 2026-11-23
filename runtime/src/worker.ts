@@ -14,6 +14,7 @@ import * as jsxRuntime from "react/jsx-runtime";
 import { placeholderEnvironment, setLaunchContext, type LaunchEnvironment } from "./api/launch.ts";
 import { Toast } from "./api/feedback.ts";
 import { createApiModule } from "./api/module.ts";
+import { connectLog, logLine, routeConsole, setLogLevel } from "./log.ts";
 import { explainRenderError } from "./api/oauth.ts";
 import { providersFromEnvironment, rewriteFetch } from "./api/oauth-fetch.ts";
 import { guardConnections, guardRequests } from "./api/oauth-http.ts";
@@ -22,7 +23,14 @@ import { recordRender } from "./api/render.ts";
 import { callApp, connect, holdWhilePending, settle } from "./bridge.ts";
 import { createFudgeAppModule } from "./fudge-app.ts";
 import { errorReport } from "./notice.ts";
-import { revive, type CommandMode, type HostToWorker, type LaunchProps, type WorkerMessage } from "./protocol.ts";
+import {
+    revive,
+    type CommandMode,
+    type HostToWorker,
+    type LaunchProps,
+    type LogLevel,
+    type WorkerMessage,
+} from "./protocol.ts";
 import { createRoot, StaleCallbackError, type Root } from "./renderer/root.ts";
 
 export type WorkerData = {
@@ -31,6 +39,8 @@ export type WorkerData = {
     launchProps: LaunchProps;
     preferences: Record<string, unknown>;
     environment: Partial<LaunchEnvironment>;
+    /** The Log level when the command started; `logLevel` messages change it while it runs. */
+    logLevel: LogLevel;
 };
 
 const port = parentPort;
@@ -58,9 +68,14 @@ internals._load = function (request, parent, isMain) {
     return load.call(this, request, parent, isMain);
 };
 
-/** Reports an error to the app; one refused on purpose carries its notice (`errorReport`). */
+/**
+ * Reports an error to the app; one refused on purpose carries its notice (`errorReport`). It also goes into the
+ * command's log file with its stack (SPEC-124): a refusal on purpose as a warning, anything else as an error.
+ */
 function report(error: unknown, fatal: boolean): void {
-    post(errorReport(error, fatal));
+    const reported = errorReport(error, fatal);
+    post(reported);
+    logLine(reported.notice === undefined ? "error" : "warning", () => reported.stack ?? reported.message);
 }
 
 // Dependencies' deprecation warnings (e.g. Node's punycode module) are noise to the user.
@@ -68,6 +83,10 @@ process.noDeprecation = true;
 process.on("uncaughtException", (error) => report(error, false));
 process.on("unhandledRejection", (reason) => report(reason, false));
 connect((request) => post(request));
+// The command's console goes to its log file, as `log` messages, at its level (SPEC-124), before the command loads.
+connectLog((level, message) => post({ type: "log", level, message }));
+setLogLevel((workerData as WorkerData).logLevel ?? "debug");
+routeConsole(console);
 // Sign-in's token and refresh requests go to the relay the user chose, never to Raycast's servers (SPEC-056), by
 // whatever client the extension uses (SPEC-075): `fetch`, `http` and `https`, and a backstop under every client. All
 // of it is in place before the command loads, so a library that keeps `https.request` at load gets the wrapped one,
@@ -122,7 +141,7 @@ port.on("message", (message: HostToWorker) => {
                 }
             } catch (error) {
                 if (error instanceof StaleCallbackError) {
-                    post({ type: "log", level: "error", message: `ignored an event: ${error.message}` });
+                    logLine("warning", `ignored an event: ${error.message}`);
                 } else {
                     report(error, false);
                 }
@@ -143,6 +162,9 @@ port.on("message", (message: HostToWorker) => {
             return;
         case "rpcResult":
             settle(message.id, message.result, message.error, message.notice);
+            return;
+        case "logLevel":
+            setLogLevel(message.level);
             return;
         case "toastAction":
             try {

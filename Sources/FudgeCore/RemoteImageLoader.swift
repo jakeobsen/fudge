@@ -108,9 +108,7 @@ public actor RemoteImageLoader {
 
     public init(
         cache: RemoteImageCache, fetcher: any RemoteImageFetching, now: @escaping @Sendable () -> Date = { Date() },
-        log: @escaping @Sendable (String) -> Void = { message in
-            FileHandle.standardError.write(Data("fudge: \(message)\n".utf8))
-        }
+        log: @escaping @Sendable (String) -> Void = { message in FudgeLog.error(message) }
     ) {
         self.cache = cache
         self.fetcher = fetcher

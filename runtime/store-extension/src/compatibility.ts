@@ -3,21 +3,31 @@
 // selection has rested on it; the list shows only what's cached.
 import { lstat, mkdir, readdir, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { hasSourceExtension, sourceExtensions } from "../../scripts/compat/source-files.ts";
+import { hasSourceExtension, isCommandName, sourceExtensions } from "../../scripts/compat/source-files.ts";
+import {
+    isRaycastDomainHost,
+    providersFromEnvironment,
+    raycastDomainsFromEnvironment,
+} from "../../src/api/oauth-table.ts";
 import { readRegularFile } from "./files.ts";
 import { RestingWork, type Timers } from "./resting.ts";
-import { spawnProgram } from "./git.ts";
+import { spawnProgram, type StoreRepository } from "./git.ts";
 import type { StoreContext } from "./store.ts";
 import { scanTimeout } from "./timeouts.ts";
 
 /** What the store needs from `fudge scan <folder> --json`. `byDesign` names the category of a gap counted apart:
  * one Fudge doesn't support (AI, Browser Extension), or signing in (OAuth). `commands` says, for each command of the
- * manifest, which of those it reaches from its own entry (SPEC-109); a scanner from before it has none. */
+ * manifest, which of those it reaches from its own entry (SPEC-109); a scanner from before it has none. `signIn` says
+ * where the extension's own code signs in: the `OAuth.RedirectMethod`s it names, the authorize URLs it resolves, and
+ * whether one was left unresolved (SPEC-132 §7). `swiftParts` names the `swift:` imports its code makes (SPEC-145); a
+ * scanner from before it has none. */
 export type ScanReport = {
     supported: boolean;
     gaps: { api: string; byDesign?: string }[];
     unreadable: string[];
     commands?: { name: string; unsupported: string[] }[];
+    signIn?: { methods: string[]; authorizeURLs: string[]; unresolved: boolean };
+    swiftParts?: string[];
 };
 
 /** Runs `$FUDGE_CLI scan <source> --json`. Undefined when it fails or says something unexpected. */
@@ -54,7 +64,9 @@ const signInCategory = "OAuth";
 export type ByCommand = { count: number; using: string[] };
 
 /** One scan's outcome, as the store keeps it. `notChecked`: the source was over the caps, so it wasn't scanned.
- * `byCommand` is there when the scan said what each command reaches. */
+ * `byCommand` is there when the scan said what each command reaches. `signsInThroughRaycast`: signing in comes back
+ * through raycast.com, as the function of that name judges it. `swiftPart`: it imports a part written in Swift, which
+ * the install builds or leaves out (SPEC-145 §3); absent is none. */
 export type Compatibility =
     | { notChecked: true }
     | {
@@ -62,12 +74,54 @@ export type Compatibility =
           notSupported: string[];
           missing: string[];
           signsIn: boolean;
+          signsInThroughRaycast: boolean;
           unreadable: boolean;
           byCommand?: ByCommand;
+          swiftPart?: boolean;
       };
 
-/** A command name as the manifest rule has it (`isValidName`'s shape). */
-const isCommandName = (name: unknown): name is string => typeof name === "string" && /^[a-z0-9][a-z0-9_-]*$/.test(name);
+/**
+ * What an authorize URL is judged by: the authorize URLs of the app's provider table (`OAuthProviders`) and Raycast's
+ * domains, the ones the app hands every worker (`FUDGE_OAUTH_PROVIDERS`, `FUDGE_RAYCAST_DOMAINS`), never a copy.
+ */
+export type SignInTable = { authorizeURLs: readonly string[]; raycastDomains: readonly string[] };
+
+/** This worker's `SignInTable`, from the app. */
+export function signInTableFromEnvironment(): SignInTable {
+    return {
+        authorizeURLs: providersFromEnvironment().map((provider) => provider.authorizeURL),
+        raycastDomains: raycastDomainsFromEnvironment(),
+    };
+}
+
+/**
+ * Whether signing in comes back through raycast.com (SPEC-132 §7): the extension's own code names
+ * `OAuth.RedirectMethod.Web`, and one of its authorize URLs, an unresolved one included, is neither the table's (as
+ * `oauth.prepare` matches it, exactly) nor on Raycast's hosts (`isRaycastDomainHost`). Such a sign-in takes the
+ * direct path, and its Web redirect is raycast.com's page. App and AppURI come straight back, so they never count.
+ * A report without `signIn`, or with one that isn't well formed, says no.
+ */
+export function signsInThroughRaycast(signIn: unknown, table: SignInTable): boolean {
+    if (typeof signIn !== "object" || signIn === null) return false;
+    const { methods, authorizeURLs, unresolved } = signIn as Record<string, unknown>;
+    const strings = (list: unknown): list is string[] =>
+        Array.isArray(list) && list.every((item) => typeof item === "string");
+    if (!strings(methods) || !strings(authorizeURLs) || typeof unresolved !== "boolean") return false;
+    if (!methods.includes("Web")) return false;
+    const raycasts = (url: string) => {
+        try {
+            return isRaycastDomainHost(new URL(url).hostname, table.raycastDomains);
+        } catch {
+            return false;
+        }
+    };
+    return unresolved || authorizeURLs.some((url) => !table.authorizeURLs.includes(url) && !raycasts(url));
+}
+
+/** What the store says, in the detail pane and the install confirmation, when `signsInThroughRaycast`. It's the one
+ * place Fudge's text names where a sign-in goes. */
+export const throughRaycastSentence =
+    "Signing in goes through raycast.com. The extension's author chose that, so Fudge can't change it.";
 
 /** The report's per-command results, when they're all well formed. */
 function commandsOf(report: ScanReport): { name: string; unsupported: string[] }[] | undefined {
@@ -84,8 +138,9 @@ function commandsOf(report: ScanReport): { name: string; unsupported: string[] }
     return valid ? commands : undefined;
 }
 
-/** The parts of a scan the store shows: categories Fudge doesn't support, APIs it lacks, signing in. */
-export function fromReport(report: ScanReport): Compatibility {
+/** The parts of a scan the store shows: categories Fudge doesn't support, APIs it lacks, signing in, and whether that
+ * goes through raycast.com, judged by `table`. */
+export function fromReport(report: ScanReport, table: SignInTable = signInTableFromEnvironment()): Compatibility {
     const designed = (gap: { byDesign?: unknown }) =>
         typeof gap.byDesign === "string" && gap.byDesign !== "" ? gap.byDesign : undefined;
     const categories = new Set(report.gaps.map(designed).filter((category) => category !== undefined));
@@ -116,7 +171,9 @@ export function fromReport(report: ScanReport): Compatibility {
             ),
         ],
         signsIn: categories.has(signInCategory),
+        signsInThroughRaycast: signsInThroughRaycast(report.signIn, table),
         unreadable: report.unreadable.length > 0,
+        ...(Array.isArray(report.swiftParts) && report.swiftParts.length > 0 ? { swiftPart: true } : {}),
     };
 }
 
@@ -161,7 +218,8 @@ function fewOf(names: string[], each: (name: string) => string = (name) => name)
 
 /**
  * The install confirmation's line about what works: from the scan, or saying it couldn't run. What Fudge doesn't
- * support comes first, as not compatible; what it doesn't have yet next; signing in last, never as not compatible.
+ * support comes first, as not compatible; what it doesn't have yet next; signing in last, never as not compatible:
+ * through raycast.com (`throughRaycastSentence`), else through the sign-in server.
  */
 export function compatibilityLine(result: Compatibility | undefined, titles: CommandTitles = byName): string {
     if (!result || result.notChecked) return "Fudge couldn't check what this extension uses.";
@@ -196,7 +254,9 @@ export function compatibilityLine(result: Compatibility | undefined, titles: Com
             `${subject} things Fudge doesn't have yet: ${fewOf(result.missing)}. Some of its commands may not work.`,
         );
     }
-    if (result.signsIn) {
+    if (result.signsInThroughRaycast) {
+        sentences.push(throughRaycastSentence);
+    } else if (result.signsIn) {
         const subject = sentences.length > 0 ? "It signs" : "This extension signs";
         sentences.push(
             `${subject} in with OAuth, which works if the sign-in server chosen in Settings → Sign-in supports its ` +
@@ -288,7 +348,9 @@ export function compatibilityText(state: CheckState, titles: CommandTitles = byN
         parts.push(`Not compatible: ${listed(names)}`);
     }
     if (state.missing.length > 0) parts.push(`Missing: ${fewOf(state.missing, (api) => `\`${api}\``)}`);
-    if (state.signsIn) parts.push("Signs in with OAuth (Settings → Sign-in)");
+    // `throughRaycastSentence` ends the line, so its own full stop is the line's.
+    if (state.signsInThroughRaycast) parts.push(throughRaycastSentence);
+    else if (state.signsIn) parts.push("Signs in with OAuth (Settings → Sign-in)");
     if (parts.length === 0 && state.unreadable) parts.push("Partly checked: some of its source couldn't be read");
     return parts.length > 0 ? parts.join(". ") : "Compatible";
 }
@@ -302,6 +364,10 @@ export function compatibilityFile(supportPath: string): string {
 export const maxCachedResults = 4000;
 const maxCacheBytes = 4 * 1024 * 1024;
 const isTree = (key: string) => /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(key);
+/** The file's format: it went up with `signsInThroughRaycast` (SPEC-132 §7), so no result from before is used.
+ * `swiftPart` (SPEC-145) needed no new format: results are kept per scanner (`scannerIdentity`), and a scanner from
+ * before it, which names no `swift:` imports, never reads the results of one after. */
+const cacheVersion = 2;
 const isAPI = (name: unknown) => typeof name === "string" && /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(name);
 
 /**
@@ -321,12 +387,22 @@ function validResult(value: unknown): Compatibility | undefined {
     if (typeof value !== "object" || value === null) return undefined;
     const record = value as Record<string, unknown>;
     if (record.notChecked === true) return { notChecked: true };
-    const { notSupported, missing, signsIn, unreadable } = record;
+    const { notSupported, missing, signsIn, signsInThroughRaycast, unreadable, swiftPart } = record;
     const known = (category: unknown) => typeof category === "string" && category in notSupportedNames;
     if (!Array.isArray(notSupported) || !notSupported.every(known)) return undefined;
     if (!Array.isArray(missing) || missing.length > 500 || !missing.every(isAPI)) return undefined;
-    if (typeof signsIn !== "boolean" || typeof unreadable !== "boolean") return undefined;
-    const result = { notSupported: notSupported as string[], missing: missing as string[], signsIn, unreadable };
+    if (typeof signsIn !== "boolean" || typeof signsInThroughRaycast !== "boolean" || typeof unreadable !== "boolean") {
+        return undefined;
+    }
+    if (swiftPart !== undefined && typeof swiftPart !== "boolean") return undefined;
+    const result = {
+        notSupported: notSupported as string[],
+        missing: missing as string[],
+        signsIn,
+        signsInThroughRaycast,
+        unreadable,
+        ...(swiftPart === true ? { swiftPart } : {}),
+    };
     if (record.byCommand === undefined) return result;
     const { count, using } = (record.byCommand ?? {}) as Record<string, unknown>;
     if (!Number.isInteger(count) || (count as number) < 1 || (count as number) > 1000) return undefined;
@@ -335,8 +411,9 @@ function validResult(value: unknown): Compatibility | undefined {
 }
 
 /**
- * The cached results this scanner wrote, by tree id, oldest first. A file from another scanner, or one that's
- * missing, broken or too big, reads as empty, and entries that don't pass the checks are dropped.
+ * The cached results this scanner wrote, by tree id, oldest first. A file from another scanner or of another
+ * `cacheVersion`, or one that's missing, broken or too big, reads as empty, and entries that don't pass the checks
+ * are dropped.
  */
 export async function readCompatibility(supportPath: string, scanner: string): Promise<Map<string, Compatibility>> {
     const results = new Map<string, Compatibility>();
@@ -347,8 +424,8 @@ export async function readCompatibility(supportPath: string, scanner: string): P
         return results;
     }
     if (typeof file !== "object" || file === null) return results;
-    const { scanner: writtenBy, trees } = file as Record<string, unknown>;
-    if (writtenBy !== scanner || typeof trees !== "object" || trees === null) return results;
+    const { version, scanner: writtenBy, trees } = file as Record<string, unknown>;
+    if (version !== cacheVersion || writtenBy !== scanner || typeof trees !== "object" || trees === null) return results;
     for (const [tree, value] of Object.entries(trees)) {
         const result = validResult(value);
         if (isTree(tree) && result) results.set(tree, result);
@@ -366,7 +443,7 @@ export async function writeCompatibility(
     await mkdir(supportPath, { recursive: true });
     const file = compatibilityFile(supportPath);
     const temporary = `${file}.${process.pid}.tmp`;
-    await writeFile(temporary, `${JSON.stringify({ scanner, trees: Object.fromEntries(kept) })}\n`);
+    await writeFile(temporary, `${JSON.stringify({ version: cacheVersion, scanner, trees: Object.fromEntries(kept) })}\n`);
     await rename(temporary, file);
 }
 
@@ -441,11 +518,12 @@ export function isRefusedWant(error: unknown): boolean {
 }
 
 /**
- * Fetches `dir`'s source files, scans them with `fudge scan`, and takes the patterns out again. Resolves undefined
- * when `cancelled()` turns true before the fetch or before the scan; throws when git or the scan fails. Call it in
- * the store's git queue (`oneAtATime`). `dir` is a checked folder.
+ * Fetches `dir`'s source files in `repo`, the row's own copy (`rowCopy`, SPEC-157 D.6), scans them with `fudge scan`,
+ * and takes the patterns out again. Resolves undefined when `cancelled()` turns true before the fetch or before the
+ * scan; throws when git or the scan fails. Call it in the store's git queue (`oneAtATime`). `dir` is a checked folder.
  */
 export async function checkFolder(
+    repo: StoreRepository,
     dir: string,
     context: StoreContext,
     cancelled: () => boolean,
@@ -453,14 +531,14 @@ export async function checkFolder(
 ): Promise<Compatibility | undefined> {
     // The fetch brings every file under `src/` of at most `maxScanBytes`, assets included, so the download's cap counts
     // them all; the scan's counts only the source files.
-    const files = await context.repo.srcFiles(dir);
+    const files = await repo.srcFiles(dir);
     const sources = files.filter((file) => isScanned(file.path));
     if (files.length > maxSrcFiles || sources.length > maxScanFiles) return { notChecked: true };
     if (cancelled()) return undefined;
     const patterns = scanPatterns(dir);
     // Only a source file that isn't here matters: an asset left out for its size is never read.
     const missingSources = async () => {
-        const missing = await context.repo.missingObjects(dir);
+        const missing = await repo.missingObjects(dir);
         return sources.filter((file) => missing.has(file.object)).length;
     };
     let bounded = sources.length > 0;
@@ -469,7 +547,7 @@ export async function checkFolder(
         try {
             // The one step a cancel ends (`signal`), since it writes nothing but new packs; every other step runs to
             // its end, and the check stops between steps.
-            await context.repo.fetchSource(dir, maxScanBytes, signal);
+            await repo.fetchSource(dir, maxScanBytes, signal);
         } catch (error) {
             if (cancelled()) return undefined;
             // Only a server that won't send a folder's tree gets the fetch as before (`add`'s lazy fetch: each source
@@ -486,17 +564,17 @@ export async function checkFolder(
         // A source file over the cap wasn't downloaded, and the scan would need it.
         if (bounded && (await missingSources()) > 0) return { notChecked: true };
     }
-    if (bounded) await context.repo.addFetched(...patterns);
-    else await context.repo.add(...patterns);
+    if (bounded) await repo.addFetched(...patterns);
+    else await repo.add(...patterns);
     try {
-        const source = path.join(context.repo.path, "extensions", dir);
+        const source = path.join(repo.path, "extensions", dir);
         if ((await sourceBytes(path.join(source, "src"))) > maxScanBytes) return { notChecked: true };
         if (cancelled()) return undefined;
         const report = await scanExtension(source, context);
         if (!report) throw new Error("fudge scan failed");
         return fromReport(report);
     } finally {
-        await context.repo.drop(patterns);
+        await repo.drop(patterns);
     }
 }
 
@@ -506,7 +584,8 @@ export async function checkFolder(
  * Scans the row the selection rests on, one at a time (`RestingWork`): a check starts only after the selection has
  * stayed on an uncached row for `delay` ms, and a new `select` cancels the last: its timer, or the check itself, which
  * stops before its fetch or scan, and whose fetch is ended (`signal`). So moving through rows fetches nothing, and a
- * cached row never fetches.
+ * cached row never fetches. A row is its copy (`copyId`) and its folder there; the cache is by tree id alone, since a
+ * tree id names the same files in any repository.
  */
 export class CompatibilityChecks {
     readonly #work: RestingWork<Compatibility>;
@@ -516,26 +595,27 @@ export class CompatibilityChecks {
         timers?: Timers;
         cached: (tree: string) => Compatibility | undefined;
         check: (
+            copyId: string,
             dir: string,
             tree: string,
             cancelled: () => boolean,
             signal: AbortSignal,
         ) => Promise<Compatibility | undefined>;
-        changed: (dir: string, tree: string, result: Compatibility | "failed") => void;
+        changed: (copyId: string, dir: string, tree: string, result: Compatibility | "failed") => void;
     }) {
-        const split = (key: string) => key.split("\0") as [string, string];
+        const split = (key: string) => key.split("\0") as [string, string, string];
         this.#work = new RestingWork({
             delay: options.delay,
             timers: options.timers,
-            done: (key) => options.cached(split(key)[1]) !== undefined,
+            done: (key) => options.cached(split(key)[2]) !== undefined,
             run: (key, cancelled, signal) => options.check(...split(key), cancelled, signal),
             changed: (key, result) => options.changed(...split(key), result),
         });
     }
 
-    /** The row now selected with the detail showing, or nothing. */
-    select(dir: string | undefined, tree: string | undefined): void {
-        this.#work.select(dir && tree ? `${dir}\0${tree}` : undefined);
+    /** The row now selected with the detail showing (its copy, its folder and its tree), or nothing. */
+    select(copyId: string | undefined, dir: string | undefined, tree: string | undefined): void {
+        this.#work.select(copyId && dir && tree ? `${copyId}\0${dir}\0${tree}` : undefined);
     }
 
     /** Cancels the waiting or running check. */

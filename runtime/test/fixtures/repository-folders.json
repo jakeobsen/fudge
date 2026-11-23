@@ -1,0 +1,747 @@
+{
+  "comment": "The repository folder rule (ExtensionRepositoryFolder in Swift, repository-folder.ts in the Extension Store): a server, a port or none and the address's path segments in, the folder or the refusal out; which folders isValid accepts; and the equal and nesting checks. Every address is made up, except fudgeapp/development, Fudge's own development folder. Each refusal's one sentence is in sentences.",
+  "sentences": {
+    "characters": "That address has characters Fudge can't use.",
+    "tooLong": "That address is too long for Fudge to use.",
+    "tooManyParts": "That address has too many parts. Use the repository's own address.",
+    "notARepository": "Use the repository's own address, such as https://github.com/owner/repository.",
+    "startsWithDot": "Fudge can't use a repository whose name starts with a dot.",
+    "serverWithoutDot": "Fudge can only use a server whose name has a dot in it, such as git.example.org.",
+    "port": "Fudge can only use a port from 1 to 65535.",
+    "alreadyListed": "That repository is already in the list.",
+    "nests": "That repository's folder would be inside another repository's, so Fudge can't keep their extensions apart."
+  },
+  "folders": [
+    {
+      "host": "github.com",
+      "segments": [
+        "Someone",
+        "Tools"
+      ],
+      "folder": "someone/tools"
+    },
+    {
+      "host": "GitHub.COM",
+      "segments": [
+        "owner",
+        "repository"
+      ],
+      "folder": "owner/repository"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "raycast",
+        "extensions"
+      ],
+      "folder": "raycast/extensions"
+    },
+    {
+      "host": "github.com",
+      "port": 443,
+      "segments": [
+        "Raycast",
+        "Extensions"
+      ],
+      "folder": "raycast/extensions"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "fudgeapp",
+        "development"
+      ],
+      "folder": "fudgeapp/development"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "FudgeApp",
+        "Development"
+      ],
+      "folder": "fudgeapp/development"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "fudgeapp",
+        "tools"
+      ],
+      "folder": "fudgeapp/tools"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "development",
+        "tools"
+      ],
+      "folder": "development/tools"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "some-one",
+        "My.Repo_name-2"
+      ],
+      "folder": "some-one/my.repo_name-2"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "some--one",
+        "tools"
+      ],
+      "folder": "some--one/tools"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "owner",
+        "repo~x"
+      ],
+      "folder": "owner/repo~x"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "ooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo",
+        "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+      ],
+      "folder": "ooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo/rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo",
+        "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+      ],
+      "refused": "tooLong"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "owner",
+        "repository",
+        "tree",
+        "main"
+      ],
+      "refused": "notARepository"
+    },
+    {
+      "host": "github.com",
+      "port": 443,
+      "segments": [
+        "owner",
+        "repository",
+        "extra"
+      ],
+      "refused": "notARepository"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "owner"
+      ],
+      "refused": "notARepository"
+    },
+    {
+      "host": "github.com",
+      "segments": [],
+      "refused": "notARepository"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "",
+        "repository"
+      ],
+      "refused": "notARepository"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "owner",
+        ""
+      ],
+      "refused": "notARepository"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "someone",
+        ".github"
+      ],
+      "refused": "startsWithDot"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "someone",
+        "."
+      ],
+      "refused": "startsWithDot"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "someone",
+        ".."
+      ],
+      "refused": "startsWithDot"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "some_one",
+        "tools"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "some.one",
+        "tools"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "-someone",
+        "tools"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "someone-",
+        "tools"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        ".someone",
+        "tools"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "owner",
+        "café"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "Kelvin",
+        "tools"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "owner",
+        "repo sitory"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "owner",
+        "a/b"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "owner",
+        "a+b"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "owner",
+        "a:b"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "owner",
+        "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+      ],
+      "refused": "tooLong"
+    },
+    {
+      "host": "github.com",
+      "segments": [
+        "ooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo",
+        "repository"
+      ],
+      "refused": "tooLong"
+    },
+    {
+      "host": "github.com",
+      "port": 0,
+      "segments": [
+        "owner",
+        "repository"
+      ],
+      "refused": "port"
+    },
+    {
+      "host": "github.com",
+      "port": 8443,
+      "segments": [
+        "Team",
+        "Extensions"
+      ],
+      "folder": "github.com_8443/team/extensions"
+    },
+    {
+      "host": "git.example.org",
+      "segments": [
+        "Team",
+        "Extensions"
+      ],
+      "folder": "git.example.org/team/extensions"
+    },
+    {
+      "host": "git.example.org",
+      "port": 8443,
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "folder": "git.example.org_8443/team/extensions"
+    },
+    {
+      "host": "Git.Example.ORG",
+      "port": 443,
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "folder": "git.example.org/team/extensions"
+    },
+    {
+      "host": "code.example.org",
+      "segments": [
+        "group",
+        "sub",
+        "extensions"
+      ],
+      "folder": "code.example.org/group/sub/extensions"
+    },
+    {
+      "host": "git.example.org",
+      "segments": [
+        "~someone",
+        "extensions"
+      ],
+      "folder": "git.example.org/~someone/extensions"
+    },
+    {
+      "host": "git.example.org",
+      "segments": [
+        "extensions"
+      ],
+      "folder": "git.example.org/extensions"
+    },
+    {
+      "host": "git.example.org",
+      "segments": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f"
+      ],
+      "folder": "git.example.org/a/b/c/d/e/f"
+    },
+    {
+      "host": "git.example.org",
+      "segments": [
+        "aaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbb",
+        "ccccccccccccccccccccccc",
+        "ddddddddddddddddddddddd",
+        "eeeeeeeeeeeeeeeeeeeeeee",
+        "fffffffffffffffffffffff"
+      ],
+      "folder": "git.example.org/aaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbb/ccccccccccccccccccccccc/ddddddddddddddddddddddd/eeeeeeeeeeeeeeeeeeeeeee/fffffffffffffffffffffff"
+    },
+    {
+      "host": "git.example.org",
+      "segments": [
+        "aaaaaaaaaaaaaaaaaaaaaaaa",
+        "bbbbbbbbbbbbbbbbbbbbbbb",
+        "ccccccccccccccccccccccc",
+        "ddddddddddddddddddddddd",
+        "eeeeeeeeeeeeeeeeeeeeeee",
+        "ffffffffffffffffffffffff"
+      ],
+      "refused": "tooLong"
+    },
+    {
+      "host": "192.0.2.10",
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "folder": "192.0.2.10/team/extensions"
+    },
+    {
+      "host": "git-1.example.org",
+      "port": 1,
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "folder": "git-1.example.org_1/team/extensions"
+    },
+    {
+      "host": "git.example.org",
+      "port": 65535,
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "folder": "git.example.org_65535/team/extensions"
+    },
+    {
+      "host": "git.example.org",
+      "segments": [
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+        "g"
+      ],
+      "refused": "tooManyParts"
+    },
+    {
+      "host": "git.example.org",
+      "segments": [],
+      "refused": "notARepository"
+    },
+    {
+      "host": "git.example.org",
+      "segments": [
+        "team",
+        ""
+      ],
+      "refused": "notARepository"
+    },
+    {
+      "host": "git.example.org",
+      "segments": [
+        ".hidden",
+        "extensions"
+      ],
+      "refused": "startsWithDot"
+    },
+    {
+      "host": "git.example.org",
+      "segments": [
+        "team",
+        "café"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": "git.example.org",
+      "segments": [
+        "team",
+        "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      ],
+      "refused": "tooLong"
+    },
+    {
+      "host": "git.example.org",
+      "port": 0,
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "refused": "port"
+    },
+    {
+      "host": "git.example.org",
+      "port": 65536,
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "refused": "port"
+    },
+    {
+      "host": "git.example.org",
+      "port": -1,
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "refused": "port"
+    },
+    {
+      "host": "localhost",
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "refused": "serverWithoutDot"
+    },
+    {
+      "host": "::1",
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "refused": "serverWithoutDot"
+    },
+    {
+      "host": "[::1]",
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "refused": "serverWithoutDot"
+    },
+    {
+      "host": "[2001:db8::1]",
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "refused": "serverWithoutDot"
+    },
+    {
+      "host": "[::ffff:192.0.2.10]",
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "refused": "serverWithoutDot"
+    },
+    {
+      "host": "",
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "refused": "serverWithoutDot"
+    },
+    {
+      "host": "git_example.org",
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": "git..example.org",
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": ".example.org",
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": "example.org.",
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": "github.com.",
+      "segments": [
+        "raycast",
+        "extensions"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": "gït.example.org",
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "refused": "characters"
+    },
+    {
+      "host": "git.example.org",
+      "port": 99999,
+      "segments": [
+        "team",
+        "extensions"
+      ],
+      "refused": "port"
+    }
+  ],
+  "valid": [
+    "raycast/extensions",
+    "fudgeapp/development",
+    "fudgeapp/tools",
+    "development/tools",
+    "someone/tools",
+    "some--one/tools",
+    "owner/repo~x",
+    "some.one/tools",
+    "git.example.org/team/extensions",
+    "git.example.org_8443/team/extensions",
+    "github.com_8443/team/extensions",
+    "git.example.org/~someone/extensions",
+    "192.0.2.10/team/extensions",
+    "git.example.org/a/b/c/d/e/f",
+    "git.example.org/extensions",
+    "localhost/team",
+    "ooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo/rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+  ],
+  "invalid": [
+    "",
+    "development",
+    "fudgeapp",
+    "../x",
+    "x/..",
+    ".x/y",
+    "x/.y",
+    "Someone/tools",
+    "someone/Tools",
+    "FudgeApp/Development",
+    "some_one/tools",
+    "-someone/tools",
+    "someone-/tools",
+    "someone/tools/extra",
+    "someone//tools",
+    "someone/",
+    "/someone/tools",
+    "someone/tools/",
+    "someone/a b",
+    "café/tools",
+    "someone/café",
+    "someone/a+b",
+    "Git.Example.org/team",
+    "git.example.org",
+    "git.example.org/a/b/c/d/e/f/g",
+    "git.example.org_443/team",
+    "git.example.org_0/team",
+    "git.example.org_08443/team",
+    "git.example.org_65536/team",
+    "git.example.org_/team",
+    "git.example.org_x/team",
+    "github.com/owner/repository",
+    "git..example.org/team",
+    ".example.org/team",
+    "git.example.org/team/.hidden",
+    "oooooooooooooooooooooooooooooooooooooooooooooooooooooooooooo/rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+    "git.example.org/aaaaaaaaaaaaaaaaaaaaaaaa/bbbbbbbbbbbbbbbbbbbbbbb/ccccccccccccccccccccccc/ddddddddddddddddddddddd/eeeeeeeeeeeeeeeeeeeeeee/ffffffffffffffffffffffff",
+    "someone\\tools"
+  ],
+  "conflicts": [
+    {
+      "folder": "someone/tools",
+      "existing": [
+        "other/tools"
+      ],
+      "refused": null
+    },
+    {
+      "folder": "someone/tools",
+      "existing": [
+        "someone/tools"
+      ],
+      "refused": "alreadyListed"
+    },
+    {
+      "folder": "Someone/Tools",
+      "existing": [
+        "someone/tools"
+      ],
+      "refused": "alreadyListed"
+    },
+    {
+      "folder": "git.example.org/team",
+      "existing": [
+        "git.example.org/team/extensions"
+      ],
+      "refused": "nests"
+    },
+    {
+      "folder": "git.example.org/team/extensions",
+      "existing": [
+        "git.example.org/team"
+      ],
+      "refused": "nests"
+    },
+    {
+      "folder": "git.example.org/team/extensions",
+      "existing": [
+        "git.example.org/Team"
+      ],
+      "refused": "nests"
+    },
+    {
+      "folder": "git.example.org/team/ext",
+      "existing": [
+        "git.example.org/team/extensions"
+      ],
+      "refused": null
+    },
+    {
+      "folder": "git.example.org/team/extensions",
+      "existing": [
+        "git.example.org/team/ext"
+      ],
+      "refused": null
+    },
+    {
+      "folder": "git.example.org_8443/team",
+      "existing": [
+        "git.example.org/team/extensions"
+      ],
+      "refused": null
+    },
+    {
+      "folder": "git.example.org/team",
+      "existing": [
+        "someone/tools",
+        "git.example.org/team/extensions",
+        "git.example.org/team"
+      ],
+      "refused": "alreadyListed"
+    },
+    {
+      "folder": "someone/tools",
+      "existing": [],
+      "refused": null
+    }
+  ]
+}

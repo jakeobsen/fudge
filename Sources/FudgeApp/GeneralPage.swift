@@ -1,8 +1,9 @@
 import FudgeCore
 import SwiftUI
 
-/// The Settings window's General page: Open at Login, the launcher's hotkey, Hyperkey, update checks, whether the
-/// calculator downloads exchange rates, clearing root search's history, and Import / Export.
+/// The Settings window's General page: Open at Login, the launcher's hotkey, Hyperkey, update checks, clearing root
+/// search's history, the log level, and Import / Export. The calculator's settings are on its own page
+/// (`CalculatorPage`).
 struct GeneralPage: View {
     @Bindable var model: SettingsModel
     @State private var confirmingClear = false
@@ -58,25 +59,24 @@ struct GeneralPage: View {
                 )
                 UpdateStatusRow(model: model)
             }
-            Section("Calculator") {
-                CurrencyRatesToggle(model: model)
-                Picker(
-                    selection: Binding(get: { model.numberFormat }, set: { model.setNumberFormat($0) })
-                ) {
-                    Text("Same as macOS (\(Calculator.format(1234.5, locale: .current, for: .card)))")
-                        .tag(NumberFormatSetting.system)
-                    Text("1,234.5").tag(NumberFormatSetting.dotDecimal)
-                    Text("1.234,5").tag(NumberFormatSetting.commaDecimal)
-                } label: {
-                    Text("Number format")
-                    Text("How the calculator reads the numbers you type, and writes its answers.")
-                }
-            }
             Section("Search") {
                 LabeledContent {
                     Button("Clear Search History…") { confirmingClear = true }
                 } label: {
                     Text("Root search ranks what you open often first.")
+                }
+            }
+            Section("Logs") {
+                SettingsPopupRow(
+                    "Log level",
+                    selection: Binding(get: { model.logLevel }, set: { model.setLogLevel($0) }),
+                    options: LogLevel.allCases.map { ($0, $0.title) },
+                    help: "What Fudge and your extensions write to their log files, one file each."
+                )
+                LabeledContent {
+                    Button("Show Logs") { model.showLogs() }
+                } label: {
+                    Text("Opens the folder with the log files in Finder.")
                 }
             }
             BackupSection(model: model)
@@ -116,19 +116,6 @@ struct OpenAtLoginControls: View {
         if let error = model.loginItemError {
             Text(error).foregroundStyle(.red)
         }
-    }
-}
-
-/// The calculator's currency conversion switch, saying what it downloads and from where.
-struct CurrencyRatesToggle: View {
-    let model: SettingsModel
-
-    var body: some View {
-        Toggle(isOn: Binding(get: { model.currencyRates }, set: { model.setCurrencyRates($0) })) {
-            Text("Currency conversion")
-            Text("Fudge downloads exchange rates from the European Central Bank once a day.")
-        }
-        .toggleStyle(.switch)
     }
 }
 

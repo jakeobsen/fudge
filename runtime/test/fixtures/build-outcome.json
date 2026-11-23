@@ -1,0 +1,107 @@
+{
+  "about": "fudge build --outcome's <pid>.ended.json (SPEC-156 A.3). BuildOutcome.parse (Swift) and parseBuildOutcome (the store) read each case alike.",
+  "valid": [
+    {
+      "file": "4242.ended.json",
+      "text": "{ \"pid\": 4242, \"status\": 0, \"endedAt\": \"2026-11-20T12:05:00.123Z\" }\n",
+      "status": 0,
+      "endedAt": "2026-11-20T12:05:00.123Z"
+    },
+    {
+      "file": "7.ended.json",
+      "text": "{\"pid\":7,\"status\":1,\"endedAt\":\"2026-11-20T12:05:00.000Z\"}",
+      "status": 1,
+      "endedAt": "2026-11-20T12:05:00.000Z"
+    },
+    {
+      "file": "75.ended.json",
+      "text": "{\"pid\":75,\"status\":75,\"endedAt\":\"2026-11-20T12:05:00.000Z\"}",
+      "status": 75,
+      "endedAt": "2026-11-20T12:05:00.000Z"
+    },
+    {
+      "file": "2147483647.ended.json",
+      "text": "{\"pid\":2147483647,\"status\":255,\"endedAt\":\"2026-11-20T12:05:00.000Z\",\"more\":true}",
+      "status": 255,
+      "endedAt": "2026-11-20T12:05:00.000Z"
+    },
+    {
+      "file": "143.ended.json",
+      "text": "{\"pid\":143.0,\"status\":143.0,\"endedAt\":\"2026-11-20T12:05:00.000Z\"}",
+      "status": 143,
+      "endedAt": "2026-11-20T12:05:00.000Z"
+    }
+  ],
+  "invalid": [
+    {
+      "file": "4242.json",
+      "text": "{\"pid\":4242,\"status\":0,\"endedAt\":\"2026-11-20T12:05:00.000Z\"}",
+      "why": "not an outcome's name"
+    },
+    {
+      "file": "04242.ended.json",
+      "text": "{\"pid\":4242,\"status\":0,\"endedAt\":\"2026-11-20T12:05:00.000Z\"}",
+      "why": "a leading zero"
+    },
+    {
+      "file": "4243.ended.json",
+      "text": "{\"pid\":4242,\"status\":0,\"endedAt\":\"2026-11-20T12:05:00.000Z\"}",
+      "why": "another pid"
+    },
+    {
+      "file": "4242.ended.json",
+      "text": "{\"pid\":\"4242\",\"status\":0,\"endedAt\":\"2026-11-20T12:05:00.000Z\"}",
+      "why": "the pid as a string"
+    },
+    {
+      "file": "4242.ended.json",
+      "text": "{\"pid\":4242,\"status\":256,\"endedAt\":\"2026-11-20T12:05:00.000Z\"}",
+      "why": "a status over 255"
+    },
+    {
+      "file": "4242.ended.json",
+      "text": "{\"pid\":4242,\"status\":-1,\"endedAt\":\"2026-11-20T12:05:00.000Z\"}",
+      "why": "a negative status"
+    },
+    {
+      "file": "4242.ended.json",
+      "text": "{\"pid\":4242,\"status\":1.5,\"endedAt\":\"2026-11-20T12:05:00.000Z\"}",
+      "why": "a fractional status"
+    },
+    {
+      "file": "4242.ended.json",
+      "text": "{\"pid\":4242,\"status\":true,\"endedAt\":\"2026-11-20T12:05:00.000Z\"}",
+      "why": "a boolean status"
+    },
+    {
+      "file": "4242.ended.json",
+      "text": "{\"pid\":4242,\"endedAt\":\"2026-11-20T12:05:00.000Z\"}",
+      "why": "no status"
+    },
+    {
+      "file": "4242.ended.json",
+      "text": "{\"pid\":4242,\"status\":0,\"endedAt\":\"2026-11-20T12:05:00Z\"}",
+      "why": "a time without milliseconds"
+    },
+    {
+      "file": "4242.ended.json",
+      "text": "{\"pid\":4242,\"status\":0,\"endedAt\":\"2026-11-20T13:05:00.000+01:00\"}",
+      "why": "a time with an offset"
+    },
+    {
+      "file": "4242.ended.json",
+      "text": "{\"pid\":4242,\"status\":0,\"endedAt\":\"yesterday\"}",
+      "why": "not a time"
+    },
+    {
+      "file": "4242.ended.json",
+      "text": "{\"pid\":4242,\"status\":0",
+      "why": "broken JSON"
+    },
+    {
+      "file": "4242.ended.json",
+      "text": "[4242, 0]",
+      "why": "not an object"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+{
+  "comment": "fudge build's exit status when another build of the same extension into the same folder holds its lock (BuildError.alreadyBuildingStatus), pinned for both Swift and the Extension Store's store.ts, so the two can't drift apart.",
+  "alreadyBuilding": 75
+}

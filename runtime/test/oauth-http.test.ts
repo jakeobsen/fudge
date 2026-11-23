@@ -18,6 +18,7 @@ import { pathToFileURL } from "node:url";
 import zlib from "node:zlib";
 import {
     providersFromEnvironment,
+    raycastDomainsVariable,
     redirectedMessage,
     rewriteFetch,
     refusedMessage,
@@ -226,6 +227,53 @@ test("a token request through https goes to the relay, body and headers intact",
         return request;
     });
     assert.deepEqual(relaySeen.map((seen) => [seen.path, seen.body]), [["/base/github/refresh-token", refresh]]);
+});
+
+// `trek`, `gumroad`, `moneybird`, `freeagent`, `42-api`, `ticktick-plus` and `webflow-sites` declare @raycast/utils
+// 1.x, which posts its token requests through https.request (FUD-166): their shared-proxy addresses go to the relay that
+// way too.
+test("1.x token and refresh requests to the shared proxy's addresses go to the relay", async () => {
+    answer = { server: `${base(relay)}/base/`, signedIn: false };
+    relaySeen.length = 0;
+    await exchange(() => https.request("https://oauth.raycast.com/v1/token/wMaXr3BdE5QWGZQ_RE_7GyB37_wTuBYOg_9C7CxiqtwHYOELsCyxDKiOshV4mPWXj9NZ_cZ9-dLIkELMnqbN08GDHCnmBp0i2Z950v2kWuOU88VMf3YxkiQAxj5HiAGYW9ceuj9hTDeIBYyBIXciFpDsR6WPhJAjJsHqvz2j8IQQe28efSJFi18", post), codeGrant);
+    const refresh = new URLSearchParams({ grant_type: "refresh_token", refresh_token: "r" }).toString();
+    await exchange(() => https.request("https://oauth.raycast.com/v1/refresh-token/-8K39Rwy5HY5-DzNTOVLTMvKH6EQVd5E50z9mvLJ4bahXJu2susPq_DcGFFUYrhctLgTTXZLhmYRvlBnpIaGuxPDB7QTscbBrsz63tOA4RvPXoqJYh4JKtyUgQMAheFWBKh6gvNI08Q", { method: "POST" }), refresh);
+    await exchange(() => https.request("https://oauth.raycast.com/v1/token/csqaHeGaTfTpistIum6eBy7DDrJjcz7Z-FmW_HuU4Dsa3r-AhgMCGcEWYUCLR3k-5-PirrX1ilceu4WfRqUQlyCSEiYqzkZkIIKyx5n7khRbIe99FHiEBtENFXUZRz8", post), codeGrant);
+    await exchange(() => https.request("https://oauth.raycast.com/v1/refresh-token/wg1eYlPV441y6BfHcmZi19x61W2tqw045Dup4C6M8VgERbxtFByj1J97OeYVaiPHbYWoLz3nNnZ3nzXoMnZbqP6EhVYkT8eJefM79ey5sQLcdRL9vGnlBsLMqaB_Ylg", { method: "POST" }), refresh);
+    await exchange(() => https.request("https://oauth.raycast.com/v1/token/CQ8Acmd1GJ7WXGwXJ0BdBOtMhyiGcdZMPpq7pnM74LNkLiB6gRMSJ33oMtJ0bGkKFlG3IitUPqnW89BL8_VQ6t6Vex1Znps-pAd0itvAr1q0VaawTwfopc43vp-soOvKY9A1U8dfeKGOh9iDyGWrN-_NsDEO-UcJTazwwIBaPo1hRX4kdlHWRueDTrXS", post), codeGrant);
+    await exchange(() => https.request("https://oauth.raycast.com/v1/refresh-token/sZgB0AoTB26kqAhJ7pKwC-c0Csk7iMGAQ3OwBADMcZd0ntppCz-q3tTb4VRgutPDL-JiXn4JbkrkCggRXIlO5mQp7VJvLO7XuPxJ2oqLO7dJPEziEKzsKHEeMRgfGw", { method: "POST" }), refresh);
+    await exchange(() => https.request("https://oauth.raycast.com/v1/token/q4QKZun0V_mQeHqwiKbrv-G8fdDGM1-an2xu3vMO5AqrmUHnzIC4pjEpHf_I2XWtpR3uMK42EtKQiqNljaEE3rtacJnOHrip0_2B4K7Ci3WClmnjzv9gwmyYtmaGl4qIeU10j2RTDWVRq_jeUwc5Ze2_RCwYWdikkqKsfiLkJWZVahPvI0-RaA", post), codeGrant);
+    assert.deepEqual(
+        relaySeen.map((seen) => [seen.path, seen.body]),
+        [
+            ["/base/basecamp/token", codeGrant],
+            ["/base/gumroad/refresh-token", refresh],
+            ["/base/freeagent/token", codeGrant],
+            ["/base/freeagent/refresh-token", refresh],
+            ["/base/intra42/token", codeGrant],
+            ["/base/ticktick/refresh-token", refresh],
+            ["/base/webflow/token", codeGrant],
+        ],
+    );
+});
+
+// `whoop` locks @raycast/utils 1.13.6, which posts JSON through cross-fetch's node-fetch 2, and `miro` posts JSON with
+// node-fetch 3 (FUD-166): both call https.request, so Raycast's WHOOP and Miro proxies go to the relay that way.
+test("WHOOP's and Miro's proxies go to the relay through https.request, bodies unchanged", async () => {
+    answer = { server: `${base(relay)}/base/`, signedIn: false };
+    relaySeen.length = 0;
+    const refresh = JSON.stringify({ grant_type: "refresh_token", refresh_token: "r" });
+    await exchange(() => https.request("https://whoop.oauth.raycast.com/token", post), codeGrant);
+    await exchange(() => https.request("https://whoop.oauth.raycast.com/refresh-token", post), refresh);
+    await exchange(() => https.request("https://miro.oauth.raycast.com/token", post), codeGrant);
+    assert.deepEqual(
+        relaySeen.map((seen) => [seen.path, seen.body]),
+        [
+            ["/base/whoop/token", codeGrant],
+            ["/base/whoop/refresh-token", refresh],
+            ["/base/miro/token", codeGrant],
+        ],
+    );
 });
 
 test("a redirect from the relay fails the request, and its Location is never reached", async () => {
@@ -500,4 +548,34 @@ test("an extension's global agent never carries a relay request: replaced, loose
         https.globalAgent = global;
     }
     assert.equal(secureSeen.length, 0, "nothing reached the relay unverified");
+});
+
+test("old clients' token and refresh grants to any of Raycast's hosts are refused too, before any DNS lookup", async () => {
+    // @raycast/utils 1.x posts its token requests through node-fetch, which uses https.request (SPEC-132 §2 step 5).
+    const previous = process.env[raycastDomainsVariable];
+    process.env[raycastDomainsVariable] = '["raycast.com"]';
+    const lookups: string[] = [];
+    // A lookup fails at once, so a request that isn't refused fails with another message instead of hanging.
+    const lookup = ((host: string, _options: unknown, callback: (error: Error) => void) => {
+        lookups.push(host);
+        callback(new Error("looked up"));
+    }) as unknown as net.LookupFunction;
+    try {
+        for (const [send, host] of [
+            [() => https.request("https://www.raycast.com/oauth/token", { ...post, lookup }), "www.raycast.com"],
+            [() => https.request({ hostname: "x.oauth-proxy.raycast.com", path: "/token", ...post, lookup }), "x.oauth-proxy.raycast.com"],
+            [() => http.request("http://apple-music-oauth.raycast.com/refresh-token", { ...post, lookup }), "apple-music-oauth.raycast.com"],
+        ] as const) {
+            await assert.rejects(exchange(send, codeGrant), new RegExp(refusedMessage(host, false).replace(/\./g, "\\.")));
+        }
+        const refresh = new URLSearchParams({ grant_type: "refresh_token", refresh_token: "r" }).toString();
+        await assert.rejects(
+            exchange(() => https.request("https://WWW.Raycast.COM./oauth/token", { method: "POST", lookup }), refresh),
+            /Fudge doesn't send requests to/,
+        );
+        assert.deepEqual(lookups, []);
+    } finally {
+        if (previous === undefined) delete process.env[raycastDomainsVariable];
+        else process.env[raycastDomainsVariable] = previous;
+    }
 });

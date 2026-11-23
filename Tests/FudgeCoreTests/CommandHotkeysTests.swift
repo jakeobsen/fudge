@@ -292,7 +292,7 @@ private let cmdShiftK = HotKeySpec.parse("cmd+shift+k")!
 }
 
 private func installed(_ json: String) throws -> InstalledExtension {
-    InstalledExtension(
+    InstalledExtension.topLevel(
         manifest: try JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8)),
         directory: URL(fileURLWithPath: "/nonexistent"))
 }

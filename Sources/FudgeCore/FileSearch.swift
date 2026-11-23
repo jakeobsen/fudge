@@ -311,6 +311,8 @@ public protocol FileMetadataQuery: AnyObject, Sendable {
 public actor FileSearch {
     /// The bundled extension that may call it.
     public static let extensionName = "fudge-file-search"
+    /// Its id, the key its settings and data are kept under.
+    public static let id = ExtensionID.bundled(extensionName)
     public static let defaultTimeLimit: Duration = .milliseconds(1500)
     /// How many of Spotlight's results are read, the most recently used first. A broad query on the whole Mac can
     /// gather far more.
@@ -344,9 +346,9 @@ public actor FileSearch {
 
     /// Answers one call with `params` from `session`, a session of the extension `caller`.
     public func search(
-        _ params: JSONValue, options: FileSearchOptions, session: String, caller: String?
+        _ params: JSONValue, options: FileSearchOptions, session: String, caller: ExtensionID?
     ) async throws -> [FoundFile] {
-        guard caller == Self.extensionName else { throw FileSearchError.notSearchFiles }
+        guard BundledCalls.mayCall(.filesSearch, from: caller) else { throw FileSearchError.notSearchFiles }
         let request = try FileSearchRequest(params: params)
         if let older = running[session] { await end(older, session: session, with: .superseded) }
         let call = Call(query: makeQuery())

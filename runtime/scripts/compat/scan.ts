@@ -245,3 +245,188 @@ export function apiName(path: string): string {
     const end = segments.findIndex((segment, index) => index > 0 && !/^[A-Z]/.test(segment));
     return segments.slice(0, end === -1 ? segments.length : end + 1).join(".");
 }
+
+// MARK: - Where an extension signs in (SPEC-132 §7)
+
+/** The `OAuth.RedirectMethod`s among the API paths an extension's own code uses (`Web`, `App`, …), sorted. */
+export function redirectMethods(found: Uses): string[] {
+    const methods = new Set<string>();
+    for (const path of found.api) {
+        const method = /^OAuth\.RedirectMethod\.([A-Za-z]+)$/.exec(path);
+        if (method) methods.add(method[1]!);
+    }
+    return [...methods].sort();
+}
+
+/**
+ * What one module says about where it signs in: the authorize URLs it gives an OAuth client, as esbuild wrote their
+ * expressions (`authorizeUrl` in an object, as `OAuthService` and its built-in providers take it, and `endpoint` in
+ * `authorizationRequest({ … })`), and the constants it declares, by name (`const AUTHORIZE_URL = "https://…"`), to
+ * resolve those with across the extension's files (`resolveString`). An authorize URL whose expression the scan can't
+ * find is undefined.
+ */
+export interface SignInSites {
+    urls: (string | undefined)[];
+    constants: Map<string, string[]>;
+}
+
+/** Where the expression starting at `start` ends: before the first `,`, `;`, `)`, `]` or `}` outside brackets, strings
+ * and templates, or at the end of the code. */
+function expressionEnd(code: string, start: number): number {
+    let depth = 0;
+    let index = start;
+    for (; index < code.length; index += 1) {
+        const char = code[index]!;
+        if (char === '"' || char === "'" || char === "`") index += literalLength(code.slice(index)) - 1;
+        else if (char === "(" || char === "[" || char === "{") depth += 1;
+        else if (char === ")" || char === "]" || char === "}") {
+            if (depth === 0) return index;
+            depth -= 1;
+        } else if ((char === "," || char === ";") && depth === 0) return index;
+    }
+    return index;
+}
+
+/** How long the string or template literal at the start of `text` is, its quotes included; longer than `text` when
+ * it isn't closed. */
+function literalLength(text: string): number {
+    const quote = text[0]!;
+    let index = 1;
+    while (index < text.length && text[index] !== quote) {
+        if (text[index] === "\\") index += 2;
+        else if (quote === "`" && text.startsWith("${", index)) index = expressionEnd(text, index + 2) + 1;
+        else index += 1;
+    }
+    return index + 1;
+}
+
+/** The expression starting at `start`, trimmed. */
+function expressionAt(code: string, start: number): string {
+    return code.slice(start, expressionEnd(code, start)).trim();
+}
+
+/** A property name as written in an object: an identifier, quoted or not. */
+const propertyName = String.raw`(["']?)(${identifier})\1`;
+
+/** The top-level properties of an object literal's text (`{ a: 1, "b": 2, c }`): name → value expression, a shorthand
+ * one as its own name. Undefined when it isn't an object literal. */
+function objectProperties(literal: string): Map<string, string> | undefined {
+    if (!literal.startsWith("{") || !literal.endsWith("}")) return undefined;
+    const properties = new Map<string, string>();
+    const body = literal.slice(1, -1);
+    let index = 0;
+    while (index < body.length) {
+        const end = expressionEnd(body, index);
+        const entry = body.slice(index, end).trim();
+        const named = new RegExp(String.raw`^${propertyName}\s*:\s*([\s\S]+)$`).exec(entry);
+        if (named) properties.set(named[2]!, named[3]!.trim());
+        else if (new RegExp(String.raw`^${identifier}$`).test(entry)) properties.set(entry, entry);
+        index = end + 1;
+    }
+    return properties;
+}
+
+/** Reads where one module signs in (`SignInSites`). */
+export function signInSites(code: string): SignInSites {
+    const body = withoutImports(code);
+    const urls: (string | undefined)[] = [];
+    // A property of an object: `{ authorizeUrl: "https://…" }`, and the shorthand `{ clientId, authorizeUrl }`.
+    for (const match of body.matchAll(/(?<=[{,]\s*)(["']?)authorizeUrl\1\s*:\s*/g)) {
+        urls.push(expressionAt(body, match.index + match[0].length));
+    }
+    for (const _ of body.matchAll(/(?<=[{,]\s*)authorizeUrl\s*(?=[,}])/g)) urls.push("authorizeUrl");
+    for (const match of body.matchAll(/(?<![\w$])authorizationRequest\s*\(\s*/g)) {
+        // An argument that isn't an object literal (`authorizationRequest(options)`), or one without an `endpoint`
+        // the scan can see (`{ ...options }`), has an endpoint it can't read.
+        const properties = objectProperties(expressionAt(body, match.index + match[0].length));
+        urls.push(properties?.get("endpoint"));
+    }
+    const constants = new Map<string, string[]>();
+    for (const match of body.matchAll(new RegExp(String.raw`\b(?:const|let|var)\s+(${identifier})\s*=\s*`, "g"))) {
+        const values = constants.get(match[1]!) ?? [];
+        values.push(expressionAt(body, match.index + match[0].length));
+        constants.set(match[1]!, values);
+    }
+    return { urls, constants };
+}
+
+/** The top-level operands of a sum (`a + "b" + c`), outside brackets, strings and templates. */
+function operands(expression: string): string[] {
+    const parts: string[] = [];
+    let depth = 0;
+    let start = 0;
+    for (let index = 0; index < expression.length; index += 1) {
+        const char = expression[index]!;
+        if (char === '"' || char === "'" || char === "`") index += literalLength(expression.slice(index)) - 1;
+        else if (char === "(" || char === "[" || char === "{") depth += 1;
+        else if (char === ")" || char === "]" || char === "}") depth -= 1;
+        else if (char === "+" && depth === 0) {
+            parts.push(expression.slice(start, index).trim());
+            start = index + 1;
+        }
+    }
+    parts.push(expression.slice(start).trim());
+    return parts;
+}
+
+/** A string literal's or a template's plain text, with JavaScript's escapes read; undefined for an escape it doesn't
+ * know. */
+function unescaped(text: string): string | undefined {
+    let failed = false;
+    const value = text.replace(/\\(u\{[0-9a-fA-F]+\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|[\s\S])/g, (_, escape: string) => {
+        if (escape.startsWith("u{")) return String.fromCodePoint(parseInt(escape.slice(2, -1), 16));
+        if (/^[ux]/.test(escape) && escape.length > 1) return String.fromCharCode(parseInt(escape.slice(1), 16));
+        const simple: Record<string, string> = { n: "\n", t: "\t", r: "\r", "0": "\0", "\n": "" };
+        if (escape in simple) return simple[escape]!;
+        if (/[\\'"`/$?#&=:.-]/.test(escape)) return escape;
+        failed = true;
+        return "";
+    });
+    return failed ? undefined : value;
+}
+
+/**
+ * The string an expression stands for, when the scan can tell: a string literal, a template whose placeholders it
+ * can tell, a constant with one value, or a sum of those. Anything else (a parameter, a preference, a call) is
+ * undefined.
+ */
+export function resolveString(expression: string, constants: Map<string, string[]>, depth = 0): string | undefined {
+    if (depth > 8) return undefined;
+    let text = expression.trim();
+    // Parentheses around the whole expression: `("https://" + host)`.
+    while (text.startsWith("(") && text.endsWith(")") && expressionEnd(text, 1) === text.length - 1) {
+        text = text.slice(1, -1).trim();
+    }
+    const parts = operands(text);
+    if (parts.length > 1) {
+        const values = parts.map((part) => resolveString(part, constants, depth + 1));
+        return values.every((value) => value !== undefined) ? values.join("") : undefined;
+    }
+    if ((text.startsWith('"') || text.startsWith("'")) && literalLength(text) === text.length) {
+        return unescaped(text.slice(1, -1));
+    }
+    if (text.startsWith("`") && literalLength(text) === text.length) {
+        let value = "";
+        let index = 1;
+        let plain = 1;
+        while (index < text.length - 1) {
+            if (text[index] === "\\") index += 2;
+            else if (text.startsWith("${", index)) {
+                const end = expressionEnd(text, index + 2);
+                const before = unescaped(text.slice(plain, index));
+                const inside = resolveString(text.slice(index + 2, end), constants, depth + 1);
+                if (before === undefined || inside === undefined) return undefined;
+                value += before + inside;
+                index = end + 1;
+                plain = index;
+            } else index += 1;
+        }
+        const rest = unescaped(text.slice(plain, text.length - 1));
+        return rest === undefined ? undefined : value + rest;
+    }
+    if (new RegExp(String.raw`^${identifier}$`).test(text)) {
+        const values = new Set((constants.get(text) ?? []).map((value) => resolveString(value, constants, depth + 1)));
+        return values.size === 1 ? [...values][0] : undefined;
+    }
+    return undefined;
+}

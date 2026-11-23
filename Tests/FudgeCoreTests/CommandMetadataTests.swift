@@ -5,8 +5,11 @@ import Testing
 
 private func installed(_ json: String) throws -> InstalledExtension {
     let manifest = try JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8))
-    return InstalledExtension(manifest: manifest, directory: URL(fileURLWithPath: "/nonexistent/\(manifest.name)"))
+    return InstalledExtension.topLevel(
+        manifest: manifest, directory: URL(fileURLWithPath: "/nonexistent/\(manifest.name)"))
 }
+
+private func id(_ key: String) -> ExtensionID { ExtensionID(stored: key)! }
 
 private let inbox = """
     {"name": "inbox", "title": "Inbox", "commands": [
@@ -21,19 +24,19 @@ private let inbox = """
     #expect(CommandMetadata.load(from: file) == CommandMetadata(), "a missing file is empty")
 
     var metadata = CommandMetadata()
-    metadata.setSubtitle("3 unread", extension: "inbox", command: "unread")
-    metadata.setSubtitle("", extension: "inbox", command: "search")
+    metadata.setSubtitle("3 unread", extension: id("inbox"), command: "unread")
+    metadata.setSubtitle("", extension: id("inbox"), command: "search")
     try metadata.save(to: file)
 
     let read = CommandMetadata.load(from: file)
     #expect(read == metadata)
-    #expect(read.subtitle(extension: "inbox", command: "unread") == "3 unread")
-    #expect(read.subtitle(extension: "inbox", command: "search") == "", "an empty subtitle is a subtitle")
+    #expect(read.subtitle(extension: id("inbox"), command: "unread") == "3 unread")
+    #expect(read.subtitle(extension: id("inbox"), command: "search") == "", "an empty subtitle is a subtitle")
     let json = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: [String: String]]
     #expect(json == ["inbox/unread": ["subtitle": "3 unread"], "inbox/search": ["subtitle": ""]])
 
     var reset = read
-    reset.setSubtitle(nil, extension: "inbox", command: "unread")
+    reset.setSubtitle(nil, extension: id("inbox"), command: "unread")
     try reset.save(to: file)
     #expect(CommandMetadata.load(from: file).subtitles == ["inbox/search": ""])
 }
@@ -61,8 +64,8 @@ private let inbox = """
     var metadata = CommandMetadata.load(from: file)
     #expect(metadata.subtitles == ["a/b": "x"])
 
-    metadata.setSubtitle(nil, extension: "a", command: "b")
-    metadata.setSubtitle("new", extension: "a", command: "c")
+    metadata.setSubtitle(nil, extension: id("a"), command: "b")
+    metadata.setSubtitle("new", extension: id("a"), command: "c")
     try metadata.save(to: file)
     let written = try JSONDecoder().decode([String: JSONValue].self, from: Data(contentsOf: file))
     #expect(
@@ -113,16 +116,16 @@ private let inbox = """
     #expect(plain.map(\.extensionTitle) == ["Inbox", "Inbox", "Inbox"])
 
     var metadata = CommandMetadata()
-    metadata.setSubtitle("3 unread", extension: "inbox", command: "unread")
-    metadata.setSubtitle("Gmail", extension: "inbox", command: "search")
-    metadata.setSubtitle("elsewhere", extension: "other", command: "unread")
-    metadata.setSubtitle("2 new", extension: "inbox", command: "status")
+    metadata.setSubtitle("3 unread", extension: id("inbox"), command: "unread")
+    metadata.setSubtitle("Gmail", extension: id("inbox"), command: "search")
+    metadata.setSubtitle("elsewhere", extension: id("other"), command: "unread")
+    metadata.setSubtitle("2 new", extension: id("inbox"), command: "status")
     #expect(RootItem.commands(of: inbox, metadata: metadata).map(\.subtitle) == ["3 unread", "Gmail", "2 new"])
 }
 
 @Test func rootSearchStillFindsACommandByItsExtensionTitleWhenItShowsAnotherSubtitle() throws {
     var metadata = CommandMetadata()
-    metadata.setSubtitle("3 unread", extension: "inbox", command: "unread")
+    metadata.setSubtitle("3 unread", extension: id("inbox"), command: "unread")
     let items = RootItem.commands(of: try installed(inbox), metadata: metadata)
     let found = RootSearch.rank(items, query: "inbox", history: LaunchHistory()).map(\.title)
     #expect(found == ["Search Mail", "Status", "Unread Count"])
@@ -132,7 +135,7 @@ private let inbox = """
 @Test func commandMetadataNeverOverwritesAFileItCantRead() throws {
     let file = try Fixtures.temporaryDirectory().appendingPathComponent("command-metadata.json")
     var metadata = CommandMetadata()
-    metadata.setSubtitle("3 unread", extension: "inbox", command: "unread")
+    metadata.setSubtitle("3 unread", extension: id("inbox"), command: "unread")
     for unreadable in ["not json", "[1, 2]", "\"text\"", "{\"a/b\": "] {
         try Data(unreadable.utf8).write(to: file)
         #expect(!CommandMetadata.isWritable(file), "\(unreadable)")

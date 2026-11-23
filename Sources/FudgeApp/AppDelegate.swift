@@ -44,6 +44,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var availableSeparator: NSMenuItem?
     /// Not in snapshot runs, which install nothing that outlives them.
     private var extensionsWatcher: ExtensionsWatcher?
+    /// The only code that touches `UNUserNotificationCenter` (SPEC-156 C.6), made in `applicationWillFinishLaunching`
+    /// so a click that launches Fudge is delivered. Never in snapshot runs.
+    private var systemNotifications: SystemInstallNotifications?
+    /// The notifications picked at launch (`FixedInstallNotifications.pick`): the system's, or a snapshot run's fixed one.
+    private var installNotifications: (any InstallNotifications)?
+    /// The store's builds' outcomes in `installing/` (SPEC-156 C.2). Not in snapshot runs.
+    private var installOutcomes: InstallOutcomeWatcher?
     /// The Quick Look preview (SPEC-049). Never in snapshot runs.
     private var quickLook: QuickLookPreview?
     /// Hyperkey (SPEC-093): Caps Lock as ⌘⌥⌃⇧. Never in snapshot runs.
@@ -53,17 +60,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationSignal: DispatchSourceSignal?
 
     func applicationWillTerminate(_ notification: Notification) {
+        // The last log lines reach their files.
+        FudgeLog.flush()
         // Clipboard History's decrypted image copies don't outlive the run.
         model?.clipboardHistory.clearPreviews()
         // Nor does Hyperkey's Caps Lock mapping.
         hyperkey?.quit()
     }
 
+    /// Raycast's return links (SPEC-132 §3.1), handed on by Fudge Links (SPEC-140), since Fudge.app declares no URL
+    /// types: the get-URL handler goes in before launch finishes, so a link that launches Fudge isn't missed. Such a
+    /// link finds no sign-in waiting, and is ignored.
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSAppleEventManager.shared().setEventHandler(
+            self, andSelector: #selector(openLink(_:withReplyEvent:)), forEventClass: AEEventClass(kInternetEventClass),
+            andEventID: AEEventID(kAEGetURL))
+        // Install notifications' delegate goes in before launch finishes too, so a click that launches Fudge is
+        // delivered; a snapshot run never touches Notification Center, and gets a fixed answer (`--notifications`).
+        let picked = FixedInstallNotifications.pick(
+            snapshot: Snapshot.isRequested(CommandLine.arguments), arguments: CommandLine.arguments
+        ) { SystemInstallNotifications() }
+        installNotifications = picked
+        systemNotifications = picked as? SystemInstallNotifications
+    }
+
+    /// A `raycast:` or `com.raycast:` link Fudge Links handed on. Only the direct sign-in waiting for it takes it;
+    /// nothing logs it or its query.
+    @objc private func openLink(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
+        guard let link = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue else { return }
+        model?.receiveLink(link)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Fudge's own lines and every extension's go to their files from here on (SPEC-124); a snapshot run's go to
+        // its own support folder.
+        FudgeLog.start(
+            writer: LogWriter(
+                folder: FudgePaths.logsDirectory(),
+                header: "Fudge \(FudgeVersion.current) (\(FudgeVersion.describe))"),
+            level: FudgeSettings.load(from: paths.settingsFile).logLevel)
         NSApp.mainMenu = Self.mainMenu()
         // Before the extensions first load (in the model's `init`) and before the watcher starts, so it never sees
-        // the move. Snapshot runs change nothing.
-        if !Snapshot.isRequested(CommandLine.arguments) { Self.moveInstallsUp(in: paths.extensionsDirectory) }
+        // the moves. Snapshot runs change nothing.
+        if !Snapshot.isRequested(CommandLine.arguments) {
+            // Every install from before goes into Raycast's folder, keeping its name as its id (FUD-183). A move
+            // another Fudge is running (`fudge build`) is waited for at most 5 s; then the extensions load as they are.
+            ExtensionLayout.moveAtLaunch(extensions: paths.extensionsDirectory)
+            Self.moveInstallsUp(in: paths.extensionsDirectory)
+        }
         model = LauncherModel(paths: paths)
         // Snapshots never ask Spotlight: Search Files gets `--found-files`' results, or none.
         if let snapshot = Snapshot(arguments: CommandLine.arguments) {
@@ -101,6 +145,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 settingsModel.windowPositions.first { $0.name == editing }.map(PositionDraft.init(editing:))
                 ?? PositionDraft()
         }
+        if Snapshot(arguments: CommandLine.arguments)?.signInServicesList == true {
+            settingsModel.snapshotServicesList = []
+        }
+        if let snapshot = Snapshot(arguments: CommandLine.arguments), let address = snapshot.addRepository {
+            var draft = ExtensionRepositoryDraft()
+            draft.address = address
+            // Add goes through the page's own path, so a refusal's reason shows as the user would see it, and an
+            // accepted address closes the window.
+            let closes = snapshot.addRepositoryAdd && settingsModel.addRepository(&draft)
+            settingsModel.snapshotAddRepository = closes ? nil : draft
+        }
         // One calendar source for both, so the Calendar and Permissions pages say what My Schedule reads.
         settingsModel.calendarSource = model.calendarSource
         settingsModel.loadCalendars()
@@ -128,6 +183,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ? Snapshot(arguments: CommandLine.arguments)?.signIns ?? MemorySecretStore() : KeychainSecretStore()
         model.tokenSecrets = secrets
         settingsModel.tokenSecrets = secrets
+        // The services the chosen sign-in server offers, picked once here: the server, or in a snapshot run
+        // `--sign-in-services`' fixed answer, never the network, even with a server chosen in `settings.json`.
+        settingsModel.signInServicesFetcher = SignInServices.fetcher(
+            snapshot: Snapshot.isRequested(CommandLine.arguments),
+            snapshotValue: Snapshot(arguments: CommandLine.arguments)?.signInServices,
+            network: { URLSessionSignInServices(userAgent: UpdateCheck.userAgent(version: FudgeVersion.current)) })
+        // Who opens Raycast's links: LaunchServices; a snapshot run's fixed answer (`--raycast-links`), so it never
+        // reads or changes the Mac's handlers, or registers Fudge Links.
+        let raycastLinks: any RaycastLinks =
+            Snapshot.isRequested(CommandLine.arguments)
+            ? FixedRaycastLinks(
+                snapshotValue: Snapshot(arguments: CommandLine.arguments)?.raycastLinks ?? "",
+                helper: RaycastLinksHelper.url(in: Bundle.main.bundleURL))
+            : SystemRaycastLinks()
+        model.raycastLinks = raycastLinks
+        settingsModel.raycastLinks = raycastLinks
+        settingsModel.snapshotOwnAppSignIn = Snapshot(arguments: CommandLine.arguments)?.ownAppSignIn ?? false
+        // Install notifications (SPEC-156): macOS's in the real app, a fixed answer (`--notifications`) in a snapshot
+        // run, which never posts or asks; both picked at launch.
+        let notifications = installNotifications ?? FixedInstallNotifications(.unknown)
+        let settingsFile = paths.settingsFile
+        let notices = InstallNoticeCenter(notifications: notifications) {
+            InstallNotificationSwitches(FudgeSettings.load(from: settingsFile))
+        }
+        model.installNotices = notices
+        settingsModel.notifications = notifications
+        settingsModel.askForNotifications = { needsSwitch in await notices.ask(needsSwitch: needsSwitch) }
         settingsWindow = SettingsWindowController(model: settingsModel)
         onboardingWindow = OnboardingWindowController(settings: settingsModel, file: paths.onboardingFile)
         onboardingWindow.openLauncher = { [weak self] in self?.showPanel() }
@@ -143,6 +225,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.isVisible = { [weak self] in self?.panel.isVisible ?? false }
         model.confirm = { [weak self] request, origin in await self?.confirm(request, origin: origin) ?? false }
         model.openPanel = { [weak self] options in await self?.chooseFiles(options) }
+        // The calculator's towns and countries, read from the app's resources; nothing is downloaded.
+        model.loadPlaces(waiting: Snapshot(arguments: CommandLine.arguments) != nil)
+        // Other places with Apple Maps, only while the setting is on. A snapshot run never asks Apple, even with the
+        // setting on in its settings.
+        let asksApple = Snapshot(arguments: CommandLine.arguments) == nil
+        model.placeLookups = PlaceLookups(
+            enabled: FudgeSettings.load(from: paths.settingsFile).appleMapsPlaces,
+            makeLookup: {
+                if asksApple { return MapKitPlaceLookup() }
+                return InertPlaceLookup()
+            })
         // The calculator's exchange rates: the cached ones now, downloads only while the setting is on.
         exchangeRates = ExchangeRateUpdater(
             fetcher: ECBRatesFetcher(), cacheFile: paths.exchangeRatesFile,
@@ -172,6 +265,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Snapshots get a fixed Input Monitoring answer, and no keyboard tap.
             let allowed = Snapshot(arguments: CommandLine.arguments)?.inputMonitoring ?? false
             settingsModel.inputMonitoring = InputMonitoringStatus(read: { allowed })
+            // …and a fixed answer about the Command Line Tools, so no run asks the Mac.
+            let tools = CommandLineTools.fixedStatus(Snapshot(arguments: CommandLine.arguments)?.commandLineTools)
+            settingsModel.resolveCommandLineTools = { _ in tools }
+            model.resolveCommandLineTools = { _ in tools }
         } else {
             let expansion = SnippetExpansion(paths: paths)
             // Typing into the launcher (a non-activating panel) or a Fudge window never expands.
@@ -186,12 +283,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.clipboardHistoryChanged = { [weak self] in self?.model.applySettings() }
         settingsModel.deleteClipboardHistory = { [weak self] in self?.model.clipboardHistory.deleteAll() }
         settingsModel.stopExtensionStore = { [weak self] in
-            await self?.model.unloadSessions(ofExtension: ExtensionStore.extensionName)
+            await self?.model.unloadSessions(ofExtension: ExtensionStore.id)
         }
         settingsModel.currencyRatesChanged = { [weak self] on in
             guard let self else { return }
             Task { await self.exchangeRates.setEnabled(on, now: Date()) }
         }
+        settingsModel.appleMapsPlacesChanged = { [weak self] on in self?.model.placeLookups?.setEnabled(on) }
         // The model reads the setting again, and the open query's card is evaluated again in the new format.
         settingsModel.numberFormatChanged = { [weak self] in self?.model.applySettings() }
         // Update checks: only the real app asks GitHub, and only once a setting is chosen. A snapshot run never asks
@@ -340,12 +438,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if id == HotKeyRegistry.launcherID {
                 self.togglePanel()
             } else if let command = self.registry.command(for: id) {
+                // In the launcher, an action with the hotkey's keys runs instead (SPEC-127).
+                if let spec = self.registry.commands[command],
+                    self.model.pressHotkey(spec, launcherHoldsKeyboard: self.panel.holdsKeyboard)
+                {
+                    return
+                }
                 self.model.openFromHotkey(command)
             }
         }
         let spec = FudgeSettings.load(from: paths.settingsFile).launcherHotkey
         if !registry.setLauncher(spec) {
-            FileHandle.standardError.write(Data("fudge: couldn't register the shortcut \(spec)\n".utf8))
+            FudgeLog.error("couldn't register the shortcut \(spec)")
         }
         installStatusItem()
         launcherHotkeyChanged()
@@ -373,9 +477,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try watcher.start()
         } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't watch \(watcher.directory.path): \(error)\n".utf8))
+            FudgeLog.error("couldn't watch \(watcher.directory.path): \(error)")
         }
         extensionsWatcher = watcher
+
+        // The store's builds that end while no store session is loaded (SPEC-156 C.2): the stream starts first, then
+        // the folder is read once, and outcomes already there count as decided.
+        if !Snapshot.isRequested(CommandLine.arguments), let notices = model.installNotices {
+            let outcomes = InstallOutcomeWatcher(
+                folder: ExtensionStore.installingDirectory(paths), found: { notices.foundAtLaunch($0) },
+                ended: { [weak self] ends in
+                    let loaded = self?.model.storeSessionLoaded ?? false
+                    Task { await notices.outcomes(ends, storeLoaded: loaded) }
+                })
+            outcomes.start()
+            installOutcomes = outcomes
+            model.readInstallOutcomes = { then in outcomes.readAll(then: then) }
+            // A click, the one that launched Fudge included, opens the store now that the extensions have loaded.
+            systemNotifications?.onClick { [weak self] target in self?.model.notificationClicked(target) }
+        }
 
         // Run from the disk image or a translocated copy, Fudge offers to move itself first (SPEC-114 §1), before
         // onboarding; moving quits this copy and opens the one in Applications.
@@ -402,15 +522,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return registry.refused
     }
 
-    /// Installs from before SPEC-123 keep their commands in `dist/`. Each moves to Raycast's layout once, at launch
-    /// (`ExtensionLayout.moveUp`); one stopped halfway finishes at the next launch, and `entry(for:)`'s fallback covers
-    /// it until then. One that can't move is left on the fallback, with a log line. The bundled extensions, built with
-    /// the app, are never touched.
+    /// Installs from before SPEC-123 keep their commands in `dist/`. Each install the walk finds moves to Raycast's
+    /// layout once, at launch (`ExtensionLayout.moveUp`); one stopped halfway finishes at the next launch, and
+    /// `entry(for:)`'s fallback covers it until then. One that can't move is left on the fallback, with a log line
+    /// naming its folder relative to the extensions folder. The bundled extensions, built with the app, are never
+    /// touched.
     private static func moveInstallsUp(in extensionsDirectory: URL) {
         let log = Logger(subsystem: "io.github.jakeobsen.fudge", category: "extensions")
-        for (name, outcome) in ExtensionLayout.moveUp(in: extensionsDirectory) {
+        for (folder, outcome) in ExtensionLayout.moveUp(in: extensionsDirectory) {
             guard case .leftAlone(let refusal) = outcome else { continue }
-            log.notice("install left in dist/: \(refusal.description, privacy: .public) \(name, privacy: .private)")
+            log.notice("install left in dist/: \(refusal.description, privacy: .public) \(folder, privacy: .private)")
         }
     }
 
@@ -798,6 +919,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         launcherHotkeyChanged()
         applyCommandHotkeys()
         Task { await exchangeRates.setEnabled(settings.currencyRates, now: Date()) }
+        model.placeLookups?.setEnabled(settings.appleMapsPlaces)
         Task { await updates.setSetting(settings.updateCheck, now: Date()) }
         snippetExpansion?.update()
         hyperkey?.update()
@@ -820,12 +942,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// straight), and `--open-dropdown` presses ⌘P, or in a Form opens its first Dropdown (`--open-tags`: its first
 /// TagPicker; `--open-date`: its first DatePicker's calendar). `--windows <file>` gives Switch Windows made-up
 /// windows.
-/// `--snapshot <file.png> --settings [<extension>]` renders the Settings window instead, with a fake login item
-/// whose status `--login-item <status>` sets (`enabled`, `requiresApproval`, `notRegistered`, `notFound`), and a fake
-/// Accessibility answer that `--accessibility allowed|missing` sets (`missing` by default). `--settings :permissions`
-/// shows the Permissions page.
+/// `--snapshot <file.png> --settings [<page or extension id>]` renders the Settings window instead, with a fake login
+/// item whose status `--login-item <status>` sets (`enabled`, `requiresApproval`, `notRegistered`, `notFound`), and a
+/// fake Accessibility answer that `--accessibility allowed|missing` sets (`missing` by default). `--settings
+/// :permissions` shows the Permissions page, and `--settings someone+tools+github` that extension's.
 /// `--snapshot <file.png> --onboarding [<step>]` renders the onboarding window, with the same fakes, on its pending
 /// steps from `onboarding.json`; with a step id, on every step from the start, at that one.
+/// `--own-app-sign-in` shows **Extensions with their own sign-in** as on, and `--raycast-links fudge|<app name>` says
+/// who opens Raycast's links (`fudge,<app name>`: Fudge Links does, and that app claims them too), on the Sign-in page
+/// and onboarding's Raycast step; neither touches LaunchServices. `--sign-in-services "<id>|…"` is the sign-in server's
+/// answer, and `--sign-in-services-list` with `--settings :sign-in` draws Show All's list over the page, in place of
+/// its popover.
+/// `--command-line-tools found|old|missing` is what Settings → Development and the Extension Store take Apple's Command
+/// Line Tools to be (missing by default); no snapshot run asks the Mac.
+/// `--notifications not-asked|allowed|quiet|off|unknown` is macOS's answer for Fudge's notifications on Settings →
+/// Notifications (`FixedInstallNotifications`, not asked by default); no snapshot run asks macOS or posts one.
 /// `--update-available <version>` shows that version as found by an update check, wherever Fudge shows one (the
 /// General page). No snapshot run asks GitHub. `--menu-items <file>` gives Search Menu Items a made-up app and menus.
 /// For checking the layout without looking at the screen.
@@ -853,16 +984,38 @@ struct Snapshot {
     let accessibility: Bool
     /// `--input-monitoring allowed`: the Snippets page shows Input Monitoring as allowed (else not allowed).
     let inputMonitoring: Bool
+    /// `--command-line-tools found|old|missing`: what Settings → Development and the Extension Store take the
+    /// Command Line Tools to be (`CommandLineTools.fixedStatus`; missing without it). Nothing asks the Mac.
+    let commandLineTools: String?
     /// `--onboarding [<step>]`: the onboarding window instead, optionally on one step.
     let onboarding: Bool
     let onboardingStep: OnboardingStep?
-    /// `--sign-ins <extension>/<providerId>=<Provider>,…`: sign-ins the Sign-in page lists, kept in memory.
+    /// `--sign-ins <extension id>/<providerId>=<Provider>,…`: sign-ins the Sign-in page lists, kept in memory, each
+    /// under the Keychain account its extension's id gives (`someone+tools+github/github`); one whose id the id rule
+    /// refuses is left out.
     let signIns: MemorySecretStore
+    /// `--sign-in-services "<id>|<id>|…"`: what the chosen sign-in server answers it offers (`FixedSignInServices`),
+    /// so the line under the choice names up to five of those services, or gives their number with Show All. Without
+    /// it there's no answer and the line is the plain one.
+    let signInServices: String?
+    /// `--sign-in-services-list`: the Sign-in page draws Show All's list in place, over the page, since a snapshot
+    /// run never opens a popover; nothing while the line names five services or fewer.
+    let signInServicesList: Bool
     /// `--sign-in-consent`: picks Fudge's sign-in server on the Sign-in page and saves its consent sheet instead. It
     /// implies `--settings`, as `--clipboard-consent` does.
     let signInConsent: Bool
     /// `--clipboard-consent`: turns on Clipboard History's switch and saves its consent sheet instead.
     let clipboardConsent: Bool
+    /// `--add-repository <address>`: the Extension Store's page with the **Add Repository** window drawn over it, the
+    /// address typed (SPEC-160). It implies `--settings`, as `--clipboard-consent` does.
+    let addRepository: String?
+    /// `--add-repository-add`: presses Add in that window, so a refused address shows its reason.
+    let addRepositoryAdd: Bool
+    /// `--own-app-sign-in`: **Extensions with their own sign-in** shows as on, in memory only.
+    let ownAppSignIn: Bool
+    /// `--raycast-links fudge|<app name>[,<app name>]`: who opens Raycast's links (no app without it), and who else
+    /// claims them. Nothing reads or changes LaunchServices.
+    let raycastLinks: String?
     /// `--found-files <file>`: Search Files' results, a JSON array of `files.search` entries (`~/` paths are in the
     /// home folder). Snapshots never ask Spotlight, so without it there are none.
     let foundFiles: URL?
@@ -913,20 +1066,30 @@ struct Snapshot {
         loginItem = value("--login-item").flatMap(LoginItemStatus.init(rawValue:)) ?? .notRegistered
         accessibility = value("--accessibility") == "allowed"
         inputMonitoring = value("--input-monitoring") == "allowed"
+        commandLineTools = value("--command-line-tools")
         onboarding = arguments.contains("--onboarding")
         onboardingStep = value("--onboarding").flatMap(OnboardingStep.init(rawValue:))
         signIns = MemorySecretStore()
         for entry in (value("--sign-ins") ?? "").split(separator: ",") {
             let parts = entry.split(separator: "=", maxSplits: 1).map(String.init)
-            guard parts.count == 2 else { continue }
+            // An id has no "/", so the account splits at its first one.
+            guard parts.count == 2, let slash = parts[0].firstIndex(of: "/"),
+                ExtensionID(stored: String(parts[0][..<slash])) != nil
+            else { continue }
             let tokens = StoredTokenSet(
                 accessToken: "snapshot",
                 updatedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-7200)),
                 providerName: parts[1])
             try? signIns.write(JSONEncoder().encode(tokens), account: parts[0])
         }
+        signInServices = value("--sign-in-services")
+        signInServicesList = arguments.contains("--sign-in-services-list")
         signInConsent = arguments.contains("--sign-in-consent")
         clipboardConsent = arguments.contains("--clipboard-consent")
+        addRepository = value("--add-repository")
+        addRepositoryAdd = arguments.contains("--add-repository-add")
+        ownAppSignIn = arguments.contains("--own-app-sign-in")
+        raycastLinks = value("--raycast-links")
         foundFiles = value("--found-files").map { URL(fileURLWithPath: $0) }
         calendarEvents = value("--calendar-events").map { URL(fileURLWithPath: $0) }
         clipboardEntries = value("--clipboard-entries").map { URL(fileURLWithPath: $0) }
@@ -947,10 +1110,12 @@ struct Snapshot {
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1
-            settingsExtension = next < arguments.count && !arguments[next].hasPrefix("--") ? arguments[next] : nil
+            let page = next < arguments.count && !arguments[next].hasPrefix("--") ? arguments[next] : nil
+            // A page of Fudge's own starts with ":"; any other is an extension's, by its id (FUD-183).
+            settingsExtension = page.flatMap { $0.hasPrefix(":") ? $0 : ExtensionID(stored: $0)?.key }
         } else {
             // A consent sheet belongs to its Settings page, so its flag implies `--settings` (FUD-135 §4).
-            settings = signInConsent || clipboardConsent
+            settings = signInConsent || clipboardConsent || addRepository != nil
             settingsExtension = nil
         }
     }
@@ -958,7 +1123,10 @@ struct Snapshot {
     func take(of controller: SettingsWindowController) {
         let page =
             signInConsent
-            ? SettingsModel.signInPage : clipboardConsent ? ClipboardHistory.extensionName : settingsExtension
+            ? SettingsModel.signInPage
+            : clipboardConsent
+                ? ClipboardHistory.id.key
+                : addRepository != nil ? ExtensionStore.id.key : settingsExtension
         // `--settings :commands --search text` searches the Commands page, as typing in its field does.
         controller.model.commandsSearch = search
         controller.renderOffscreen(extension: page)

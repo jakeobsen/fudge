@@ -11,7 +11,7 @@ It is not affiliated with or endorsed by Raycast.
 Fudge needs macOS 14 or later and a Mac with Apple silicon.
 On an Intel Mac, [build it from source](#building-from-source).
 
-Each release on GitHub has a disk image, `Fudge-<version>.dmg`: open it and drag Fudge to Applications.
+Each release on GitHub has a disk image, `Fudge.dmg`, also there as `Fudge-<version>.dmg`: open it and drag Fudge to Applications.
 Fudge includes the Node.js that runs extensions, so there's nothing else to install.
 If you open Fudge straight from the disk image or from Downloads, it offers to move itself to Applications, since it can't open at login from there.
 On an account that can't add apps to `/Applications`, it moves to the Applications folder in your home folder instead.
@@ -22,17 +22,34 @@ It lives in the menu bar, with no Dock icon.
 ### The `fudge` command-line tool
 
 Fudge includes `fudge`, a command-line tool for building and checking extensions, at `/Applications/Fudge.app/Contents/Helpers/fudge`.
-To run it as `fudge`, link it into a folder on your `PATH`; it finds Fudge's own Node.js and esbuild through the link:
+To run it as `fudge`, link it into a folder on your `PATH`; it finds Fudge's own Node.js and esbuild through the link.
+A new Mac may not have `/usr/local/bin` yet, so the first line creates it:
 
 ```bash
+sudo mkdir -p /usr/local/bin
 sudo ln -s /Applications/Fudge.app/Contents/Helpers/fudge /usr/local/bin/fudge
 ```
 
 - `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for Fudge, which picks it up within a second, with nothing to reload.
   Run it again after changing the extension.
+  It goes in the development folder, `fudgeapp/development`, beside any extension of the same name that the Extension Store installed from Raycast's official repository, with its own settings, data and sign-ins, and Fudge shows it as "<title> (development)".
+  `--repository raycast/extensions` installs it in the folder of Raycast's official repository instead: it replaces the Extension Store's install of that name and keeps its settings, until the Extension Store's next Update of it.
+  To get Raycast's official version back, uninstall it with ⌃X in the Extension Store, then Install it there again.
   `--into <folder>` installs it in that extensions folder instead.
+  It stops at once, with exit status 75, while another build of the same extension into the same repository's folder is running.
+  `--outcome <folder>` writes its exit status to `<folder>/<pid>.ended.json` as it ends, which the Extension Store passes so that it learns how a build ended after the store was closed.
 - `fudge scan <folder>` says what the extension uses that Fudge doesn't have yet or doesn't support, without building or running it (`--json` for a script).
 - `fudge version` prints Fudge's version.
+
+Fudge keeps each repository's extensions in a folder of their own, in its extensions folder (`~/Library/Application Support/fudge/extensions`):
+
+- `raycast/extensions/<name>`: Raycast's official repository, where the Extension Store installs.
+- `<owner>/<repository>/<name>`: a repository on GitHub, and `<server>/<path>/<name>` one on another server.
+- `fudgeapp/development/<name>`: the development folder, for `fudge build` and `make install-extension` without `--repository`.
+
+Each repository's extensions keep their own settings, data and sign-ins, so two extensions of one name from different places never share them.
+The first time this version of Fudge starts, it moves every extension already installed to `raycast/extensions/<name>`, and each keeps its settings.
+A later `fudge build` of one of them without `--repository` makes a separate copy in the development folder.
 
 ## First run
 
@@ -62,6 +79,8 @@ Both read the `@raycast/api` features the extension's code uses, without running
 - **Raycast AI and the Raycast Browser Extension aren't supported.**
   Fudge checks each command on its own, following the files it imports, and installs a command that uses either turned off.
   The store marks an extension with some such commands **Partly compatible**, and one with only such commands **Not compatible**.
+- **Parts written in Rust** are for Windows, so Fudge leaves them out, as Raycast does on a Mac.
+- **Parts written in Swift** are built on your Mac once Apple's Command Line Tools are set up in **Settings… → Development**, and the first build takes a few minutes.
 - **A feature Fudge doesn't have yet** makes the command that uses it stop with a message naming it.
 - **Signing in:** extensions that sign in to a service with OAuth go through a sign-in server, which you pick under **Settings… → Sign-in** (see [Signing in](#signing-in)).
   Fudge's sign-in server offers GitHub and Atlassian (Jira and Confluence), and a company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth).
@@ -74,6 +93,8 @@ Esc goes back, then hides the window.
 
 Extensions run with your permissions, and while they run they can reach each other's data, as in Raycast.
 Install the ones you trust.
+An extension may ask to use your contacts, location, photos, calendars, reminders, camera, microphone or Bluetooth, and macOS asks you first.
+macOS keeps one answer for Fudge, so a yes covers every extension, and you can change it under **System Settings → Privacy & Security**.
 
 When you open Fudge again within 90 seconds, it's as you left it.
 After longer, it starts over on an empty root search.
@@ -140,7 +161,7 @@ If Caps Lock is already mapped to another key, Fudge leaves it alone and says so
 
 ### Extension Store
 
-The Extension Store browses the extensions in Raycast's open-source repository and installs the ones you choose.
+The Extension Store browses the extensions in Raycast's open-source repository and the extension repositories you add, and installs the ones you choose.
 It takes two steps:
 
 1. Enable **Extension Store** under **Settings… → Commands**, and it shows up in Fudge.
@@ -163,15 +184,47 @@ In the **Extension Store** command, search the extensions, or pick a category in
   After you change the proxy settings, quit and reopen Fudge for the store to use them.
 - The store needs Git, which comes with Apple's Command Line Tools.
   Without them, the store offers **Install Command Line Tools** (↵), macOS's own installer, and ⌘R checks again once they're in.
+- While an extension installs, its row says so, and closing the store doesn't stop the install: a store you open again shows it installing and records it when it's done.
+  When an install or update finishes or fails while the store isn't on screen, Fudge shows a notification, and clicking it opens the store on that extension.
+  macOS asks whether Fudge may show notifications the first time you confirm an install or update.
+  An install that failed after you closed the store is marked on its row the next time you open the store, with **Try Again** and **Show Error**.
+  **Settings… → Notifications** chooses which of these notifications Fudge shows.
 - It never touches extensions you installed with `fudge build` yourself.
-  An extension installs under its own name, so it can't be installed while another extension of that name is: uninstall that one first.
+  An extension of the same name from another repository, or your own development build in the development folder, doesn't stop an install: each is installed beside the other, with its own settings and data.
+  It installs each extension in its repository's folder, and won't install one there while an extension of that name that it didn't install is in that folder, such as one built with `fudge build --repository <owner>/<repository>`.
+  The Extension Store has no record of such a build, so it can't uninstall it either: to remove it, delete its folder `<owner>/<repository>/<name>` in Fudge's extensions folder, for example `raycast/extensions/<name>`.
+- It never updates your own development builds, but shows each under **Installed** as **Development build**, and ⌃X moves it to the Trash.
+  Those rows are there only while the Extension Store is on (it's off until you turn it on), so with it off, remove a development build by deleting its folder `fudgeapp/development/<name>` in Fudge's extensions folder.
+
+#### Extension repositories
+
+Besides Raycast's official repository, the Extension Store can list the extensions in repositories you add: any Git repository with an `extensions` folder holding one folder per extension, as Raycast's has.
+Add one under **Settings… → Extension Store → Extension Repositories**: click **Add Repository…**, type its address, such as `https://github.com/owner/repository`, and a branch if it isn't the default one, then click **Add**.
+Only public `https://` addresses work, without a user name or password, and Fudge never asks for a password.
+The **Add Repository** window says that a repository's extensions run their own code on your Mac, like any app you install: only add one you trust.
+Raycast's official repository is in the list from the start, as `raycast/extensions`, and can be switched off or removed like any other; **Add Raycast's Repository** puts it back.
+Each repository has a switch, Raycast's official repository too; one that's off keeps its copy, but the Extension Store doesn't list or update its extensions.
+Under each one is what the Extension Store last found there: how many extensions it lists, or what went wrong.
+The minus button removes a repository, Raycast's official repository too; the extensions you installed from it stay installed, but get no more updates.
+They show under **Installed** as **Not updated**, as do those of a repository that's switched off, and ⌃X uninstalls them there.
+Each extension's details name the repository it's from, a row from a repository you added names it too, and with more than one repository on, the dropdown also filters by repository.
+An extension of the same name in two repositories can be installed from both: each is its own extension, with its own settings and data.
+You can add up to 10, and `https://github.com/fudgeapp/development` can't be added, since Fudge keeps your own builds in that repository's folder.
+Changes reach the Extension Store the next time you open it, or when you press ⌘R in it.
 
 ### Signing in
 
 Some extensions sign in to a service, such as GitHub or Jira.
 Pick a sign-in server under **Settings… → Sign-in**: **Fudge's sign-in server**, or **Your own server…**.
 Fudge's sign-in server offers GitHub and Atlassian (Jira and Confluence).
-A company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth), which can also offer Linear, Slack, Asana, Google and Zoom.
+Under your choice, the page names up to five of the services the chosen server offers, when the server lists them.
+With more than five, it gives their number, and **Show All** lists them.
+A company can run its own with [fudge-oauth](https://github.com/jakeobsen/fudge-oauth), which supports many more services.
+[fudge-oauth's README](https://github.com/jakeobsen/fudge-oauth#confirmed-integrations) lists the services confirmed so far.
+Extensions that sign in with an app of their own work too, once **Extensions with their own sign-in** is on under **Settings… → Sign-in**.
+Some of them come back through a Raycast link, which opens Fudge only while **Fudge opens Raycast links** is on, on the same page.
+Turned on, Raycast's own links open Fudge too; turned off, they go back to Raycast.
+It can't be turned on while Fudge runs from its disk image: move Fudge to Applications first.
 When an extension needs to sign in, Fudge shows **Sign in to** the service, and ↵ continues in your browser.
 Sign-ins are kept in your Keychain, and the Sign-in page lists them, each with **Sign Out**.
 Changing the server signs you out of everything.
@@ -179,6 +232,21 @@ Changing the server signs you out of everything.
 Extensions trust the certificates your Mac trusts, so a server behind your company's own certificate works as it does in Safari.
 
 An extension that takes a token in its settings (⌘⇧,) works without signing in.
+
+When Fudge isn't there to turn **Fudge opens Raycast links** off, for example after you've deleted it, Terminal can do the same.
+This shows which app opens each kind of Raycast link, by its bundle identifier:
+
+```sh
+osascript -l JavaScript -e 'ObjC.import("CoreServices"); ["raycast", "com.raycast"].map(s => s + ": " + (ObjC.unwrap(ObjC.castRefToObject($.LSCopyDefaultHandlerForURLScheme($(s)))) || "none")).join("\n")'
+```
+
+And this gives both back to Raycast (`com.raycast.macos`):
+
+```sh
+osascript -l JavaScript -e 'ObjC.import("CoreServices"); ["raycast", "com.raycast"].forEach(s => $.LSSetDefaultHandlerForURLScheme($(s), $("com.raycast.macos")))'
+```
+
+Run the first command again to check.
 
 ### Menu bar commands
 
@@ -291,11 +359,19 @@ No keyword can contain another, so a keyword never expands inside a longer one.
 
 Type a calculation in root search and the answer shows above the results: arithmetic (`5+5/10*39`), units (`13kg to lbs`), time zones (`3pm cet in pst`) and currencies (`100 usd to eur`, `€100 in usd`, `100 € in kr`). ↵ copies the answer.
 
-Numbers follow your Mac's number format, or the one you pick under **Settings… → General → Number format**: "1,234.5" or "1.234,5".
+Time zones also know towns of 15,000 people or more (`3pm roskilde to kouvola`), countries with one time zone (`denmark time`) and offsets from UTC (`gmt+2 to utc`).
+
+Numbers follow your Mac's number format, or the one you pick under **Settings… → Calculator → Number format** (in the Extensions part of the sidebar): "1,234.5" or "1.234,5".
 In "1.234,5", `1.000 + 1` is 1.001, and `1.5` isn't a number, so it gets no answer rather than a wrong one.
 
 Currency conversion uses the European Central Bank's daily exchange rates.
-Turn it on under **Settings… → General**; until then, a currency query shows a card that takes you there.
+Turn it on under **Settings… → Calculator**; until then, a currency query shows a card that takes you there.
+
+For places the calculator doesn't know, such as small towns, turn on **Look up other places with Apple Maps** under **Settings… → Calculator**.
+Then `time in hirtshals` shows its card once Apple Maps has found the town.
+
+Town and country names come from [GeoNames](https://www.geonames.org), under the [Creative Commons Attribution 4.0 license](https://creativecommons.org/licenses/by/4.0/).
+Fudge keeps only each town's names, country, population and time zone.
 
 ### Search Files
 
@@ -414,10 +490,21 @@ Fudge never downloads or installs anything by itself.
   The summary also lists the backup's extensions that changed since it was made (a new version, an update from the Extension Store, or installed another way); they're imported all the same.
   It then lists the extensions in the backup that aren't installed here, so you can reinstall them.
   It installs nothing itself.
-- **The extensions themselves aren't in a backup**, only the list, and neither are caches, the exchange rates, your sign-ins, the sign-in server or the Extension Store's switch (set these again yourself).
+- **The extensions themselves aren't in a backup**, only the list, and neither are caches, the exchange rates, your sign-ins, the sign-in server, the Extension Store's switch or its list of extension repositories (set these again yourself).
 - Before importing, Fudge saves what it's about to replace in `backups/` in its support folder (`~/Library/Application Support/fudge/backups`), readable by you only.
   It keeps the last 3.
   You can import one of those with **Import…**; it needs no password.
+
+## FAQ
+
+### Why doesn't Fudge limit what each extension can do?
+
+We tried.
+The firmest way macOS supports is to run an extension inside Apple's App Sandbox, the one App Store apps run in.
+A limited extension then can't control other apps with AppleScript, run tools installed with Homebrew, or read your files, so many extensions would stop working.
+Limited extensions also need a second extension runner, about 77 MB more memory, and keeping their data in place needs sandbox exceptions that Apple documents only in its old archive.
+So for now Fudge works as Raycast does: extensions run with your permissions, and one answer to macOS covers every extension.
+Install the extensions you trust.
 
 ## Building from source
 
@@ -434,10 +521,11 @@ make run     # build it and open it
 make test    # run the Swift and extension host tests
 make lint    # check formatting and types
 
-make install-extension DIR=path/to/extension   # compile and install an extension
+make install-extension DIR=path/to/extension   # compile and install an extension, in the development folder
 ```
 
 `make help` lists every target.
+Published releases are built on GitHub when a release's pull request is merged into `mainline`; `make release` builds one on your Mac.
 
 ### Keeping permissions across builds
 
@@ -468,7 +556,8 @@ Releases are signed with Fudge's Developer ID, so their permissions carry over f
 A release and a build you made yourself have different signatures, so switching between them asks for the permissions again.
 
 Every build has the hardened runtime, which notarizing needs.
-It refuses a protected resource unless the app has its entitlement, so `App/Fudge.entitlements` lists the ones Fudge uses: Apple Events and Calendars.
+It refuses a protected resource unless the app has its entitlement, so `App/Fudge.entitlements` lists the ones Fudge and its extensions may use: Apple Events, Calendars, Contacts, location, Photos, the camera and the microphone.
+Bluetooth has no entitlement, only the text macOS asks with, in `App/Info.plist` with the others.
 The Node.js inside Fudge has two of its own, in `App/Helpers/node.entitlements`: one to compile JavaScript as it runs, and one to load extensions' native addons, which others have signed.
 
 ## What's here
@@ -476,7 +565,8 @@ The Node.js inside Fudge has two of its own, in `App/Helpers/node.entitlements`:
 - `Sources/FudgeApp`: the macOS app.
   It runs in the menu bar, without a Dock icon.
 - `Sources/FudgeCLI`: the [`fudge` command-line tool](#the-fudge-command-line-tool).
-- `Sources/FudgeCore`: code shared by the app and the tool.
+- `Sources/FudgeCore`: code shared by the app, the tool and Fudge Links.
+- `Sources/FudgeLinks`: Fudge Links, a small app inside Fudge that passes Raycast's links on to Fudge once you turn on **Fudge opens Raycast links** under **Settings… → Sign-in**.
 - `runtime/`: the extension host.
   This is the Node.js program that runs extensions.
   The app talks to it over stdin/stdout.
@@ -497,6 +587,8 @@ The app icon was made with ChatGPT for this project.
 The app also ships third-party code and data, each under its own license: [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) lists them, and Fudge.app carries the same as `Third-Party Notices.txt`, linked from **About Fudge**.
 
 `runtime/vendor/unicode/` holds Unicode's emoji data and CLDR's English annotations, under the Unicode License v3; see [the license next to them](runtime/vendor/unicode/LICENSE).
+
+`runtime/vendor/geonames/` holds the calculator's towns and countries, made from GeoNames' files, under the Creative Commons Attribution 4.0 license; see [the license next to them](runtime/vendor/geonames/LICENSE).
 
 `runtime/vendor/raycast-api/index.d.ts` contains the type definitions from the `@raycast/api` package.
 They are Copyright (c) 2021 Raycast and MIT-licensed; see [the notice next to them](runtime/vendor/raycast-api/LICENSE).

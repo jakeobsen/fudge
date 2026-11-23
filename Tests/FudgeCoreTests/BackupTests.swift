@@ -50,7 +50,7 @@ private final class Folder {
 private func installed(_ name: String, title: String, version: String? = nil) throws -> InstalledExtension {
     let versionField = version.map { #","version":"\#($0)""# } ?? ""
     let json = #"{"name":"\#(name)","title":"\#(title)"\#(versionField)}"#
-    return InstalledExtension(
+    return InstalledExtension.topLevel(
         manifest: try JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8)),
         directory: URL(fileURLWithPath: "/nonexistent/\(name)"))
 }
@@ -583,6 +583,32 @@ private func storeFolder(_ trees: [String: String]) throws -> Folder {
             == [Backup.Listed(name: "alpha", title: "Alpha", version: nil, source: .store, storeTree: nil)])
 }
 
+@Test func theStoresRecordsAreReadByIdWithTheirRepository() throws {
+    let folder = try Folder()
+    try folder.write(
+        "extension-data/fudge-extension-store/installed.json",
+        #"""
+        {"alpha":{"tree":"t-alpha"},
+         "someone+tools+github":{"tree":"t-added","repository":"someone/tools"},
+         "git.example.org_8443+team+extensions+github":{"tree":"t-host","repository":"git.example.org_8443/team/extensions"},
+         "someone+tools+gist":{"tree":"t-none"},
+         "someone+tools+jira":{"tree":"t-other","repository":"someone/other"},
+         "someone+tools+linear":{"tree":"t-number","repository":7},
+         "beta":{"tree":"t-beta","repository":"someone/tools"},
+         "raycast+extensions+github":{"tree":"t-raycast","repository":"raycast/extensions"},
+         "Someone+tools+github":{"tree":"t-case","repository":"Someone/tools"},
+         "someone/tools+gitlab":{"tree":"t-slash","repository":"someone/tools"},
+         "../x":{"tree":"t"}}
+        """#)
+    #expect(
+        Backup.storeInstalls(folder.paths) == [
+            "alpha": Backup.StoreInstall(tree: "t-alpha"),
+            "someone+tools+github": Backup.StoreInstall(tree: "t-added"),
+            "git.example.org_8443+team+extensions+github": Backup.StoreInstall(tree: "t-host"),
+        ],
+        "a qualified id needs its own folder as the record's repository; a bare name needs none")
+}
+
 @Test func anOldManifestWithoutStoreTreesStillReads() throws {
     let json = #"""
         {"format":1,"fudgeVersion":"0.9","created":"2026-11-20T10:00:00Z","extensions":[
@@ -621,11 +647,11 @@ private func storeFolder(_ trees: [String: String]) throws -> Folder {
         ],
         paths: folder.paths)
     #expect(
-        changed.map { "\($0.title) — \($0.text)" } == [
-            "Alpha — version 1.2.0 in the backup, 1.3.0 now",
-            "Beta — updated in the Extension Store since the backup",
-            "Delta — installed from a local folder now",
-            "Gamma — installed from the Extension Store now",
+        changed.map { "\($0.title): \($0.text)" } == [
+            "Alpha: version 1.2.0 in the backup, 1.3.0 now",
+            "Beta: updated in the Extension Store since the backup",
+            "Delta: installed from a local folder now",
+            "Gamma: installed from the Extension Store now",
         ], "one line each, sorted by title")
 }
 
@@ -672,11 +698,43 @@ private func storeFolder(_ trees: [String: String]) throws -> Folder {
         "not-installed ones are the import's other list; the bundled store is never flagged; a name counts once")
 }
 
+/// SPEC-143: what's kept under a command named as Raycast accepts it (`caffeinateWhile`) comes back in its own case.
+@Test func aCamelCaseCommandsSettingsAndDataRoundTrip() throws {
+    let name = "made-up"
+    let source = try Folder()
+    try source.write(
+        "settings.json",
+        #"{"commands":{"\#(name)/caffeinateWhile":{"hotkey":"option+w","alias":"cw"},"\#(name)/addSchedule":{"enabled":false}}}"#
+    )
+    try source.write("history.json", #"{"\#(name)/caffeinateWhile":2}"#)
+    try source.write("command-metadata.json", #"{"\#(name)/caffeinateWhile":{"subtitle":"On"}}"#)
+    try source.write("form-values/\(name).json", #"{"addSchedule":{"when":"x"}}"#)
+    let file = source.url.appendingPathComponent("b.fudgebackup")
+    try BackupArchive.write(
+        Backup.collect(
+            from: source.paths, installed: [try installed(name, title: "Made Up")], fudgeVersion: "1.0", now: now
+        ).entries, to: file, password: password)
+    let target = try Folder()
+    _ = try Backup.apply(
+        try Backup.open(file, password: password), to: target.paths, installed: [], fudgeVersion: "1.0", now: now)
+
+    let settings = FudgeSettings.load(from: target.paths.settingsFile)
+    #expect(settings.commands["\(name)/caffeinateWhile"]?.hotkey == "option+w")
+    #expect(settings.commands["\(name)/caffeinateWhile"]?.alias == "cw")
+    #expect(!settings.isEnabled(owner: .extension(ExtensionID(stored: name)!), command: "addSchedule"))
+    for path in ["history.json", "form-values/\(name).json"] {
+        #expect(target.read(path) == source.read(path), "\(path)")
+    }
+    // A keyed file is merged extension by extension, so it's written again: its content comes back.
+    let metadata = target.json("command-metadata.json")?["\(name)/caffeinateWhile"] as? [String: Any]
+    #expect(metadata?["subtitle"] as? String == "On")
+}
+
 @Test func aBuiltInCommandsHotkeyAliasAndEnabledSurviveABackup() throws {
     let source = try Folder()
     try source.write(
         "settings.json",
-        #"{"commands":{":test-tools/first":{"hotkey":"option+l","alias":"tf"}},"extensions":{":test-tools":{"enabled":false}}}"#
+        #"{"commands":{":tools/first":{"hotkey":"option+l","alias":"tf"}},"extensions":{":tools":{"enabled":false}}}"#
     )
     let file = source.url.appendingPathComponent("b.fudgebackup")
     try BackupArchive.write(
@@ -686,9 +744,9 @@ private func storeFolder(_ trees: [String: String]) throws -> Folder {
     _ = try Backup.apply(
         try Backup.open(file, password: password), to: target.paths, installed: [], fudgeVersion: "1.0", now: now)
     let settings = FudgeSettings.load(from: target.paths.settingsFile)
-    #expect(settings.commands[":test-tools/first"]?.hotkey == "option+l")
-    #expect(settings.commands[":test-tools/first"]?.alias == "tf")
-    #expect(!settings.isEnabled(extension: ":test-tools"))
+    #expect(settings.commands[":tools/first"]?.hotkey == "option+l")
+    #expect(settings.commands[":tools/first"]?.alias == "tf")
+    #expect(!settings.isEnabled(owner: .group(.tools)))
 }
 
 @Test func recentColorsGoIntoABackup() throws {
@@ -759,4 +817,38 @@ private func storeFolder(_ trees: [String: String]) throws -> Folder {
             BackupEntry(path: "window-layouts.json", data: Data("[1]".utf8)),
         ])
     }
+}
+
+@Test func anImportKeepsThisMacsRepositoriesAndTakesNoneFromTheBackup() throws {
+    let source = try Folder()
+    try source.write(
+        "settings.json",
+        #"{"hotkey":"option+space","raycastRepository":false,"extensionRepositories":[{"address":"https://github.com/someone/tools"}]}"#
+    )
+    let file = source.url.appendingPathComponent("b.fudgebackup")
+    try BackupArchive.write(
+        Backup.collect(from: source.paths, installed: [], fudgeVersion: "1.0", now: now).entries, to: file,
+        password: password)
+
+    // A Mac with a list of its own keeps it, and its Raycast switch.
+    let target = try Folder()
+    try target.write(
+        "settings.json",
+        #"{"extensionRepositories":[{"address":"https://git.example.org/team/extensions","off":true}]}"#)
+    _ = try Backup.apply(
+        try Backup.open(file, password: password), to: target.paths, installed: [], fudgeVersion: "1.0", now: now)
+    let settings = try #require(target.json("settings.json"))
+    #expect(settings["hotkey"] as? String == "option+space", "the rest of the settings came in")
+    let list = try #require(settings["extensionRepositories"] as? [[String: Any]])
+    #expect(list.map { $0["address"] as? String } == ["https://git.example.org/team/extensions"])
+    #expect(list.first?["off"] as? Bool == true)
+    #expect(settings["raycastRepository"] == nil, "Raycast's switch stays on here")
+
+    // A Mac without a list gets none.
+    let empty = try Folder()
+    try empty.write("settings.json", #"{"hotkey":"cmd+space"}"#)
+    _ = try Backup.apply(
+        try Backup.open(file, password: password), to: empty.paths, installed: [], fudgeVersion: "1.0", now: now)
+    let emptySettings = try #require(empty.json("settings.json"))
+    #expect(emptySettings["extensionRepositories"] == nil && emptySettings["raycastRepository"] == nil)
 }

@@ -10,16 +10,19 @@ final class SettingsModel {
     private(set) var extensions: [InstalledExtension] = []
     /// The page shown. Change it with `select(_:)`, which ends a hotkey recording on the page being left.
     private(set) var selected: String?
-    /// The General and Commands pages' entries in the sidebar; extension names can't start with ":".
-    static let generalPage = ":general"
-    static let commandsPage = ":commands"
-    static let permissionsPage = ":permissions"
-    static let quicklinksPage = ":quicklinks"
-    static let snippetsPage = ":snippets"
-    static let colorPickerPage = ":color-picker"
-    static let windowManagementPage = ":window-management"
-    static let signInPage = ":sign-in"
-    static let calendarPage = ":calendar"
+    /// The sidebar's pages of Fudge's own (`SettingsSidebar`, where the tags are); extension names can't start with ":".
+    static let generalPage = SettingsSidebar.generalPage
+    static let commandsPage = SettingsSidebar.commandsPage
+    static let permissionsPage = SettingsSidebar.permissionsPage
+    static let notificationsPage = SettingsSidebar.notificationsPage
+    static let quicklinksPage = SettingsSidebar.quicklinksPage
+    static let snippetsPage = SettingsSidebar.snippetsPage
+    static let colorPickerPage = SettingsSidebar.colorPickerPage
+    static let windowManagementPage = SettingsSidebar.windowManagementPage
+    static let signInPage = SettingsSidebar.signInPage
+    static let calendarPage = SettingsSidebar.calendarPage
+    static let developmentPage = SettingsSidebar.developmentPage
+    static let calculatorPage = SettingsSidebar.calculatorPage
     /// Every installed extension, for the Commands page.
     private(set) var allExtensions: [InstalledExtension] = []
     /// `settings.json`, as the Commands page edits it.
@@ -53,7 +56,8 @@ final class SettingsModel {
     @ObservationIgnored var accessibility = AccessibilityStatus(access: FixedAccessibility(trusted: false))
     /// Show Onboarding Again; set by the app delegate.
     @ObservationIgnored var showOnboarding: () -> Void = {}
-    private(set) var stored: [String: StoredPreferences] = [:]
+    /// Each settings page's stored preferences, by the extension's id.
+    private(set) var stored: [ExtensionID: StoredPreferences] = [:]
     @ObservationIgnored private let store: PreferenceStore
     @ObservationIgnored private let paths: FudgePaths
     @ObservationIgnored private(set) lazy var applications: [RootItem] = ApplicationIndex.scan()
@@ -67,7 +71,8 @@ final class SettingsModel {
     func reload() {
         let installed = InstalledExtension.all(paths: paths, resources: Bundle.main.resourceURL)
         extensions = InstalledExtension.settingsPages(of: installed)
-        stored = Dictionary(uniqueKeysWithValues: extensions.map { ($0.manifest.name, store.load($0.manifest.name)) })
+        // By id through the one index, so two installs of one name never meet here and a duplicate can't trap.
+        stored = InstalledExtension.index(extensions).mapValues { store.load($0.id) }
         allExtensions = installed.sorted {
             $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending
         }
@@ -79,13 +84,8 @@ final class SettingsModel {
         loadWindowLayouts()
         loadSignIns()
         loadCalendars()
-        if selected != Self.generalPage, selected != Self.commandsPage, selected != Self.permissionsPage,
-            selected != Self.quicklinksPage, selected != Self.snippetsPage, selected != Self.signInPage,
-            selected != Self.colorPickerPage, selected != Self.windowManagementPage, selected != Self.calendarPage,
-            !extensions.contains(where: { $0.manifest.name == selected })
-        {
-            select(Self.generalPage)
-        }
+        // A page that's no longer listed (an extension removed while its page is open) gives way to General.
+        if !SettingsSidebar.lists(selected, among: extensions) { select(Self.generalPage) }
     }
 
     /// Shows `page`. Leaving a page ends a hotkey recording on it, with no change, and Fudge's hotkeys resume.
@@ -109,7 +109,7 @@ final class SettingsModel {
     private var installedCommandIDs: Set<String> {
         Set(
             allExtensions.flatMap { item in
-                item.manifest.commands.map { FudgeSettings.commandID(extension: item.manifest.name, command: $0.name) }
+                item.manifest.commands.map { FudgeSettings.commandID(owner: .extension(item.id), command: $0.name) }
             } + BuiltInCommandGroup.commandIDs(in: builtInGroups) + QuicklinkCommands.commandIDs(quicklinks))
     }
 
@@ -134,6 +134,18 @@ final class SettingsModel {
         guard FudgeSettings.load(from: paths.settingsFile).currencyRates != on, change({ $0.currencyRates = on })
         else { return }
         currencyRatesChanged(on)
+    }
+
+    /// Whether the calculator looks up other places with Apple Maps (`appleMapsPlaces` in `settings.json`).
+    var appleMapsPlaces: Bool { fudgeSettings.appleMapsPlaces }
+    /// Turns the lookups on or off; set by the app delegate.
+    @ObservationIgnored var appleMapsPlacesChanged: (Bool) -> Void = { _ in }
+
+    func setAppleMapsPlaces(_ on: Bool) {
+        // As for currency: a settings.json that can't be written is refused, with the banner.
+        guard FudgeSettings.load(from: paths.settingsFile).appleMapsPlaces != on, change({ $0.appleMapsPlaces = on })
+        else { return }
+        appleMapsPlacesChanged(on)
     }
 
     // MARK: - Hyperkey
@@ -195,6 +207,50 @@ final class SettingsModel {
     func setColorFormat(_ format: ColorFormat) {
         guard format != colorFormat, change({ $0.colorFormat = format }) else { return }
         colorFormatChanged()
+    }
+
+    /// macOS's answer for Fudge's notifications (SPEC-156 F), read and never asked: when the Notifications page appears
+    /// and when the window becomes key. Nil until the first read.
+    var notificationPermission: NotificationPermission?
+    /// macOS's notifications, or a snapshot run's fixed answer; set by the app delegate.
+    @ObservationIgnored var notifications: any InstallNotifications = FixedInstallNotifications(.unknown)
+    /// Asks macOS (G), at most once per run, through the app's one notice center; set by the app delegate.
+    /// `needsSwitch`: only with either switch on.
+    @ObservationIgnored var askForNotifications: (_ needsSwitch: Bool) async -> Void = { _ in }
+    /// Settings → Notifications' **Install or update finished** (`notifyInstallFinished`).
+    var notifyInstallFinished: Bool { fudgeSettings.notifyInstallFinished }
+    /// **Install or update failed** (`notifyInstallFailed`).
+    var notifyInstallFailed: Bool { fudgeSettings.notifyInstallFailed }
+
+    func setNotifyInstallFinished(_ on: Bool) {
+        guard on != notifyInstallFinished, change({ $0.notifyInstallFinished = on }) else { return }
+        if on { askForNotificationsNow(needsSwitch: true) }
+    }
+
+    func setNotifyInstallFailed(_ on: Bool) {
+        guard on != notifyInstallFailed, change({ $0.notifyInstallFailed = on }) else { return }
+        if on { askForNotificationsNow(needsSwitch: true) }
+    }
+
+    /// Reads macOS's answer again.
+    func refreshNotificationPermission() {
+        let notifications = notifications
+        Task { notificationPermission = await notifications.permission() }
+    }
+
+    /// Ask Now, or a switch turned on: macOS asks while it hasn't been asked, then the row reads its answer.
+    func askForNotificationsNow(needsSwitch: Bool = false) {
+        let ask = askForNotifications
+        let notifications = notifications
+        Task {
+            await ask(needsSwitch)
+            notificationPermission = await notifications.permission()
+        }
+    }
+
+    /// Open Notification Settings: System Settings' Notifications pane.
+    func openNotificationSettings() {
+        NSWorkspace.shared.open(NotificationPermission.settingsURL)
     }
 
     /// How the calculator reads and shows numbers (`numberFormat` in `settings.json`).
@@ -271,17 +327,17 @@ final class SettingsModel {
     /// The file holds something fudge can't read, so the answers can't be changed here.
     private(set) var launchPermissionsUnreadable = false
 
-    /// An installed extension's title, or nil when it isn't installed.
-    func extensionTitle(_ name: String) -> String? {
-        allExtensions.first { $0.manifest.name == name }?.manifest.title
+    /// An installed extension's title as Fudge shows it (`displayTitle`), by its id, or nil when it isn't installed.
+    func extensionTitle(_ id: ExtensionID) -> String? {
+        allExtensions.first { $0.id == id }?.displayTitle
     }
 
-    func setLaunchPermission(_ allowed: Bool, caller: String, target: String) {
+    func setLaunchPermission(_ allowed: Bool, caller: ExtensionID, target: ExtensionID) {
         changeLaunchPermissions { $0.record(allowed, caller: caller, target: target) }
     }
 
     /// Forgets an answer, so the user is asked again next time.
-    func forgetLaunchPermission(caller: String, target: String) {
+    func forgetLaunchPermission(caller: ExtensionID, target: ExtensionID) {
         changeLaunchPermissions { $0.forget(caller: caller, target: target) }
     }
 
@@ -297,7 +353,7 @@ final class SettingsModel {
         do {
             try permissions.save(to: paths.launchPermissionsFile)
         } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't save launch permissions: \(error)\n".utf8))
+            FudgeLog.error("couldn't save launch permissions: \(error)")
         }
         loadLaunchPermissions()
     }
@@ -376,7 +432,7 @@ final class SettingsModel {
                 change { QuicklinkCommands.prune(&$0, in: store) }
             }
         } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't delete the quicklink: \(error)\n".utf8))
+            FudgeLog.error("couldn't delete the quicklink: \(error)")
         }
         loadQuicklinks()
         quicklinksChanged()
@@ -424,6 +480,54 @@ final class SettingsModel {
     func setCalendarDaysAhead(_ days: Int) {
         guard days != calendarDaysAhead, change({ $0.calendarDaysAhead = days }) else { return }
         calendarChanged()
+    }
+
+    // MARK: - Development (SPEC-145)
+
+    /// Finds the Command Line Tools for a `commandLineTools` setting (`CommandLineTools.resolve`). Snapshot runs set a
+    /// fixed answer (`--command-line-tools`), so they never ask the Mac.
+    @ObservationIgnored var resolveCommandLineTools: @Sendable (String?) -> CommandLineTools.Status = {
+        CommandLineTools.resolve(setting: $0)
+    }
+    /// What the Development page shows; nil until the first read lands.
+    private(set) var commandLineTools: CommandLineTools.Status?
+    /// What Install… couldn't start, shown under the row until the next try.
+    private(set) var commandLineToolsInstallProblem: String?
+    /// The folder chosen on the page (`commandLineTools` in `settings.json`), or nil when Fudge finds it by itself.
+    var commandLineToolsSetting: String? { fudgeSettings.commandLineTools }
+
+    /// The folder the row names: the chosen one, else the one found by itself, else none.
+    var commandLineToolsFolder: String? {
+        commandLineToolsSetting ?? commandLineTools?.tools?.folder.path
+    }
+
+    /// Reads the status again, off the main thread, since it runs the folder's `swift --version`. An answer
+    /// for a setting changed meanwhile is dropped.
+    func loadCommandLineTools() {
+        let setting = fudgeSettings.commandLineTools
+        let resolve = resolveCommandLineTools
+        Task {
+            let status = await Task.detached(priority: .userInitiated) { resolve(setting) }.value
+            guard setting == fudgeSettings.commandLineTools, status != commandLineTools else { return }
+            commandLineTools = status
+        }
+    }
+
+    /// Choose… (a folder) and Use Default (nil).
+    func setCommandLineTools(_ folder: String?) {
+        guard folder != commandLineToolsSetting, change({ $0.commandLineTools = folder }) else { return }
+        commandLineTools = nil
+        commandLineToolsInstallProblem = nil
+        loadCommandLineTools()
+    }
+
+    /// Install…: Apple's own download prompt for the tools (`xcode-select --install`).
+    func installCommandLineTools() {
+        commandLineToolsInstallProblem = nil
+        Task {
+            let problem = await Task.detached(priority: .userInitiated) { CommandLineTools.requestInstall() }.value
+            commandLineToolsInstallProblem = problem
+        }
     }
 
     // MARK: - Snippets
@@ -497,7 +601,7 @@ final class SettingsModel {
         do {
             try store.save(to: file)
         } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't delete the snippet: \(error)\n".utf8))
+            FudgeLog.error("couldn't delete the snippet: \(error)")
         }
         loadSnippets()
         snippetsChanged()
@@ -568,10 +672,10 @@ final class SettingsModel {
 
     private func deleteWindowCommand(_ command: String, from store: WindowLayoutStore) {
         if case .failed(let message) = saveWindowLayouts(store) {
-            FileHandle.standardError.write(Data("fudge: couldn't delete it: \(message)\n".utf8))
+            FudgeLog.error("couldn't delete it: \(message)")
             return
         }
-        let id = FudgeSettings.commandID(extension: BuiltInCommandGroup.windowManagement.name, command: command)
+        let id = FudgeSettings.commandID(owner: .group(BuiltInCommandGroup.windowManagement.name), command: command)
         if fudgeSettings.commands[id] != nil, change({ $0.commands[id] = nil }) { _ = applyHotkeys() }
     }
 
@@ -660,7 +764,7 @@ final class SettingsModel {
                 do {
                     try ExtensionStore.deleteRepository(paths)
                 } catch {
-                    FileHandle.standardError.write(Data("fudge: couldn't delete the store's list: \(error)\n".utf8))
+                    FudgeLog.error("couldn't delete the store's list: \(error)")
                 }
             }
             reload()
@@ -675,6 +779,97 @@ final class SettingsModel {
         _ = applyHotkeys()
         reload()
         extensionStoreChanged()
+    }
+
+    // MARK: - Extension repositories (FUD-182)
+
+    /// Raycast's official repository's switch in the Extension Store's list, while it's there.
+    var raycastRepository: Bool { fudgeSettings.raycastRepository }
+    /// Whether Raycast's official repository is in the list, first.
+    var raycastRepositoryListed: Bool { fudgeSettings.raycastRepositoryListed }
+    /// **Add Raycast's Repository** under the list: only while Raycast's has been removed.
+    var showsAddRaycastRepository: Bool { fudgeSettings.showsAddRaycastRepository }
+    /// The added repositories, in the order added.
+    var extensionRepositories: [ListedRepository] { fudgeSettings.extensionRepositories }
+    /// Each copy's status, by copy id, read when the page appears and when the window becomes key.
+    private(set) var repositoryStatuses: [String: ExtensionRepositoryStatus] = [:]
+    /// A snapshot run's **Add Repository** window, drawn in the page, since it never begins a sheet
+    /// (`--add-repository`).
+    var snapshotAddRepository: ExtensionRepositoryDraft?
+
+    /// Reads each copy's status file again: Raycast's and every added repository's.
+    func loadRepositoryStatuses() {
+        let copyIds = [ExtensionRepository.raycastCopyId] + extensionRepositories.map(\.repository.copyId)
+        repositoryStatuses = Dictionary(
+            uniqueKeysWithValues: copyIds.map {
+                ($0, ExtensionRepositoryStatus.read(ExtensionStore.statusFile(copyId: $0, paths)))
+            })
+    }
+
+    func setRaycastRepository(_ on: Bool) {
+        change { $0.raycastRepository = on }
+    }
+
+    func setRepository(_ copyId: String, on: Bool) {
+        change { settings in
+            guard let index = settings.extensionRepositories.firstIndex(where: { $0.repository.copyId == copyId })
+            else { return }
+            settings.extensionRepositories[index].on = on
+        }
+    }
+
+    /// The **Add Repository** window's Add: `draft` is checked against the list and Raycast's place as they are now,
+    /// in `settings.json`. A refusal, or a save that fails, stays in the draft as its reason, and the window stays
+    /// open; an accepted one is saved on, and the statuses are read again. Returns whether the window can close.
+    func addRepository(_ draft: inout ExtensionRepositoryDraft) -> Bool {
+        let settings = readSettings()
+        guard
+            let added = draft.add(
+                existing: settings.extensionRepositories.map(\.repository),
+                raycastListed: settings.raycastRepositoryListed)
+        else { return false }
+        guard change({ $0.addRepository(added) }) else {
+            draft.saveFailed(settingsProblem ?? unreadableMessage)
+            return false
+        }
+        loadRepositoryStatuses()
+        return true
+    }
+
+    /// **Add Raycast's Repository**: Raycast's official repository back in the list, first and on, with no window,
+    /// since it's the repository the list starts with.
+    func addRaycastRepository() {
+        guard change({ $0.restoreRaycastRepository() }) else { return }
+        loadRepositoryStatuses()
+    }
+
+    /// The minus button: asks first, then takes the repository out of `settings.json`, Raycast's official one too. The
+    /// Extension Store deletes its copy the next time it opens, and what was installed from it stays.
+    func removeRepository(_ copyId: String) {
+        let raycast = copyId == ExtensionRepository.raycastCopyId
+        guard
+            let name = raycast
+                ? (raycastRepositoryListed ? ExtensionRepositoryText.raycastName : nil)
+                : extensionRepositories.first(where: { $0.repository.copyId == copyId })?.repository.name
+        else { return }
+        Task {
+            guard await confirm(Self.removeRequest(name: name, raycast: raycast)) else { return }
+            change { settings in
+                if raycast {
+                    settings.removeRaycastRepository()
+                } else {
+                    settings.extensionRepositories.removeAll { $0.repository.copyId == copyId }
+                }
+            }
+            loadRepositoryStatuses()
+        }
+    }
+
+    static func removeRequest(name: String, raycast: Bool) -> LauncherModel.AlertRequest {
+        LauncherModel.AlertRequest(
+            title: ExtensionRepositoryText.removeTitle(name),
+            message: ExtensionRepositoryText.removeMessage(raycast: raycast),
+            primary: ExtensionRepositoryText.remove, dismiss: ExtensionRepositoryText.cancel, destructive: true)
     }
 
     // MARK: - Clipboard history (SPEC-077)
@@ -749,6 +944,12 @@ final class SettingsModel {
     private(set) var signInProblem: String?
     /// Where sign-ins are kept: the Keychain, set by the app delegate; memory in snapshot runs.
     @ObservationIgnored var tokenSecrets: any SecretStore = MemorySecretStore()
+    /// Where the line under the server choice asks for the server's services (SPEC-149): the server, set once by the
+    /// app delegate at launch; a snapshot run's fixed answer, which never uses the network, as this default doesn't.
+    @ObservationIgnored var signInServicesFetcher: any SignInServicesFetching = FixedSignInServices(ids: nil)
+    /// In a snapshot run with `--sign-in-services-list`, the names the server choice loaded, which the Sign-in page
+    /// lists in place, as Show All's popover would; nil in every other run, so the choice writes nothing here.
+    var snapshotServicesList: [String]?
 
     private var tokenStore: OAuthTokenStore { OAuthTokenStore(secrets: tokenSecrets) }
 
@@ -807,9 +1008,99 @@ final class SettingsModel {
         }
     }
 
+    // MARK: - Extensions with their own sign-in, and Raycast's links (SPEC-132)
+
+    /// **Extensions with their own sign-in**: on only through its consent sheet, or onboarding's Turn On.
+    var ownAppSignIn: Bool { fudgeSettings.isOwnAppSignInOn }
+    /// `--own-app-sign-in`: a snapshot run shows the switch on, in memory only.
+    @ObservationIgnored var snapshotOwnAppSignIn = false
+    /// Which app opens Raycast's links: LaunchServices, set by the app delegate; a fixed answer in snapshot runs.
+    @ObservationIgnored var raycastLinks: any RaycastLinks = FixedRaycastLinks(app: nil)
+    /// This app's Fudge Links, the only part of Fudge that can open Raycast's links.
+    @ObservationIgnored var raycastLinksHelper = RaycastLinksHelper.url(in: Bundle.main.bundleURL)
+    /// Who opens them, read when the Sign-in page or onboarding's step shows and when its window becomes key.
+    private(set) var raycastLinksStatus = RaycastLinksStatus.elsewhere(nil)
+    /// While Fudge opens them: the app switching it off gives them back to, nil when no other app claims them.
+    private(set) var raycastLinksGiveBack: URL?
+    /// Why switching it on or off didn't work, until the next try.
+    private(set) var raycastLinksProblem: String?
+
+    /// The Sign-in page's **Fudge opens Raycast links** switch, from who opens them now.
+    var raycastLinksToggle: RaycastLinksToggle {
+        RaycastLinksToggle(
+            status: raycastLinksStatus, giveBackTo: raycastLinksGiveBack.map(SystemRaycastLinks.appName))
+    }
+
+    /// The switch: on after its consent sheet's Continue, which records the date; off removes both keys, so new
+    /// direct sign-ins are refused, and the ones stored stay under Signed in. The sheet goes on the Settings window, or
+    /// where `ask` shows it.
+    func setOwnAppSignIn(_ on: Bool, ask: ((LauncherModel.AlertRequest) async -> Bool)? = nil) {
+        guard on != ownAppSignIn else { return }
+        guard on else {
+            change { $0.setOwnAppSignIn(false, now: Date()) }
+            return
+        }
+        let confirm = ask ?? confirm
+        Task {
+            let consent = OwnAppSignIn.Consent.self
+            guard
+                await confirm(
+                    LauncherModel.AlertRequest(
+                        title: consent.title, message: OwnAppSignIn.explanation, primary: consent.confirm,
+                        dismiss: consent.cancel, destructive: false))
+            else { return }
+            turnOnOwnAppSignIn()
+        }
+    }
+
+    /// Turns it on, the consent having been given: the switch's sheet, or onboarding's step, which shows the same
+    /// words.
+    func turnOnOwnAppSignIn() {
+        change { $0.setOwnAppSignIn(true, now: Date()) }
+    }
+
+    func refreshRaycastLinks() {
+        show(raycastLinksStatus: raycastLinks.status(helper: raycastLinksHelper))
+    }
+
+    private func show(raycastLinksStatus status: RaycastLinksStatus) {
+        raycastLinksStatus = status
+        raycastLinksGiveBack = status.isFudge ? raycastLinks.handBackTarget(helper: raycastLinksHelper) : nil
+    }
+
+    /// The Sign-in page's switch: on is Open Raycast Links with Fudge, off gives them back to the other app that claims
+    /// them. Only the user's click gets here.
+    func setRaycastLinks(_ on: Bool) {
+        guard on != raycastLinksStatus.isFudge else { return }
+        if on { openRaycastLinksWithFudge() } else { giveRaycastLinksBack() }
+    }
+
+    /// **Open Raycast Links with Fudge** (onboarding), or switching it on: registers Fudge Links and makes it open
+    /// `raycast` and `com.raycast` links, then reads who opens them again. Refused from the disk image or a translocated
+    /// copy. Only the user's click does this, never a launch.
+    func openRaycastLinksWithFudge() {
+        raycastLinksProblem = nil
+        Task {
+            let (status, problem) = await raycastLinks.openWithFudge(helper: raycastLinksHelper, location: appLocation)
+            show(raycastLinksStatus: status)
+            raycastLinksProblem = problem
+        }
+    }
+
+    /// Switching it off: gives both schemes back to the other app that claims them, then reads who opens them again.
+    private func giveRaycastLinksBack() {
+        guard let app = raycastLinksGiveBack else { return }
+        raycastLinksProblem = nil
+        Task {
+            let (status, problem) = await raycastLinks.giveBack(to: app, helper: raycastLinksHelper)
+            show(raycastLinksStatus: status)
+            raycastLinksProblem = problem
+        }
+    }
+
     func signOut(_ entry: SignInEntry) {
         do {
-            try tokenStore.remove(extension: entry.extensionName, provider: entry.providerID)
+            try tokenStore.remove(entry)
             signInProblem = nil
         } catch {
             signInProblem = String(describing: error)
@@ -830,6 +1121,29 @@ final class SettingsModel {
     func setEscapeBehavior(_ behavior: EscapeBehavior) {
         guard behavior != escapeBehavior, change({ $0.escapeBehavior = behavior }) else { return }
         _ = applyHotkeys()
+    }
+
+    // MARK: - Logs (SPEC-124)
+
+    /// How much goes into the log files (`logLevel`).
+    var logLevel: LogLevel { fudgeSettings.logLevel }
+
+    /// Takes effect at once, for running commands too: `applyHotkeys` applies `settings.json` to the launcher, which
+    /// tells `FudgeLog` and the extension host.
+    func setLogLevel(_ level: LogLevel) {
+        guard level != logLevel, change({ $0.logLevel = level }) else { return }
+        _ = applyHotkeys()
+    }
+
+    /// Opens the logs folder in Finder, creating it first when nothing has been logged yet.
+    func showLogs() {
+        let folder = FudgePaths.logsDirectory()
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        } catch {
+            FudgeLog.error("couldn't create \(folder.path): \(error)")
+        }
+        NSWorkspace.shared.open(folder)
     }
 
     // MARK: - Pop to Root Search
@@ -987,11 +1301,12 @@ final class SettingsModel {
         fudgeSettings.isEnabledOwn(commandID: commandID)
     }
 
-    /// Why a command is off by default, for its row on the Commands page; nil for one that isn't.
+    /// Why a command is off by default, for its row on the Commands page; nil for one that isn't. The part of its id
+    /// before the first `/` is its extension's id.
     func offByDefaultReason(command commandID: String) -> String? {
         guard let slash = commandID.firstIndex(of: "/") else { return nil }
-        let name = String(commandID[..<slash])
-        return allExtensions.first { $0.manifest.name == name }?.compatibility
+        let owner = String(commandID[..<slash])
+        return allExtensions.first { $0.id.key == owner }?.compatibility
             .reason(for: String(commandID[commandID.index(after: slash)...]))
     }
 
@@ -999,12 +1314,13 @@ final class SettingsModel {
     private func readSettings() -> FudgeSettings {
         var settings = FudgeSettings.load(from: paths.settingsFile)
         settings.offByDefault = InstalledExtension.offByDefault(allExtensions)
+        if snapshotOwnAppSignIn { settings.setOwnAppSignIn(true, now: Date()) }
         return settings
     }
 
-    /// The Extension Store is off unless enabled (`FudgeSettings.isEnabled(extension:)`).
-    func isEnabled(extension name: String) -> Bool {
-        fudgeSettings.isEnabled(extension: name)
+    /// The Extension Store is off unless enabled (`FudgeSettings.isEnabled(owner:)`).
+    func isEnabled(owner: CommandOwner) -> Bool {
+        fudgeSettings.isEnabled(owner: owner)
     }
 
     /// Enables or disables a command: a disabled one leaves root search, and its hotkey stops working.
@@ -1013,9 +1329,9 @@ final class SettingsModel {
         _ = applyHotkeys()
     }
 
-    /// Enables or disables every command of an extension.
-    func setEnabled(_ enabled: Bool, extension name: String) {
-        change { $0.setEnabled(enabled, extension: name) }
+    /// Enables or disables every command of an extension or a group.
+    func setEnabled(_ enabled: Bool, owner: CommandOwner) {
+        change { $0.setEnabled(enabled, owner: owner) }
         _ = applyHotkeys()
     }
 
@@ -1035,7 +1351,7 @@ final class SettingsModel {
         }
         for installed in allExtensions {
             for command in installed.manifest.commands
-            where FudgeSettings.commandID(extension: installed.manifest.name, command: command.name) == commandID {
+            where FudgeSettings.commandID(owner: .extension(installed.id), command: command.name) == commandID {
                 return command.title
             }
         }
@@ -1043,34 +1359,34 @@ final class SettingsModel {
     }
 
     /// The value shown for a preference: what's stored, else its default.
-    func value(_ preference: ExtensionManifest.Preference, of extensionName: String, command: String?) -> JSONValue? {
-        let values = stored[extensionName] ?? StoredPreferences()
+    func value(_ preference: ExtensionManifest.Preference, of id: ExtensionID, command: String?) -> JSONValue? {
+        let values = stored[id] ?? StoredPreferences()
         let storedValue =
             command.map { values.commandValues[$0]?[preference.name] } ?? values.extensionValues[preference.name]
         return storedValue ?? preference.default ?? PreferenceResolver.typeDefault(preference)
     }
 
     func set(
-        _ value: JSONValue?, for preference: ExtensionManifest.Preference, of extensionName: String, command: String?
+        _ value: JSONValue?, for preference: ExtensionManifest.Preference, of id: ExtensionID, command: String?
     ) {
-        var values = stored[extensionName] ?? StoredPreferences()
+        var values = stored[id] ?? StoredPreferences()
         if let command {
             values.commandValues[command, default: [:]][preference.name] = value
         } else {
             values.extensionValues[preference.name] = value
         }
-        stored[extensionName] = values
+        stored[id] = values
         do {
-            try store.save(values, for: extensionName)
+            try store.save(values, for: id)
         } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't save preferences: \(error)\n".utf8))
+            FudgeLog.error("couldn't save preferences: \(error)")
         }
     }
 
-    /// Required preferences of `extensionName` that still have no value, for highlighting.
-    func isMissing(_ preference: ExtensionManifest.Preference, of extensionName: String, command: String?) -> Bool {
+    /// Required preferences of the extension with `id` that still have no value, for highlighting.
+    func isMissing(_ preference: ExtensionManifest.Preference, of id: ExtensionID, command: String?) -> Bool {
         guard preference.required == true else { return false }
-        switch value(preference, of: extensionName, command: command) {
+        switch value(preference, of: id, command: command) {
         case nil, .null, .string(""): return true
         default: return false
         }
@@ -1221,9 +1537,12 @@ final class SettingsWindowController {
             ) { _ in
                 MainActor.assumeIsolated {
                     model.refreshLoginItem()
+                    model.refreshRaycastLinks()
+                    model.refreshNotificationPermission()
                     model.loadQuicklinks()
                     model.loadSnippets()
                     model.loadWindowLayouts()
+                    model.loadRepositoryStatuses()
                 }
             }
         }
@@ -1275,19 +1594,13 @@ struct SettingsView: View {
         // until the sidebar collapsed, and with no toggle (it jumped across the title bar) nothing brought it back.
         // There's no split view, so no divider and no collapsed state to restore.
         HStack(spacing: 0) {
+            // Both lists come from `SettingsSidebar`: Fudge's core pages on top, then its other pages among the
+            // extensions', sorted by title.
             List(selection: Binding(get: { model.selected }, set: { model.select($0) })) {
-                Label("General", systemImage: "gearshape").tag(SettingsModel.generalPage)
-                Label("Permissions", systemImage: "hand.raised").tag(SettingsModel.permissionsPage)
-                Label("Commands", systemImage: "command").tag(SettingsModel.commandsPage)
-                Label("Quicklinks", systemImage: "link").tag(SettingsModel.quicklinksPage)
-                Label("Snippets", systemImage: "doc.text").tag(SettingsModel.snippetsPage)
-                Label("Window Management", systemImage: "macwindow").tag(SettingsModel.windowManagementPage)
-                Label("Sign-in", systemImage: "person.badge.key").tag(SettingsModel.signInPage)
-                Label("Color Picker", systemImage: "eyedropper").tag(SettingsModel.colorPickerPage)
-                Label("Calendar", systemImage: "calendar").tag(SettingsModel.calendarPage)
+                ForEach(SettingsSidebar.top, id: \.tag) { SidebarRow(entry: $0).tag($0.tag) }
                 Section("Extensions") {
-                    ForEach(model.extensions, id: \.manifest.name) { installed in
-                        Text(installed.manifest.title).tag(installed.manifest.name)
+                    ForEach(SettingsSidebar.extensions(model.extensions), id: \.tag) {
+                        SidebarRow(entry: $0).tag($0.tag)
                     }
                 }
             }
@@ -1301,6 +1614,8 @@ struct SettingsView: View {
                     GeneralPage(model: model)
                 } else if model.selected == SettingsModel.permissionsPage {
                     PermissionsPage(model: model)
+                } else if model.selected == SettingsModel.notificationsPage {
+                    NotificationsPage(model: model)
                 } else if model.selected == SettingsModel.commandsPage {
                     CommandsPage(model: model)
                 } else if model.selected == SettingsModel.quicklinksPage {
@@ -1315,7 +1630,13 @@ struct SettingsView: View {
                     ColorPickerPage(model: model)
                 } else if model.selected == SettingsModel.calendarPage {
                     CalendarPage(model: model)
-                } else if let installed = model.extensions.first(where: { $0.manifest.name == model.selected }) {
+                } else if model.selected == SettingsModel.developmentPage {
+                    DevelopmentPage(model: model)
+                } else if model.selected == SettingsModel.calculatorPage {
+                    CalculatorPage(model: model)
+                } else if let installed = model.extensions.first(where: {
+                    SettingsSidebar.tag(of: $0) == model.selected
+                }) {
                     ExtensionPreferencesForm(model: model, installed: installed)
                 } else {
                     Text("No extension has preferences.").foregroundStyle(.secondary)
@@ -1326,6 +1647,20 @@ struct SettingsView: View {
         // The width it opens at: any narrower and the Commands table squeezes its Name column, truncating names and
         // running a command's subtitle into the Type column.
         .frame(minWidth: 880, minHeight: 400)
+    }
+}
+
+/// One sidebar row: a top row's title and symbol, or, under Extensions, the title only. Its tag is set where it's
+/// listed.
+private struct SidebarRow: View {
+    let entry: SettingsSidebar.Entry
+
+    var body: some View {
+        if let symbol = entry.symbol {
+            Label(entry.title, systemImage: symbol)
+        } else {
+            Text(entry.title)
+        }
     }
 }
 
@@ -1349,17 +1684,18 @@ private struct ExtensionPreferencesForm: View {
     var body: some View {
         let manifest = installed.manifest
         Form {
-            if manifest.name == ExtensionStore.extensionName {
+            if installed.id == ExtensionStore.id {
                 ExtensionStoreSwitch(model: model)
+                ExtensionRepositoriesSection(model: model)
             }
-            if manifest.name == ClipboardHistory.extensionName {
+            if installed.id == ClipboardHistory.id {
                 ClipboardHistorySettings(model: model)
             }
             if !manifest.preferences.isEmpty {
                 Section(manifest.title) {
                     ForEach(manifest.preferences, id: \.name) { preference in
                         PreferenceField(
-                            model: model, preference: preference, extensionName: manifest.name, command: nil)
+                            model: model, preference: preference, extension: installed.id, command: nil)
                     }
                 }
             }
@@ -1369,7 +1705,7 @@ private struct ExtensionPreferencesForm: View {
                         PreferenceField(
                             model: model,
                             preference: preference,
-                            extensionName: manifest.name,
+                            extension: installed.id,
                             command: command.name
                         )
                     }
@@ -1377,6 +1713,7 @@ private struct ExtensionPreferencesForm: View {
             }
         }
         .formStyle(.grouped)
+        .overlay { AddRepositorySnapshotOverlay(model: model) }
     }
 }
 
@@ -1467,14 +1804,15 @@ private struct ClipboardHistorySettings: View {
 private struct PreferenceField: View {
     let model: SettingsModel
     let preference: ExtensionManifest.Preference
-    let extensionName: String
+    /// The extension whose preference it is: its value is read and saved by this id.
+    let `extension`: ExtensionID
     let command: String?
 
     var body: some View {
         control
             .help(preference.description ?? "")
             .overlay(alignment: .trailing) {
-                if model.isMissing(preference, of: extensionName, command: command) {
+                if model.isMissing(preference, of: `extension`, command: command) {
                     Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red).offset(x: 22)
                 }
             }
@@ -1482,10 +1820,10 @@ private struct PreferenceField: View {
 
     private var title: String { preference.title ?? preference.label ?? preference.name }
 
-    private var current: JSONValue? { model.value(preference, of: extensionName, command: command) }
+    private var current: JSONValue? { model.value(preference, of: `extension`, command: command) }
 
     private func set(_ value: JSONValue?) {
-        model.set(value, for: preference, of: extensionName, command: command)
+        model.set(value, for: preference, of: `extension`, command: command)
     }
 
     private var text: Binding<String> {

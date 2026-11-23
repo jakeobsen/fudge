@@ -82,6 +82,32 @@ test("AI used only in a tool counts for the tool, not for any command", async ()
     assert.ok(result.gaps.some((gap) => gap.api.startsWith("AI")), "the whole scan still sees it");
 });
 
+test("commands and tools named as Raycast accepts them (caffeinateWhile, dots) are scanned like any other", async () => {
+    const folder = extension(
+        ["askAway", "show-recent.command", "fooBar"],
+        {
+            "src/askAway.tsx": view(`import { AI } from "@raycast/api";\nAI.ask("a");`),
+            "src/show-recent.command.tsx": view(),
+            // Found as the build finds it, ignoring case.
+            "src/FooBar.tsx": view(),
+            "src/tools/getVaults.ts": `import { AI } from "@raycast/api";\nexport default () => AI.ask("vaults");\n`,
+        },
+        ["getVaults"],
+    );
+    const result = await scanExtension(folder, options);
+    // The tool's entry reaches its AI file, so the commands are traced, not all counted by the backstop.
+    assert.deepEqual(
+        result.commands.map((command) => [command.name, command.unsupported, command.traced]),
+        [
+            ["askAway", ["AI"], true],
+            ["show-recent.command", [], true],
+            ["fooBar", [], true],
+        ],
+    );
+    const compatibility = fromReport(report(folder, result));
+    assert.deepEqual("byCommand" in compatibility && compatibility.byCommand, { count: 3, using: ["askAway"] });
+});
+
 test("an extension with no AI has no command that uses it, and one where every command does has all", async () => {
     const none = extension(["a", "b"], { "src/a.tsx": view(), "src/b.tsx": view() });
     assert.deepEqual(await unsupportedByCommand(none), { a: [], b: [] });
@@ -155,6 +181,53 @@ test("a command with an import that can't be followed counts as reaching the who
             ["fine", [], true],
         ],
     );
+});
+
+test("a rust: import is followed as a package: its command keeps its own uses, and one using AI next to it is found", async () => {
+    // On a Mac the Rust part's module is written from its sources and holds nothing to follow (SPEC-144 §3).
+    const folder = extension(["calls-rust", "asks"], {
+        "src/calls-rust.tsx": view(`import { greet } from "rust:../rust";\ngreet("x");`),
+        "src/asks.tsx": view(`import { greet } from "rust:../rust";\nimport { ask } from "./other";\ngreet("x");\nask();`),
+        "src/other.ts": `import { AI } from "@raycast/api";\nexport const ask = () => AI.ask("x");\n`,
+        "rust/Cargo.toml": "[package]\nname = \"made-up\"\n",
+        "rust/src/main.rs": "#[raycast]\nfn greet(name: String) {}\n",
+    });
+    const result = await scanExtension(folder, options);
+    assert.deepEqual(
+        result.commands.map((command) => [command.name, command.unsupported, command.traced]),
+        [
+            ["calls-rust", [], true],
+            ["asks", ["AI"], true],
+        ],
+    );
+    assert.equal(packages([])("rust:../rust"), true);
+    assert.equal(packages([])("rust"), false, "only the rust: scheme, not a package named rust");
+});
+
+test("a swift: import is followed as a package: its command keeps its own uses, one using AI next to it is found", async () => {
+    // SPEC-145 §3: the Swift part's module runs a program or refuses, and holds nothing to follow. Unfollowed, every
+    // command reaching it would count as reaching the whole extension, and install switched off.
+    const folder = extension(["calls-swift", "asks", "plain"], {
+        "src/calls-swift.tsx": view(`import { greet } from "swift:../swift";\ngreet("x");`),
+        "src/asks.tsx": view(`import { greet } from "swift:../swift";\nimport { ask } from "./other";\ngreet("x");\nask();`),
+        "src/plain.tsx": view(),
+        "src/other.ts": `import { AI } from "@raycast/api";\nimport { more } from "swift:../more";\nexport const ask = () => AI.ask(more());\n`,
+        "swift/Package.swift": "// swift-tools-version: 6.0\n",
+        "swift/Sources/Main/Main.swift": "@raycast func greet(name: String) {}\n",
+    });
+    const result = await scanExtension(folder, options);
+    assert.deepEqual(
+        result.commands.map((command) => [command.name, command.unsupported, command.traced]),
+        [
+            ["calls-swift", [], true],
+            ["asks", ["AI"], true],
+            ["plain", [], true],
+        ],
+    );
+    assert.deepEqual(result.swiftParts, ["swift:../more", "swift:../swift"], "each once, sorted");
+    assert.deepEqual((await scanExtension(extension(["plain"], { "src/plain.tsx": view() }), options)).swiftParts, []);
+    assert.equal(packages([])("swift:../swift"), true);
+    assert.equal(packages([])("swift"), false, "only the swift: scheme, not a package named swift");
 });
 
 test("resolveImport tells the extension's own files from packages and data", async () => {

@@ -1,26 +1,91 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
 import {
+    failureKeep,
+    failuresFolder,
+    followClicks,
+    LaunchTarget,
+    launchTarget,
+    noticeTarget,
+    openNoticeTarget,
+    pruneSavedFailures,
+    readSavedFailure,
+    removeSavedFailure,
+    reportEnd,
+    reportLimit,
+    RowMarks,
+    RowSelection,
+    saveFailure,
+    topRowId,
+    unanswered,
+    type FailureMark,
+    type InstallAnswer,
+    type InstallEndReport,
+    type NoticeTarget,
+} from "../store-extension/src/notices.ts";
+import {
     accessoryTexts,
+    addedRepository,
     allFilter,
+    byTitle,
     categories,
     distinctFolders,
+    entryId,
+    failedInstallTag,
+    failedUpdateTag,
     filterEntries,
+    filterRepositories,
+    folderURL,
+    gitHubRepository,
     iconURL,
     installedFilter,
+    installedRecord,
     isValidName,
+    namedRowId,
     parseManifest,
+    raycastCopy,
     readCatalog,
+    repositoryFilter,
+    repositoryHost,
+    rowActions,
+    rowId,
     searchKeywords,
     sections,
     status,
+    updatingTag,
     type StoreEntry,
 } from "../store-extension/src/catalog.ts";
+import { installedSection, installedSectionRowId } from "../store-extension/src/development-builds.ts";
+import {
+    installingFolder,
+    parseProcessLine,
+    readBuildRecords,
+    removeBuildRecord,
+    stillRunning,
+    systemProbe,
+    writeBuildRecord,
+    type BuildRecord,
+    type ProcessProbe,
+    type ProcessState,
+} from "../store-extension/src/build-records.ts";
+import {
+    heldRefresh,
+    heldRefreshMessage,
+    openCopy,
+    OtherBuilds,
+    pollInterval,
+    settledNotice,
+    settledToast,
+    stoppedLine,
+    type Settled,
+    type SettledSteps,
+} from "../store-extension/src/other-builds.ts";
 import {
     builtCompatibility,
     checkFolder,
@@ -58,6 +123,7 @@ import {
     storeEnvironment,
     StoreRepository,
     type GitResult,
+    type ProgramOutput,
     type Run,
 } from "../store-extension/src/git.ts";
 import {
@@ -66,8 +132,16 @@ import {
     filterImages,
     imageSource,
     isGitHubImage,
+    readmeKey,
+    readmeKeyParts,
+    readmeNotFetched,
+    refetching,
     rendererPass,
+    shownReadme,
+    type RowRepository,
 } from "../store-extension/src/readme.ts";
+import { parseRepositoryAddress, RAYCAST_COPY, type ParsedRepository } from "../store-extension/src/repository-address.ts";
+import { problemOf } from "../store-extension/src/repositories.ts";
 import { RestingWork } from "../store-extension/src/resting.ts";
 import {
     caseClash,
@@ -76,18 +150,42 @@ import {
     sourceProblem,
     specProblem,
 } from "../store-extension/src/sources.ts";
+import { isCommandName } from "../scripts/compat/source-files.ts";
 import {
+    AlreadyBuilding,
+    alreadyBuildingStatus,
     buildArguments,
+    installFolder,
+    installsWithoutSwift,
     bundledNames,
+    confirmationText,
+    doneToast,
     failureDetails,
     install,
+    installPressed,
+    InstallPresses,
+    offOrRemovedMessage,
     oneAtATime,
     readInstalled,
+    rowCopy,
     StoreError,
     uninstall,
     writeInstalled,
+    type InstallView,
     type StoreContext,
 } from "../store-extension/src/store.ts";
+import {
+    askedForSwiftParts,
+    chooseSwiftPartsMessage,
+    installedWithoutSwift,
+    leaveOutLine,
+    swiftPartsActions,
+    swiftPartsFile,
+    swiftPartsMarkdown,
+    swiftPartsMessage,
+} from "../store-extension/src/swift-parts.ts";
+import { chooseSwiftParts } from "../scripts/compile/swift.ts";
+import { buildTimeout, swiftBuildTimeout } from "../store-extension/src/timeouts.ts";
 
 const temporaries: string[] = [];
 async function temporary(): Promise<string> {
@@ -129,6 +227,17 @@ test("the name rule is the app's: one fixture pins both", async () => {
     for (const name of names.invalid) assert.ok(!isValidName(name), name);
 });
 
+test("the command name rule is the app's: one fixture pins both, for the scan and the store alike", async () => {
+    const names = JSON.parse(await readFile(new URL("./fixtures/command-names.json", import.meta.url), "utf8")) as {
+        valid: string[];
+        invalid: string[];
+    };
+    assert.ok(names.valid.length > 0 && names.invalid.length > 0);
+    for (const name of names.valid) assert.ok(isCommandName(name), name);
+    for (const name of names.invalid) assert.ok(!isCommandName(name), JSON.stringify(name));
+    assert.ok(!isCommandName(1) && !isCommandName(null));
+});
+
 test("a manifest's name and its folder each pass their own rule, and may differ", () => {
     assert.equal(parseManifest("alpha", manifest("alpha"))?.name, "alpha");
     const aws = parseManifest("amazon-aws", manifest("aws"))!;
@@ -155,6 +264,8 @@ test("an entry has the manifest's fields, and only a plain icon file name", () =
     assert.deepEqual(entry, {
         name: "alpha",
         dir: "alpha",
+        copyId: "raycast",
+        repositoryFolder: "raycast/extensions",
         title: "Alpha",
         description: "The alpha extension",
         author: "someone",
@@ -167,7 +278,7 @@ test("an entry has the manifest's fields, and only a plain icon file name", () =
     assert.equal(parseManifest("alpha", manifest("alpha", { icon: "../../x.png" }))?.icon, undefined);
     assert.equal(parseManifest("alpha", manifest("alpha", { icon: ".hidden" }))?.icon, undefined);
     assert.equal(
-        iconURL(entry, "abc123"),
+        iconURL(entry, "raycast/extensions", "abc123"),
         "https://raw.githubusercontent.com/raycast/extensions/abc123/extensions/alpha/assets/icon.png",
     );
 });
@@ -185,7 +296,7 @@ test("the catalog reads valid manifests only, sorted by title", async () => {
     await writeFile(path.join(repo, "extensions/broken-json"), "");
     await mkdir(path.join(repo, "extensions/broken"), { recursive: true });
     await writeFile(path.join(repo, "extensions/broken/package.json"), "{ not json");
-    const entries = await readCatalog(repo);
+    const entries = await readCatalog(repo, raycastCopy);
     assert.deepEqual(
         entries.map((entry) => [entry.name, entry.dir]),
         [
@@ -196,11 +307,94 @@ test("the catalog reads valid manifests only, sorted by title", async () => {
         ],
         "by title; Upper's name isn't valid, and .hidden isn't a folder the store reads",
     );
-    assert.deepEqual(await readCatalog(path.join(repo, "missing")), []);
+    assert.deepEqual(await readCatalog(path.join(repo, "missing"), raycastCopy), []);
 });
 
 test("folders that differ only by case are one folder, as on APFS", () => {
     assert.deepEqual(distinctFolders(["dup", "Zeta", "Dup", "alpha", "DUP"]), ["DUP", "Zeta", "alpha"]);
+});
+
+/** An added repository's copy, as `repositories.ts` names one: a made-up address's copy id and folder. */
+const addedCopy = { copyId: "0123456789abcdef", repositoryFolder: "owner/repository" };
+
+test("rows know their copy and repository: every entry of a copy gets its copy id and folder", async () => {
+    const repo = await temporary();
+    await writeJSON(path.join(repo, "extensions/alpha/package.json"), manifest("alpha"));
+    await writeJSON(path.join(repo, "extensions/amazon-aws/package.json"), manifest("aws", { title: "Amazon AWS" }));
+    for (const copy of [raycastCopy, addedCopy]) {
+        assert.deepEqual(
+            (await readCatalog(repo, copy)).map((entry) => [entry.name, entry.dir, entry.copyId, entry.repositoryFolder]),
+            [
+                ["alpha", "alpha", copy.copyId, copy.repositoryFolder],
+                ["aws", "amazon-aws", copy.copyId, copy.repositoryFolder],
+            ],
+        );
+    }
+    assert.deepEqual(raycastCopy, { copyId: "raycast", repositoryFolder: "raycast/extensions" });
+    const raycasts = parseManifest("alpha", manifest("alpha"))!;
+    assert.equal(raycasts.copyId, "raycast", "a manifest read with no copy is Raycast's");
+    assert.equal(raycasts.repositoryFolder, "raycast/extensions");
+    const added = parseManifest("alpha", manifest("alpha"), addedCopy)!;
+    assert.equal(added.copyId, addedCopy.copyId);
+    assert.equal(added.repositoryFolder, addedCopy.repositoryFolder);
+});
+
+test("the same title, name and folder in two copies sorts by the copy id last", () => {
+    const raycasts = parseManifest("alpha", manifest("alpha"))!;
+    const added = parseManifest("alpha", manifest("alpha"), addedCopy)!;
+    assert.ok(byTitle(added, raycasts) < 0, "0123… before raycast");
+    assert.ok(byTitle(raycasts, added) > 0);
+    assert.deepEqual([raycasts, added].sort(byTitle).map((entry) => entry.copyId), [addedCopy.copyId, "raycast"]);
+    // The title still comes first.
+    const zeta = parseManifest("zeta", manifest("zeta"))!;
+    assert.deepEqual([zeta, added].sort(byTitle).map((entry) => entry.name), ["alpha", "zeta"]);
+});
+
+test("a row's extension id, its list id and its added repository: the same name from two repositories is two", () => {
+    const raycasts = parseManifest("github", manifest("github"))!;
+    const added = parseManifest("github", manifest("github"), addedCopy)!;
+    assert.equal(entryId(raycasts), "github", "Raycast's keep their bare names");
+    assert.equal(entryId(added), "owner+repository+github");
+    assert.equal(entryId({ name: "github", repositoryFolder: "git.example.org_8443/team/tools" }), "git.example.org_8443+team+tools+github");
+    // A name too long for the id rule still keys its own row, apart from any other.
+    const long = "a".repeat(190);
+    assert.equal(entryId({ name: long, repositoryFolder: "owner/repository" }), `owner+repository+${long}`);
+    assert.equal(rowId(raycasts.repositoryFolder, raycasts.dir), "raycast/extensions:github");
+    assert.equal(rowId(added.repositoryFolder, added.dir), "owner/repository:github");
+    assert.notEqual(rowId(raycasts.repositoryFolder, raycasts.dir), rowId(added.repositoryFolder, added.dir));
+    assert.equal(addedRepository(raycasts), undefined, "Raycast's rows carry no repository");
+    assert.equal(addedRepository(added), "owner/repository");
+    // A record, a report or a mark names its row by its folder and its added repository, Raycast's by none.
+    assert.equal(namedRowId("github", undefined), rowId(raycasts.repositoryFolder, raycasts.dir));
+    assert.equal(namedRowId("github", "owner/repository"), rowId(added.repositoryFolder, added.dir));
+});
+
+test("installedRecord matches the row's id and folder: a record of the same name from another repository isn't this row's", () => {
+    const raycasts = parseManifest("github", manifest("github"))!;
+    const added = parseManifest("github", manifest("github"), addedCopy)!;
+    const raycastRecord = { tree: "t1", commit: "c1", installedAt: "2026-11-22T00:00:00.000Z", dir: "github" };
+    const addedRecord = { ...raycastRecord, tree: "t2", repository: "owner/repository" };
+    assert.equal(installedRecord(raycasts, { github: raycastRecord }), raycastRecord);
+    assert.equal(installedRecord(added, { github: raycastRecord }), undefined, "Raycast's install isn't the added row's");
+    assert.equal(installedRecord(added, { "owner+repository+github": addedRecord }), addedRecord);
+    assert.equal(installedRecord(raycasts, { "owner+repository+github": addedRecord }), undefined);
+    const both = { github: raycastRecord, "owner+repository+github": addedRecord };
+    assert.equal(installedRecord(raycasts, both), raycastRecord);
+    assert.equal(installedRecord(added, both), addedRecord);
+    assert.equal(status(added, both, new Map([["github", "t3"]])), "update", "each row from its own record");
+    assert.equal(status(raycasts, both, new Map([["github", "t1"]])), "installed");
+    // A record under the id that names another repository isn't the row's either.
+    assert.equal(installedRecord(added, { "owner+repository+github": { ...addedRecord, repository: "owner/other" } }), undefined);
+    assert.equal(installedRecord(raycasts, { github: { ...raycastRecord, repository: "owner/repository" } }), undefined);
+});
+
+test("a README is kept by its copy, its folder and its tree", () => {
+    const key = readmeKey(addedCopy.copyId, "github", "abc");
+    assert.notEqual(key, readmeKey("raycast", "github", "abc"));
+    assert.notEqual(key, readmeKey(addedCopy.copyId, "github-2", "abc"));
+    assert.deepEqual(readmeKeyParts(key), { copyId: addedCopy.copyId, dir: "github", tree: "abc" });
+    assert.equal(shownReadme(key, { [key]: "# GitHub" }, new Set()), "# GitHub");
+    assert.equal(shownReadme(readmeKey("raycast", "github", "abc"), { [key]: "# GitHub" }, new Set()), undefined);
 });
 
 // MARK: - Rows
@@ -234,7 +428,7 @@ test("two folders with one name: only the folder it was installed from is instal
     assert.equal(status(first, installed, new Map([["world-clock", "t2"]])), "update");
     assert.equal(status(parseManifest("World-Clock", manifest("world-clock"))!, installed, trees), "installed", "APFS ignores case");
     assert.deepEqual(filterEntries([first, second], installedFilter, installed), [first]);
-    assert.deepEqual(sections([first, second], installed).other, [second]);
+    assert.deepEqual(sections([first, second], installed, []).other, [second]);
 });
 
 test("rows show the author, the commands and the state; search includes keywords, author and name", () => {
@@ -256,7 +450,7 @@ test("the category and Installed filters, and installed ones first", () => {
         filterEntries(entries, "category:Productivity", installed).map((entry) => entry.name),
         ["beta", "alpha"],
     );
-    const split = sections(entries, installed);
+    const split = sections(entries, installed, []);
     assert.deepEqual(
         split.installed.map((entry) => entry.name),
         ["gamma"],
@@ -504,7 +698,7 @@ test("other images become their alt text; paths in the folder become GitHub's ra
     ].join("\n");
     const raw = "https://raw.githubusercontent.com/raycast/extensions/c0ffee/extensions/alpha";
     assert.equal(
-        filterImages(readme, "alpha", "c0ffee"),
+        filterImages(readme, "raycast/extensions", "alpha", "c0ffee"),
         [
             `![Shot](${raw}/media/shot.png)`,
             '![Hosted](https://raw.githubusercontent.com/a/b/main/x.png "A title")',
@@ -522,10 +716,10 @@ test("other images become their alt text; paths in the folder become GitHub's ra
 
 test("a source the renderer would read differently is never shown", () => {
     for (const source of ["a b", "x)", "<x", "x>", "media/a.png\n![y](https://evil.example/p.png", ""]) {
-        assert.equal(imageSource(source, "alpha", "c0ffee"), undefined, JSON.stringify(source));
+        assert.equal(imageSource(source, "raycast/extensions", "alpha", "c0ffee"), undefined, JSON.stringify(source));
     }
     const vector = "![a](<x)\n![y](https://evil.example/two.png>)";
-    const filtered = filterImages(vector, "alpha", "c0ffee");
+    const filtered = filterImages(vector, "raycast/extensions", "alpha", "c0ffee");
     assert.ok(!filtered.includes("evil.example/two.png)"), filtered);
     assert.ok(!/!\[[^\]]*\]\(https:\/\/evil/.test(filtered), filtered);
 });
@@ -547,26 +741,29 @@ test("everything in the detail goes through the filter, the manifest's text incl
             commands: [{ name: "run", title: "Run", description: evil }],
         }),
     )!;
-    const detail = detailMarkdown(entry, "c0ffee", `# Readme\n\n${evil}\n\n![shot](media/shot.png)`);
+    const detail = detailMarkdown(entry, raycastRow, "c0ffee", `# Readme\n\n${evil}\n\n![shot](media/shot.png)`);
     assert.ok(!detail.includes("evil.example"), detail);
     assert.match(detail, /^# Alpha/);
     assert.ok(detail.includes("raw.githubusercontent.com/raycast/extensions/c0ffee/extensions/alpha/media/shot.png"));
-    assert.match(detailMarkdown(entry, "c0ffee", undefined), /Loading the README/);
+    assert.match(detailMarkdown(entry, raycastRow, "c0ffee", undefined), /Loading the README/);
+    assert.match(detailMarkdown(entry, raycastRow, "c0ffee", readmeNotFetched), /couldn't fetch the README\. ⌘R tries again/);
+    const none = detailMarkdown(entry, raycastRow, "c0ffee", "");
+    assert.ok(!/README|---/.test(none), `a folder with no README shows the manifest alone: ${none}`);
 });
 
 test("the detail's Compatibility line comes first among the facts", () => {
     const entry = parseManifest("alpha", manifest("alpha"))!;
-    const markdown = detailMarkdown(entry, "c0ffee", "", "Not compatible: Raycast AI. Missing: `Clipboard.read`");
+    const markdown = detailMarkdown(entry, raycastRow, "c0ffee", "", "Not compatible: Raycast AI. Missing: `Clipboard.read`");
     assert.match(markdown, /\n\n\*\*Compatibility:\*\* Not compatible: Raycast AI\. Missing: `Clipboard\.read`  \n\*\*Author:\*\* someone/);
-    assert.doesNotMatch(detailMarkdown(entry, "c0ffee", ""), /Compatibility/, "no line without a state");
+    assert.doesNotMatch(detailMarkdown(entry, raycastRow, "c0ffee", ""), /Compatibility/, "no line without a state");
 });
 
 test("the detail names the repository folder when it differs from the name, and links to the folder", () => {
     const aws = parseManifest("amazon-aws", manifest("aws", { title: "Amazon AWS" }))!;
-    const detail = detailMarkdown(aws, "abc123", "");
+    const detail = detailMarkdown(aws, raycastRow, "abc123", "");
     assert.ok(detail.includes("In the repository as `amazon-aws`"), detail);
     assert.ok(detail.includes("https://github.com/raycast/extensions/tree/abc123/extensions/amazon-aws"), detail);
-    assert.ok(!detailMarkdown(alpha, "abc123", "").includes("In the repository as"), "not when they're the same");
+    assert.ok(!detailMarkdown(alpha, raycastRow, "abc123", "").includes("In the repository as"), "not when they're the same");
 });
 
 test("the detail lists each command with its mode", () => {
@@ -582,7 +779,7 @@ test("the detail lists each command with its mode", () => {
             ],
         }),
     )!;
-    const commands = detailMarkdown(entry, "c0ffee", undefined).split("## Commands\n\n")[1]!.split("\n\n")[0];
+    const commands = detailMarkdown(entry, raycastRow, "c0ffee", undefined).split("## Commands\n\n")[1]!.split("\n\n")[0];
     assert.equal(
         commands,
         [
@@ -617,6 +814,13 @@ test("every git operation of the store's waits its turn", async () => {
 
 // MARK: - Git
 
+/** A git call's arguments after the `-c` pairs the store puts before `clone` and `fetch` (SPEC-157 C.4). */
+function gitArgs(args: string[]): string[] {
+    let rest = args;
+    while (rest[0] === "-c") rest = rest.slice(2);
+    return rest;
+}
+
 /** A fake runner: records each call and answers from `reply`. */
 function fakeRun(reply: (program: string, args: string[]) => Partial<GitResult> = () => ({})) {
     const calls: {
@@ -627,6 +831,8 @@ function fakeRun(reply: (program: string, args: string[]) => Partial<GitResult> 
         stoppable?: boolean;
         input?: string;
         env?: NodeJS.ProcessEnv;
+        signal?: AbortSignal;
+        stopOn?: string;
     }[] = [];
     const run: Run = async (program, args, options) => {
         calls.push({ program, args, ...options });
@@ -670,11 +876,11 @@ test("the exact git calls: clone, refresh keeping only what it reaches, add, com
     assert.deepEqual(
         calls.map((call) => call.args),
         [
-            ["clone", "--depth", "1", "--filter=blob:none", "--sparse", "--no-checkout", "https://example.invalid/repo.git", repoPath],
+            ["-c", "credential.helper=", "clone", "--depth", "1", "--filter=blob:none", "--sparse", "--no-checkout", "--", "https://example.invalid/repo.git", repoPath],
             ["sparse-checkout", "set", "--no-cone", "/extensions/*/package.json"],
             ["checkout"],
-            ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-            ["fetch", "--depth", "1", "--filter=blob:none", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"],
+            ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+            ["-c", "credential.helper=", "fetch", "--depth", "1", "--filter=blob:none", "--no-tags", "origin", "+refs/heads/main:refs/remotes/origin/main"],
             ["checkout", "--quiet", "-B", "main", "refs/remotes/origin/main", "--"],
             ["for-each-ref", "--format=%(refname)"],
             ["update-ref", "--no-deref", "-d", "refs/tags/v1"],
@@ -706,6 +912,25 @@ test("the exact git calls: clone, refresh keeping only what it reaches, add, com
     );
     assert.ok(!(await repo.needsRefresh(new Date())), "just refreshed");
     assert.ok(await repo.needsRefresh(new Date(Date.now() + 25 * 60 * 60 * 1000)), "a day later");
+    // Every git reaches only https and never asks (SPEC-157 C.4); the clone and the fetch stop on the filter warning,
+    // in English, in a group of their own (C.7).
+    for (const call of calls) {
+        assert.equal(call.env?.GIT_ALLOW_PROTOCOL, "https", call.args.join(" "));
+        assert.equal(call.env?.GIT_ASKPASS, "", call.args.join(" "));
+    }
+    const downloads = calls.filter((call) => ["clone", "fetch"].includes(gitArgs(call.args)[0]!));
+    assert.equal(downloads.length, 2);
+    for (const call of downloads) {
+        assert.deepEqual(call.args.slice(0, 2), ["-c", "credential.helper="]);
+        assert.equal(call.stopOn, "filtering not recognized by server");
+        assert.equal(call.env?.LC_ALL, "C");
+        assert.ok(call.signal && !call.signal.aborted, "in a group of its own");
+    }
+    for (const call of calls.filter((call) => !downloads.includes(call))) {
+        assert.equal(call.stopOn, undefined, call.args.join(" "));
+        assert.equal(call.env?.LC_ALL, undefined, call.args.join(" "));
+        assert.notEqual(call.args[0], "-c", call.args.join(" "));
+    }
 });
 
 test("git ignores the user's own configuration and never prompts", () => {
@@ -715,6 +940,21 @@ test("git ignores the user's own configuration and never prompts", () => {
     assert.equal(environment.GIT_CONFIG_GLOBAL, "/dev/null", "an insteadOf rule can't redirect the clone");
     assert.equal(environment.HOME, "/Users/someone");
     assert.equal(environment.PATH, "/usr/bin");
+    // Configuration handed down in the environment goes too (SPEC-157 C.4): no credential helper, no URL rewrite.
+    const handedDown = storeEnvironment({
+        PATH: "/usr/bin",
+        GIT_CONFIG_COUNT: "2",
+        GIT_CONFIG_KEY_0: "credential.helper",
+        GIT_CONFIG_VALUE_0: "!/tmp/helper",
+        GIT_CONFIG_KEY_1: "url.https://evil.example/.insteadOf",
+        GIT_CONFIG_VALUE_1: "https://github.com/",
+        GIT_CONFIG_PARAMETERS: "'credential.helper'='!/tmp/helper'",
+    });
+    for (const name of ["GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_KEY_1", "GIT_CONFIG_VALUE_1", "GIT_CONFIG_PARAMETERS"]) {
+        assert.equal(Object.hasOwn(handedDown, name), false, name);
+    }
+    assert.equal(handedDown.PATH, "/usr/bin");
+    assert.equal(handedDown.GIT_CONFIG_GLOBAL, "/dev/null", "the store's own configuration variables stay");
 });
 
 test("unloading the store stops its running git, and only that", async () => {
@@ -765,7 +1005,29 @@ test("without the Command Line Tools, git itself is never run", async () => {
         missing.calls.map((call) => call.program),
         ["/usr/bin/xcode-select"],
     );
-    const present = fakeRun();
+    // A developer folder `xcode-select -p` still names, whose tools are gone: `/usr/bin/git` would offer the
+    // installer, so it isn't run either.
+    const developer = await temporary();
+    const naming = (folder: string) => (program: string) => (program.endsWith("xcode-select") ? { stdout: `${folder}\n` } : {});
+    for (const [why, folder] of [
+        ["a folder without git", developer],
+        ["a folder that isn't there", path.join(developer, "gone")],
+        ["no folder", ""],
+        ["a relative path", "Developer"],
+    ] as const) {
+        const emptied = fakeRun(naming(folder));
+        assert.equal(await gitAvailable(emptied.run), false, why);
+        assert.deepEqual(emptied.calls.map((call) => call.program), ["/usr/bin/xcode-select"], `${why}: git isn't run`);
+    }
+    await mkdir(path.join(developer, "usr/bin/git"), { recursive: true });
+    const aFolder = fakeRun(naming(developer));
+    assert.equal(await gitAvailable(aFolder.run), false, "usr/bin/git must be a file");
+    assert.deepEqual(aFolder.calls.map((call) => call.program), ["/usr/bin/xcode-select"]);
+
+    const tools = await temporary();
+    await mkdir(path.join(tools, "usr/bin"), { recursive: true });
+    await writeFile(path.join(tools, "usr/bin/git"), "");
+    const present = fakeRun(naming(tools));
     assert.equal(await gitAvailable(present.run), true);
     assert.deepEqual(
         present.calls.map((call) => [call.program, ...call.args]),
@@ -774,8 +1036,11 @@ test("without the Command Line Tools, git itself is never run", async () => {
             ["/usr/bin/git", "--version"],
         ],
     );
-    const broken = fakeRun((program) => (program.endsWith("git") ? { code: 1, stderr: "xcrun: error: invalid active developer path" } : {}));
+    const broken = fakeRun((program) =>
+        program.endsWith("git") ? { code: 1, stderr: "xcrun: error: invalid active developer path" } : naming(tools)(program),
+    );
     assert.equal(await gitAvailable(broken.run), false);
+    assert.equal(broken.calls.length, 2, "git ran, and said it can't");
 });
 
 // MARK: - Install, update and uninstall
@@ -794,6 +1059,8 @@ async function storeContext(
         sources?: Record<string, string[]>;
         /** What the build writes as the install's `compatibility.json`; nothing when its own scan failed. */
         built?: unknown;
+        /** Answers a build itself, by its arguments, instead of `cliCode`. */
+        build?: (args: string[]) => { code: number; stderr?: string };
     } = {},
 ) {
     const root = await temporary();
@@ -818,7 +1085,7 @@ async function storeContext(
             parsedFolder = folderOf(args.at(-1)) ?? parsedFolder;
             return { stdout: "c0ffee1234\n" };
         }
-        if (args[0] === "fetch") fetched.add(parsedFolder);
+        if (gitArgs(args)[0] === "fetch") fetched.add(parsedFolder);
         if (args[0] === "rev-list" && args.includes("--missing=print")) {
             const dir = folderOf(args.at(-1))!;
             if (fetched.has(dir)) return {};
@@ -842,8 +1109,11 @@ async function storeContext(
     });
     const cli = fakeRun((_program, args) => {
         if (args[0] === "scan") return { code: 0, stdout: JSON.stringify(supportedScan), ...options.scan };
+        if (args[0] === "build" && options.build) return options.build(args);
         if (args[0] === "build" && options.built !== undefined && !options.cliCode) {
-            const installed = path.join(args[3]!, path.basename(args[1]!));
+            const into = args[args.indexOf("--into") + 1]!;
+            const repository = args.includes("--repository") ? args[args.indexOf("--repository") + 1]! : "fudgeapp/development";
+            const installed = path.join(into, ...repository.split("/"), path.basename(args[1]!));
             mkdirSync(installed, { recursive: true });
             writeFileSync(path.join(installed, "compatibility.json"), JSON.stringify(options.built));
         }
@@ -852,7 +1122,7 @@ async function storeContext(
     const asked: { title: string; message: string; primary: string }[] = [];
     const trashed: string[] = [];
     const context: StoreContext = {
-        repo: new StoreRepository(repoPath, { run: git.run }),
+        copyOf: raycastOnly(new StoreRepository(repoPath, { allowProtocols: "file", run: git.run })),
         supportPath,
         cli: "/Applications/Fudge.app/Contents/Helpers/fudge",
         extensionsDir,
@@ -870,6 +1140,24 @@ async function storeContext(
 }
 const alphaEntry = parseManifest("alpha", manifest("alpha"))!;
 
+/** Raycast's repository as a row's detail names it and links to it. */
+const raycastRow: RowRepository = { name: RAYCAST_COPY.name, gitHub: "raycast/extensions" };
+/** The copies a context looks rows up in: Raycast's only, at `repo`. */
+function raycastOnly(repo: StoreRepository): StoreContext["copyOf"] {
+    return (copyId) => (copyId === RAYCAST_COPY.copyId ? { entry: RAYCAST_COPY, repo } : undefined);
+}
+/** Raycast's copy, as a context has it. */
+function raycastRepo(context: Pick<StoreContext, "copyOf">): StoreRepository {
+    return context.copyOf(RAYCAST_COPY.copyId)!.repo;
+}
+
+/** A build's arguments without the `--outcome <support>/installing` the store adds to every build (SPEC-156 A.3). */
+function withoutOutcome(args: string[]): string[] {
+    assert.equal(args.at(-2), "--outcome");
+    assert.ok(args.at(-1)!.endsWith(`${path.sep}installing`), args.at(-1));
+    return args.slice(0, -2);
+}
+
 test("install fetches the source, checks it, asks, builds into FUDGE_EXTENSIONS_DIR and records it", async () => {
     const { context, git, cli, asked, extensionsDir, supportPath, repoPath } = await storeContext();
     assert.deepEqual(await install(alphaEntry, context), {});
@@ -883,14 +1171,215 @@ test("install fetches the source, checks it, asks, builds into FUDGE_EXTENSIONS_
             primary: "Install",
         },
     ]);
-    assert.deepEqual(cli.calls.map((call) => [call.program, ...call.args]), [
+    assert.deepEqual(cli.calls.map((call) => [call.program, ...(call.args[0] === "build" ? withoutOutcome(call.args) : call.args)]), [
         ["/Applications/Fudge.app/Contents/Helpers/fudge", "scan", path.join(repoPath, "extensions/alpha"), "--json"],
-        ["/Applications/Fudge.app/Contents/Helpers/fudge", "build", path.join(repoPath, "extensions/alpha"), "--into", extensionsDir],
+        [
+            "/Applications/Fudge.app/Contents/Helpers/fudge",
+            "build",
+            path.join(repoPath, "extensions/alpha"),
+            "--into",
+            extensionsDir,
+            "--repository",
+            "raycast/extensions",
+        ],
     ]);
-    assert.deepEqual(buildArguments("/src", "/dest"), ["build", "/src", "--into", "/dest"]);
+    assert.deepEqual(buildArguments("/src", "/dest", "raycast/extensions"), ["build", "/src", "--into", "/dest", "--repository", "raycast/extensions"]);
+    assert.deepEqual(buildArguments("/src", "/dest", "someone/tools", "build"), [
+        "build",
+        "/src",
+        "--into",
+        "/dest",
+        "--repository",
+        "someone/tools",
+        "--swift-parts",
+        "build",
+    ]);
+    assert.equal(installFolder("/dest", "raycast/extensions", "alpha"), "/dest/raycast/extensions/alpha", "Raycast's folder (FUD-183)");
+    assert.equal(installFolder("/dest", "git.example.org/team/tools", "alpha"), "/dest/git.example.org/team/tools/alpha");
     assert.deepEqual(await readInstalled(supportPath), {
         alpha: { tree: "aaa1", commit: "c0ffee1234", installedAt: "2026-11-20T12:00:00.000Z", dir: "alpha" },
     });
+});
+
+// MARK: - Parts written in Swift (SPEC-145 §3)
+
+/** A scan that found a `swift:` import. */
+const swiftScan = JSON.stringify({ ...supportedScan, swiftParts: ["swift:../swift"] });
+
+test("with the Command Line Tools set up, an extension with a Swift part installs as any other, building it (D-118)", async () => {
+    const { context, cli, asked, extensionsDir, repoPath } = await storeContext({ scan: { stdout: swiftScan } });
+    let readyAsked = 0;
+    const chosen: string[] = [];
+    context.commandLineToolsReady = async () => {
+        readyAsked++;
+        return true;
+    };
+    context.chooseSwiftParts = async (title) => {
+        chosen.push(title);
+        return "dont-install";
+    };
+    assert.deepEqual(await install(alphaEntry, context), {});
+    assert.deepEqual(chosen, [], "no view");
+    assert.equal(asked.length, 1, "only the install's own confirmation");
+    assert.equal(asked[0]!.message.includes("Swift"), false, "and nothing in it about Swift");
+    assert.deepEqual(withoutOutcome(cli.calls.at(-1)!.args), [
+        "build", path.join(repoPath, "extensions/alpha"), "--into", extensionsDir, "--repository", "raycast/extensions",
+        "--swift-parts", "build",
+    ]);
+    assert.equal(cli.calls.at(-1)!.timeout, swiftBuildTimeout, "a first Swift build fetches and compiles its packages");
+    // Asked again at the next install, never cached: an extension without one gets build too, which changes nothing.
+    const plain = await storeContext();
+    plain.context.commandLineToolsReady = context.commandLineToolsReady;
+    assert.deepEqual(await install(alphaEntry, plain.context), {});
+    assert.deepEqual(withoutOutcome(plain.cli.calls.at(-1)!.args).slice(-2), ["--swift-parts", "build"]);
+    assert.equal(plain.cli.calls.at(-1)!.timeout, buildTimeout, "with no Swift part, the usual time");
+    assert.equal(readyAsked, 2);
+    // When the check didn't answer (install always scans, so that's a scan that failed), the build may have a Swift
+    // part, so it gets that time too.
+    for (const scan of [{ code: 1, stdout: "" }, { stdout: "not json" }, { stdout: "{}" }]) {
+        const unchecked = await storeContext({ scan });
+        unchecked.context.commandLineToolsReady = context.commandLineToolsReady;
+        assert.deepEqual(await install(alphaEntry, unchecked.context), {}, JSON.stringify(scan));
+        assert.deepEqual(withoutOutcome(unchecked.cli.calls.at(-1)!.args).slice(-2), ["--swift-parts", "build"], JSON.stringify(scan));
+        assert.equal(unchecked.cli.calls.at(-1)!.timeout, swiftBuildTimeout, JSON.stringify(scan));
+    }
+});
+
+test("without the tools, the view comes first, and its choice is what the build is told", async () => {
+    for (const [choice, flag] of [
+        ["dont-install", undefined],
+        ["leave-out", "leave-out"],
+        ["build", "build"],
+    ] as const) {
+        const { context, cli, asked } = await storeContext({ scan: { stdout: swiftScan } });
+        const order: string[] = [];
+        context.commandLineToolsReady = async () => false;
+        context.chooseSwiftParts = async (title) => {
+            order.push(`view: ${title}`);
+            return choice;
+        };
+        const confirm = context.confirm;
+        context.confirm = async (...args) => {
+            order.push("confirm");
+            return confirm(...args);
+        };
+        const done = await install(alphaEntry, context);
+        const builds = cli.calls.filter((call) => call.args[0] === "build");
+        if (flag === undefined) {
+            assert.equal(done, false, "Don't Install changes nothing");
+            assert.deepEqual(order, ["view: Alpha"]);
+            assert.deepEqual(builds, []);
+            assert.deepEqual(asked, []);
+        } else {
+            assert.deepEqual(done, {});
+            assert.deepEqual(order, ["view: Alpha", "confirm"], "before anything is installed");
+            assert.deepEqual(builds.map((call) => withoutOutcome(call.args).slice(-2)), [["--swift-parts", flag]]);
+        }
+    }
+});
+
+test("without the tools, an extension with no Swift part shows no view and the build is told nothing", async () => {
+    const { context, cli } = await storeContext();
+    context.commandLineToolsReady = async () => false;
+    context.chooseSwiftParts = async () => assert.fail("no view");
+    assert.deepEqual(await install(alphaEntry, context), {});
+    assert.equal(cli.calls.at(-1)!.args.includes("--swift-parts"), false);
+});
+
+test("a swift: import the check missed: without the tools, the build's question becomes the view", async () => {
+    for (const choice of ["dont-install", "leave-out"] as const) {
+        const { context, cli } = await storeContext({
+            build: (args) =>
+                args.includes("--swift-parts")
+                    ? { code: 0 }
+                    : { code: 1, stderr: `✘ [ERROR] ${chooseSwiftPartsMessage} [plugin swift]\n\n    src/index.ts:1:20:` },
+        });
+        context.commandLineToolsReady = async () => false;
+        const views: string[] = [];
+        context.chooseSwiftParts = async (title) => {
+            views.push(title);
+            return choice;
+        };
+        const done = await install(alphaEntry, context);
+        const builds = cli.calls.filter((call) => call.args[0] === "build").map((call) => withoutOutcome(call.args).slice(6));
+        assert.deepEqual(views, ["Alpha"]);
+        if (choice === "dont-install") {
+            assert.equal(done, false);
+            assert.deepEqual(builds, [[]]);
+        } else {
+            assert.deepEqual(done, {});
+            assert.deepEqual(builds, [[], ["--swift-parts", "leave-out"]]);
+        }
+    }
+    // Any other failure is still a failure.
+    const { context } = await storeContext({ build: () => ({ code: 1, stderr: "error: esbuild failed" }) });
+    context.commandLineToolsReady = async () => false;
+    context.chooseSwiftParts = async () => assert.fail("no view");
+    await assert.rejects(install(alphaEntry, context), /esbuild failed|didn't/);
+});
+
+test("the store's no-flag message is the bundling script's, word for word", () => {
+    assert.equal(chooseSwiftPartsMessage, chooseSwiftParts);
+    assert.equal(askedForSwiftParts(`✘ [ERROR] ${chooseSwiftParts} [plugin swift]`), true);
+    assert.equal(askedForSwiftParts("✘ [ERROR] Could not resolve"), false);
+});
+
+test("the view: its words, its three actions in order, the line beside the second", () => {
+    assert.equal(
+        swiftPartsMessage("Say"),
+        "Say has a part written in Swift, and building it needs Apple's Command Line Tools, which aren't set up. " +
+            "To install it with that part, set them up in Settings → Development.",
+    );
+    assert.deepEqual(Object.values(swiftPartsActions), [
+        "Don't Install",
+        "Install Without the Swift Part",
+        "Install with Command Line Tools",
+    ]);
+    assert.equal(leaveOutLine, "Some commands might not work, or the extension may crash.");
+    assert.equal(
+        swiftPartsMarkdown("Say"),
+        `${swiftPartsMessage("Say")}\n\n- **Don't Install**\n- **Install Without the Swift Part**: ${leaveOutLine}\n- **Install with Command Line Tools**`,
+    );
+});
+
+test("an extension installed without its Swift part says so on its detail page, and no other does", async () => {
+    const folder = await temporary();
+    assert.equal(await installedWithoutSwift(folder), false, "no record");
+    await writeFile(path.join(folder, swiftPartsFile), JSON.stringify({ swiftParts: "build" }));
+    assert.equal(await installedWithoutSwift(folder), false);
+    await writeFile(path.join(folder, swiftPartsFile), JSON.stringify({ swiftParts: "leave-out" }));
+    assert.equal(await installedWithoutSwift(folder), true);
+    await writeFile(path.join(folder, swiftPartsFile), "not json");
+    assert.equal(await installedWithoutSwift(folder), false);
+    const markdown = detailMarkdown(alphaEntry, raycastRow, "c0ffee1234", "", undefined, true);
+    assert.ok(markdown.includes("Installed without its part written in Swift."), markdown);
+    assert.equal(detailMarkdown(alphaEntry, raycastRow, "c0ffee1234", "", undefined).includes("Swift"), false);
+});
+
+test("the list reads each install's Swift part choice from its folder in Raycast's, not the top level", async () => {
+    const extensionsDir = await temporary();
+    const leaveOut = JSON.stringify({ swiftParts: "leave-out" });
+    // The store's install, filed in Raycast's folder, and one of another name still at the top level (FUD-183).
+    await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "say"), { recursive: true });
+    await writeFile(path.join(installFolder(extensionsDir, RAYCAST_COPY.folder, "say"), swiftPartsFile), leaveOut);
+    await mkdir(path.join(extensionsDir, "speak"), { recursive: true });
+    await writeFile(path.join(extensionsDir, "speak", swiftPartsFile), leaveOut);
+    await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "built"), { recursive: true });
+    const build = JSON.stringify({ swiftParts: "build" });
+    await writeFile(path.join(installFolder(extensionsDir, RAYCAST_COPY.folder, "built"), swiftPartsFile), build);
+    assert.deepEqual([...(await installsWithoutSwift(extensionsDir, ["say", "speak", "built", "missing"]))], ["say"]);
+    // An added repository's install is read from its own folder, by its id (SPEC-157 E.4); Raycast's of that name isn't
+    // it.
+    await mkdir(installFolder(extensionsDir, "someone/tools", "built"), { recursive: true });
+    await writeFile(path.join(installFolder(extensionsDir, "someone/tools", "built"), swiftPartsFile), leaveOut);
+    assert.deepEqual([...(await installsWithoutSwift(extensionsDir, ["built", "someone+tools+built", "someone+tools+say"]))], [
+        "someone+tools+built",
+    ]);
+});
+
+test("a scan's swift: imports become the store's swiftPart, kept in the cache", () => {
+    assert.equal((fromReport(JSON.parse(swiftScan)) as { swiftPart?: boolean }).swiftPart, true);
+    assert.equal("swiftPart" in fromReport(supportedScan), false, "none, from a scanner that names none too");
 });
 
 test("a folder whose manifest has another name installs from the folder, under the name, and records both", async () => {
@@ -900,15 +1389,23 @@ test("a folder whose manifest has another name installs from the folder, under t
     const aws = parseManifest("amazon-aws", manifest("aws", { title: "Amazon AWS" }))!;
     assert.deepEqual(await install(aws, context), {});
     assert.deepEqual(git.calls[0]!.args, ["sparse-checkout", "add", "/extensions/amazon-aws/"]);
-    assert.deepEqual(cli.calls.at(-1)!.args, ["build", path.join(repoPath, "extensions/amazon-aws"), "--into", extensionsDir]);
+    assert.deepEqual(withoutOutcome(cli.calls.at(-1)!.args), [
+        "build",
+        path.join(repoPath, "extensions/amazon-aws"),
+        "--into",
+        extensionsDir,
+        "--repository",
+        "raycast/extensions",
+    ]);
     assert.deepEqual((await readInstalled(supportPath)).aws, {
         tree: "a5a1",
         commit: "c0ffee1234",
         installedAt: "2026-11-20T12:00:00.000Z",
         dir: "amazon-aws",
     });
-    // fudge build installs under the manifest's name, so `<extensions>/aws` is what's checked and trashed.
-    await mkdir(path.join(extensionsDir, "aws"));
+    // fudge build installs under the manifest's name, so `<extensions>/raycast/extensions/aws` is what's checked and
+    // trashed.
+    await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "aws"), { recursive: true });
     assert.equal(await uninstall(aws, context), true);
 });
 
@@ -922,13 +1419,13 @@ test("two folders with one name: the second can't install over the first, and up
     const first = parseManifest("world-clock", manifest("world-clock"))!;
     const second = parseManifest("world-clock-2", manifest("world-clock"))!;
     assert.deepEqual(await install(first, context), {});
-    await mkdir(path.join(extensionsDir, "world-clock"));
+    await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "world-clock"), { recursive: true });
     await assert.rejects(install(second, context), (error: unknown) => {
         assert.ok(error instanceof StoreError);
         assert.equal(error.message, "Another extension called world-clock is installed. Uninstall it first.");
         return true;
     });
-    await assert.rejects(uninstall(second, context), /wasn't installed by the store/, "nor removed through the other row");
+    await assert.rejects(uninstall(second, context), /wasn't installed by the Extension Store/, "nor removed through the other row");
     assert.deepEqual(await install(first, context), {}, "updating the first one");
     assert.equal(asked.at(-1)!.title, "Update World-clock?");
     assert.equal((await readInstalled(supportPath))["world-clock"]?.dir, "world-clock");
@@ -969,7 +1466,7 @@ test("cancelling builds nothing and records nothing", async () => {
 
 test("a name clash with an extension the store didn't install is refused before anything else", async () => {
     const { context, git, cli, extensionsDir } = await storeContext();
-    await mkdir(path.join(extensionsDir, "alpha"));
+    await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
     await assert.rejects(install(alphaEntry, context), (error: unknown) => {
         assert.ok(error instanceof StoreError);
         assert.equal(error.message, "Another extension called alpha is installed. Uninstall it first.");
@@ -977,6 +1474,19 @@ test("a name clash with an extension the store didn't install is refused before 
     });
     assert.equal(git.calls.length, 0);
     assert.equal(cli.calls.length, 0);
+});
+
+test("a development build of the name is kept apart, so an install goes ahead into Raycast's folder and leaves it", async () => {
+    const { context, cli, extensionsDir, supportPath } = await storeContext({ built: { disabled: [] } });
+    const development = path.join(extensionsDir, "fudgeapp/development/alpha");
+    await mkdir(development, { recursive: true });
+    await writeFile(path.join(development, "package.json"), "mine");
+    assert.deepEqual(await install(alphaEntry, context), {});
+    assert.deepEqual(withoutOutcome(cli.calls.at(-1)!.args).slice(-2), ["--repository", "raycast/extensions"]);
+    assert.ok((await readInstalled(supportPath)).alpha);
+    assert.deepEqual(await readdir(development), ["package.json"]);
+    assert.equal(await readFile(path.join(development, "package.json"), "utf8"), "mine");
+    assert.deepEqual(await readdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "alpha")), ["compatibility.json"], "the fake build's install");
 });
 
 test("an extension with another package source is refused before asking", async () => {
@@ -998,7 +1508,7 @@ test("a failed build shows the CLI's message and records nothing", async () => {
     // The failure view gets the whole output, the command and its exit (SPEC-116).
     assert.deepEqual(failureDetails(thrown), {
         output: "error: esbuild failed",
-        command: `fudge build ${path.join(repoPath, "extensions/alpha")} --into ${extensionsDir}`,
+        command: `fudge build ${path.join(repoPath, "extensions/alpha")} --into ${extensionsDir} --repository raycast/extensions`,
         code: 1,
     });
 });
@@ -1019,7 +1529,7 @@ test("a failure's details say what failed: a build, a git step, or one of the st
 test("updating an installed extension asks to update and records the new tree", async () => {
     const { context, asked, supportPath, extensionsDir } = await storeContext({ tree: "bbb2" });
     await writeInstalled(supportPath, { alpha: { tree: "aaa1", commit: "old", installedAt: "x", dir: "alpha" } });
-    await mkdir(path.join(extensionsDir, "alpha"));
+    await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
     assert.deepEqual(await install(alphaEntry, context), {}, "its own folder isn't a clash");
     assert.equal(asked[0]!.title, "Update Alpha?");
     assert.equal((await readInstalled(supportPath)).alpha?.tree, "bbb2");
@@ -1027,11 +1537,11 @@ test("updating an installed extension asks to update and records the new tree", 
 
 test("uninstall trashes only what the store installed, and forgets it", async () => {
     const { context, trashed, supportPath, extensionsDir } = await storeContext();
-    await assert.rejects(uninstall(alphaEntry, context), /wasn't installed by the store/);
-    await mkdir(path.join(extensionsDir, "alpha"));
+    await assert.rejects(uninstall(alphaEntry, context), /wasn't installed by the Extension Store/);
+    await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
     await writeInstalled(supportPath, { alpha: { tree: "t", commit: "c", installedAt: "x", dir: "alpha" } });
     assert.equal(await uninstall(alphaEntry, context), true);
-    assert.deepEqual(trashed, [path.join(extensionsDir, "alpha")]);
+    assert.deepEqual(trashed, [path.join(extensionsDir, "raycast/extensions/alpha")]);
     assert.deepEqual(await readInstalled(supportPath), {});
 });
 
@@ -1164,6 +1674,7 @@ test("some commands using Raycast AI is Partly compatible, orange; every command
         notSupported: ["AI"],
         missing: [],
         signsIn: false,
+        signsInThroughRaycast: false,
         unreadable: false,
     });
     assert.equal(compatibilityTag(partly), "Partly compatible");
@@ -1215,15 +1726,31 @@ test("the detail and the confirmation name the commands, and the confirmation sa
     );
 });
 
+test("per-command results keep command names as Raycast accepts them (caffeinateWhile, dots)", async () => {
+    const byCommand = (report: ScanReport) => {
+        const result = fromReport(report);
+        return "byCommand" in result ? result.byCommand : undefined;
+    };
+    const camel = perCommand({ caffeinateWhile: ["AI"], addSchedule: [], "show-recent.command": [] });
+    assert.deepEqual(byCommand(camel), { count: 3, using: ["caffeinateWhile"] });
+    assert.deepEqual(byCommand(perCommand({ "a b": ["AI"], ok: [] })), undefined, "one bad name drops them");
+
+    const supportPath = await mkdtemp(path.join(tmpdir(), "fudge-camel-"));
+    await writeCompatibility(supportPath, "scanner-1", new Map([[treeOf(1), fromReport(camel)]]));
+    assert.deepEqual((await readCompatibility(supportPath, "scanner-1")).get(treeOf(1)), fromReport(camel));
+    await rm(supportPath, { recursive: true, force: true });
+});
+
 test("a cached result keeps its commands, and one with a bad commands entry is dropped", async () => {
     const supportPath = await mkdtemp(path.join(tmpdir(), "fudge-partly-"));
     const partly = fromReport(slackLike);
     await writeCompatibility(supportPath, "scanner-1", new Map([[treeOf(1), partly]]));
     assert.deepEqual((await readCompatibility(supportPath, "scanner-1")).get(treeOf(1)), partly);
-    const bad = (byCommand: unknown) => ({ notSupported: ["AI"], missing: [], signsIn: false, unreadable: false, byCommand });
+    const bad = (byCommand: unknown) => ({ notSupported: ["AI"], missing: [], signsIn: false, signsInThroughRaycast: false, unreadable: false, byCommand });
     await writeFile(
         compatibilityFile(supportPath),
         JSON.stringify({
+            version: 2,
             scanner: "scanner-1",
             trees: {
                 [treeOf(2)]: bad({ count: 2, using: ["a", "b", "c"] }),
@@ -1257,7 +1784,7 @@ test("install's confirmation carries the scan's gaps, and a failed scan doesn't 
 // MARK: - Compatibility: the cache, the detail's scan, and install
 
 const treeOf = (n: number) => n.toString(16).padStart(40, "0");
-const aiOnly: Compatibility = { notSupported: ["AI"], missing: [], signsIn: false, unreadable: false };
+const aiOnly: Compatibility = { notSupported: ["AI"], missing: [], signsIn: false, signsInThroughRaycast: false, unreadable: false };
 
 test("results are cached by tree id, for the scanner that wrote them only", async () => {
     const support = await temporary();
@@ -1285,6 +1812,7 @@ test("results are cached by tree id, for the scanner that wrote them only", asyn
 test("the cache lets in only valid entries, and keeps the newest", async () => {
     const support = await temporary();
     await writeJSON(compatibilityFile(support), {
+        version: 2,
         scanner: "s",
         trees: {
             [treeOf(1)]: aiOnly,
@@ -1293,7 +1821,7 @@ test("the cache lets in only valid entries, and keeps the newest", async () => {
             [treeOf(3)]: { ...aiOnly, notSupported: ["Telepathy"] },
             [treeOf(4)]: { notSupported: [], missing: [] },
             [treeOf(5)]: "Compatible",
-            [treeOf(6)]: { notSupported: [], missing: ["Clipboard.read"], signsIn: true, unreadable: false },
+            [treeOf(6)]: { notSupported: [], missing: ["Clipboard.read"], signsIn: true, signsInThroughRaycast: false, unreadable: false },
         },
     });
     assert.deepEqual(
@@ -1321,7 +1849,7 @@ test("a detail scan fetches the folder's src/ with a per-file cap, checks out it
         sources: { alpha: ["index.ts", "lib/util.tsx", "data.json", "logo.png"] },
         scan: { stdout: JSON.stringify(report) },
     });
-    assert.deepEqual(await checkFolder("alpha", context, () => false), aiOnly);
+    assert.deepEqual(await checkFolder(raycastRepo(context), "alpha", context, () => false), aiOnly);
     assert.deepEqual(
         git.calls.map((call) => call.args),
         [
@@ -1330,6 +1858,8 @@ test("a detail scan fetches the folder's src/ with a per-file cap, checks out it
             ["rev-list", "--objects", "--missing=print", "HEAD:extensions/alpha/src"],
             ["rev-parse", "--verify", "HEAD:extensions/alpha/src"],
             [
+                "-c",
+                "credential.helper=",
                 "fetch",
                 "--refetch",
                 "--no-write-fetch-head",
@@ -1346,7 +1876,7 @@ test("a detail scan fetches the folder's src/ with a per-file cap, checks out it
             ["sparse-checkout", "set", "--no-cone", "--stdin"],
         ],
     );
-    assert.deepEqual(git.calls[5]!.env, { GIT_NO_LAZY_FETCH: "1" }, "the checkout never downloads");
+    assert.equal(git.calls[5]!.env?.GIT_NO_LAZY_FETCH, "1", "the checkout never downloads");
     assert.deepEqual(scanPatterns("alpha"), [
         "/extensions/alpha/src/**/*.tsx",
         "/extensions/alpha/src/**/*.ts",
@@ -1371,17 +1901,17 @@ test("past the caps a row isn't checked: too many source files, or files under s
     const assets = (count: number) => Array.from({ length: count }, (_, n) => `assets/image${n}.png`);
     // Assets don't count toward the scan's cap, only toward the download's.
     const atCaps = await storeContext({ sources: { alpha: [...sources, ...assets(maxSrcFiles - maxScanFiles)] } });
-    assert.deepEqual(await checkFolder("alpha", atCaps.context, () => false), fromReport(supportedScan), "exactly both caps is fine");
+    assert.deepEqual(await checkFolder(raycastRepo(atCaps.context), "alpha", atCaps.context, () => false), fromReport(supportedScan), "exactly both caps is fine");
     assert.equal(atCaps.cli.calls.length, 1);
 
     const tooManySources = await storeContext({ sources: { alpha: [...sources, "one-more.tsx", "a.png"] } });
-    assert.deepEqual(await checkFolder("alpha", tooManySources.context, () => false), { notChecked: true });
+    assert.deepEqual(await checkFolder(raycastRepo(tooManySources.context), "alpha", tooManySources.context, () => false), { notChecked: true });
     assert.deepEqual(tooManySources.git.calls.map((call) => call.args[0]), ["ls-tree"], "nothing fetched");
     assert.deepEqual(tooManySources.cli.calls, []);
 
     // Every file under src/ is downloaded, so past the download's cap nothing is, however few the source files.
     const tooManyFiles = await storeContext({ sources: { alpha: ["index.ts", ...assets(maxSrcFiles)] } });
-    assert.deepEqual(await checkFolder("alpha", tooManyFiles.context, () => false), { notChecked: true });
+    assert.deepEqual(await checkFolder(raycastRepo(tooManyFiles.context), "alpha", tooManyFiles.context, () => false), { notChecked: true });
     assert.deepEqual(tooManyFiles.git.calls.map((call) => call.args[0]), ["ls-tree"], "nothing fetched");
     assert.deepEqual(tooManyFiles.cli.calls, []);
 
@@ -1396,14 +1926,14 @@ test("past the caps a row isn't checked: too many source files, or files under s
         const reply = left.git.run;
         let fetched = false;
         const withMissing: Run = async (program, args, options) => {
-            if (args[0] === "fetch") fetched = true;
+            if (gitArgs(args)[0] === "fetch") fetched = true;
             if (args[0] !== "rev-list") return reply(program, args, options);
             const missing = fetched ? [still] : files;
             const lines = missing.map((file) => `?${String(files.indexOf(file)).padStart(40, "0")}\n`);
             return { code: 0, stdout: `abc1 extensions/alpha/src\n${lines.join("")}`, stderr: "" };
         };
-        const overCap = { ...left.context, repo: new StoreRepository(left.repoPath, { run: withMissing }) };
-        assert.deepEqual(await checkFolder("alpha", overCap, () => false), expected, `${still} over the per-file cap`);
+        const overCap = { ...left.context, copyOf: raycastOnly(new StoreRepository(left.repoPath, { allowProtocols: "file", run: withMissing })) };
+        assert.deepEqual(await checkFolder(raycastRepo(overCap), "alpha", overCap, () => false), expected, `${still} over the per-file cap`);
         assert.ok(fetched, `${still}: fetched`);
         const checkedOut = left.git.calls.some((call) => call.args[0] === "sparse-checkout" && call.args[1] === "add");
         assert.equal(checkedOut, still === "hero.png", `${still}: checked out or not`);
@@ -1413,18 +1943,18 @@ test("past the caps a row isn't checked: too many source files, or files under s
     const big = await storeContext({ sources: { alpha: ["huge.js"] } });
     await mkdir(path.join(big.repoPath, "extensions/alpha/src"), { recursive: true });
     await writeFile(path.join(big.repoPath, "extensions/alpha/src/huge.js"), Buffer.alloc(maxScanBytes + 1));
-    assert.deepEqual(await checkFolder("alpha", big.context, () => false), { notChecked: true });
+    assert.deepEqual(await checkFolder(raycastRepo(big.context), "alpha", big.context, () => false), { notChecked: true });
     assert.deepEqual(big.cli.calls, [], "not scanned");
     assert.deepEqual(big.git.calls.at(-1)!.args, ["sparse-checkout", "set", "--no-cone", "--stdin"], "its patterns are taken out");
 });
 
 test("a detail scan that fails throws, and still takes its patterns out; one cancelled before its fetch fetches nothing", async () => {
     const failing = await storeContext({ sources: { alpha: ["index.ts"] }, scan: { code: 1 } });
-    await assert.rejects(checkFolder("alpha", failing.context, () => false), /fudge scan failed/);
+    await assert.rejects(checkFolder(raycastRepo(failing.context), "alpha", failing.context, () => false), /fudge scan failed/);
     assert.deepEqual(failing.git.calls.at(-1)!.args, ["sparse-checkout", "set", "--no-cone", "--stdin"]);
 
     const cancelled = await storeContext({ sources: { alpha: ["index.ts"] } });
-    assert.equal(await checkFolder("alpha", cancelled.context, () => true), undefined);
+    assert.equal(await checkFolder(raycastRepo(cancelled.context), "alpha", cancelled.context, () => true), undefined);
     assert.deepEqual(cancelled.git.calls.map((call) => call.args[0]), ["ls-tree"]);
     assert.deepEqual(cancelled.cli.calls, []);
 });
@@ -1466,32 +1996,32 @@ test("moving through 20 rows quickly fetches nothing; the row the selection rest
     const checks = new CompatibilityChecks({
         timers: clock.timers,
         cached: (tree) => results.get(tree),
-        check: (dir, _tree, cancelled) => oneAtATime(() => checkFolder(dir, context, cancelled)),
-        changed: (dir, tree, result) => {
+        check: (_copyId, dir, _tree, cancelled) => oneAtATime(() => checkFolder(raycastRepo(context), dir, context, cancelled)),
+        changed: (_copyId, dir, tree, result) => {
             if (result !== "failed") results.set(tree, result);
             settled([dir, result]);
         },
     });
     for (let row = 0; row < 20; row++) {
-        checks.select(`row${row}`, treeOf(row));
+        checks.select("raycast", `row${row}`, treeOf(row));
         clock.advance(100);
         await settle();
     }
     assert.equal(git.calls.length, 0, "nothing fetched while moving");
     assert.equal(cli.calls.length, 0);
-    checks.select(`row7`, treeOf(7));
+    checks.select("raycast", `row7`, treeOf(7));
     clock.advance(499);
     await settle();
     assert.equal(git.calls.length, 0, "not before half a second of rest");
-    checks.select(`row7`, treeOf(7));
+    checks.select("raycast", `row7`, treeOf(7));
     clock.advance(1);
-    assert.deepEqual(await done, ["row7", { notSupported: [], missing: [], signsIn: false, unreadable: false }]);
+    assert.deepEqual(await done, ["row7", { notSupported: [], missing: [], signsIn: false, signsInThroughRaycast: false, unreadable: false }]);
     assert.equal(cli.calls.length, 1);
     assert.equal(git.calls.filter((call) => call.args[1] === "add").length, 1);
 
     const before = git.calls.length;
-    checks.select(undefined, undefined);
-    checks.select(`row7`, treeOf(7));
+    checks.select(undefined, undefined, undefined);
+    checks.select("raycast", `row7`, treeOf(7));
     clock.advance(5000);
     await settle();
     assert.equal(git.calls.length, before, "a cached row never fetches");
@@ -1505,12 +2035,12 @@ test("moving on cancels a check before its fetch, and a failed check says so", a
     const checks = new CompatibilityChecks({
         timers: clock.timers,
         cached: () => undefined,
-        check: (dir, _tree, cancelled) => checkFolder(dir, context, cancelled),
-        changed: (dir, _tree, result) => changes.push([dir, result]),
+        check: (_copyId, dir, _tree, cancelled) => checkFolder(raycastRepo(context), dir, context, cancelled),
+        changed: (_copyId, dir, _tree, result) => changes.push([dir, result]),
     });
-    checks.select("alpha", treeOf(1));
+    checks.select("raycast", "alpha", treeOf(1));
     clock.advance(500);
-    checks.select("beta", treeOf(2)); // while alpha's listing is still being read
+    checks.select("raycast", "beta", treeOf(2)); // while alpha's listing is still being read
     await settle();
     assert.deepEqual(git.calls.map((call) => call.args[0]), ["ls-tree"], "alpha's source isn't fetched");
     assert.equal(changes.length, 0);
@@ -1520,10 +2050,10 @@ test("moving on cancels a check before its fetch, and a failed check says so", a
     const failed = new CompatibilityChecks({
         timers: clock.timers,
         cached: () => undefined,
-        check: (dir, _tree, cancelled) => checkFolder(dir, failing.context, cancelled),
-        changed: (dir, _tree, result) => changes.push([dir, result]),
+        check: (_copyId, dir, _tree, cancelled) => checkFolder(raycastRepo(failing.context), dir, failing.context, cancelled),
+        changed: (_copyId, dir, _tree, result) => changes.push([dir, result]),
     });
-    failed.select("alpha", treeOf(1));
+    failed.select("raycast", "alpha", treeOf(1));
     clock.advance(500);
     await settle();
     assert.deepEqual(changes, [["alpha", "failed"]]);
@@ -1531,14 +2061,14 @@ test("moving on cancels a check before its fetch, and a failed check says so", a
 
 test("moving through 20 rows fetches no README; the row the selection rests on is fetched once, by its tree", async () => {
     const { context, git } = await storeContext();
-    await writeFile(path.join(context.repo.path, "extensions/alpha/README.md"), "# Alpha\n");
+    await writeFile(path.join(raycastRepo(context).path, "extensions/alpha/README.md"), "# Alpha\n");
     const clock = manualTimers();
     const readmes = new Map<string, string>();
     const fetches = new RestingWork<string>({
         timers: clock.timers,
         done: (key) => readmes.has(key.split("\0")[1]!),
         run: (key, cancelled) =>
-            oneAtATime(async () => (cancelled() ? undefined : fetchReadme(context.repo, key.split("\0")[0]!))),
+            oneAtATime(async () => (cancelled() ? undefined : fetchReadme(raycastRepo(context), key.split("\0")[0]!))),
         // As the view keeps them: a failed fetch isn't kept (the view shows it as no README).
         changed: (key, readme) => {
             if (readme !== "failed") readmes.set(key.split("\0")[1]!, readme);
@@ -1579,7 +2109,7 @@ test("a README git couldn't fetch isn't kept as missing: selecting it again wait
             ? { code: 128, stderr: "fatal: unable to access 'https://github.com/raycast/extensions/': Could not resolve host" }
             : {},
     );
-    const repo = new StoreRepository(context.repo.path, { run: failing.run });
+    const repo = new StoreRepository(raycastRepo(context).path, { allowProtocols: "file", run: failing.run });
     await writeFile(path.join(repo.path, "extensions/alpha/README.md"), "# Alpha\n");
     await assert.rejects(fetchReadme(repo, "alpha"), /Could not resolve host/, "a failed fetch throws");
     gitFails = false;
@@ -1633,6 +2163,88 @@ test("a README git couldn't fetch isn't kept as missing: selecting it again wait
     assert.equal(readmes.has("gamma"), false);
 });
 
+test("a README fetch on its way shows as loading, a failed one says so, and none shows only for a folder without one", async () => {
+    let gitFails = true;
+    const { context } = await storeContext({ folders: [{ dir: "beta", name: "beta", tree: "bbb2" }] });
+    const failing = fakeRun((_program, args) =>
+        gitFails && args[0] === "sparse-checkout" && args[1] === "add"
+            ? { code: 128, stderr: "fatal: unable to access 'https://github.com/raycast/extensions/': Could not resolve host" }
+            : {},
+    );
+    const repo = new StoreRepository(raycastRepo(context).path, { allowProtocols: "file", run: failing.run });
+    await writeFile(path.join(repo.path, "extensions/alpha/README.md"), "# Alpha\n");
+    const entry = parseManifest("alpha", manifest("alpha"))!;
+    const clock = manualTimers();
+    // Each fetch waits for `release`, so a test can look while it runs.
+    let release = () => {};
+    const held = () => new Promise<void>((resolve) => (release = resolve));
+    let gate = held();
+    // The store's own state and callbacks (extension-store.tsx), each key a folder's tree.
+    let readmes: Record<string, string> = {};
+    let failed: ReadonlySet<string> = new Set();
+    const scheduled: string[] = [];
+    const fetches = new RestingWork<string>({
+        timers: clock.timers,
+        done: (key) => readmes[key] !== undefined,
+        run: async (key) => {
+            await gate;
+            return fetchReadme(repo, key);
+        },
+        changed: (key, readme) => {
+            if (readme === "failed") failed = new Set(failed).add(key);
+            else readmes = { ...readmes, [key]: readme };
+        },
+        scheduled: (key) => {
+            scheduled.push(key);
+            failed = refetching(failed, key);
+        },
+    });
+    const shown = (dir = "alpha") => detailMarkdown(entry, raycastRow, "c0ffee", shownReadme(dir, readmes, failed));
+    const loading = /Loading the README/;
+    const notFetched = /couldn't fetch the README/;
+    /** Lets the waiting fetch start, looks while it runs, then lets it end. */
+    const fetch = async (why: string, dir = "alpha") => {
+        clock.advance(500);
+        await settle();
+        assert.match(shown(dir), loading, `${why}: loading while it runs`);
+        release();
+        await settle();
+        gate = held();
+    };
+
+    fetches.select("alpha");
+    assert.match(shown(), loading, "the first fetch, waiting");
+    await fetch("the first fetch");
+    assert.match(shown(), notFetched, "it failed, and the detail says so");
+    assert.doesNotMatch(shown(), loading);
+
+    fetches.select("alpha");
+    assert.match(shown(), notFetched, "a render selecting it again fetches nothing, so the failure stays");
+    fetches.again();
+    assert.match(shown(), loading, "⌘R: on its way, so loading, not the failure");
+    await fetch("⌘R's retry");
+    assert.match(shown(), notFetched, "the retry failed too");
+
+    fetches.select("beta");
+    fetches.select("alpha");
+    assert.match(shown(), loading, "back on the row: on its way again");
+    gitFails = false;
+    await fetch("the fetch on coming back");
+    assert.match(shown(), /# Alpha/, "fetched");
+    assert.doesNotMatch(shown(), loading);
+    assert.doesNotMatch(shown(), notFetched);
+
+    fetches.select("beta");
+    assert.match(shown("beta"), loading);
+    await fetch("beta's fetch", "beta");
+    assert.equal(readmes.beta, "", "beta has no README");
+    assert.ok(!/README|---/.test(shown("beta")), "and only that shows nothing");
+
+    fetches.select("alpha");
+    fetches.again();
+    assert.deepEqual(scheduled, ["alpha", "alpha", "beta", "alpha", "beta"], "a kept README is never on its way again");
+});
+
 test("resting work: moving on cancels and aborts, and a result that comes in after it is still kept", async () => {
     const clock = manualTimers();
     const kept: [string, unknown][] = [];
@@ -1677,7 +2289,7 @@ test("install uses this version's cached result instead of scanning, and caches 
     assert.deepEqual(await install(alphaEntry, fresh.context), {});
     assert.deepEqual(
         (await readCompatibility(fresh.supportPath, await scannerIdentity(fresh.context.cli))).get(tree),
-        { notSupported: [], missing: [], signsIn: false, unreadable: false },
+        { notSupported: [], missing: [], signsIn: false, signsInThroughRaycast: false, unreadable: false },
         "the list and the detail get the install's scan",
     );
 });
@@ -1699,6 +2311,35 @@ test("installed.json drops invalid names, folders and records; an entry without 
     assert.deepEqual(Object.keys(installed), ["alpha", "aws", "notion_researcher"]);
     assert.equal(installed.alpha?.dir, "alpha", "written before folders were recorded");
     assert.equal(installed.aws?.dir, "amazon-aws");
+    await writeFile(path.join(support, "installed.json"), "{ broken");
+    assert.deepEqual(await readInstalled(support), {});
+    assert.deepEqual(await readInstalled(path.join(support, "missing")), {});
+});
+
+test("installed.json is keyed by id: an added repository's record names the id's folder, Raycast's names none", async () => {
+    const support = await temporary();
+    const record = { tree: "t", commit: "c", installedAt: "x" };
+    await writeFile(
+        path.join(support, "installed.json"),
+        JSON.stringify({
+            github: record,
+            "someone+tools+github": { ...record, repository: "someone/tools" },
+            "git.example.org_8443+team+extensions+github": { ...record, dir: "GitHub", repository: "git.example.org_8443/team/extensions" },
+            "someone+tools+gist": record,
+            "someone+tools+jira": { ...record, repository: "someone/other" },
+            "someone+tools+linear": { ...record, repository: 7 },
+            beta: { ...record, repository: "someone/tools" },
+            gamma: { ...record, repository: "raycast/extensions" },
+            "raycast+extensions+github": { ...record, repository: "raycast/extensions" },
+            "Someone+tools+github": { ...record, repository: "Someone/tools" },
+            "someone/tools+gitlab": { ...record, repository: "someone/tools" },
+        }),
+    );
+    assert.deepEqual(await readInstalled(support), {
+        github: { ...record, dir: "github" },
+        "someone+tools+github": { ...record, dir: "github", repository: "someone/tools" },
+        "git.example.org_8443+team+extensions+github": { ...record, dir: "GitHub", repository: "git.example.org_8443/team/extensions" },
+    });
     await writeFile(path.join(support, "installed.json"), "{ broken");
     assert.deepEqual(await readInstalled(support), {});
     assert.deepEqual(await readInstalled(path.join(support, "missing")), {});
@@ -1733,10 +2374,10 @@ test("clone, list, fetch a README on demand, and see an update after a refresh",
     await sh(bare, "config", "uploadpack.allowFilter", "true");
     await sh(bare, "config", "uploadpack.allowAnySHA1InWant", "true");
 
-    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}` });
+    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}`, allowProtocols: "file" });
     await repo.clone();
     assert.deepEqual(
-        (await readCatalog(repo.path)).map((entry) => entry.name),
+        (await readCatalog(repo.path, raycastCopy)).map((entry) => entry.name),
         ["alpha", "beta"],
     );
     const readme = path.join(repo.path, "extensions/alpha/README.md");
@@ -1780,7 +2421,7 @@ test("a detail scan's patterns fetch the source files alone, from the trees' lis
     await sh(bare, "config", "uploadpack.allowFilter", "true");
     await sh(bare, "config", "uploadpack.allowAnySHA1InWant", "true");
 
-    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}` });
+    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}`, allowProtocols: "file" });
     await repo.clone();
     /** The paths under extensions/alpha whose contents aren't downloaded, asked without downloading them. */
     const missing = async () => {
@@ -1854,10 +2495,10 @@ async function partialClone(files: Record<string, string | Buffer>) {
     await sh(root, "clone", "--quiet", "--bare", source, bare);
     // Filters only: protocol v2 takes a tree's id in a `want` with no setting, so a fall back to v0 would fail here.
     await sh(bare, "config", "uploadpack.allowFilter", "true");
-    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}` });
+    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}`, allowProtocols: "file" });
     await repo.clone();
     const { context, cli } = await storeContext();
-    return { repo, context: { ...context, repo }, cli, root, bare };
+    return { repo, context: { ...context, copyOf: raycastOnly(repo) }, cli, root, bare };
 }
 
 test("a check downloads no source file over the cap: that folder isn't checked, and its blob never comes", async () => {
@@ -1874,7 +2515,7 @@ test("a check downloads no source file over the cap: that folder isn't checked, 
     });
     assert.deepEqual(await notDownloaded(repo.path, "big"), ["assets/icon.png", "src/generated.ts", "src/index.ts"]);
 
-    assert.deepEqual(await checkFolder("big", context, () => false), { notChecked: true });
+    assert.deepEqual(await checkFolder(raycastRepo(context), "big", context, () => false), { notChecked: true });
     assert.deepEqual(
         await notDownloaded(repo.path, "big"),
         ["assets/icon.png", "src/generated.ts"],
@@ -1887,7 +2528,7 @@ test("a check downloads no source file over the cap: that folder isn't checked, 
     );
     assert.equal(cli.calls.length, 0, "nor scanned");
 
-    assert.deepEqual(await checkFolder("small", context, () => false), fromReport(supportedScan));
+    assert.deepEqual(await checkFolder(raycastRepo(context), "small", context, () => false), fromReport(supportedScan));
     assert.deepEqual(
         await notDownloaded(repo.path, "small"),
         ["README.md", "src/data.json"],
@@ -1905,12 +2546,13 @@ test("a check downloads no source file over the cap: that folder isn't checked, 
     // Checked again (a new build of Fudge, say): the source is here already, so nothing is fetched.
     const calls: string[] = [];
     const recording = new StoreRepository(repo.path, {
+        allowProtocols: "file",
         run: (program, args, options) => {
-            calls.push(args[0]!);
+            calls.push(gitArgs(args)[0]!);
             return spawnProgram(program, args, options);
         },
     });
-    assert.deepEqual(await checkFolder("small", { ...context, repo: recording }, () => false), fromReport(supportedScan));
+    assert.deepEqual(await checkFolder(recording, "small", context, () => false), fromReport(supportedScan));
     assert.ok(calls.includes("rev-list") && !calls.includes("fetch"), `no fetch the second time: ${calls.join(", ")}`);
 });
 
@@ -1929,7 +2571,7 @@ test("only source files decide: an asset over the per-file cap never comes and t
     const patterns = async () => (await sh(repo.path, "sparse-checkout", "list")).split("\n").filter(Boolean);
     assert.deepEqual(await notDownloaded(repo.path, "art"), ["src/hero.png", "src/icon.png", "src/index.ts"]);
 
-    assert.deepEqual(await checkFolder("art", context, () => false), fromReport(supportedScan));
+    assert.deepEqual(await checkFolder(raycastRepo(context), "art", context, () => false), fromReport(supportedScan));
     assert.deepEqual(
         await notDownloaded(repo.path, "art"),
         ["src/hero.png"],
@@ -1939,7 +2581,7 @@ test("only source files decide: an asset over the per-file cap never comes and t
     assert.deepEqual(await patterns(), ["/extensions/*/package.json"], "the scan's patterns went again");
 
     // Checking out a file that isn't here, with the lazy fetch off, would fail: it counts as source, so not checked.
-    assert.deepEqual(await checkFolder("gen", context, () => false), { notChecked: true });
+    assert.deepEqual(await checkFolder(raycastRepo(context), "gen", context, () => false), { notChecked: true });
     assert.deepEqual(await notDownloaded(repo.path, "gen"), ["src/table.js/rows.bin"]);
     assert.deepEqual(await patterns(), ["/extensions/*/package.json"], "nothing was checked out");
     assert.equal(cli.calls.length, 1, "nor scanned");
@@ -1974,7 +2616,8 @@ function recording(around: Run = spawnProgram) {
         calls.push({ args, env: options.env, code: result.code, stderr: result.stderr });
         return result;
     };
-    const steps = () => calls.map((call) => `${call.args.slice(0, 2).join(" ")}${call.env ? " (no lazy fetch)" : ""}`);
+    const steps = () =>
+        calls.map((call) => `${gitArgs(call.args).slice(0, 2).join(" ")}${call.env?.GIT_NO_LAZY_FETCH ? " (no lazy fetch)" : ""}`);
     return { run, calls, steps };
 }
 
@@ -1989,10 +2632,10 @@ test("a server that refuses the folder's tree gets the fetch as before: each sou
     await sh(refusing.repo.path, "config", "protocol.version", "0");
     const v0 = recording();
     await assert.rejects(
-        checkFolder("small", { ...refusing.context, repo: new StoreRepository(refusing.repo.path, { run: v0.run }) }, () => false),
+        checkFolder(new StoreRepository(refusing.repo.path, { allowProtocols: "file", run: v0.run }), "small", refusing.context, () => false),
         /not our ref/,
     );
-    const fetch = v0.calls.find((call) => call.args[0] === "fetch")!;
+    const fetch = v0.calls.find((call) => gitArgs(call.args)[0] === "fetch")!;
     assert.match(fetch.stderr, /not our ref/, "git's own refusal");
     assert.deepEqual(
         v0.steps().filter((step) => step.startsWith("fetch") || step.startsWith("sparse-checkout")),
@@ -2011,18 +2654,18 @@ test("a server that refuses the folder's tree gets the fetch as before: each sou
         "extensions/huge/src/generated.ts": big,
     });
     const refuseTrees: Run = async (program, args, options) => {
-        if (args[0] !== "fetch" || !args.includes("--refetch")) return spawnProgram(program, args, options);
+        if (gitArgs(args)[0] !== "fetch" || !args.includes("--refetch")) return spawnProgram(program, args, options);
         const tree = args.at(-1)!;
         return { code: 128, stdout: "", stderr: `error: git upload-pack: not our ref ${tree}\nfatal: remote error: upload-pack: not our ref ${tree}` };
     };
     const v2 = recording(refuseTrees);
-    const refused = { ...context, repo: new StoreRepository(repo.path, { run: v2.run }) };
-    assert.deepEqual(await checkFolder("art", refused, () => false), fromReport(supportedScan));
+    const refused = { ...context, copyOf: raycastOnly(new StoreRepository(repo.path, { allowProtocols: "file", run: v2.run })) };
+    assert.deepEqual(await checkFolder(raycastRepo(refused), "art", refused, () => false), fromReport(supportedScan));
     assert.deepEqual(await notDownloaded(repo.path, "art"), ["src/logo.png"], "only the source file came, not the asset");
     assert.ok(v2.steps().includes("sparse-checkout add"), "with the lazy fetch on");
 
     // A source file over the per-file cap comes all the same, and the total's check makes the row "Not checked".
-    assert.deepEqual(await checkFolder("huge", refused, () => false), { notChecked: true });
+    assert.deepEqual(await checkFolder(raycastRepo(refused), "huge", refused, () => false), { notChecked: true });
     assert.deepEqual(await notDownloaded(repo.path, "huge"), [], "every source file came, whatever its size");
     assert.equal(cli.calls.length, 1, "huge wasn't scanned");
     assert.deepEqual(
@@ -2054,11 +2697,11 @@ test("any other failure of the tree fetch fails the check: no fetch as before, n
     // A timeout: a remote that takes 30 s to answer, and a fetch given half a second.
     await sh(repo.path, "config", "remote.origin.uploadpack", "sleep 30; git-upload-pack");
     const slow = recording((program, args, options) =>
-        spawnProgram(program, args, args[0] === "fetch" ? { ...options, timeout: 500 } : options),
+        spawnProgram(program, args, gitArgs(args)[0] === "fetch" ? { ...options, timeout: 500 } : options),
     );
     const started = Date.now();
     await assert.rejects(
-        checkFolder("small", { ...context, repo: new StoreRepository(repo.path, { run: slow.run }) }, () => false, new AbortController().signal),
+        checkFolder(new StoreRepository(repo.path, { allowProtocols: "file", run: slow.run }), "small", context, () => false, new AbortController().signal),
         /git stopped after 0\.5 s/,
     );
     assert.ok(Date.now() - started < 10_000, `the check ended with the fetch (${Date.now() - started} ms)`);
@@ -2069,7 +2712,7 @@ test("any other failure of the tree fetch fails the check: no fetch as before, n
     await sh(repo.path, "config", "remote.origin.url", `file://${path.join(root, "nowhere.git")}`);
     const unreachable = recording();
     await assert.rejects(
-        checkFolder("small", { ...context, repo: new StoreRepository(repo.path, { run: unreachable.run }) }, () => false),
+        checkFolder(new StoreRepository(repo.path, { allowProtocols: "file", run: unreachable.run }), "small", context, () => false),
         /Could not read from remote repository/,
     );
     await unchanged("an unreachable remote", unreachable);
@@ -2106,7 +2749,7 @@ test("cancelling a check at each step ends only the download, leaves no lock, an
     await sh(repo.path, "config", "remote.origin.uploadpack", "sleep 30; git-upload-pack");
     const controller = new AbortController();
     const started = Date.now();
-    const during = checkFolder("small", context, () => controller.signal.aborted, controller.signal);
+    const during = checkFolder(raycastRepo(context), "small", context, () => controller.signal.aborted, controller.signal);
     setTimeout(() => controller.abort(), 500);
     assert.equal(await during, undefined);
     assert.ok(Date.now() - started < 500 + cancelGrace + 2000, `the fetch ended within the grace period (${Date.now() - started} ms)`);
@@ -2132,9 +2775,9 @@ test("cancelling a check at each step ends only the download, leaves no lock, an
             exits.push({ command, code: result.code });
             return result;
         };
-        const stepped = new StoreRepository(repo.path, { run });
+        const stepped = new StoreRepository(repo.path, { allowProtocols: "file", run });
         assert.deepEqual(
-            await checkFolder("small", { ...context, repo: stepped }, () => controller.signal.aborted, controller.signal),
+            await checkFolder(stepped, "small", context, () => controller.signal.aborted, controller.signal),
             expected,
             `cancelled during ${step}`,
         );
@@ -2148,8 +2791,8 @@ test("cancelling a check at each step ends only the download, leaves no lock, an
         await settledState(`during ${step}`, scans);
     }
 
-    assert.deepEqual(await checkFolder("small", context, () => false), fromReport(supportedScan), "the next check works");
-    assert.equal(await install(parseManifest("small", manifest("small"))!, context), true, "and an install");
+    assert.deepEqual(await checkFolder(raycastRepo(context), "small", context, () => false), fromReport(supportedScan), "the next check works");
+    assert.deepEqual(await install(parseManifest("small", manifest("small"))!, context), {}, "and an install");
     assert.deepEqual(await locks(repo.path), []);
 });
 
@@ -2182,12 +2825,98 @@ test("a default branch name is used only when it's a plain branch name", async (
         assert.ok(!isValidBranch(name), JSON.stringify(name));
     }
     const { run, calls } = fakeRun((_program, args) => (args[0] === "symbolic-ref" ? { stdout: "origin/--upload-pack=x\n" } : {}));
-    const repo = new StoreRepository(await temporary(), { run });
+    const repo = new StoreRepository(await temporary(), { allowProtocols: "file", run });
     await assert.rejects(repo.refresh(), /default branch it can't use: "--upload-pack=x"/);
     assert.deepEqual(
         calls.map((call) => call.args[0]),
         ["symbolic-ref"],
         "nothing is fetched with it",
+    );
+});
+
+// MARK: - A copy with no origin/HEAD asks the remote (SPEC-167)
+
+/** A copy whose `symbolic-ref --quiet` exits 1 (it has no `origin/HEAD`), whose `ls-remote` answers `listing`. */
+function noOriginHead(listing: Partial<GitResult>, other: (args: string[]) => Partial<GitResult> = () => ({})) {
+    return fakeRun((_program, args) => {
+        const command = gitArgs(args)[0];
+        if (command === "symbolic-ref" && args.includes("--quiet")) return { code: 1 };
+        if (command === "ls-remote") return listing;
+        return other(args);
+    });
+}
+
+/** Each call's git command, after any `-c` pair. */
+function commands(calls: { args: string[] }[]): (string | undefined)[] {
+    return calls.map((call) => gitArgs(call.args)[0]);
+}
+
+async function refreshFailure(repo: StoreRepository): Promise<unknown> {
+    return repo.refresh().then(
+        () => undefined,
+        (error: unknown) => error,
+    );
+}
+
+test("no origin/HEAD, and a remote that names no default branch: failed, with nothing written or fetched", async () => {
+    for (const stdout of ["", "1111111111111111111111111111111111111111\tHEAD\n"]) {
+        const { run, calls } = noOriginHead({ stdout });
+        const repo = new StoreRepository(await temporary(), { allowProtocols: "file", run });
+        const error = await refreshFailure(repo);
+        assert.ok(error instanceof GitError && /doesn't name a default branch/.test(error.message), String(error));
+        assert.equal(problemOf(error), "failed");
+        assert.deepEqual(commands(calls), ["symbolic-ref", "ls-remote"], JSON.stringify(stdout));
+    }
+});
+
+test("no origin/HEAD, and a name from the remote that isn't a plain branch name: refused, with nothing written", async () => {
+    for (const [stdout, refused] of [
+        ["ref: refs/heads/--upload-pack=x\tHEAD\n", /default branch it can't use: "--upload-pack=x"/],
+        ["ref: refs/tags/v1\tHEAD\n", /doesn't name a default branch/],
+    ] as const) {
+        const { run, calls } = noOriginHead({ stdout });
+        const repo = new StoreRepository(await temporary(), { allowProtocols: "file", run });
+        await assert.rejects(repo.refresh(), refused);
+        assert.deepEqual(commands(calls), ["symbolic-ref", "ls-remote"], stdout);
+    }
+});
+
+test("no origin/HEAD, offline: the ask fails as a fetch would, unreachable, with nothing written", async () => {
+    const { run, calls } = noOriginHead({
+        code: 128,
+        stderr: "fatal: unable to access 'https://example.invalid/repo.git/': Could not resolve host: example.invalid\n",
+    });
+    const repo = new StoreRepository(await temporary(), { run, url: "https://example.invalid/repo.git" });
+    const error = await refreshFailure(repo);
+    assert.ok(error instanceof GitError, String(error));
+    assert.equal(problemOf(error), "unreachable");
+    assert.deepEqual(commands(calls), ["symbolic-ref", "ls-remote"]);
+});
+
+test("symbolic-ref's other failures still throw, and nothing asks the remote", async () => {
+    const { run, calls } = fakeRun((_program, args) =>
+        gitArgs(args)[0] === "symbolic-ref"
+            ? { code: 128, stderr: "fatal: not a git repository (or any of the parent directories): .git\n" }
+            : {},
+    );
+    const repo = new StoreRepository(await temporary(), { allowProtocols: "file", run });
+    await assert.rejects(repo.refresh(), /not a git repository/);
+    assert.deepEqual(commands(calls), ["symbolic-ref"]);
+});
+
+test("a refresh that asked already never asks again: the same name's missing branch is the fetch's own error", async () => {
+    const { run, calls } = noOriginHead(
+        { stdout: "ref: refs/heads/main\tHEAD\n1111111111111111111111111111111111111111\tHEAD\n" },
+        (args) =>
+            gitArgs(args)[0] === "fetch" ? { code: 128, stderr: "fatal: couldn't find remote ref refs/heads/main\n" } : {},
+    );
+    const repo = new StoreRepository(await temporary(), { allowProtocols: "file", run });
+    await assert.rejects(repo.refresh(), /couldn't find remote ref refs\/heads\/main/);
+    assert.deepEqual(commands(calls), ["symbolic-ref", "ls-remote", "symbolic-ref", "fetch"]);
+    assert.deepEqual(
+        calls[2]!.args,
+        ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"],
+        "the asked name is kept as origin/HEAD",
     );
 });
 
@@ -2206,7 +2935,7 @@ test("refreshing many times keeps the copy one commit deep: only the newest comm
     await sh(bare, "config", "uploadpack.allowFilter", "true");
     await sh(bare, "config", "uploadpack.allowAnySHA1InWant", "true");
 
-    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}` });
+    const repo = new StoreRepository(path.join(root, "support/repo"), { url: `file://${bare}`, allowProtocols: "file" });
     await repo.clone();
     const commits = [(await sh(source, "rev-parse", "HEAD")).trim()];
     for (const round of [2, 3, 4]) {
@@ -2272,7 +3001,7 @@ test("a linked package.json leaves the list, and a linked or missing file fails 
     await mkdir(path.join(repo, "extensions/beta"), { recursive: true });
     await symlink("/dev/zero", path.join(repo, "extensions/beta/package.json"));
     assert.deepEqual(
-        (await readCatalog(repo)).map((entry) => entry.name),
+        (await readCatalog(repo, raycastCopy)).map((entry) => entry.name),
         ["alpha"],
     );
 
@@ -2327,6 +3056,7 @@ test("installNote names what's really on and off, in each case", () => {
         notSupported: ["AI"],
         missing: [],
         signsIn: false,
+        signsInThroughRaycast: false,
         unreadable: false,
         byCommand: { count: 3, using },
     });
@@ -2345,11 +3075,42 @@ test("installNote names what's really on and off, in each case", () => {
         "Fudge couldn't check which of its commands use Raycast AI, so every command is on.",
     );
     // A result from before per-command scans names no command, so whatever the build turned off is named.
-    const whole: Compatibility = { notSupported: ["AI"], missing: [], signsIn: false, unreadable: false };
+    const whole: Compatibility = { notSupported: ["AI"], missing: [], signsIn: false, signsInThroughRaycast: false, unreadable: false };
     assert.equal(
         installNote(whole, { ask: ["AI"] }, titles),
         "Turned off: Ask, which uses Raycast AI. You can turn it on in Settings → Commands.",
     );
+});
+
+test("a finished install or update leaves a Success toast, with the note when there is one (SPEC-130)", () => {
+    const note = "Turned off: Ask, which uses Raycast AI. You can turn it on in Settings → Commands.";
+    assert.deepEqual(doneToast("Jira", false, {}), { title: "Installed Jira" });
+    assert.deepEqual(doneToast("Jira", false, { note }), { title: "Installed Jira", message: note });
+    assert.deepEqual(doneToast("Jira", true, {}), { title: "Updated Jira" });
+    assert.deepEqual(doneToast("Jira", true, { note }), { title: "Updated Jira", message: note });
+});
+
+test("the store never closes Fudge's window: no showHUD, closeMainWindow or popToRoot in its source (SPEC-130)", async () => {
+    // Any mention of the names, not only a named import, so every way of reaching them counts, comments included.
+    const closers = (text: string) => [...text.matchAll(/\b(showHUD|closeMainWindow|popToRoot)\b/g)].map((match) => match[1]);
+    for (const [form, text] of [
+        ["named", 'import { Toast, showHUD } from "@raycast/api";'],
+        ["renamed", 'import { closeMainWindow as close } from "@raycast/api";'],
+        ["namespace", 'import * as api from "@raycast/api";\nawait api.popToRoot();'],
+        ["require", 'require("@raycast/api").showHUD("Installed");'],
+        ["dynamic import", '(await import("@raycast/api")).closeMainWindow();'],
+        ["by key", 'api["popToRoot"]();'],
+    ]) {
+        assert.equal(closers(text).length, 1, form);
+    }
+    const source = path.join(import.meta.dirname, "../store-extension/src");
+    const files = (await readdir(source, { recursive: true })).filter((name) => /\.tsx?$/.test(name));
+    assert.ok(files.includes("extension-store.tsx") && files.includes("failure-view.tsx"), "the store's views are read");
+    const found: string[] = [];
+    for (const name of files) {
+        for (const closer of closers(await readFile(path.join(source, name), "utf8"))) found.push(`${name}: ${closer}`);
+    }
+    assert.deepEqual(found, [], "each of these closes the launcher in Raycast and in Fudge");
 });
 
 test("the install's compatibility.json is read as the app reads it", async () => {
@@ -2365,4 +3126,2043 @@ test("the install's compatibility.json is read as the app reads it", async () =>
     await writeJSON(path.join(linked, "real.json"), { commands: { ask: ["AI"] } });
     await symlink(path.join(linked, "real.json"), path.join(linked, "compatibility.json"));
     assert.equal(await builtCompatibility(linked, ["ask"]), undefined, "never through a link");
+});
+
+// MARK: - One install of an extension at a time (SPEC-153)
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** `read` once it stops throwing, or its last error after `limit` ms. */
+async function waitFor<T>(read: () => Promise<T>, limit = 10_000): Promise<T> {
+    const end = Date.now() + limit;
+    for (;;) {
+        try {
+            return await read();
+        } catch (error) {
+            if (Date.now() > end) throw error;
+            await delay(10);
+        }
+    }
+}
+
+/** `promise`, or a failure saying `what` after `limit` ms: a deadlock fails the test instead of hanging it. */
+async function within<T>(promise: Promise<T>, what: string, limit = 10_000): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${what}: still waiting after ${limit} ms`)), limit);
+    });
+    try {
+        return await Promise.race([promise, late]);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+/** A view for `installPressed` that writes down what the user would see. */
+function pressView() {
+    const shown: string[] = [];
+    const failures: string[] = [];
+    const view: InstallView = {
+        toast: async (title) => {
+            shown.push(`toast: ${title}`);
+            return {
+                hide: async () => void shown.push("hidden"),
+                done: (title, message) => void shown.push(`done: ${title}${message ? ` (${message})` : ""}`),
+                failed: (title, message) => void shown.push(`failed: ${title} (${message})`),
+            };
+        },
+        load: async () => void shown.push("loaded"),
+        failed: (title) => void failures.push(title),
+    };
+    return { view, shown, failures };
+}
+
+/** Holds every `fudge build` of `context` until `release`, and lists them. */
+function gatedBuilds(context: StoreContext) {
+    const run = context.run!;
+    const builds: string[] = [];
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    context.run = async (program, args, options) => {
+        if (args[0] === "build") {
+            builds.push(path.basename(args[1]!));
+            await gate;
+        }
+        return run(program, args, options);
+    };
+    return { builds, release: () => release() };
+}
+
+/** The view's `runInstall` (extension-store.tsx): one press per extension id, each in the queue. */
+function pressing(context: StoreContext, view: InstallView, presses = new InstallPresses()) {
+    return (entry: StoreEntry, updating: boolean) =>
+        presses.press(entryId(entry), updating, () => oneAtATime(() => installPressed(entry, updating, context, view)));
+}
+
+test("a second press on a name that's installing does nothing; a press on another name waits its turn", async () => {
+    const { context, supportPath } = await storeContext({ folders: [{ dir: "beta", name: "beta", tree: "bbb1" }] });
+    const beta = parseManifest("beta", manifest("beta"))!;
+    const gated = gatedBuilds(context);
+    const { view, shown, failures } = pressView();
+    let changes = 0;
+    const presses = new InstallPresses(() => changes++);
+    const press = pressing(context, view, presses);
+
+    const first = press(alphaEntry, false);
+    let second: Promise<void> | undefined;
+    try {
+        assert.equal(presses.state("alpha"), "installing");
+        // Install again, ⌘U Update and Try Again all go through the same press: none of them shows a toast or queues.
+        await within(Promise.all([press(alphaEntry, false), press(alphaEntry, true), press(alphaEntry, false)]), "ignored presses");
+        second = press(beta, false);
+        assert.equal(presses.state("beta"), "installing", "its row says so while it waits");
+        await waitFor(async () => assert.deepEqual(gated.builds, ["alpha"]));
+        await settle();
+        assert.deepEqual(gated.builds, ["alpha"], "one build, and beta waits its turn");
+        assert.deepEqual(shown, ["toast: Installing Alpha…"], "one toast");
+    } finally {
+        // Released whatever happened, so a failure here can't leave the store's queue stuck for the tests after it.
+        gated.release();
+    }
+    await within(Promise.all([first, second]), "the presses");
+    assert.deepEqual(gated.builds, ["alpha", "beta"]);
+    assert.deepEqual(shown, [
+        "toast: Installing Alpha…",
+        "loaded",
+        "done: Installed Alpha",
+        "toast: Installing Beta…",
+        "loaded",
+        "done: Installed Beta",
+    ]);
+    assert.deepEqual(failures, []);
+    assert.equal(presses.state("alpha"), undefined, "the name is free once the press has ended, after the load");
+    assert.equal(presses.state("beta"), undefined);
+    assert.equal(changes, 4, "drawn again when each name starts and stops");
+    assert.deepEqual(Object.keys(await readInstalled(supportPath)).sort(), ["alpha", "beta"]);
+});
+
+test("two ⌘U presses run one update, and two Try Agains one install", async () => {
+    const updating = await storeContext({ tree: "bbb2" });
+    await writeInstalled(updating.supportPath, { alpha: { tree: "aaa1", commit: "old", installedAt: "x", dir: "alpha" } });
+    await mkdir(installFolder(updating.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
+    const gated = gatedBuilds(updating.context);
+    const shown = pressView();
+    const press = pressing(updating.context, shown.view);
+    const first = press(alphaEntry, true);
+    try {
+        await within(press(alphaEntry, true), "the second ⌘U");
+    } finally {
+        gated.release();
+    }
+    await within(first, "the update");
+    assert.deepEqual(gated.builds, ["alpha"]);
+    assert.deepEqual(shown.shown, ["toast: Updating Alpha…", "loaded", "done: Updated Alpha"]);
+
+    // The first build fails; the failure view's Try Again, pressed twice, runs one more.
+    let builds = 0;
+    const failing = await storeContext({ build: () => ({ code: builds++ === 0 ? 1 : 0, stderr: "error: esbuild failed" }) });
+    const again = pressView();
+    const retry = pressing(failing.context, again.view);
+    await within(retry(alphaEntry, false), "the failed install");
+    assert.deepEqual(again.failures, ["Couldn't install Alpha"]);
+    const gatedRetry = gatedBuilds(failing.context);
+    const tried = retry(alphaEntry, false);
+    try {
+        await within(retry(alphaEntry, false), "the second Try Again");
+    } finally {
+        gatedRetry.release();
+    }
+    await within(tried, "Try Again");
+    assert.equal(builds, 2);
+    assert.deepEqual(again.shown, [
+        "toast: Installing Alpha…",
+        "failed: Couldn't install Alpha (See the details.)",
+        "toast: Installing Alpha…",
+        "loaded",
+        "done: Installed Alpha",
+    ]);
+});
+
+test("while a name installs, every row of that name says so and offers no Install, Update or Uninstall", async () => {
+    const tags = (busy?: "installing" | "updating", state: "available" | "installed" | "update" = "installed") =>
+        accessoryTexts(alphaEntry, state, "Partly compatible", busy).filter((accessory) => "tag" in accessory);
+    assert.deepEqual(tags(), [{ tag: "Partly compatible" }, { tag: "Installed" }]);
+    assert.deepEqual(tags("installing", "available"), [{ tag: "Partly compatible" }, { tag: "Installing…" }]);
+    assert.deepEqual(tags("updating"), [{ tag: "Partly compatible" }, { tag: "Updating…" }], "in place of Installed");
+    assert.deepEqual(tags("updating", "update"), [{ tag: "Partly compatible" }, { tag: "Updating…" }], "and of Update available");
+
+    const none = { tryAgain: false, showError: false };
+    assert.deepEqual(rowActions("available"), { install: true, update: false, uninstall: false, ...none });
+    assert.deepEqual(rowActions("installed"), { install: false, update: false, uninstall: true, ...none });
+    assert.deepEqual(rowActions("update"), { install: false, update: true, uninstall: true, ...none });
+    for (const state of ["available", "installed", "update"] as const) {
+        for (const busy of ["installing", "updating"] as const) {
+            assert.deepEqual(
+                rowActions(state, busy),
+                { install: false, update: false, uninstall: false, tryAgain: false, showError: false },
+                `${state}, ${busy}`,
+            );
+        }
+    }
+
+    // The key is the extension's id, so a second folder with the same name in one repository is busy too, while the same
+    // name from another repository is another extension and isn't (SPEC-157 E.7).
+    const presses = new InstallPresses();
+    let finish = () => {};
+    const pressed = presses.press("alpha", false, () => new Promise<void>((resolve) => (finish = resolve)));
+    const twin = parseManifest("alpha-two", manifest("alpha"))!;
+    assert.equal(presses.state(entryId(twin)), "installing");
+    const added = parseManifest("alpha", manifest("alpha"), addedCopy)!;
+    assert.equal(presses.state(entryId(added)), undefined, "the added repository's alpha isn't busy");
+    let ranAdded = false;
+    await presses.press(entryId(added), false, async () => void (ranAdded = true));
+    assert.equal(ranAdded, true, "and installs meanwhile");
+    finish();
+    await pressed;
+
+    // A name a build from another session is installing: a press does nothing.
+    const elsewhere = new InstallPresses(() => {}, (name) => name === "alpha");
+    let ran = false;
+    await elsewhere.press("alpha", false, async () => void (ran = true));
+    assert.equal(ran, false);
+    assert.equal(elsewhere.state("alpha"), undefined);
+});
+
+test("fudge build's status for another build running is the app's: one fixture pins both", async () => {
+    const statuses = JSON.parse(await readFile(new URL("./fixtures/build-statuses.json", import.meta.url), "utf8")) as {
+        alreadyBuilding: number;
+    };
+    assert.equal(statuses.alreadyBuilding, alreadyBuildingStatus);
+});
+
+test("a build that exits 75 says the extension is already being installed: no failure view, no log, nothing written", async () => {
+    const { context, supportPath } = await storeContext({ build: () => ({ code: 75, stderr: "fudge: another fudge build is installing alpha" }) });
+    const lines: string[] = [];
+    context.log = (line) => void lines.push(line);
+    await assert.rejects(install(alphaEntry, context), (error: unknown) => error instanceof AlreadyBuilding);
+    const { view, shown, failures } = pressView();
+    await installPressed(alphaEntry, false, context, view);
+    assert.deepEqual(shown, ["toast: Installing Alpha…", "done: Alpha is already being installed"]);
+    assert.deepEqual(failures, [], "no failure view, and nothing in Fudge.log");
+    assert.deepEqual(lines, []);
+    assert.deepEqual(await readInstalled(supportPath), {});
+
+    // The second run, after a swift: import the check missed, is read the same way.
+    let runs = 0;
+    const retried = await storeContext({
+        build: () =>
+            runs++ === 0
+                ? { code: 1, stderr: `✘ [ERROR] ${chooseSwiftPartsMessage} [plugin swift]\n\n    src/index.ts:1:20:` }
+                : { code: 75 },
+    });
+    retried.context.chooseSwiftParts = async () => "leave-out";
+    await assert.rejects(install(alphaEntry, retried.context), (error: unknown) => error instanceof AlreadyBuilding);
+    assert.equal(runs, 2);
+});
+
+test("each build is recorded in installing/<pid>.json while it runs, and the record goes however the run ends", async () => {
+    const endings: [string, Partial<GitResult>][] = [
+        ["success", { code: 0 }],
+        ["failure", { code: 1, stderr: "error: esbuild failed" }],
+        ["timeout", { code: 143, stderr: "\nfudge stopped after 600 s" }],
+        ["refusal", { code: 75, stderr: "fudge: another fudge build is installing alpha" }],
+    ];
+    for (const [ending, result] of endings) {
+        const { context, supportPath, extensionsDir, repoPath } = await storeContext();
+        const own = new Set<number>();
+        context.ownBuilds = own;
+        const run = context.run!;
+        let recorded: unknown;
+        let output: ProgramOutput | undefined;
+        context.run = async (program, args, options) => {
+            if (args[0] !== "build") return run(program, args, options);
+            output = options.output;
+            // As the build does: its output files, then its start, and its outcome at its end.
+            if (output) {
+                await writeFile(output.stdout, "out");
+                await writeFile(output.stderr, "err");
+            }
+            options.started?.(4242);
+            recorded = await waitFor(async () => JSON.parse(await readFile(path.join(supportPath, "installing/4242.json"), "utf8")));
+            const outcome = { pid: 4242, status: result.code ?? 0, endedAt: "2026-11-20T12:01:00.000Z" };
+            await writeFile(path.join(supportPath, "installing/4242.ended.json"), JSON.stringify(outcome));
+            return { stdout: "", stderr: "", code: 0, ...result };
+        };
+        const outcome = await install(alphaEntry, context).then(
+            () => "installed",
+            (error: unknown) => (error instanceof AlreadyBuilding ? "already" : "failed"),
+        );
+        assert.equal(outcome, { success: "installed", failure: "failed", timeout: "failed", refusal: "already" }[ending]);
+        assert.deepEqual(
+            recorded,
+            {
+                pid: 4242,
+                name: "alpha",
+                dir: "alpha",
+                title: "Alpha",
+                tree: "aaa1",
+                commit: "c0ffee1234",
+                updating: false,
+                startedAt: "2026-11-20T12:00:00.000Z",
+                deadline: "2026-11-20T12:10:00.000Z",
+                command: [
+                    context.cli, "build", path.join(repoPath, "extensions/alpha"), "--into", extensionsDir,
+                    "--repository", "raycast/extensions", "--outcome", installingFolder(supportPath),
+                ],
+            },
+            ending,
+        );
+        // The build's output goes to the two files beside its record (A.1), never to pipes.
+        assert.equal(path.dirname(output?.stdout ?? ""), installingFolder(supportPath), `${ending}: stdout to a file`);
+        assert.equal(path.dirname(output?.stderr ?? ""), installingFolder(supportPath), `${ending}: stderr to a file`);
+        assert.match(path.basename(output!.stdout), /^\..+\.out$/);
+        assert.match(path.basename(output!.stderr), /^\..+\.err$/);
+        assert.deepEqual(await readdir(installingFolder(supportPath)), [], `${ending}: the record, output and outcome are gone`);
+        assert.ok(own.has(4242), "it's this session's build");
+    }
+});
+
+test("a build whose installing/ folder can't be made runs as before: no output files and no --outcome", async () => {
+    const { context, supportPath } = await storeContext();
+    const lines: string[] = [];
+    context.log = (line) => lines.push(line);
+    // A file in the folder's place.
+    await writeFile(installingFolder(supportPath), "");
+    const run = context.run!;
+    let build: { args: string[]; output?: ProgramOutput } | undefined;
+    context.run = async (program, args, options) => {
+        if (args[0] === "build") build = { args, output: options.output };
+        return run(program, args, options);
+    };
+    await install(alphaEntry, context);
+    assert.ok(build, "it built");
+    assert.equal(build.output, undefined);
+    assert.ok(!build.args.includes("--outcome"), build.args.join(" "));
+    assert.ok(lines.some((line) => line.startsWith("Couldn't keep the output of Alpha's build: ")), lines.join("\n"));
+});
+
+test("a record is removed only once its write has settled, so a run that ends at once leaves none", async () => {
+    const { context, supportPath } = await storeContext({ build: () => ({ code: 75 }) });
+    let written = false;
+    context.buildRecords = {
+        write: async (support, record) => {
+            await delay(200);
+            await writeBuildRecord(support, record);
+            written = true;
+        },
+        remove: removeBuildRecord,
+    };
+    const run = context.run!;
+    context.run = async (program, args, options) => {
+        if (args[0] === "build") options.started?.(4343);
+        return run(program, args, options);
+    };
+    await assert.rejects(install(alphaEntry, context), (error: unknown) => error instanceof AlreadyBuilding);
+    assert.equal(written, true, "the install waited for the write");
+    await delay(300);
+    assert.deepEqual(await readdir(installingFolder(supportPath)), [], "and then removed it");
+});
+
+test("only a program that started calls started, with its pid", async () => {
+    let called = false;
+    const failed = await spawnProgram("/nonexistent/fudge", ["build"], { timeout: 5000, started: () => void (called = true) });
+    assert.equal(failed.code, -1);
+    assert.equal(called, false, "a spawn that fails never calls started");
+    let pid: number | undefined;
+    const ran = await spawnProgram("/usr/bin/true", [], { timeout: 5000, started: (started) => void (pid = started) });
+    assert.equal(ran.code, 0);
+    assert.ok(Number.isSafeInteger(pid) && pid! > 0);
+    // One that throws can't change the run.
+    const thrown = await spawnProgram("/usr/bin/true", [], {
+        timeout: 5000,
+        started: () => {
+            throw new Error("boom");
+        },
+    });
+    assert.equal(thrown.code, 0);
+});
+
+test("a record that can't be written or removed is logged, and the install ends as it would have", async () => {
+    const rejections: unknown[] = [];
+    const rejected = (reason: unknown) => void rejections.push(reason);
+    process.on("unhandledRejection", rejected);
+    try {
+        const failingWrite = async () => {
+            throw new Error("disk full");
+        };
+        const failingRemove = async () => {
+            throw new Error("read-only");
+        };
+        for (const [failing, files, cliCode] of [
+            ["write", { write: failingWrite, remove: removeBuildRecord }, 0],
+            ["remove", { write: writeBuildRecord, remove: failingRemove }, 0],
+            ["write, failed build", { write: failingWrite, remove: removeBuildRecord }, 1],
+            ["remove, failed build", { write: writeBuildRecord, remove: failingRemove }, 1],
+        ] as const) {
+            const { context, supportPath } = await storeContext({ cliCode });
+            const lines: string[] = [];
+            context.log = (line) => void lines.push(line);
+            context.buildRecords = files;
+            const run = context.run!;
+            context.run = async (program, args, options) => {
+                if (args[0] === "build") options.started?.(5151);
+                return run(program, args, options);
+            };
+            if (cliCode === 0) {
+                assert.deepEqual(await install(alphaEntry, context), {}, failing);
+                assert.equal((await readInstalled(supportPath)).alpha?.tree, "aaa1", failing);
+            } else {
+                await assert.rejects(install(alphaEntry, context), /esbuild failed/, failing);
+                assert.deepEqual(await readInstalled(supportPath), {}, failing);
+            }
+            assert.deepEqual(
+                lines,
+                [failing.startsWith("write") ? "Couldn't record the build of Alpha: disk full" : "Couldn't remove the record of Alpha's build: read-only"],
+                failing,
+            );
+        }
+        await settle();
+        assert.deepEqual(rejections, []);
+    } finally {
+        process.off("unhandledRejection", rejected);
+    }
+});
+
+/** A record of another session's build of alpha, started a minute ago, with nine minutes left. */
+function otherRecord(overrides: Partial<BuildRecord> = {}): BuildRecord {
+    const start = Date.now() - 60_000;
+    return {
+        pid: 7001,
+        name: "alpha",
+        dir: "alpha",
+        title: "Alpha",
+        tree: "t-new",
+        commit: "c-new",
+        updating: false,
+        startedAt: new Date(start).toISOString(),
+        deadline: new Date(start + 600_000).toISOString(),
+        command: [
+            "/Applications/Fudge.app/Contents/Helpers/fudge",
+            "build",
+            "/repo/extensions/alpha",
+            "--into",
+            "/Users/someone/Library/Application Support/Fudge/extensions",
+            "--repository",
+            "raycast/extensions",
+        ],
+        ...overrides,
+    };
+}
+
+/** Processes as the checks see them: each live pid with its `ps` line, and the signals sent. */
+function fakeProbe() {
+    const processes = new Map<number, ProcessState>();
+    const signalled: number[] = [];
+    const probe: ProcessProbe = {
+        alive: (pid) => processes.has(pid),
+        state: async (pid) => processes.get(pid),
+        terminate: (pid) => void signalled.push(pid),
+    };
+    const running = (record: BuildRecord, stat = "S") => processes.set(record.pid, { stat, args: record.command.join(" ") });
+    return { probe, processes, signalled, running };
+}
+
+/** A store that opens with `records` from another session in `installing/`. */
+async function otherSession(records: BuildRecord[], options: { own?: number[]; probe?: ProcessProbe } = {}) {
+    const supportPath = await temporary();
+    const extensionsDir = await temporary();
+    for (const record of records) await writeBuildRecord(supportPath, record);
+    const fake = fakeProbe();
+    const settled: Settled[] = [];
+    const order: string[] = [];
+    let clock = () => new Date();
+    const builds = new OtherBuilds({
+        supportPath,
+        extensionsDir,
+        probe: options.probe ?? fake.probe,
+        own: new Set(options.own ?? []),
+        now: () => clock(),
+        settled: (outcome) => {
+            settled.push(outcome);
+            order.push("settled");
+        },
+    });
+    return {
+        supportPath,
+        extensionsDir,
+        builds,
+        fake,
+        settled,
+        order,
+        setClock: (next: () => Date) => (clock = next),
+        /** Resolves once every record from another session has settled. */
+        allSettled: () => within(builds.hold("test", async () => {}), "settling"),
+        records: async () => (await readdir(installingFolder(supportPath)).catch(() => [])).filter((name) => !name.startsWith(".")),
+    };
+}
+
+test("installing/: a write's dot file is skipped, and deleted only once it's an hour old; anything else invalid is deleted", async () => {
+    const support = await temporary();
+    const folder = installingFolder(support);
+    const good = otherRecord({ pid: 101 });
+    await writeBuildRecord(support, good);
+    await writeFile(path.join(folder, ".202.abcd.tmp"), "{");
+    await writeFile(path.join(folder, ".303.abcd.tmp"), "{");
+    const hourAgo = new Date(Date.now() - 61 * 60 * 1000);
+    await utimes(path.join(folder, ".303.abcd.tmp"), hourAgo, hourAgo);
+    const invalid: Record<string, unknown> = {
+        "404.json": { ...otherRecord({ pid: 404 }), name: "../etc" },
+        "405.json": { ...otherRecord({ pid: 405 }), dir: "a/b" },
+        "406.json": otherRecord({ pid: 999 }),
+        "407.json": { ...otherRecord({ pid: 407 }), startedAt: "yesterday" },
+        "408.json": { ...otherRecord({ pid: 408 }), command: [] },
+        "409.json": { ...otherRecord({ pid: 409 }), updating: "no" },
+        "0410.json": otherRecord({ pid: 410 }),
+        "notes.txt": otherRecord({ pid: 411 }),
+    };
+    for (const [name, value] of Object.entries(invalid)) await writeFile(path.join(folder, name), JSON.stringify(value));
+    await writeFile(path.join(folder, "412.json"), "not json");
+    await mkdir(path.join(folder, "413.json"));
+    await symlink(path.join(folder, "101.json"), path.join(folder, "414.json"));
+
+    assert.deepEqual(await readBuildRecords(support), [good]);
+    assert.deepEqual((await readdir(folder)).sort(), [".202.abcd.tmp", "101.json"]);
+    // `load()` and the poll read them the same way: the fresh dot file stays.
+    const session = new OtherBuilds({ supportPath: support, extensionsDir: await temporary(), probe: fakeProbe().probe, own: new Set([101]), settled: () => {} });
+    await session.check();
+    await session.check();
+    assert.deepEqual((await readdir(folder)).sort(), [".202.abcd.tmp", "101.json"]);
+    assert.equal(parseProcessLine("ZN   <defunct>\n")?.stat, "ZN");
+    assert.deepEqual(parseProcessLine("S    /a/fudge build /b --into /c d\n"), { stat: "S", args: "/a/fudge build /b --into /c d" });
+});
+
+test("a record whose build still runs: its rows say so, and nothing is written", async () => {
+    const record = otherRecord();
+    const session = await otherSession([record]);
+    session.fake.running(record);
+    await session.builds.check();
+    assert.equal(session.builds.busy("alpha"), "installing");
+    assert.equal(session.builds.busy("beta"), undefined);
+    assert.ok(session.builds.pending);
+    await settle();
+    assert.deepEqual(session.settled, []);
+    assert.deepEqual(await session.records(), ["7001.json"]);
+    assert.deepEqual(await readInstalled(session.supportPath), {});
+    const updating = await otherSession([otherRecord({ updating: true })]);
+    updating.fake.running(otherRecord());
+    await updating.builds.check();
+    assert.equal(updating.builds.busy("alpha"), "updating");
+});
+
+test("another session's build is busy by the extension's id: an added repository's alpha leaves Raycast's alpha free", async () => {
+    const record = otherRecord({ id: "owner+repository+alpha", repository: "owner/repository" });
+    const session = await otherSession([record]);
+    session.fake.running(record);
+    await session.builds.check();
+    assert.equal(session.builds.busy("owner+repository+alpha"), "installing");
+    assert.equal(session.builds.busy("alpha"), undefined, "Raycast's alpha is another extension");
+});
+
+test("an ended build is a zombie of the host: a state starting with Z, or <defunct>, has ended, and gets no signal", async () => {
+    const past = new Date(Date.now() - 1000).toISOString();
+    for (const state of [{ stat: "Z", args: "<defunct>" }, { stat: "ZN" }, { stat: "S", args: "<defunct>" }]) {
+        const record = otherRecord({ deadline: past });
+        const session = await otherSession([record]);
+        session.fake.processes.set(record.pid, { stat: state.stat, args: state.args ?? record.command.join(" ") });
+        await session.builds.check();
+        await session.allSettled();
+        assert.deepEqual(session.settled.map(({ adopted, seen }) => ({ adopted, seen })), [{ adopted: false, seen: false }], state.stat);
+        assert.deepEqual(session.fake.signalled, [], `${state.stat}: never signalled, even past its deadline`);
+        assert.deepEqual(await session.records(), []);
+    }
+});
+
+test("an added repository's ended build is adopted from its own folder, under its id with its repository (E.1, E.3, E.4)", async () => {
+    const record = otherRecord({ id: "owner+repository+alpha", repository: "owner/repository" });
+    const adopted = await otherSession([record]);
+    // Raycast's alpha, made in the same window, isn't this build's.
+    await mkdir(installFolder(adopted.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
+    adopted.setClock(() => new Date("2026-11-22T16:00:00.000Z"));
+    await adopted.builds.check();
+    await adopted.allSettled();
+    assert.deepEqual(adopted.settled.map((outcome) => outcome.adopted), [false], "its own folder isn't there");
+    assert.deepEqual(await readInstalled(adopted.supportPath), {});
+
+    const found = await otherSession([record]);
+    await mkdir(installFolder(found.extensionsDir, "owner/repository", "alpha"), { recursive: true });
+    found.setClock(() => new Date("2026-11-22T16:00:00.000Z"));
+    await found.builds.check();
+    await found.allSettled();
+    assert.deepEqual(found.settled.map((outcome) => outcome.adopted), [true]);
+    assert.deepEqual(await readInstalled(found.supportPath), {
+        "owner+repository+alpha": {
+            tree: "t-new",
+            commit: "c-new",
+            installedAt: "2026-11-22T16:00:00.000Z",
+            dir: "alpha",
+            repository: "owner/repository",
+        },
+    });
+});
+
+test("an ended build is adopted only when its folder was made between its start and the end bound", async () => {
+    // Found ended at open: the end bound is the deadline.
+    const record = otherRecord();
+    const adopted = await otherSession([record]);
+    await mkdir(installFolder(adopted.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
+    adopted.setClock(() => new Date("2026-11-22T16:00:00.000Z"));
+    await adopted.builds.check();
+    await adopted.allSettled();
+    assert.deepEqual(adopted.settled, [{ record, adopted: true, seen: false }], "settled without a toast");
+    assert.deepEqual(await readInstalled(adopted.supportPath), {
+        alpha: { tree: "t-new", commit: "c-new", installedAt: "2026-11-22T16:00:00.000Z", dir: "alpha" },
+    });
+    assert.deepEqual(await adopted.records(), []);
+
+    // Found ended at open, its folder made after the deadline (a build from Terminal, say).
+    const start = Date.now() - 2 * 60 * 60 * 1000;
+    const late = await otherSession([otherRecord({ startedAt: new Date(start).toISOString(), deadline: new Date(start + 600_000).toISOString() })]);
+    await mkdir(installFolder(late.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
+    await late.builds.check();
+    await late.allSettled();
+    assert.deepEqual(late.settled.map((outcome) => outcome.adopted), [false]);
+    assert.deepEqual(await readInstalled(late.supportPath), {});
+
+    // No folder.
+    const none = await otherSession([otherRecord()]);
+    await none.builds.check();
+    await none.allSettled();
+    assert.deepEqual(none.settled.map((outcome) => outcome.adopted), [false]);
+    assert.deepEqual(await readInstalled(none.supportPath), {});
+
+    // A failed update leaves the older folder, made before the start; the older entry stays.
+    const failed = await otherSession([]);
+    await mkdir(installFolder(failed.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
+    const older = { alpha: { tree: "t-old", commit: "c-old", installedAt: "x", dir: "alpha" } };
+    await writeInstalled(failed.supportPath, older);
+    await delay(20);
+    const started = Date.now();
+    await writeBuildRecord(failed.supportPath, otherRecord({ updating: true, startedAt: new Date(started).toISOString(), deadline: new Date(started + 600_000).toISOString() }));
+    await failed.builds.check();
+    await failed.allSettled();
+    assert.deepEqual(failed.settled.map((outcome) => outcome.adopted), [false]);
+    assert.deepEqual(await readInstalled(failed.supportPath), older);
+
+    // No tree: the store couldn't have recorded it.
+    const treeless = await otherSession([otherRecord({ tree: undefined })]);
+    await mkdir(installFolder(treeless.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
+    await treeless.builds.check();
+    await treeless.allSettled();
+    assert.deepEqual(treeless.settled.map((outcome) => outcome.adopted), [false]);
+});
+
+test("a build seen ending while the store is open: the end bound is that moment", async () => {
+    // Its folder made before the poll saw it end: adopted, with a toast.
+    const record = otherRecord();
+    const seen = await otherSession([record]);
+    seen.fake.running(record);
+    await seen.builds.check();
+    await mkdir(installFolder(seen.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
+    seen.fake.processes.delete(record.pid);
+    await seen.builds.check();
+    await seen.allSettled();
+    assert.deepEqual(seen.settled.map(({ adopted, seen }) => ({ adopted, seen })), [{ adopted: true, seen: true }]);
+
+    // Its folder made after the moment the poll saw it end (a clock 30 s behind, so the folder is there when the record
+    // settles, and still after that moment): dropped, `installed.json` unchanged, though it's before the deadline.
+    const after = await otherSession([record]);
+    after.fake.running(record);
+    await after.builds.check();
+    await mkdir(installFolder(after.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
+    after.fake.processes.delete(record.pid);
+    after.setClock(() => new Date(Date.now() - 30_000));
+    await after.builds.check();
+    await after.allSettled();
+    assert.deepEqual(after.settled.map(({ adopted, seen }) => ({ adopted, seen })), [{ adopted: false, seen: true }]);
+    assert.deepEqual(await readInstalled(after.supportPath), {});
+
+    assert.deepEqual(settledToast({ record, adopted: true, seen: true }), { failed: false, title: "Installed Alpha" });
+    assert.deepEqual(settledToast({ record: { ...record, updating: true }, adopted: true, seen: true }), { failed: false, title: "Updated Alpha" });
+    // A failed drop now has its output, so its toast points to the failure view (SPEC-156 D.2); a quiet drop has none.
+    assert.deepEqual(settledToast({ record, adopted: false, seen: true, failure: { output: "x" } }), {
+        failed: true,
+        title: "Couldn't install Alpha",
+        message: "See the details.",
+    });
+    assert.equal(settledToast({ record, adopted: false, seen: true }), undefined);
+});
+
+test("a pid kill(pid, 0) can't find has ended, whatever ps says; EPERM and ESRCH both mean it isn't the store's", async () => {
+    const record = otherRecord();
+    const fake = fakeProbe();
+    fake.running(record);
+    assert.equal(await stillRunning(record, fake.probe), true);
+    assert.equal(await stillRunning(record, { ...fake.probe, alive: () => false }), false);
+    const real = systemProbe();
+    assert.equal(real.alive(process.pid), true);
+    assert.equal(real.alive(1), false, "launchd, another user's process: EPERM");
+    const gone = spawn("/usr/bin/true", [], { stdio: "ignore" });
+    await once(gone, "exit");
+    assert.equal(real.alive(gone.pid!), false, "an ended, reaped child: ESRCH");
+    assert.equal(await real.state(gone.pid!), undefined, "and ps lists nothing for it");
+});
+
+test("a reused pid isn't the build: it has ended, and its process is never signalled", async () => {
+    const record = otherRecord({ deadline: new Date(Date.now() - 1000).toISOString() });
+    const session = await otherSession([record]);
+    session.fake.processes.set(record.pid, { stat: "S", args: "/usr/bin/vim notes.txt" });
+    await mkdir(installFolder(session.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
+    await session.builds.check();
+    await session.allSettled();
+    assert.equal(session.settled.length, 1);
+    assert.deepEqual(session.fake.signalled, []);
+});
+
+test("a build still running past its deadline gets SIGTERM, once, and no other process does", async () => {
+    const late = otherRecord({ deadline: new Date(Date.now() - 1000).toISOString() });
+    const onTime = otherRecord({ pid: 7002, name: "beta", dir: "beta", title: "Beta" });
+    const reused = otherRecord({ pid: 7003, name: "gamma", dir: "gamma", title: "Gamma", deadline: late.deadline });
+    const session = await otherSession([late, onTime, reused]);
+    session.fake.running(late);
+    session.fake.running(onTime);
+    session.fake.processes.set(reused.pid, { stat: "S", args: "/bin/sleep 100" });
+    await session.builds.check();
+    await session.builds.check();
+    assert.deepEqual(session.fake.signalled, [late.pid]);
+    session.fake.processes.delete(late.pid);
+    await session.builds.check();
+    assert.deepEqual(session.fake.signalled, [late.pid]);
+});
+
+test("this session's own records are never settled by its poll", async () => {
+    const record = otherRecord();
+    const session = await otherSession([record], { own: [record.pid] });
+    await session.builds.check();
+    await settle();
+    assert.deepEqual(session.settled, []);
+    assert.equal(session.builds.busy("alpha"), undefined);
+    assert.deepEqual(await session.records(), ["7001.json"]);
+});
+
+test("the poll checks every 2 seconds while a build from another session is pending, and stops when the store goes", async () => {
+    let tick: (() => void) | undefined;
+    const cleared: unknown[] = [];
+    const timers = {
+        setInterval: ((run: () => void, ms: number) => {
+            assert.equal(ms, pollInterval);
+            tick = run;
+            return 1;
+        }) as unknown as typeof setInterval,
+        clearInterval: ((handle: unknown) => void cleared.push(handle)) as unknown as typeof clearInterval,
+    };
+    const record = otherRecord();
+    const supportPath = await temporary();
+    await writeBuildRecord(supportPath, record);
+    const fake = fakeProbe();
+    fake.running(record);
+    const builds = new OtherBuilds({ supportPath, extensionsDir: await temporary(), probe: fake.probe, own: new Set(), timers, settled: () => {} });
+    builds.start();
+    assert.equal(pollInterval, 2000);
+    await builds.check();
+    fake.processes.delete(record.pid);
+    tick!();
+    await waitFor(async () => assert.equal(builds.pending, false));
+    builds.stop();
+    assert.deepEqual(cleared, [1]);
+});
+
+test("the real checks: a running child of the test's own, then an ended one nobody reaps", async () => {
+    const probe = systemProbe();
+    const command = [process.execPath, "-e", "setTimeout(() => {}, 60000)"];
+    const child = spawn(command[0]!, command.slice(1), { stdio: "ignore" });
+    const exited = once(child, "exit");
+    const running = otherRecord({ pid: child.pid!, command });
+    try {
+        await waitFor(async () => assert.equal(await stillRunning(running, probe), true));
+    } finally {
+        process.kill(child.pid!, "SIGTERM");
+    }
+    await exited;
+    assert.equal(await stillRunning(running, probe), false);
+
+    // A perl that forks a child which exits at once, and never waits for it: the child is a zombie, as an orphaned build
+    // is of the host. `kill(pid, 0)` still finds it, and the checks say it has ended.
+    const perl = spawn("/usr/bin/perl", ["-e", 'my $p = fork(); if ($p == 0) { exit 0 } $| = 1; print "$p\\n"; sleep 600'], {
+        stdio: ["ignore", "pipe", "ignore"],
+    });
+    try {
+        const [data] = (await once(perl.stdout!, "data")) as [Buffer];
+        const zombie = Number(data.toString().trim());
+        await waitFor(async () => assert.match((await probe.state(zombie))?.stat ?? "", /^Z/));
+        assert.equal(probe.alive(zombie), true);
+        const record = otherRecord({ pid: zombie, command: ["/usr/bin/perl", "-e", "fork"], deadline: new Date(Date.now() - 1000).toISOString() });
+        assert.equal(await stillRunning(record, probe), false);
+        const signalled: number[] = [];
+        const session = await otherSession([record], { probe: { ...probe, terminate: (pid) => void signalled.push(pid) } });
+        await session.builds.check();
+        await session.allSettled();
+        assert.equal(session.settled.length, 1);
+        assert.deepEqual(signalled, [], "no signal to the zombie, even past its deadline");
+    } finally {
+        process.kill(perl.pid!, "SIGTERM");
+    }
+});
+
+test("a refresh waits outside the queue while another session's build runs, then runs once after it settles", async () => {
+    const record = otherRecord();
+    const session = await otherSession([record]);
+    session.fake.running(record);
+    await session.builds.check();
+    const order = session.order;
+    // ⌘R twice, and the day-old refresh on open.
+    const refresh = () => heldRefresh(session.builds, "raycast", async () => void order.push("refresh"));
+    const held = [refresh(), refresh(), refresh()];
+    // A README fetch, a compatibility check, an install and an uninstall go on meanwhile.
+    await within(oneAtATime(async () => void order.push("readme")), "a README fetch");
+    await within(oneAtATime(async () => void order.push("check")), "a compatibility check");
+    assert.deepEqual(order, ["readme", "check"], "the refresh didn't touch repo/ or enter the queue");
+    assert.equal(heldRefreshMessage(session.builds.records()), "The list updates when Alpha has installed");
+    assert.equal(heldRefreshMessage([record, { ...record, pid: 2 }]), "The list updates when the installs have finished");
+    assert.equal(heldRefreshMessage([{ ...record, updating: true }]), "The list updates when Alpha has updated");
+
+    session.fake.processes.delete(record.pid);
+    await session.builds.check();
+    await within(Promise.all(held), "the held refresh, with no deadlock");
+    assert.deepEqual(order, ["readme", "check", "settled", "refresh"], "the record settles first, then the refresh runs once");
+    // Nothing pending: a refresh runs at once.
+    await within(refresh(), "a refresh with nothing pending");
+    assert.deepEqual(order.at(-1), "refresh");
+});
+
+test("each copy's refresh is held under its own key: two copies each run once, the same copy twice runs once", async () => {
+    const record = otherRecord();
+    const session = await otherSession([record]);
+    session.fake.running(record);
+    await session.builds.check();
+    const order = session.order;
+    const refresh = (copyId: string) => heldRefresh(session.builds, copyId, async () => void order.push(copyId));
+    const held = [refresh("raycast"), refresh("0123456789abcdef"), refresh("raycast"), refresh("0123456789abcdef")];
+    await settle();
+    assert.deepEqual(order, [], "every copy's git waits while the build runs");
+    session.fake.processes.delete(record.pid);
+    await session.builds.check();
+    await within(Promise.all(held), "the held refreshes");
+    assert.deepEqual(order, ["settled", "raycast", "0123456789abcdef"], "one copy never stands in for another");
+});
+
+test("a copy that can't be read is cloned again under its own key, so another copy's reload doesn't stand in for it", async () => {
+    const record = otherRecord();
+    const session = await otherSession([record]);
+    session.fake.running(record);
+    const order = session.order;
+    const opening = (copyId: string) =>
+        openCopy(false, {
+            others: session.builds,
+            copyId,
+            exists: async () => true,
+            load: async () => {
+                throw new Error("the copy can't be read");
+            },
+            remove: async () => void order.push(`remove ${copyId}`),
+            refresh: () => heldRefresh(session.builds, copyId, async () => void order.push(`clone ${copyId}`)),
+            needsRefresh: async () => false,
+        });
+    const both = [opening("raycast"), opening("0123456789abcdef")];
+    await settle();
+    session.fake.processes.delete(record.pid);
+    await session.builds.check();
+    await within(Promise.all(both), "both copies cloned again");
+    assert.deepEqual(order.slice(1).sort(), ["clone 0123456789abcdef", "clone raycast", "remove 0123456789abcdef", "remove raycast"]);
+});
+
+test("a copy that can't be read: the records come first, so its removal waits for a running build", async () => {
+    const record = otherRecord();
+    const session = await otherSession([record]);
+    session.fake.running(record);
+    const order = session.order;
+    const opening = openCopy(false, {
+        others: session.builds,
+        copyId: "raycast",
+        exists: async () => true,
+        load: async () => {
+            order.push("load failed");
+            throw new Error("the copy can't be read");
+        },
+        remove: async () => void order.push("remove"),
+        refresh: () => heldRefresh(session.builds, "raycast", async () => void order.push("refresh")),
+        needsRefresh: async () => false,
+    });
+    await waitFor(async () => assert.deepEqual(order, ["load failed"]));
+    await settle();
+    assert.deepEqual(order, ["load failed"], "the removal waits");
+    assert.equal(session.builds.busy("alpha"), "installing", "the record was read before the copy");
+    session.fake.processes.delete(record.pid);
+    await session.builds.check();
+    await within(opening, "the removal and the clone after it");
+    assert.deepEqual(order, ["load failed", "settled", "remove", "refresh"]);
+
+    // The day-old refresh waits too, and an open with nothing pending goes on at once.
+    const quiet = await otherSession([]);
+    await within(
+        openCopy(false, {
+            others: quiet.builds,
+            copyId: "raycast",
+            exists: async () => true,
+            load: async () => void quiet.order.push("loaded"),
+            remove: async () => void quiet.order.push("remove"),
+            refresh: () => heldRefresh(quiet.builds, "raycast", async () => void quiet.order.push("refresh")),
+            needsRefresh: async () => true,
+        }),
+        "an open with nothing pending",
+    );
+    assert.deepEqual(quiet.order, ["loaded", "refresh"]);
+});
+
+// MARK: - Install notifications (SPEC-156 D.1, D.4, G)
+
+/** A press view with install notifications: the app's answer is `answer`, and every report, selection and quiet
+ * failure is listed. */
+function noticesView(answer: InstallAnswer | (() => Promise<InstallAnswer>), limit?: number) {
+    const pressed = pressView();
+    const reports: InstallEndReport[] = [];
+    const selected: string[] = [];
+    const quiet: { title: string; mark: FailureMark }[] = [];
+    pressed.view.notices = {
+        report: async (report) => {
+            reports.push(report);
+            return typeof answer === "function" ? answer() : answer;
+        },
+        // Raycast's rows by folder alone, an added repository's as `<repository>:<folder>`.
+        select: (dir, repository) => void selected.push(repository === undefined ? dir : `${repository}:${dir}`),
+        failedNotified: (title, _error, mark) => void quiet.push({ title, mark }),
+        ...(limit === undefined ? {} : { limit }),
+    };
+    return { ...pressed, reports, selected, quiet };
+}
+
+/** Gives every `fudge build` of `context` the pid `pid`, as `spawnProgram` would once it has started. */
+function withPid(context: StoreContext, pid: number) {
+    const run = context.run!;
+    context.run = async (program, args, options) => {
+        if (args[0] === "build") await options?.started?.(pid);
+        return run(program, args, options);
+    };
+}
+
+test("a finished install is reported with its build, and the answer decides the toast and the selection", async () => {
+    const cases: { answer: InstallAnswer; shown: string[]; selected: string[] }[] = [
+        { answer: { onScreen: false, notified: true }, shown: ["toast: Installing Alpha…", "loaded", "hidden"], selected: ["alpha"] },
+        { answer: { onScreen: false, notified: false }, shown: ["toast: Installing Alpha…", "loaded", "done: Installed Alpha"], selected: ["alpha"] },
+        { answer: { onScreen: true, notified: false }, shown: ["toast: Installing Alpha…", "loaded", "done: Installed Alpha"], selected: [] },
+    ];
+    for (const { answer, shown, selected } of cases) {
+        const { context } = await storeContext();
+        withPid(context, 4242);
+        const view = noticesView(answer);
+        await installPressed(alphaEntry, false, context, view.view);
+        assert.deepEqual(view.shown, shown, JSON.stringify(answer));
+        assert.deepEqual(view.selected, selected);
+        assert.equal(view.reports.length, 1);
+        const report = view.reports[0]!;
+        assert.equal(report.build?.pid, 4242);
+        assert.match(report.build?.startedAt ?? "", /^2026-11-20T12:00:00\.000Z$/);
+        assert.deepEqual({ ...report, build: undefined }, {
+            build: undefined, name: "alpha", dir: "alpha", title: "Alpha", updating: false, outcome: "installed",
+        });
+    }
+});
+
+test("an added repository's install names its repository in the report, the mark, the selection and the saved failure", async () => {
+    const { context, supportPath } = await storeContext({ cliCode: 1 });
+    const view = noticesView({ onScreen: false, notified: true });
+    const added = parseManifest("alpha", manifest("alpha"), addedCopy)!;
+    await installPressed(added, false, context, view.view);
+    assert.equal(view.reports[0]?.outcome, "failed");
+    assert.equal(view.reports[0]?.repository, "owner/repository");
+    const mark = view.quiet[0]!.mark;
+    assert.equal(mark.repository, "owner/repository");
+    assert.deepEqual(view.selected, ["owner/repository:alpha"]);
+    assert.deepEqual(await readSavedFailure(supportPath, { name: "alpha", repository: "owner/repository" }), mark);
+    assert.equal(await readSavedFailure(supportPath, { name: "alpha" }), undefined, "Raycast's alpha has no failure");
+
+    // Raycast's names none, as its records don't.
+    const raycast = await storeContext({ cliCode: 1 });
+    const plain = noticesView({ onScreen: false, notified: true });
+    await installPressed(alphaEntry, false, raycast.context, plain.view);
+    assert.equal("repository" in plain.reports[0]!, false);
+    assert.equal("repository" in plain.quiet[0]!.mark, false);
+    assert.deepEqual(plain.selected, ["alpha"]);
+});
+
+test("an install that built twice reports its last build", async () => {
+    let runs = 0;
+    const { context } = await storeContext({
+        build: () =>
+            runs++ === 0
+                ? { code: 1, stderr: `✘ [ERROR] ${chooseSwiftPartsMessage} [plugin swift]\n\n    src/index.ts:1:20:` }
+                : { code: 0 },
+    });
+    context.chooseSwiftParts = async () => "leave-out";
+    const run = context.run!;
+    let pid = 500;
+    context.run = async (program, args, options) => {
+        if (args[0] === "build") await options?.started?.(++pid);
+        return run(program, args, options);
+    };
+    const view = noticesView({ onScreen: false, notified: false });
+    await installPressed(alphaEntry, false, context, view.view);
+    assert.equal(runs, 2);
+    assert.equal(view.reports.length, 1);
+    assert.equal(view.reports[0]?.build?.pid, 502);
+});
+
+test("a failure that got a notification is marked, kept and saved, with no failure view; one that didn't pushes it", async () => {
+    const notified = await storeContext({ cliCode: 1 });
+    withPid(notified.context, 77);
+    const view = noticesView({ onScreen: false, notified: true });
+    await installPressed(alphaEntry, true, notified.context, view.view);
+    assert.deepEqual(view.shown, ["toast: Updating Alpha…", "hidden"]);
+    assert.deepEqual(view.failures, [], "no failure view");
+    assert.equal(view.reports[0]?.outcome, "failed");
+    assert.equal(view.reports[0]?.build?.pid, 77);
+    assert.equal(view.quiet.length, 1);
+    assert.equal(view.quiet[0]!.title, "Couldn't update Alpha");
+    const mark = view.quiet[0]!.mark;
+    assert.equal(mark.dir, "alpha");
+    assert.match(mark.details.output, /esbuild failed/);
+    assert.equal(mark.details.code, 1);
+    const saved = await readSavedFailure(notified.supportPath, { name: "alpha" });
+    assert.deepEqual(saved, mark);
+
+    const plain = await storeContext({ cliCode: 1 });
+    const shown = noticesView({ onScreen: false, notified: false });
+    await installPressed(alphaEntry, false, plain.context, shown.view);
+    assert.deepEqual(shown.shown, ["toast: Installing Alpha…", "failed: Couldn't install Alpha (See the details.)"]);
+    assert.deepEqual(shown.failures, ["Couldn't install Alpha"]);
+    assert.deepEqual(shown.quiet, []);
+    assert.equal(await readSavedFailure(plain.supportPath, { name: "alpha" }), undefined, "nothing saved without a notification");
+});
+
+test("a report that throws or takes over its limit ends the press as before", async () => {
+    for (const answer of [
+        async (): Promise<InstallAnswer> => {
+            throw new Error("Only the Extension Store asks about install notifications");
+        },
+        () => new Promise<InstallAnswer>(() => {}),
+        async () => ({ onScreen: false }) as unknown as InstallAnswer,
+    ]) {
+        const { context } = await storeContext({ cliCode: 1 });
+        const view = noticesView(answer, 30);
+        await installPressed(alphaEntry, false, context, view.view);
+        assert.deepEqual(view.shown, ["toast: Installing Alpha…", "failed: Couldn't install Alpha (See the details.)"]);
+        assert.deepEqual(view.failures, ["Couldn't install Alpha"]);
+        assert.deepEqual(view.selected, [], "on screen: no selection");
+    }
+    assert.deepEqual(await reportEnd(undefined, { name: "a", dir: "a", title: "A", updating: false, outcome: "installed" }), unanswered);
+    assert.equal(reportLimit, 5000);
+});
+
+test("another build running and a cancel report nothing; a refusal before any build has no build", async () => {
+    const busy = await storeContext({ build: () => ({ code: 75 }) });
+    const view = noticesView({ onScreen: false, notified: true });
+    await installPressed(alphaEntry, false, busy.context, view.view);
+    const cancelled = await storeContext({ confirm: false });
+    await installPressed(alphaEntry, false, cancelled.context, view.view);
+    assert.deepEqual(view.reports, []);
+
+    const refused = await storeContext();
+    await mkdir(installFolder(refused.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
+    const refusal = noticesView({ onScreen: false, notified: false });
+    await installPressed(alphaEntry, false, refused.context, refusal.view);
+    assert.equal(refusal.reports.length, 1);
+    assert.equal(refusal.reports[0]!.build, undefined);
+    assert.equal(refusal.reports[0]!.outcome, "failed");
+});
+
+test("pressing a name again deletes the failure saved for its notification", async () => {
+    const { context, supportPath } = await storeContext();
+    const mark: FailureMark = {
+        name: "alpha", dir: "alpha", title: "Alpha", updating: false, failedAt: "2026-11-20T11:00:00.000Z", details: { output: "x" },
+    };
+    await saveFailure(supportPath, mark);
+    assert.ok(await readSavedFailure(supportPath, { name: "alpha" }));
+    await installPressed(alphaEntry, false, context, noticesView({ onScreen: true, notified: false }).view);
+    assert.equal(await readSavedFailure(supportPath, { name: "alpha" }), undefined);
+});
+
+test("macOS is asked once the user confirms, before the build, and never after a cancel", async () => {
+    for (const updating of [false, true]) {
+        const { context, cli } = await storeContext();
+        const order: string[] = [];
+        context.askForNotifications = async () => void order.push(`asked after ${cli.calls.filter((c) => c.args[0] === "build").length} builds`);
+        if (updating) await writeInstalled(context.supportPath, { alpha: { tree: "old", commit: "c", installedAt: "2026-11-01T00:00:00.000Z", dir: "alpha" } });
+        assert.ok(await install(alphaEntry, context));
+        assert.deepEqual(order, ["asked after 0 builds"]);
+    }
+    const cancelled = await storeContext({ confirm: false });
+    let asked = 0;
+    cancelled.context.askForNotifications = async () => void asked++;
+    assert.equal(await install(alphaEntry, cancelled.context), false);
+    assert.equal(asked, 0);
+    // A question that fails, at once or later, never stops the install.
+    for (const ask of [
+        () => {
+            throw new Error("no");
+        },
+        async () => {
+            throw new Error("no");
+        },
+    ]) {
+        const { context } = await storeContext();
+        context.askForNotifications = ask as () => Promise<void>;
+        assert.ok(await install(alphaEntry, context));
+    }
+});
+
+test("saved failures: read back only when valid, older than 7 days deleted at open", async () => {
+    const support = await temporary();
+    const mark: FailureMark = {
+        name: "alpha", dir: "alpha", title: "Alpha", updating: true, failedAt: "2026-11-20T11:00:00.000Z",
+        details: { output: "boom", command: "fudge build", code: 1 }, repository: "raycast/extensions",
+    };
+    await saveFailure(support, mark);
+    assert.deepEqual(await readSavedFailure(support, { name: "alpha" }), mark);
+    assert.equal(await readSavedFailure(support, { name: "../alpha" }), undefined);
+    // A refusal stays one, so its view shows the store's own words rather than a build error.
+    const refusal: FailureMark = { ...mark, name: "zeta", dir: "zeta", details: { output: "Another extension called zeta is installed.", refused: true } };
+    await saveFailure(support, refusal);
+    assert.deepEqual(await readSavedFailure(support, { name: "zeta" }), refusal);
+    await writeFile(path.join(failuresFolder(support), "zeta.json"), JSON.stringify({ ...refusal, details: { output: "x", refused: "yes" } }));
+    assert.equal(await readSavedFailure(support, { name: "zeta" }), undefined, "refused must be a boolean");
+    await rm(path.join(failuresFolder(support), "zeta.json"));
+    await writeFile(path.join(failuresFolder(support), "beta.json"), `{"title": 1}`);
+    assert.equal(await readSavedFailure(support, { name: "beta" }), undefined);
+    const old = new Date(Date.now() - failureKeep - 60_000);
+    await utimes(path.join(failuresFolder(support), "beta.json"), old, old);
+    await pruneSavedFailures(support);
+    assert.deepEqual(await readdir(failuresFolder(support)), ["alpha.json"]);
+    await removeSavedFailure(support, { name: "alpha" });
+    assert.deepEqual(await readdir(failuresFolder(support)), []);
+});
+
+test("saved failures are kept by id: two extensions of one name keep their own file", async () => {
+    const support = await temporary();
+    const base = { dir: "github", title: "GitHub", updating: false, failedAt: "2026-11-22T21:00:00.000Z" };
+    const raycast: FailureMark = { ...base, name: "github", details: { output: "raycast's" } };
+    const added: FailureMark = { ...base, name: "github", details: { output: "added" }, repository: "someone/tools" };
+    const hosted: FailureMark = { ...base, name: "github", details: { output: "hosted" }, repository: "git.example.org_8443/team/extensions" };
+    for (const mark of [raycast, added, hosted]) await saveFailure(support, mark);
+    assert.deepEqual((await readdir(failuresFolder(support))).sort(), [
+        "git.example.org_8443+team+extensions+github.json", "github.json", "someone+tools+github.json",
+    ]);
+    assert.deepEqual(await readSavedFailure(support, { name: "github" }), raycast);
+    assert.deepEqual(await readSavedFailure(support, { name: "github", repository: "raycast/extensions" }), raycast, "Raycast's folder named is Raycast's");
+    assert.deepEqual(await readSavedFailure(support, { name: "github", repository: "someone/tools" }), added);
+    assert.deepEqual(await readSavedFailure(support, hosted), hosted);
+    assert.equal(await readSavedFailure(support, { name: "github", repository: "someone/other" }), undefined);
+    // A file under an id holds that id's repository, or it isn't read.
+    const file = path.join(failuresFolder(support), "someone+tools+github.json");
+    for (const repository of [undefined, "someone/other", "raycast/extensions", 3]) {
+        const { name: _name, ...saved } = added;
+        await writeFile(file, JSON.stringify({ ...saved, repository }));
+        assert.equal(await readSavedFailure(support, added), undefined, `repository ${String(repository)}`);
+    }
+    await writeFile(path.join(failuresFolder(support), "github.json"), JSON.stringify({ ...base, details: { output: "x" }, repository: "someone/tools" }));
+    assert.equal(await readSavedFailure(support, { name: "github" }), undefined, "a bare name's file names no other repository");
+    // A refused folder or name saves and reads nothing, and never reaches outside the folder.
+    for (const repository of ["Someone/tools", "someone/tools/../x", "raycast", ""]) {
+        await saveFailure(support, { ...added, repository });
+        assert.equal(await readSavedFailure(support, { name: "github", repository }), undefined, repository);
+    }
+    await saveFailure(support, added);
+    await removeSavedFailure(support, { name: "github", repository: "someone/tools" });
+    assert.deepEqual((await readdir(failuresFolder(support))).sort(), ["git.example.org_8443+team+extensions+github.json", "github.json"], "only that one goes");
+});
+
+test("a click's target and the launch context are checked; anything off is ignored", () => {
+    const good = { name: "alpha", dir: "alpha", failed: true };
+    assert.deepEqual(launchTarget({ storeNotification: good }), good);
+    assert.deepEqual(noticeTarget({ ...good, repository: "raycast/extensions" }), { ...good, repository: "raycast/extensions" });
+    // A repository's folder by the folder rule (SPEC-157); a missing one is Raycast's.
+    for (const repository of ["someone/tools", "git.example.org_8443/team/extensions", "fudgeapp/development"]) {
+        assert.deepEqual(noticeTarget({ ...good, repository }), { ...good, repository });
+    }
+    for (const bad of [
+        { ...good, name: "Al pha" }, { ...good, dir: "../alpha" }, { ...good, dir: "a/b" }, { ...good, failed: "yes" },
+        { name: "alpha", dir: "alpha" }, { ...good, repository: 3 }, null, "alpha",
+        { ...good, repository: "Someone/Tools" }, { ...good, repository: "someone/../tools" }, { ...good, repository: "raycast" },
+        { ...good, repository: "" }, { ...good, repository: "/someone/tools" }, { ...good, repository: "github.com/someone/tools" },
+    ]) {
+        assert.equal(noticeTarget(bad), undefined, JSON.stringify(bad));
+        assert.equal(launchTarget({ storeNotification: bad }), undefined);
+    }
+    assert.equal(launchTarget(undefined), undefined);
+    assert.equal(launchTarget({ other: good }), undefined);
+});
+
+test("row marks are per folder, gone when the name installs", () => {
+    let changes = 0;
+    const marks = new RowMarks(() => void changes++);
+    const mark: FailureMark = { name: "alpha", dir: "alpha-dir", title: "Alpha", updating: false, failedAt: "t", details: { output: "" } };
+    marks.mark(mark);
+    assert.equal(marks.get("alpha-dir"), mark);
+    marks.clear("beta");
+    assert.equal(changes, 1, "nothing to clear changes nothing");
+    marks.clear("alpha");
+    assert.equal(marks.get("alpha-dir"), undefined);
+    assert.equal(changes, 2);
+});
+
+test("row marks are per repository and folder: one name from two repositories keeps two marks", () => {
+    const marks = new RowMarks();
+    const base = { name: "github", dir: "github", title: "GitHub", updating: false, failedAt: "t", details: { output: "" } };
+    const raycast: FailureMark = { ...base, details: { output: "raycast's" } };
+    const added: FailureMark = { ...base, details: { output: "added" }, repository: "someone/tools" };
+    marks.mark(raycast);
+    marks.mark(added);
+    assert.equal(marks.get("github"), raycast);
+    assert.equal(marks.get("github", "raycast/extensions"), raycast, "Raycast's folder named is Raycast's");
+    assert.equal(marks.get("github", "someone/tools"), added);
+    assert.equal(marks.get("github", "someone/other"), undefined);
+    marks.clear("github");
+    assert.equal(marks.get("github"), undefined);
+    assert.equal(marks.get("github", "someone/tools"), added, "the other repository's mark stays");
+    marks.clear("github", "someone/tools");
+    assert.equal(marks.get("github", "someone/tools"), undefined);
+});
+
+/**
+ * The app's side of `selectedItemId` (`ListContent.selection`): it follows the id when it changed since the id it last
+ * followed and the list shows that row, forgets what it followed when the id goes, and reports only a selection that
+ * moved, later, as the bridge does.
+ */
+class FollowingList {
+    selected: string | undefined;
+    rendered: (string | undefined)[] = [];
+    private followed: string | undefined;
+    private readonly reports: string[] = [];
+    private shown: Set<string>;
+
+    constructor(rows: string[], selected?: string) {
+        this.shown = new Set(rows);
+        this.selected = selected;
+    }
+
+    /** A render with these rows: the selection stays on its row while it's shown, else goes to the first row, as
+     * `reselect` does, and is reported when it moved. */
+    show(rows: string[]): void {
+        this.shown = new Set(rows);
+        const first = rows[0];
+        if ((this.selected === undefined || !this.shown.has(this.selected)) && first !== undefined) this.move(first);
+    }
+
+    render(selectedItemId: string | undefined): void {
+        this.rendered.push(selectedItemId);
+        if (selectedItemId !== undefined && selectedItemId !== this.followed && this.shown.has(selectedItemId)) {
+            this.followed = selectedItemId;
+            this.move(selectedItemId);
+        } else if (selectedItemId === undefined) {
+            this.followed = undefined;
+        }
+    }
+
+    /** The user moves the selection. */
+    move(id: string): void {
+        if (id === this.selected) return;
+        this.selected = id;
+        this.reports.push(id);
+    }
+
+    /** The reports reach the store. */
+    deliver(to: RowSelection): void {
+        for (const id of this.reports.splice(0)) to.reported(id);
+    }
+}
+
+test("a row is selected once, whenever it's asked for, even when it was already selected (D.1, D.5, E.1)", () => {
+    const list = new FollowingList(["w", "x", "y"], "x");
+    const rows = new RowSelection((asked) => list.render(asked));
+    rows.reported("x");
+    // X ends while the panel is hidden, with X selected: nothing to ask for.
+    rows.select("x");
+    list.deliver(rows);
+    assert.equal(list.selected, "x");
+    assert.equal(rows.current, undefined, "an already selected row isn't asked for");
+    // The user moves to Y; then the click on "X is installed" selects X.
+    list.move("y");
+    list.deliver(rows);
+    rows.select("x");
+    list.deliver(rows);
+    assert.equal(list.selected, "x", "the click selects its row");
+    assert.equal(rows.current, undefined, "selected once: from here the user moves it");
+    // Again: the user moves away, and another click on the same row selects it again.
+    list.move("w");
+    list.deliver(rows);
+    rows.select("x");
+    list.deliver(rows);
+    assert.equal(list.selected, "x");
+    assert.deepEqual(list.rendered, ["x", undefined, "x", undefined]);
+});
+
+test("an ask waits for its row, and asking for the selected row instead takes it back", () => {
+    const list = new FollowingList(["w", "x"], "x");
+    const rows = new RowSelection((asked) => list.render(asked));
+    rows.reported("x");
+    // A row the list doesn't show (a search hides it) stays asked for.
+    rows.select("z");
+    list.deliver(rows);
+    assert.equal(rows.current, "z");
+    assert.equal(list.selected, "x");
+    rows.select("x");
+    assert.equal(rows.current, undefined, "the newer ask, for the selected row, wins");
+    assert.equal(list.selected, "x");
+    assert.deepEqual(list.rendered, ["z", undefined]);
+});
+
+/** A list as it opens (SPEC-166): each render records its top row, and the effect after it follows. */
+function opening(): { list: FollowingList; rows: RowSelection; render: (shown: string[]) => void } {
+    const list = new FollowingList([]);
+    const rows = new RowSelection((asked) => list.render(asked));
+    const render = (shown: string[]) => {
+        rows.seen(shown[0]);
+        list.show(shown);
+    };
+    return { list, rows, render };
+}
+
+test("until the user acts, the list's top row stays selected as later copies' rows come (SPEC-166)", () => {
+    const { list, rows, render } = opening();
+    // The first copy's rows: the list selects its first row and reports it, before the effect: nothing to ask for.
+    render(["r1", "r2"]);
+    list.deliver(rows);
+    rows.follow(true);
+    assert.equal(list.selected, "r1");
+    assert.deepEqual(list.rendered, [], "the top row is already selected");
+    // A later copy's row above it: asked for, followed, and the report clears the ask.
+    render(["t", "r1", "r2"]);
+    rows.follow(true);
+    list.deliver(rows);
+    assert.equal(list.selected, "t");
+    // A problem row above that: the same.
+    render(["p", "t", "r1", "r2"]);
+    rows.follow(true);
+    list.deliver(rows);
+    assert.equal(list.selected, "p");
+    assert.deepEqual(list.rendered, ["t", undefined, "p", undefined]);
+    assert.equal(rows.followsTop, true);
+});
+
+test("a report the app sent before it followed a newer ask leaves the top row followed (SPEC-166)", () => {
+    const { list, rows, render } = opening();
+    // The effect asks for the first row before the list's report of it comes back.
+    render(["r1", "r2"]);
+    rows.follow(true);
+    // A later copy's row above, asked for, all before the reports come: r1's first, then t's.
+    render(["t", "r1", "r2"]);
+    rows.follow(true);
+    list.deliver(rows);
+    assert.equal(rows.followsTop, true, "r1's report was sent before the list followed t");
+    assert.equal(list.selected, "t");
+    render(["p", "t", "r1", "r2"]);
+    rows.follow(true);
+    list.deliver(rows);
+    assert.equal(list.selected, "p");
+    assert.deepEqual(list.rendered, ["r1", "t", undefined, "p", undefined]);
+});
+
+test("the first report can come before or after its effect, and leaves the top row followed (SPEC-166)", () => {
+    // The report first: it comes after the render recorded its top row, before the effect.
+    const before = opening();
+    before.render(["r1", "r2"]);
+    before.list.deliver(before.rows);
+    assert.equal(before.rows.followsTop, true, "the list's own selection of its first row isn't the user's");
+    before.rows.follow(true);
+    assert.deepEqual(before.list.rendered, [], "the top row is already selected");
+    // The effect first: it asks for the row the list has just selected, and the list's report of it clears the ask.
+    const after = opening();
+    after.render(["r1", "r2"]);
+    after.rows.follow(true);
+    after.list.deliver(after.rows);
+    assert.equal(after.list.selected, "r1");
+    assert.equal(after.rows.current, undefined);
+    assert.equal(after.rows.followsTop, true);
+    assert.deepEqual(after.list.rendered, ["r1", undefined]);
+});
+
+test("once the user moves the selection, later rows never move it (SPEC-166, C.3)", () => {
+    const { list, rows, render } = opening();
+    render(["r1", "r2"]);
+    list.deliver(rows);
+    rows.follow(true);
+    list.move("r2");
+    list.deliver(rows);
+    assert.equal(rows.followsTop, false);
+    render(["t", "r1", "r2"]);
+    rows.follow(true);
+    list.deliver(rows);
+    assert.equal(list.selected, "r2");
+    assert.deepEqual(list.rendered, []);
+});
+
+test("typing, the detail pane or an action ends following the top row (SPEC-166)", () => {
+    const { list, rows, render } = opening();
+    render(["r1", "r2"]);
+    list.deliver(rows);
+    rows.follow(true);
+    rows.stopFollowing();
+    render(["t", "r1", "r2"]);
+    rows.follow(true);
+    list.deliver(rows);
+    assert.equal(list.selected, "r1");
+    assert.deepEqual(list.rendered, []);
+});
+
+test("a row the store selects for the user wins over the top row (SPEC-166, D.1)", () => {
+    const { list, rows, render } = opening();
+    render(["r1", "r2"]);
+    list.deliver(rows);
+    rows.follow(true);
+    rows.select("r2");
+    list.deliver(rows);
+    assert.equal(list.selected, "r2");
+    render(["t", "r1", "r2"]);
+    rows.follow(true);
+    list.deliver(rows);
+    assert.equal(list.selected, "r2");
+    assert.deepEqual(list.rendered, ["r2", undefined]);
+});
+
+test("the end of the open asks for the last top row once, and then nothing moves it (SPEC-166)", () => {
+    const { list, rows, render } = opening();
+    render(["r1", "r2"]);
+    list.deliver(rows);
+    rows.follow(true);
+    // The last copy's rows and the end of the open: its top row is still asked for.
+    render(["t", "r1", "r2"]);
+    rows.follow(false);
+    list.deliver(rows);
+    assert.equal(list.selected, "t");
+    assert.equal(rows.followsTop, false);
+    // An install afterwards puts a row above: the selection stays.
+    render(["a", "t", "r1", "r2"]);
+    rows.follow(false);
+    list.deliver(rows);
+    assert.equal(list.selected, "t");
+    assert.deepEqual(list.rendered, ["t", undefined]);
+});
+
+test("the list's top row is the first of its sections' rows: Repositories, Installed, Extensions (SPEC-166)", () => {
+    assert.equal(topRowId(["problem:a"], ["x"], ["y"]), "problem:a");
+    assert.equal(topRowId([], ["x"], ["y"]), "x");
+    assert.equal(topRowId([], [], ["y"]), "y");
+    assert.equal(topRowId([], [], []), undefined);
+    // The Installed section as drawn: a development build titled Alpha comes before an install titled GitHub.
+    const github = parseManifest("github", { name: "github", title: "GitHub", commands: [{ name: "a", title: "A" }] })!;
+    const drawn = installedSection([github], [{ name: "alpha-dev", title: "Alpha", description: "" }], []);
+    assert.equal(topRowId([], drawn.map(installedSectionRowId), ["y"]), "development:alpha-dev");
+});
+
+test("a failed row's mark: its tag and Try Again and Show Error, a busy tag winning while one runs", () => {
+    const failed = { updating: false };
+    const tags = (state: "available" | "installed" | "update", busy?: "installing" | "updating", mark = failed) =>
+        accessoryTexts(alphaEntry, state, undefined, busy, mark).filter((accessory) => "tag" in accessory);
+    assert.deepEqual(tags("available"), [{ tag: failedInstallTag }]);
+    assert.deepEqual(tags("installed"), [{ tag: failedInstallTag }], "in place of Installed");
+    assert.deepEqual(tags("update", undefined, { updating: true }), [{ tag: failedUpdateTag }], "in place of Update available");
+    assert.deepEqual(tags("update", "updating"), [{ tag: updatingTag }], "busy wins");
+    assert.equal(failedInstallTag, "Couldn't install");
+    assert.equal(failedUpdateTag, "Couldn't update");
+    assert.deepEqual(rowActions("available", undefined, failed), {
+        install: false, update: false, uninstall: false, tryAgain: true, showError: true,
+    });
+    assert.deepEqual(rowActions("update", undefined, { updating: true }), {
+        install: false, update: false, uninstall: true, tryAgain: true, showError: true,
+    });
+    assert.deepEqual(rowActions("available", "installing", failed), {
+        install: false, update: false, uninstall: false, tryAgain: false, showError: false,
+    });
+});
+
+test("a notified failure selects its row, and a success clears its mark", async () => {
+    const failing = await storeContext({ cliCode: 1 });
+    const view = noticesView({ onScreen: false, notified: true });
+    await installPressed(alphaEntry, false, failing.context, view.view);
+    assert.deepEqual(view.selected, ["alpha"]);
+    const cleared: string[] = [];
+    const { context } = await storeContext();
+    const ok = noticesView({ onScreen: true, notified: false });
+    ok.view.notices!.succeeded = (name) => void cleared.push(name);
+    await installPressed(alphaEntry, false, context, ok.view);
+    assert.deepEqual(cleared, ["alpha"]);
+});
+
+/** Settles one record from another session that wrote `status` as its outcome (none: killed), with its output files,
+ * and `<extensions>/alpha` made now when `folder`. */
+async function settleWithOutcome(options: {
+    status?: number;
+    endedAt?: string;
+    /** Where `alpha`'s folder is made: Raycast's folder (`true`), the top level an older `fudge build` used, or none. */
+    folder: boolean | "top level";
+    output?: [string, string];
+}) {
+    const supportPath = await temporary();
+    const extensionsDir = await temporary();
+    const record = otherRecord();
+    await writeBuildRecord(supportPath, record);
+    const folder = installingFolder(supportPath);
+    if (options.output) {
+        await writeFile(path.join(folder, `${record.pid}.out`), options.output[0]);
+        await writeFile(path.join(folder, `${record.pid}.err`), options.output[1]);
+    }
+    if (options.status !== undefined) {
+        const endedAt = options.endedAt ?? new Date(Date.now() + 10_000).toISOString();
+        await writeFile(path.join(folder, `${record.pid}.ended.json`), JSON.stringify({ pid: record.pid, status: options.status, endedAt }));
+    }
+    if (options.folder === "top level") await mkdir(path.join(extensionsDir, "alpha"));
+    else if (options.folder) await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
+    const settled: Settled[] = [];
+    const lines: string[] = [];
+    // No process is running: the probe finds none.
+    const builds = new OtherBuilds({
+        supportPath,
+        extensionsDir,
+        probe: fakeProbe().probe,
+        own: new Set(),
+        settled: (outcome) => void settled.push(outcome),
+        log: (line) => void lines.push(line),
+    });
+    await builds.check();
+    await within(builds.hold("test", async () => {}), "settling");
+    return { record, settled, lines, left: await readdir(folder), installed: await readInstalled(supportPath) };
+}
+
+test("settling with an outcome: 0 adopted by the build's own end, 75 quiet, any other status failed with its output", async () => {
+    const adopted = await settleWithOutcome({ status: 0, folder: true });
+    assert.equal(adopted.settled[0]?.adopted, true);
+    assert.equal(adopted.settled[0]?.failure, undefined);
+    assert.ok(adopted.installed.alpha);
+    assert.deepEqual(adopted.left, [], "all of the pid's files go");
+
+    // An older `fudge build` finished it at the top level (FUD-183): adopted from there, and the next move files it
+    // in Raycast's folder.
+    const unmoved = await settleWithOutcome({ status: 0, folder: "top level" });
+    assert.equal(unmoved.settled[0]?.adopted, true);
+    assert.ok(unmoved.installed.alpha);
+
+    // The folder made after the build's own end, though before the deadline: dropped quietly, with one line.
+    const changed = await settleWithOutcome({ status: 0, endedAt: new Date(Date.now() - 30_000).toISOString(), folder: true });
+    assert.equal(changed.settled[0]?.adopted, false);
+    assert.equal(changed.settled[0]?.failure, undefined);
+    assert.deepEqual(changed.installed, {});
+    assert.equal(changed.lines.length, 1);
+    assert.match(changed.lines[0]!, /Alpha.*folder changed since/);
+
+    const busy = await settleWithOutcome({ status: 75, folder: false });
+    assert.deepEqual(
+        busy.settled.map(({ adopted, failure }) => ({ adopted, failure })),
+        [{ adopted: false, failure: undefined }],
+    );
+    assert.deepEqual(busy.lines, []);
+
+    const failed = await settleWithOutcome({ status: 1, folder: true, output: ["building\n", "error: esbuild failed\n"] });
+    assert.equal(failed.settled[0]?.adopted, false, "a failed build's folder isn't adopted");
+    assert.deepEqual(failed.settled[0]?.failure, {
+        output: "building\n\nerror: esbuild failed\n",
+        command:
+            "fudge build /repo/extensions/alpha --into /Users/someone/Library/Application Support/Fudge/extensions --repository raycast/extensions",
+        code: 1,
+    });
+    assert.deepEqual(failed.left, []);
+});
+
+test("settling without an outcome is as before, and a failed drop's output ends with the stopped line", async () => {
+    const adopted = await settleWithOutcome({ folder: true });
+    assert.equal(adopted.settled[0]?.adopted, true);
+    const killed = await settleWithOutcome({ folder: false, output: ["half a build", ""] });
+    assert.equal(killed.settled[0]?.adopted, false);
+    assert.deepEqual(killed.settled[0]?.failure, {
+        output: `half a build\n${stoppedLine}`,
+        command:
+            "fudge build /repo/extensions/alpha --into /Users/someone/Library/Application Support/Fudge/extensions --repository raycast/extensions",
+    });
+    assert.equal(stoppedLine, "Its build stopped before it finished.");
+    const silent = await settleWithOutcome({ folder: false });
+    assert.equal(silent.settled[0]?.failure?.output, stoppedLine);
+});
+
+/** A failure as the store keeps it, for `name`. */
+const failureMark = (name: string, output = "boom"): FailureMark => ({
+    name, dir: `${name}-dir`, title: name.toUpperCase(), updating: false, failedAt: "2026-11-22T10:00:00.000Z", details: { output },
+});
+
+/** The view's side of opening a target: what was selected and shown. */
+function targetSteps(supportPath: string, marks = new RowMarks()) {
+    const selected: string[] = [];
+    const shown: FailureMark[] = [];
+    return {
+        selected,
+        shown,
+        steps: { supportPath, select: (dir: string) => void selected.push(dir), marks, show: (mark: FailureMark) => void shown.push(mark) },
+    };
+}
+
+test("a target opens its row, and with failed its failure from memory or the saved file, which then goes", async () => {
+    const support = await temporary();
+    // From this session's memory: the mark stays on its row.
+    const marks = new RowMarks();
+    marks.mark(failureMark("alpha"));
+    const memory = targetSteps(support, marks);
+    await openNoticeTarget({ name: "alpha", dir: "alpha-dir", failed: true }, memory.steps);
+    assert.deepEqual(memory.selected, ["alpha-dir"]);
+    assert.deepEqual(memory.shown, [failureMark("alpha")]);
+    assert.ok(marks.get("alpha-dir"));
+
+    // From the file a notified failure saved: shown once, then deleted.
+    await saveFailure(support, failureMark("beta", "saved output"));
+    const saved = targetSteps(support);
+    await openNoticeTarget({ name: "beta", dir: "beta-dir", failed: true }, saved.steps);
+    assert.deepEqual(saved.selected, ["beta-dir"]);
+    assert.deepEqual(saved.shown, [failureMark("beta", "saved output")]);
+    assert.deepEqual(await readdir(failuresFolder(support)), []);
+    await openNoticeTarget({ name: "beta", dir: "beta-dir", failed: true }, saved.steps);
+    assert.equal(saved.shown.length, 1, "once: the file is gone");
+
+    // Memory wins over the file, and the file still goes.
+    await saveFailure(support, failureMark("alpha", "older"));
+    const both = targetSteps(support, marks);
+    await openNoticeTarget({ name: "alpha", dir: "alpha-dir", failed: true }, both.steps);
+    assert.deepEqual(both.shown, [failureMark("alpha")]);
+    assert.deepEqual(await readdir(failuresFolder(support)), []);
+
+    // With neither, or not failed: only the selection.
+    await saveFailure(support, failureMark("gamma"));
+    const plain = targetSteps(support);
+    await openNoticeTarget({ name: "delta", dir: "delta-dir", failed: true }, plain.steps);
+    await openNoticeTarget({ name: "gamma", dir: "gamma-dir", failed: false }, plain.steps);
+    assert.deepEqual(plain.selected, ["delta-dir", "gamma-dir"]);
+    assert.deepEqual(plain.shown, []);
+    assert.deepEqual(await readdir(failuresFolder(support)), ["gamma.json"], "a success's click leaves a saved failure alone");
+
+    // Two folders hold one name: a click on the other folder's row shows neither its memory nor its file.
+    await saveFailure(support, failureMark("alpha", "saved"));
+    const other = targetSteps(support, marks);
+    await openNoticeTarget({ name: "alpha", dir: "alpha-other", failed: true }, other.steps);
+    assert.deepEqual(other.selected, ["alpha-other"]);
+    assert.deepEqual(other.shown, []);
+    assert.ok((await readdir(failuresFolder(support))).includes("alpha.json"), "the other row's file stays");
+});
+
+test("the launch context opens once, after the first load, once the records found at open have settled", async () => {
+    let release: () => void = () => {};
+    const settling = new Promise<void>((resolve) => (release = resolve));
+    const held: string[] = [];
+    const others = {
+        hold: async <T>(key: string, step: () => Promise<T>) => {
+            held.push(key);
+            await settling;
+            return step();
+        },
+    };
+    const opened: NoticeTarget[] = [];
+    const open = async (target: NoticeTarget) => void opened.push(target);
+    const target = { name: "alpha", dir: "alpha", failed: true };
+    const launch = new LaunchTarget({ storeNotification: target }, others, open);
+    assert.equal(launch.loaded(false), undefined, "nothing before the first load");
+    assert.deepEqual(held, []);
+    const waiting = launch.loaded(true);
+    assert.equal(launch.loaded(true), undefined, "once");
+    await settle();
+    assert.deepEqual(held, ["notification"]);
+    assert.deepEqual(opened, [], "not while the records found at open are settling");
+    release();
+    await waiting;
+    assert.deepEqual(opened, [target]);
+    launch.loaded(true);
+    assert.equal(opened.length, 1);
+
+    // An invalid context, or none, opens nothing and holds nothing.
+    for (const context of [{ storeNotification: { ...target, dir: "../alpha" } }, { storeNotification: { name: "alpha" } }, undefined, "alpha"]) {
+        const quiet = new LaunchTarget(context, others, open);
+        assert.equal(quiet.loaded(true), undefined);
+    }
+    assert.deepEqual(held, ["notification"]);
+    assert.equal(opened.length, 1);
+});
+
+test("the launch context's failure comes from the record settled at open, else from the saved file", async () => {
+    const support = await temporary();
+    const marks = new RowMarks();
+    const open = (view: ReturnType<typeof targetSteps>) => (target: NoticeTarget) => openNoticeTarget(target, view.steps);
+    const noHold = { hold: <T>(_key: string, step: () => Promise<T>) => step() };
+
+    // The record the store just settled as failed is in this session's marks.
+    const settled = await settledNoticeRun({ seen: false, failure: { output: "orphan's error", code: 1 } });
+    for (const mark of settled.marked) marks.mark(mark);
+    const fromRecord = targetSteps(support, marks);
+    await new LaunchTarget({ storeNotification: { name: "alpha", dir: "alpha", failed: true } }, noHold, open(fromRecord)).loaded(true);
+    assert.deepEqual(fromRecord.selected, ["alpha"]);
+    assert.equal(fromRecord.shown[0]?.details.output, "orphan's error");
+
+    await saveFailure(support, failureMark("beta"));
+    const fromFile = targetSteps(support);
+    await new LaunchTarget({ storeNotification: { name: "beta", dir: "beta-dir", failed: true } }, noHold, open(fromFile)).loaded(true);
+    assert.deepEqual(fromFile.shown, [failureMark("beta")]);
+    assert.deepEqual(await readdir(failuresFolder(support)), [], "the saved file is deleted once opened");
+});
+
+test("clicks in a loaded store: each answer opened, the call made again after each, stopped by an error, null or the session's end", async () => {
+    const answers: unknown[] = [
+        { name: "alpha", dir: "alpha", failed: false },
+        { name: "../x", dir: "alpha", failed: true },
+        { name: "beta", dir: "beta", failed: true },
+    ];
+    let calls = 0;
+    const opened: NoticeTarget[] = [];
+    const next = async () => {
+        calls++;
+        if (answers.length === 0) throw new Error("The app doesn't answer it");
+        return answers.shift();
+    };
+    await followClicks(next, async (target) => void opened.push(target), () => false);
+    assert.deepEqual(opened, [{ name: "alpha", dir: "alpha", failed: false }, { name: "beta", dir: "beta", failed: true }]);
+    assert.equal(calls, 4, "made again after each answer, an invalid one included, until the call fails");
+
+    // A newer call replaced this one: stop.
+    let replacedCalls = 0;
+    await followClicks(async () => (replacedCalls++, null), async () => {}, () => false);
+    assert.equal(replacedCalls, 1);
+
+    // The session went while the call waited: the late answer opens nothing.
+    let stopped = false;
+    let answer: (value: unknown) => void = () => {};
+    const late: NoticeTarget[] = [];
+    const following = followClicks(() => new Promise((resolve) => (answer = resolve)), async (target) => void late.push(target), () => stopped);
+    stopped = true;
+    answer({ name: "alpha", dir: "alpha", failed: false });
+    await following;
+    assert.deepEqual(late, []);
+
+    // A target that can't be opened doesn't stop the next click.
+    const queue: unknown[] = [{ name: "alpha", dir: "alpha", failed: true }, { name: "beta", dir: "beta", failed: false }];
+    const after: string[] = [];
+    await followClicks(
+        async () => {
+            if (queue.length === 0) throw new Error("done");
+            return queue.shift();
+        },
+        async (target) => {
+            if (target.failed) throw new Error("can't push");
+            after.push(target.name);
+        },
+        () => false,
+    );
+    assert.deepEqual(after, ["beta"]);
+});
+
+/** Runs `settledNotice` for an Alpha record from another session with `answer` from the app, listing every step. */
+async function settledNoticeRun(
+    outcome: { seen: boolean; adopted?: boolean; failure?: { output: string; code?: number } },
+    answer: InstallAnswer = { onScreen: false, notified: false },
+    overrides: Partial<BuildRecord> = {},
+) {
+    const record = otherRecord(overrides);
+    const logged: { title: string; output: string }[] = [];
+    const marked: FailureMark[] = [];
+    const reports: InstallEndReport[] = [];
+    const selected: string[] = [];
+    const saved: FailureMark[] = [];
+    const toasts: { failed: boolean; title: string; message?: string }[] = [];
+    const shown: FailureMark[] = [];
+    const steps: SettledSteps = {
+        logFailure: (title, failure) => void logged.push({ title, output: failure.output }),
+        marks: { mark: (mark) => void marked.push(mark) },
+        report: async (end) => (reports.push(end), answer),
+        select: (dir) => void selected.push(dir),
+        save: async (mark) => void saved.push(mark),
+        toast: async (toast) => void toasts.push(toast),
+        show: (mark) => void shown.push(mark),
+        now: () => new Date("2026-11-22T10:00:00.000Z"),
+    };
+    await settledNotice({ record, adopted: outcome.adopted ?? false, seen: outcome.seen, ...(outcome.failure ? { failure: outcome.failure } : {}) }, steps);
+    return { record, logged, marked, reports, selected, saved, toasts, shown };
+}
+
+test("a settled record of an added repository's build reports, marks and saves its repository", async () => {
+    const added = { id: "someone+tools+alpha", repository: "someone/tools" };
+    const failed = await settledNoticeRun({ seen: true, failure: { output: "error", code: 1 } }, { onScreen: false, notified: true }, added);
+    assert.equal(failed.reports[0]?.repository, "someone/tools");
+    assert.equal(failed.marked[0]?.repository, "someone/tools");
+    assert.equal(failed.saved[0]?.repository, "someone/tools");
+    const installed = await settledNoticeRun({ seen: true, adopted: true }, { onScreen: true, notified: true }, added);
+    assert.equal(installed.reports[0]?.repository, "someone/tools");
+    // Raycast's names none, as before.
+    const raycast = await settledNoticeRun({ seen: true, failure: { output: "error", code: 1 } }, { onScreen: false, notified: true });
+    assert.equal(Object.hasOwn(raycast.reports[0]!, "repository"), false);
+    assert.equal(Object.hasOwn(raycast.marked[0]!, "repository"), false);
+});
+
+test("a target opens its own repository's failure: the mark of that repository and folder, else that one's saved file", async () => {
+    const support = await temporary();
+    const marks = new RowMarks();
+    const base = { name: "github", dir: "github", title: "GitHub", updating: false, failedAt: "2026-11-22T10:00:00.000Z" };
+    marks.mark({ ...base, details: { output: "raycast's" } });
+    const added = targetSteps(support, marks);
+    await openNoticeTarget({ name: "github", dir: "github", failed: true, repository: "someone/tools" }, added.steps);
+    assert.deepEqual(added.shown, [], "Raycast's mark isn't the added repository's");
+    await saveFailure(support, { ...base, details: { output: "added" }, repository: "someone/tools" });
+    const fromFile = targetSteps(support, marks);
+    await openNoticeTarget({ name: "github", dir: "github", failed: true, repository: "someone/tools" }, fromFile.steps);
+    assert.equal(fromFile.shown[0]?.details.output, "added");
+    const raycast = targetSteps(support, marks);
+    await openNoticeTarget({ name: "github", dir: "github", failed: true }, raycast.steps);
+    assert.equal(raycast.shown[0]?.details.output, "raycast's");
+});
+
+test("a settled record's failure is logged and marked whenever it ended; one found ended at open reports nothing", async () => {
+    const found = await settledNoticeRun({ seen: false, failure: { output: "error: esbuild failed", code: 1 } });
+    assert.deepEqual(found.logged, [{ title: "Couldn't install Alpha", output: "error: esbuild failed" }]);
+    assert.deepEqual(found.marked, [{
+        name: "alpha", dir: "alpha", title: "Alpha", updating: false, failedAt: "2026-11-22T10:00:00.000Z",
+        details: { output: "error: esbuild failed", code: 1 },
+    }]);
+    assert.deepEqual([found.reports, found.selected, found.saved, found.toasts, found.shown], [[], [], [], [], []]);
+
+    const adoptedAtOpen = await settledNoticeRun({ seen: false, adopted: true });
+    assert.deepEqual([adoptedAtOpen.logged, adoptedAtOpen.marked, adoptedAtOpen.reports, adoptedAtOpen.toasts], [[], [], [], []]);
+
+    // A quiet drop seen ending (75, or a folder changed since): nothing at all.
+    const quiet = await settledNoticeRun({ seen: true });
+    assert.deepEqual([quiet.logged, quiet.reports, quiet.toasts, quiet.selected], [[], [], [], []]);
+});
+
+test("a settled record seen ending is reported with its build, and the answer decides as for the store's own", async () => {
+    const failure = { output: "error: esbuild failed", code: 1 };
+    const notified = await settledNoticeRun({ seen: true, failure }, { onScreen: false, notified: true });
+    assert.deepEqual(notified.reports, [{
+        build: { pid: notified.record.pid, startedAt: notified.record.startedAt },
+        name: "alpha", dir: "alpha", title: "Alpha", updating: false, outcome: "failed",
+    }]);
+    assert.deepEqual(notified.selected, ["alpha"]);
+    assert.deepEqual(notified.saved, notified.marked);
+    assert.deepEqual([notified.toasts, notified.shown], [[], []], "no toast and no failure view: the click opens it");
+
+    const quiet = await settledNoticeRun({ seen: true, failure }, { onScreen: false, notified: false });
+    assert.deepEqual(quiet.toasts, [{ failed: true, title: "Couldn't install Alpha", message: "See the details." }]);
+    assert.deepEqual(quiet.shown, quiet.marked);
+    assert.deepEqual([quiet.saved, quiet.selected], [[], []]);
+
+    const installedHidden = await settledNoticeRun({ seen: true, adopted: true }, { onScreen: false, notified: true });
+    assert.equal(installedHidden.reports[0]?.outcome, "installed");
+    assert.deepEqual(installedHidden.selected, ["alpha"]);
+    assert.deepEqual([installedHidden.toasts, installedHidden.saved, installedHidden.shown], [[], [], []]);
+
+    const installedOnScreen = await settledNoticeRun({ seen: true, adopted: true }, { onScreen: true, notified: false });
+    assert.deepEqual(installedOnScreen.selected, []);
+    assert.deepEqual(installedOnScreen.toasts, [{ failed: false, title: settledToast({ record: installedOnScreen.record, adopted: true, seen: true })!.title }]);
+});
+
+// MARK: - Rows from more than one repository (SPEC-157 D.2-D.6, E.5)
+
+/** Added repositories as the rule parses them: one on github.com, one on another host. */
+const toolsRepository = parseRepositoryAddress("https://github.com/Someone/Tools", undefined, []) as ParsedRepository;
+const gitlabRepository = parseRepositoryAddress("https://gitlab.com/group/tools", undefined, [toolsRepository]) as ParsedRepository;
+const copyOfRepository = (repository: ParsedRepository) => ({ copyId: repository.copyId, repositoryFolder: repository.folder });
+
+test("a row from an added repository names it first among its accessories; Raycast's rows don't (D.2)", () => {
+    const fromTools = parseManifest("alpha", manifest("alpha"), copyOfRepository(toolsRepository))!;
+    assert.deepEqual(accessoryTexts(fromTools, "installed", undefined, undefined, undefined, "Someone/Tools"), [
+        { text: "Someone/Tools" },
+        { text: "someone" },
+        { text: "1 command" },
+        { tag: "Installed" },
+    ]);
+    assert.deepEqual(accessoryTexts(alphaEntry, "available", undefined, undefined, undefined, "Raycast"), [
+        { text: "someone" },
+        { text: "1 command" },
+    ]);
+    assert.deepEqual(accessoryTexts(fromTools, "available"), [{ text: "someone" }, { text: "1 command" }], "no name, none shown");
+});
+
+test("the Repositories filter shows one repository's rows, and is there only with more than one on (D.3)", () => {
+    const fromTools = parseManifest("alpha", manifest("alpha"), copyOfRepository(toolsRepository))!;
+    const entries = [alphaEntry, fromTools];
+    assert.equal(repositoryFilter("raycast"), "repository:raycast");
+    assert.deepEqual(filterEntries(entries, repositoryFilter("raycast"), {}), [alphaEntry]);
+    assert.deepEqual(filterEntries(entries, repositoryFilter(toolsRepository.copyId), {}), [fromTools]);
+    assert.deepEqual(filterEntries(entries, repositoryFilter(gitlabRepository.copyId), {}), [], "a repository with no rows");
+    assert.deepEqual(filterEntries(entries, allFilter, {}), entries);
+    assert.deepEqual(filterRepositories(["raycast"]), [], "one repository on: no section");
+    assert.deepEqual(filterRepositories([]), []);
+    assert.deepEqual(filterRepositories(["raycast", toolsRepository.copyId]), ["raycast", toolsRepository.copyId]);
+});
+
+test("links follow the row's repository: its owner and name on github.com, none on another host (D.4)", () => {
+    assert.equal(gitHubRepository(RAYCAST_COPY.identity), "raycast/extensions");
+    assert.equal(gitHubRepository(toolsRepository.identity), "someone/tools");
+    for (const other of [
+        gitlabRepository.identity,
+        "https://github.com:8443/someone/tools",
+        "https://github.com.example.org/someone/tools",
+        "https://gitlab.com/github.com/someone",
+        "https://github.com/someone/tools/more",
+    ]) {
+        assert.equal(gitHubRepository(other), undefined, other);
+    }
+    assert.equal(repositoryHost(RAYCAST_COPY.identity), undefined);
+    assert.equal(repositoryHost(toolsRepository.identity), undefined);
+    assert.equal(repositoryHost(gitlabRepository.identity), "gitlab.com");
+    assert.equal(repositoryHost("https://git.example.com:8443/tools"), "git.example.com:8443");
+
+    const entry = parseManifest("alpha", manifest("alpha", { icon: "icon.png" }), copyOfRepository(toolsRepository))!;
+    assert.equal(folderURL("someone/tools", "alpha", "abc123"), "https://github.com/someone/tools/tree/abc123/extensions/alpha");
+    assert.equal(
+        iconURL(entry, "someone/tools", "abc123"),
+        "https://raw.githubusercontent.com/someone/tools/abc123/extensions/alpha/assets/icon.png",
+    );
+    assert.equal(iconURL(entry, undefined, "abc123"), undefined, "another host: the default icon");
+
+    const readme = "![Shot](media/shot.png)\n![Hosted](https://raw.githubusercontent.com/a/b/main/x.png)";
+    assert.equal(
+        filterImages(readme, "someone/tools", "alpha", "c0ffee"),
+        "![Shot](https://raw.githubusercontent.com/someone/tools/c0ffee/extensions/alpha/media/shot.png)\n" +
+            "![Hosted](https://raw.githubusercontent.com/a/b/main/x.png)",
+    );
+    assert.equal(imageSource("media/shot.png", undefined, "alpha", "c0ffee"), undefined);
+    assert.equal(
+        filterImages(readme, undefined, "alpha", "c0ffee"),
+        "Shot\n![Hosted](https://raw.githubusercontent.com/a/b/main/x.png)",
+        "another host's own pictures become their alt text; GitHub's rule is unchanged",
+    );
+
+    const onGitHub = detailMarkdown(entry, { name: "Someone/Tools", gitHub: "someone/tools" }, "c0ffee", "![Shot](media/shot.png)");
+    assert.ok(onGitHub.includes("[Source on GitHub](https://github.com/someone/tools/tree/c0ffee/extensions/alpha)"), onGitHub);
+    assert.ok(onGitHub.includes("raw.githubusercontent.com/someone/tools/c0ffee/extensions/alpha/media/shot.png"), onGitHub);
+    const elsewhere = detailMarkdown(entry, { name: "gitlab.com/group/tools" }, "c0ffee", "![Shot](media/shot.png)");
+    assert.ok(!elsewhere.includes("Source on GitHub"), elsewhere);
+    assert.ok(!elsewhere.includes("githubusercontent"), elsewhere);
+    assert.ok(elsewhere.endsWith("---\n\nShot"), elsewhere);
+});
+
+test("every row's detail has a Repository line with its repository's name (D.2)", () => {
+    const fromTools = parseManifest("alpha", manifest("alpha"), copyOfRepository(toolsRepository))!;
+    assert.match(detailMarkdown(alphaEntry, raycastRow, "c0ffee", ""), /\*\*Repository:\*\* raycast\\\/extensions(  \n|$)/m);
+    assert.match(detailMarkdown(fromTools, { name: "Someone/Tools", gitHub: "someone/tools" }, "c0ffee", ""), /\*\*Repository:\*\* Someone\\\/Tools/);
+    // The name's marks are escaped, so none of it reads as Markdown.
+    assert.match(detailMarkdown(fromTools, { name: "gitlab.com/a_b/~c" }, "c0ffee", ""), /\*\*Repository:\*\* gitlab\\\.com\\\/a\\_b\\\/\\~c/);
+});
+
+test("the confirmation says where the extension comes from, and an added repository's that it's kept apart (D.5, E.5)", () => {
+    assert.equal(
+        confirmationText(RAYCAST_COPY.identity, "c0ffee1234", false, "Fudge supports everything this extension uses."),
+        "From github.com/raycast/extensions at c0ffee1. It runs its own code on your Mac, like any app you install.\n\n" +
+            "Fudge supports everything this extension uses.",
+    );
+    assert.equal(
+        confirmationText(gitlabRepository.identity, "abcdef0123", true, "Line."),
+        "From gitlab.com/group/tools at abcdef0. It runs its own code on your Mac, like any app you install.\n\n" +
+            "It's kept apart from other extensions with the same name, with its own settings and data.\n\nLine.",
+    );
+});
+
+test("each row installs from its own copy, and a row whose repository is gone installs nothing (D.6)", async () => {
+    const { context, git, cli, asked, supportPath, repoPath } = await storeContext();
+    const toolsPath = path.join(supportPath, "repositories", gitlabRepository.copyId, "repo");
+    await writeJSON(path.join(toolsPath, "extensions/alpha/package.json"), manifest("alpha", { dependencies: { a: "^1" } }));
+    const toolsRepo = new StoreRepository(toolsPath, { allowProtocols: "file", run: git.run });
+    const both: StoreContext = {
+        ...context,
+        copyOf: (copyId) => (copyId === gitlabRepository.copyId ? { entry: gitlabRepository, repo: toolsRepo } : context.copyOf(copyId)),
+    };
+    const fromGitlab = parseManifest("alpha", manifest("alpha"), copyOfRepository(gitlabRepository))!;
+    assert.deepEqual(await install(fromGitlab, both), {});
+    assert.ok(git.calls.length > 0 && git.calls.every((call) => call.cwd === toolsPath), "every git call in the row's own copy");
+    assert.deepEqual(git.calls[0]!.args, ["sparse-checkout", "add", "/extensions/alpha/"]);
+    assert.deepEqual(
+        cli.calls.map((call) => call.args.slice(0, 2)),
+        [
+            ["scan", path.join(toolsPath, "extensions/alpha")],
+            ["build", path.join(toolsPath, "extensions/alpha")],
+        ],
+        "scanned and built from its own copy",
+    );
+    assert.equal(
+        asked[0]!.message,
+        "From gitlab.com/group/tools at c0ffee1. It runs its own code on your Mac, like any app you install.\n\n" +
+            "It's kept apart from other extensions with the same name, with its own settings and data.\n\n" +
+            "Fudge supports everything this extension uses.",
+    );
+
+    // Its repository switched off or removed since the list was read: nothing is fetched, asked or built.
+    const before = { git: git.calls.length, cli: cli.calls.length, asked: asked.length };
+    const gone = parseManifest("beta", manifest("beta"), copyOfRepository(toolsRepository))!;
+    await assert.rejects(install(gone, both), (error) => error instanceof StoreError && error.message === offOrRemovedMessage);
+    assert.deepEqual({ git: git.calls.length, cli: cli.calls.length, asked: asked.length }, before);
+    assert.equal(offOrRemovedMessage, "This repository is off or was removed.");
+    // Raycast's row still uses Raycast's copy.
+    assert.equal(rowCopy(both, "raycast").repo.path, repoPath);
+    assert.equal(rowCopy(both, gitlabRepository.copyId).repo, toolsRepo);
+    // A lookup that answers with another repository's copy is refused too: never another's.
+    assert.throws(() => rowCopy({ copyOf: () => ({ entry: gitlabRepository, repo: toolsRepo }) }, "raycast"), StoreError);
+});
+
+/** A store context with Raycast's copy and the made-up GitLab repository's, each with an `alpha`. */
+async function twoCopies(options: Parameters<typeof storeContext>[0] = {}) {
+    const store = await storeContext(options);
+    const toolsPath = path.join(store.supportPath, "repositories", gitlabRepository.copyId, "repo");
+    await writeJSON(path.join(toolsPath, "extensions/alpha/package.json"), manifest("alpha", { dependencies: { a: "^1" } }));
+    const toolsRepo = new StoreRepository(toolsPath, { allowProtocols: "file", run: store.git.run });
+    const both: StoreContext = {
+        ...store.context,
+        copyOf: (copyId) =>
+            copyId === gitlabRepository.copyId ? { entry: gitlabRepository, repo: toolsRepo } : store.context.copyOf(copyId),
+    };
+    const fromGitlab = parseManifest("alpha", manifest("alpha"), copyOfRepository(gitlabRepository))!;
+    return { ...store, both, fromGitlab, toolsPath };
+}
+
+test("an added repository's extension installs into its folder under its id, beside the same name elsewhere (E.1, E.4, E.5)", async () => {
+    const { both, fromGitlab, cli, asked, trashed, supportPath, extensionsDir } = await twoCopies({ built: { disabled: [] } });
+    const raycastRecord = { tree: "t", commit: "c", installedAt: "x", dir: "alpha" };
+    await writeInstalled(supportPath, { alpha: raycastRecord });
+    await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
+    await mkdir(path.join(extensionsDir, "fudgeapp/development/alpha"), { recursive: true });
+    const id = "gitlab.com+group+tools+alpha";
+
+    assert.deepEqual(await install(fromGitlab, both), {});
+    assert.equal(asked[0]!.title, "Install Alpha?", "Raycast's alpha is another extension, not this one to update");
+    assert.deepEqual(withoutOutcome(cli.calls.at(-1)!.args).slice(-2), ["--repository", "gitlab.com/group/tools"]);
+    assert.deepEqual(await readInstalled(supportPath), {
+        alpha: raycastRecord,
+        [id]: { tree: "aaa1", commit: "c0ffee1234", installedAt: "2026-11-20T12:00:00.000Z", dir: "alpha", repository: "gitlab.com/group/tools" },
+    });
+    assert.deepEqual(await readdir(installFolder(extensionsDir, "gitlab.com/group/tools", "alpha")), ["compatibility.json"]);
+    assert.deepEqual(await readdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "alpha")), [], "Raycast's untouched");
+    assert.deepEqual(await readdir(path.join(extensionsDir, "fudgeapp/development/alpha")), [], "the development build too");
+
+    // Uninstall takes only this row's folder and record.
+    assert.equal(await uninstall(fromGitlab, both), true);
+    assert.deepEqual(trashed, [installFolder(extensionsDir, "gitlab.com/group/tools", "alpha")]);
+    assert.deepEqual(await readInstalled(supportPath), { alpha: raycastRecord });
+    await assert.rejects(uninstall(fromGitlab, both), /wasn't installed by the Extension Store/, "forgotten");
+});
+
+test("still refused in an added repository: an install the store didn't record, and a second folder of one name (E.6)", async () => {
+    const unrecorded = await twoCopies();
+    await mkdir(installFolder(unrecorded.extensionsDir, "gitlab.com/group/tools", "alpha"), { recursive: true });
+    await assert.rejects(install(unrecorded.fromGitlab, unrecorded.both), (error: unknown) => {
+        assert.ok(error instanceof StoreError);
+        assert.equal(error.message, "Another extension called alpha is installed. Uninstall it first.");
+        return true;
+    });
+    assert.equal(unrecorded.git.calls.length + unrecorded.cli.calls.length, 0, "before anything else");
+
+    const second = await twoCopies();
+    await writeInstalled(second.supportPath, {
+        "gitlab.com+group+tools+alpha": { tree: "t", commit: "c", installedAt: "x", dir: "alpha", repository: "gitlab.com/group/tools" },
+    });
+    const otherFolder = parseManifest("alpha-2", manifest("alpha"), copyOfRepository(gitlabRepository))!;
+    await assert.rejects(install(otherFolder, second.both), /Another extension called alpha is installed\. Uninstall it first\./);
+    await assert.rejects(uninstall(otherFolder, second.both), /wasn't installed by the Extension Store/);
+    // Raycast's row of that name isn't this repository's install, so it neither refuses nor is refused by it.
+    assert.deepEqual(await install(alphaEntry, second.both), {});
 });

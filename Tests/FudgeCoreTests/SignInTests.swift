@@ -3,6 +3,8 @@ import Testing
 
 @testable import FudgeCore
 
+private func id(_ key: String) -> ExtensionID { ExtensionID(stored: key)! }
+
 // SPEC-056: sign-in through a fudge-oauth relay. The provider table, the settings rules, the callback parser and the
 // token store, with a fake Keychain.
 
@@ -11,7 +13,11 @@ import Testing
 @Test func everyBuiltInProvidersDefaultURLsMapAndNothingElseDoes() {
     #expect(
         OAuthProviders.all.map(\.id) == [
-            "github", "linear", "slack", "asana", "google", "atlassian", "atlassian", "zoom", "zoom",
+            "github", "github", "linear", "slack", "asana", "google", "atlassian", "atlassian", "zoom", "zoom",
+            "notion",
+            "notion", "todoist", "basecamp", "gumroad", "moneybird", "freeagent", "mollie", "plane", "homey", "figma",
+            "intra42", "ticktick", "zoho", "webflow",
+            "bangumi", "wave", "whoop", "miro", "tesla",
         ])
     for provider in OAuthProviders.all {
         #expect(OAuthProviders.provider(authorizing: provider.authorizeURL) == provider, "\(provider.id)")
@@ -31,7 +37,8 @@ import Testing
     #expect(
         OAuthProviders.raycastHosts.sorted() == [
             "asana.oauth.raycast.com", "github.oauth.raycast.com", "jira.oauth.raycast.com",
-            "linear.oauth.raycast.com", "slack.oauth.raycast.com", "zoom.oauth.raycast.com",
+            "linear.oauth.raycast.com", "miro.oauth.raycast.com", "notion.oauth.raycast.com",
+            "slack.oauth.raycast.com", "whoop.oauth.raycast.com", "zoom.oauth.raycast.com",
         ])
     let google = OAuthProviders.all.first { $0.id == "google" }!
     #expect(google.refreshURL == google.tokenURL, "Google refreshes at its token URL")
@@ -70,14 +77,207 @@ import Testing
     #expect(Set(urls).count == urls.count)
 }
 
+/// Seven more of Raycast's sign-in addresses that store extensions use (FUD-166, batch 1): Notion's and Todoist's
+/// proxies, and five extensions' own apps on Raycast's shared proxy, each copied from the extension at `ce8f05c`.
+@Test func theStoresOtherRaycastSignInAddressesGoToTheRelay() throws {
+    let entries: [(id: String, name: String, authorize: String, token: String, refresh: String)] = [
+        // The store's Notion extension, through Raycast's Notion proxy.
+        (
+            "notion", "Notion", "https://notion.oauth.raycast.com/authorize", "https://notion.oauth.raycast.com/token",
+            "https://notion.oauth.raycast.com/refresh-token"
+        ),
+        // The store's Todoist extension, through Raycast's Todoist proxy; it refreshes at its token URL.
+        (
+            "todoist", "Todoist", "https://todoist.oauth-proxy.raycast.com/authorize",
+            "https://todoist.oauth-proxy.raycast.com/token", "https://todoist.oauth-proxy.raycast.com/token"
+        ),
+        // `github-copilot`, its author's app on Raycast's shared proxy.
+        (
+            "github", "GitHub",
+            "https://oauth.raycast.com/v1/authorize/ZJFTemDOnon9VgfOxbFostk2HJqDaHtXFizUhliOj5WNPEcL3n9Mjzf_NWXwTDo5UHmMpzAaX0hOk5GZggt_Gkq7J3VlakVu7C67POdoLtId--l3BOI9j-rxsyrYqdo4iFocQmEFYpNGY97ulVc",
+            "https://oauth.raycast.com/v1/token/iJqg8WNq5LKdm75IypyhlNY97FAffYDPq76nQ4XfEjlPF1ZwUq4mSlldpwhViz46X_biMUY6MOvB2ytQ8xP2s3y0dJ142g_0ywNHkuKpPYhs-nnzcXDFsfcDMMqvuDQNXDAte_jVRkXsKRD2r7o4Ucc",
+            "https://oauth.raycast.com/v1/token/iJqg8WNq5LKdm75IypyhlNY97FAffYDPq76nQ4XfEjlPF1ZwUq4mSlldpwhViz46X_biMUY6MOvB2ytQ8xP2s3y0dJ142g_0ywNHkuKpPYhs-nnzcXDFsfcDMMqvuDQNXDAte_jVRkXsKRD2r7o4Ucc"
+        ),
+        // `raycast-pomodoro-notion`, its author's app on Raycast's shared proxy.
+        (
+            "notion", "Notion",
+            "https://oauth.raycast.com/v1/authorize/c7Qokr0CiZIEHW7WoevaKukgEOtjEFGI1lYt3_kYC6k8CNeqRO8xF9BtpZUePirKQM2KwJH21RCJI1I2I4VeutakujJ2EZJQoypCI_Cg4OOaRCqT4a5MLxiYcBHGDXsp52ewVVrzzGM5KjfY951bomaB3ELg6qoLeQ",
+            "https://oauth.raycast.com/v1/token/Dcc7jqB2FwkuyDVKpiBI71VgY3qKbGWZxbmrHn9OHUvNSu-X63-RQgOGSgpb2jsY8IC-mVjl7Zrn1M_LvTt4VUgWRTLnf6Pf5dUJZ1T1clSJBps1mD0Vs00412TZofmQulfQMErWB5du-_2fACC_Rfe7xYY-",
+            "https://oauth.raycast.com/v1/token/Dcc7jqB2FwkuyDVKpiBI71VgY3qKbGWZxbmrHn9OHUvNSu-X63-RQgOGSgpb2jsY8IC-mVjl7Zrn1M_LvTt4VUgWRTLnf6Pf5dUJZ1T1clSJBps1mD0Vs00412TZofmQulfQMErWB5du-_2fACC_Rfe7xYY-"
+        ),
+        // `trek`, its author's app on Raycast's shared proxy.
+        (
+            "basecamp", "Basecamp",
+            "https://oauth.raycast.com/v1/authorize/Yu5bylqUnHj-jHAkK4iRGFKxrV_ObMQz4TEPVf4zHD3UxkB9A2WIdhPF18B4B76kimV7t1ks7MZQE2wqKh6Zc9MVsxKqVB2CLZvhZfnkTBzRu1YXFn9EXbPJz0602roPZLt6p_x-PWbvi5OG8JIaZFkyiqbnkVE",
+            "https://oauth.raycast.com/v1/token/wMaXr3BdE5QWGZQ_RE_7GyB37_wTuBYOg_9C7CxiqtwHYOELsCyxDKiOshV4mPWXj9NZ_cZ9-dLIkELMnqbN08GDHCnmBp0i2Z950v2kWuOU88VMf3YxkiQAxj5HiAGYW9ceuj9hTDeIBYyBIXciFpDsR6WPhJAjJsHqvz2j8IQQe28efSJFi18",
+            "https://oauth.raycast.com/v1/refresh-token/zUVueWjJBw5e_3E04mUmut6L1LiT8fa6FdubGOtITFX_Gx3nilkwNIUISui62gZbvu6yXqDWHy7UKdM9R5RXPUQu-9q-zEsgnK2NhTktNwp2wmGT60Rg-mXFUUd_jg4fwBzIXj5cOBculalOYYodpTWi8bJJBp60XCxA_0C4hctAhKftD8soF-A"
+        ),
+        // `gumroad`, its author's app on Raycast's shared proxy.
+        (
+            "gumroad", "Gumroad",
+            "https://oauth.raycast.com/v1/authorize/6u4QNlwsUEvYJiwlmx-jGSBLpe0QloUowsc9PMy64xyP31e0kMWtiJCyTz4b_9EPuycLxrAIvZfFtVczX9fPJfU5Xt5h2ib3aZRDa85rRqQbFe1hqyVXIQdIPXo2mZdkSp9N7P2pFtAeykI3",
+            "https://oauth.raycast.com/v1/token/cAfVd74pOuU0WIWMymDxtIHXg2c1Hai7gBXmE4DZGFk4tRZczsTQlJzrFzbwSYE3TmlIEse4FP4uUy9EYX35zYfsI0_2mfKmLudJ4wsC-8zUsEXhJwnIn11TJmNeH2bpiWxqQpU-K4Q",
+            "https://oauth.raycast.com/v1/refresh-token/-8K39Rwy5HY5-DzNTOVLTMvKH6EQVd5E50z9mvLJ4bahXJu2susPq_DcGFFUYrhctLgTTXZLhmYRvlBnpIaGuxPDB7QTscbBrsz63tOA4RvPXoqJYh4JKtyUgQMAheFWBKh6gvNI08Q"
+        ),
+        // `moneybird`, its author's app on Raycast's shared proxy.
+        (
+            "moneybird", "Moneybird",
+            "https://oauth.raycast.com/v1/authorize/2QijvWZlCgJtKVzE9EG_mGx2DulRYvJQZlKC0cN8CwjSTccDV-mwsxiRx03lbj63Hl53CKRb5vi37PJ8AJMvarHholI5CvrGbIX7AeIIyoqcX-bAF2bnwnKGWzK-7EWxqJxog9aX4KD1lS_CyVONoOBVhhCIsTUpzeuusGMuDfD-H90",
+            "https://oauth.raycast.com/v1/token/HkdQIb7W7JlFwNFCj2yL6zDPvJHb-vnTCrL_iPlT_K77Z-hQHyRJ-iiLSrkfjNta8Yys7_qRGKHBiAIVVt5GnqiV-VvvegeT9INJ24TrXTHk_P2MT0GOTd8fD9ogDuOgdPyMahi1mePSjhGKHTsBuPloYZFqNnDSzr4_ioxJBQ",
+            "https://oauth.raycast.com/v1/refresh-token/66Tt7sCc6O70T4V3Rf_Dr4B941f08fkyizdDhimTODW0M7niNRllwvyk7FLX3XLaj0WNAWZBeOG1fZ8E1aTYWQR8ThljnyaUy3zS68Ocd5oxI6p4SUY7q2oIs_IauacmW75epq8Mn-mrdcpnmpuL19R7iPHgFy3FBS1ZeHRbSg"
+        ),
+        // `freeagent`, its author's app on Raycast's shared proxy.
+        (
+            "freeagent", "FreeAgent",
+            "https://oauth.raycast.com/v1/authorize/PLlKWDuFWQjTTgdJHUy-wK47_zN8lc2ATzyvHJSoNy5WazXXYTG_h8Yz1eOPwlUvB-YNQos46o_9lgTxwUdQN3L9P4LsjYwgitMYkEmcHtGHsUyZYyBXwng3lgE",
+            "https://oauth.raycast.com/v1/token/csqaHeGaTfTpistIum6eBy7DDrJjcz7Z-FmW_HuU4Dsa3r-AhgMCGcEWYUCLR3k-5-PirrX1ilceu4WfRqUQlyCSEiYqzkZkIIKyx5n7khRbIe99FHiEBtENFXUZRz8",
+            "https://oauth.raycast.com/v1/refresh-token/wg1eYlPV441y6BfHcmZi19x61W2tqw045Dup4C6M8VgERbxtFByj1J97OeYVaiPHbYWoLz3nNnZ3nzXoMnZbqP6EhVYkT8eJefM79ey5sQLcdRL9vGnlBsLMqaB_Ylg"
+        ),
+        // `mollie-for-raycast`, its author's app on Raycast's shared proxy.
+        (
+            "mollie", "Mollie",
+            "https://oauth.raycast.com/v1/authorize/NxaZKqcp7vp8pAw3Mp8r8UOXy_z3pnka8zfft5NcBEoB09N36m-7Y6r_EBUphunBEkTTec8UnAC_hq1ENW73rgp77by3LF_mXqJ4ct1g9kqbLRe8Hx1ezlHoU2sxnqKZfzHWkdV7hGugdqZksA",
+            "https://oauth.raycast.com/v1/token/5p7_7xQdzkXilZdhppv_or2B9wwd0Sm7Fx0khb74h_MHnro7AO5w4tr9-aj5vJe4C0NnlLsV1Onr24ndgmFR5J_yRpV6b_hD8BzYSg6lcH1Q7s-1DUfZ0JFlZjE2nF0j-vunQ34iLi8d8w",
+            "https://oauth.raycast.com/v1/refresh-token/hiXK17eErlQSoxjH5w0qTI3fjCmQt-Qw7TWqV0PhNEi6xvSqLjnklSkwNy7D0g67FwQAfXV3udahWqjl2tFPa5b7zO_rFNtJQTvPto9gQMrQDdQFFC6VvdGZstEn8K2juivJh2SwmBzBfg"
+        ),
+        // `plane`, its author's app on Raycast's shared proxy.
+        (
+            "plane", "Plane",
+            "https://oauth.raycast.com/v1/authorize/dAAojlwLRis2jBTlrt8vrrmmaMYGJO0ZuPZb8awD6ouUaNVltt_bEeZACr4zFPcHvV0U5IVaAabS3IWAn0R-JN1vvk1g5WqXSrYpyH9SQAXQ2-nquGy9KhyrfKd8JnnBFC0kMLzniS13BIrr0F9mbrSMZuhXITeAlgHSnlJcqHBw7MMYbLNfwbMbeHPofwDPbroIsU1l8VVPQpu3Xba8L0jy6rBAQeczGhi0ghcoEfeuogNd5r3CRyU9WgCGoB3e7VqNvWNk5e0",
+            "https://oauth.raycast.com/v1/token/9KXLatvC9QrbuSafABDqcnA8IZW-JXwd4FF4CvZ-C6LFXfbl8FONXyjGuaO1n2XEFIW6bvDFFWDKH5IB_9gupDVVPiAHt5_mNmQJTQ_OmF7AYcKe6fF3I13O_hYIOETpCPknFn9ww9arA93J2knoGIWRSE-FFoVB2_lBGL8xP8FaRaj8_S6M-fsKUOg1YyyOFaK6dIIN5LF8i6P5J8y_L8Q6hWu4ZyyxmLCKHmEyPY9uoK-6ZZ27W0LMIrNzSHTS",
+            "https://oauth.raycast.com/v1/refresh-token/dERRhlRqcHTtXPJLaZZqs7h8JYsRPZrQeWpVvNN_5F9qd_Z6Hb1q6xr_iVeLUmKBj9Ewk3xHAuADSKCpQ1fb0rJq07vziFLkate0VW2zkV0a-xfj23KBoVM2y50aA4geUo7XQT4PS0MKFBIt44ZaD0QRnr3gdZIf37xWollM66pK35YAmuIgo4uFDFJnj1-A1zJ8FvuYL16tHK5qO4nK6SBKE-AktYpraqpziJUINAwN6ByKe_JO1MdvtGGeMb-5"
+        ),
+        // `homey`, its author's app on Raycast's shared proxy.
+        (
+            "homey", "Homey",
+            "https://oauth.raycast.com/v1/authorize/WTWZbnJLBrEo1FEYJ0E4Ix5Wpsxnpfkcb5d2EURGgmOtgPnpIE8QvYHgJX0LeG9yryHZ71LssD1tli8bdKKVlKuEIMx-W-Ql8H72V2kBFkRgv0HPkPPGPv6ULdVrop4rZsMi-kohkLrs7glA",
+            "https://oauth.raycast.com/v1/token/7EXpLgXJ1PDijhpr-BiJe3CVd8JGSZsST-oAdflCaTWLJuEE0vRMulR8bHGX4SRrBJWgXgZKC4A0b2jF90p7QELwCoXdZQnHrigsXbfLOolG1PwDUbDNB971f6EllEs4ndcak66nGw8",
+            "https://oauth.raycast.com/v1/refresh-token/ptpJtGSqQUGUt9zDDZGzv4iW-Vn7965_rjjtPM3sOeRSXhXL_GIF4ZrNDUR21AhW5zg-MUeZuMdoKG1co7oEkas3HYBat5-W4rLPUMScN0yOM5zlapM6xD-ryNobzZ55v22lc_5qXKo"
+        ),
+        // `figma-files`, its author's app on Raycast's shared proxy.
+        (
+            "figma", "Figma",
+            "https://oauth.raycast.com/v1/authorize/F7SnNEtLc3w2AFfhwdtXwpE-rW2l2OOtG3h0z76VKM6YJVtkU17gAmgJgqzIn6lO3X9SCv_iv3_3BS8a1Jq0gc14HUxILPg8wQNB8zBaX4-OjUj2ixG0",
+            "https://oauth.raycast.com/v1/token/rsuQtsavqnjuxmA3vCYSGa3E-D8_ruhzY4OqJIOA7aB4_wGaFh2WE0mQc_uMZ7E5Nk8-pAeW3JXE3WlUfgqu_-zNiM4yWU7i_z2-u0pO8HJFh7_H6ohVBh8fcDpk64nT",
+            "https://oauth.raycast.com/v1/refresh-token/qJfyXOqhjDouaj06_54vl2O3NoIfY36R_-OOExXZNAS073Bih0aeNaHLO9xEpW6lbooqWCpT6zO7zLvbTx1MtXF2dU5d4B_of5d05Yxh27JIAPHG0uBw7fINhej_ViQ-sbE"
+        ),
+        // `42-api`, its author's app on Raycast's shared proxy.
+        (
+            "intra42", "42",
+            "https://oauth.raycast.com/v1/authorize/MnlQFVxIGQ4k6vhqj0q7FUyjXQs7FbP504oq2kWvU0DQ7ydArhDDZo_0RZLytPp3cBI4XAAi6JhEM4dq3POHTarPLiM-OJScM_6D1S3WCTynD_ArEsOIIihJC7KQvZL3X5vaDaKBygzemteTqVfTT3mxFpHXRwDMaMwKrSBimszqxqSJre9Cm_rkaA4ovOKh9A",
+            "https://oauth.raycast.com/v1/token/CQ8Acmd1GJ7WXGwXJ0BdBOtMhyiGcdZMPpq7pnM74LNkLiB6gRMSJ33oMtJ0bGkKFlG3IitUPqnW89BL8_VQ6t6Vex1Znps-pAd0itvAr1q0VaawTwfopc43vp-soOvKY9A1U8dfeKGOh9iDyGWrN-_NsDEO-UcJTazwwIBaPo1hRX4kdlHWRueDTrXS",
+            "https://oauth.raycast.com/v1/refresh-token/3M-j9Q4RZaZelFapmWrXeGPyaVV2zce7OIBsa7_8yMZ-Z-wH0UnsPVvGlNwo3n8IBZs-dEyVDLVusP6hjYD4seIut6Jv24LtdvogyEDNcuRpOmyb6DEX-hnvnT56MH47XJ-aNiCWAJC4SIn3WeMA7T-wdlbsuxWvHA1Aw7IyA5jNLwTyALavTOnrY69W"
+        ),
+        // `ticktick-plus`, its author's app on Raycast's shared proxy.
+        (
+            "ticktick", "TickTick",
+            "https://oauth.raycast.com/v1/authorize/mgIpKnxTo3jdnE1IUETN_zw4tSRTSnH6DffToE_gh1deVyanGQ53X1ZN8QrZtl8XgYkARnurl9iQVFtuOvNYPMmaEtZoY05ZV7KmAF4GE2NNmlJScX8Hd3_RRm054E_hRus",
+            "https://oauth.raycast.com/v1/token/SXhT3SrBQS_UHzaHXdkI28IHvtPy1y79lN5b7WoFnWn6gbvztRZkAL906CUce9e4DbOLgWxhVLCG_Bxi0Ur3d4H7bBprZDsofulVmBBdNJgrF1mH-b2iJRDck9uLWA",
+            "https://oauth.raycast.com/v1/refresh-token/sZgB0AoTB26kqAhJ7pKwC-c0Csk7iMGAQ3OwBADMcZd0ntppCz-q3tTb4VRgutPDL-JiXn4JbkrkCggRXIlO5mQp7VJvLO7XuPxJ2oqLO7dJPEziEKzsKHEeMRgfGw"
+        ),
+        // `zoho-mail`, its author's app on Raycast's shared proxy.
+        (
+            "zoho", "Zoho",
+            "https://oauth.raycast.com/v1/authorize/L56YnDJ7Pyv-SZlWPCgVlUHSVMI4Eo71Yzox2S9xDRtI83vegut87tcNRpoby4W-_L3m6rYKozB71tAb1THv3G00VX-9rvnQ5klOYengXzr7E8GE6pEIFP9rCqF2KCHqAV_yVzzjYYgt7ztx3FS1",
+            "https://oauth.raycast.com/v1/token/IzJ2IgubKiVDyntspLduHwp2fbqLnidriix9jaZCAzZbj2wdsPWfJpv3TUtpQCRyopHNO1YPx0HgWOiQlaIaDiJu8zCrnvxFsp9beqRPVE1w5acImQsJ3BHoVq36OD3mAS6BV0FlkgzkPWjcqjMvzg",
+            "https://oauth.raycast.com/v1/refresh-token/PkgYXNFbQinA8SK-3Wvcl8xdP7Hq-kaX6ur_sct3_qk_ATrFgb8uneFkkpkwlACWOjsnG_TIvW75N7SdQ9Afd-ZfeKxtqdHj2yYEfg5Y0oueBi8zBwGoRWc-sglHUgecZaF2PQfuzqKZ0JoXL2JP4w"
+        ),
+        // `webflow-sites`, its author's app on Raycast's shared proxy.
+        (
+            "webflow", "Webflow",
+            "https://oauth.raycast.com/v1/authorize/SpqHimJblCsEsHMaOX6bSCGCatuNIU9D8vHt3qn0eGhM9Dhqs-K2TDWF2KFer-G-LizUGpxKDwkTBA-oGVs9yAJzI-GsWPkS3UTCbil0P5rY5VxHVic2kuBzEaQan7HBhfvFHLwOYnbd69mx0blWKqXxgWW7sZ3FqagkphxttM0n",
+            "https://oauth.raycast.com/v1/token/q4QKZun0V_mQeHqwiKbrv-G8fdDGM1-an2xu3vMO5AqrmUHnzIC4pjEpHf_I2XWtpR3uMK42EtKQiqNljaEE3rtacJnOHrip0_2B4K7Ci3WClmnjzv9gwmyYtmaGl4qIeU10j2RTDWVRq_jeUwc5Ze2_RCwYWdikkqKsfiLkJWZVahPvI0-RaA",
+            "https://oauth.raycast.com/v1/refresh-token/OUvaPcCuUx4pAsmO9NlL0SjzRIsj1iquQtVbDxZlJHw5AxRqpEykQrSAKVa13YZNyTulfh8hUtGnOsmNEdMCyvflcIegE6MhbCr5BYS9Zdznb95mcJiXhduhwmXr9OXV6srwF4DmOUEnVwMzH7Pv8i8KmFxRRjbmm9rku70X_yNeVIxu9bzKzg"
+        ),
+        // `bangumi`, its author's app on Raycast's shared proxy; it refreshes at its token URL.
+        (
+            "bangumi", "Bangumi",
+            "https://oauth.raycast.com/v1/authorize/nAxnz5SEQ7fO5SRxM_DjKrJ4k3C00kfJCNh1-fp_ZcDFXVcYIxtPBI5BbGux3-EOO8WfSheAkSZ7EJRtTfq1EQkaxB4ZKpkJ9byrPZZfYMx35C1Ii85HfKYDVo4",
+            "https://oauth.raycast.com/v1/token/7CSgIYGNn4jFuD6fTG5ov64wsfsi3iegonKLu0FCzW4pWL1T1jgXa4Bxa4f5w-bZOModMtBbrKFPsx1bGT4LUL_pmFzC1O3PkRp4Al1FToLwL_OPG4wVCAnQBQv6d2A",
+            "https://oauth.raycast.com/v1/token/7CSgIYGNn4jFuD6fTG5ov64wsfsi3iegonKLu0FCzW4pWL1T1jgXa4Bxa4f5w-bZOModMtBbrKFPsx1bGT4LUL_pmFzC1O3PkRp4Al1FToLwL_OPG4wVCAnQBQv6d2A"
+        ),
+        // `wave`, its author's app on Raycast's shared proxy.
+        (
+            "wave", "Wave",
+            "https://oauth.raycast.com/v1/authorize/FM5tM_5g15vFDnfj7nm3vtkcoByMUAI69cCl58SB27ud1QGVoveYNA_BgjcsXvWyDqBQVyZoLYaUlIlZvpFcPvXxK7MqOHeO5hN5y0qwEnShw9Hv9PofZM7xqADLOih2-W62ftFCaRDVJIur7F0ccG7xVu8t8wSt3VXL5i7o3IQIPQ7ODWqswTt6Fx5KxL5y5MuqAgxP2jr7Xwz-yWQWc_A7EaKPxbno2oTPaz9AArfAd-t-YaPbXvTL3bi69cu1CmVTJygRdhM",
+            "https://oauth.raycast.com/v1/token/_wJ5kXg1rLhO75Pr62ge83y20RUwQ7SITWBOL86St6DKEY-FK1p9yWdFqDhcFE_SgHgaYril7-RoS3JfDNs5lVX8xQ2iEX2LAXmDQV8armzVls1lWJYKHVSw123e6h9d-C3JUkDzhYfBiWY6HaMrn2E03dhqiuiBN5SOLAfCqZKTgq1ULnvfJ7Nexi82FN54jsrn2gyHDspcz6d89jWStRIPvFSeVt3C3EEPmdnWbm7mKZNmxhuoFrOZ1B8N-KOObts8Bg",
+            "https://oauth.raycast.com/v1/refresh-token/TQsitwYgPmfM2Tm6ZC5NMaBiOIztfOmzALSrh4UM0o4SdlSqRCvGuJ3i56HXpOkkuiwOc0TtKfxtfBKDy96nmDKMfewczvXkpNnH1afTexQYGUDTQOpUYBE8Cxo9XMRdqdJKC2OIUitHjCXZHEAQDLaGNo5AXMeWKO4Kkg6MLooZuy2Zuh16neM6-DCwJ8Qs1ZLPHdF6ps8vZRd-viNgscOto3NwUXa4iOVWLXsn8xrVD3tOcCcDvC3R-JOIzn-5ipsSZQ"
+        ),
+        // The store's WHOOP extension, through Raycast's WHOOP proxy.
+        (
+            "whoop", "WHOOP", "https://whoop.oauth.raycast.com/authorize", "https://whoop.oauth.raycast.com/token",
+            "https://whoop.oauth.raycast.com/refresh-token"
+        ),
+        // The store's Miro extension, through Raycast's Miro proxy.
+        (
+            "miro", "Miro", "https://miro.oauth.raycast.com/authorize", "https://miro.oauth.raycast.com/token",
+            "https://miro.oauth.raycast.com/refresh-token"
+        ),
+        // `tesla-energy`, its author's app on Raycast's shared proxy.
+        (
+            "tesla", "Tesla",
+            "https://oauth.raycast.com/v1/authorize/iJYj_0c8sxOGHvexNi0qXCRaBHscvub2yLI7kZMyK4Ky2u5iV3xTuVTNE3LW-0ex07VjFpdLEVEoLB1yD2XlGoVYz8ph_4UjUroi4j4MNVYmvTQeIOZC5HZqR-FFWYliFhI",
+            "https://oauth.raycast.com/v1/token/p7q14_mMGdFpROFDg19bzNg2blC7PT5i4a6ngcQP9vOfa6PV5udRzR_zvXopGW1U1u9IVw-BweEiW1oOV7L9yOd8buGsNoPdJMf4wyhZ2A6fStxe1I66z_FOpZwt4Q",
+            "https://oauth.raycast.com/v1/refresh-token/xG23f3tmUA9zNOewrzh164GX_4cZ1FzUAmVD1kt9YLigM2OcdKeMPh78YwDZKuXNPM3ipD-BDuQXC_6mo7qPe7MPpX4u701JXxhPoAjx9yjLxf-_3IStAzrpwVHSzA"
+        ),
+    ]
+    let server = SignInServer.custom(URL(string: "https://relay.example")!)
+    for entry in entries {
+        let found = try #require(OAuthProviders.provider(authorizing: entry.authorize), "\(entry.authorize)")
+        #expect(found.id == entry.id && found.name == entry.name, "\(entry.authorize)")
+        #expect(found.tokenURL == entry.token && found.refreshURL == entry.refresh, "\(entry.authorize)")
+        #expect(server.endpoint(found, "authorize") == "https://relay.example/\(entry.id)/authorize")
+    }
+    // Only those exact URLs.
+    let shared =
+        "https://oauth.raycast.com/v1/authorize/Yu5bylqUnHj-jHAkK4iRGFKxrV_ObMQz4TEPVf4zHD3UxkB9A2WIdhPF18B4B76kimV7t1ks7MZQE2wqKh6Zc9MVsxKqVB2CLZvhZfnkTBzRu1YXFn9EXbPJz0602roPZLt6p_x-PWbvi5OG8JIaZFkyiqbnkVE"
+    var changed = Array(shared)
+    changed[changed.count - 1] = changed.last == "A" ? "B" : "A"
+    for lookalike in [
+        shared + "/", String(changed), shared + "?x=1", "http" + shared.dropFirst("https".count),
+        "https://oauth.raycast.com/v1/authorize/unknown", "https://todoist.oauth-proxy.raycast.com.evil.test/authorize",
+        "http://todoist.oauth-proxy.raycast.com/authorize",
+    ] {
+        #expect(OAuthProviders.provider(authorizing: lookalike) == nil, "\(lookalike)")
+    }
+    // The same for one of batch 2's addresses (`figma-files`).
+    let figma =
+        "https://oauth.raycast.com/v1/authorize/F7SnNEtLc3w2AFfhwdtXwpE-rW2l2OOtG3h0z76VKM6YJVtkU17gAmgJgqzIn6lO3X9SCv_iv3_3BS8a1Jq0gc14HUxILPg8wQNB8zBaX4-OjUj2ixG0"
+    var figmaChanged = Array(figma)
+    figmaChanged[figmaChanged.count - 1] = figmaChanged.last == "A" ? "B" : "A"
+    for lookalike in [figma + "/", String(figmaChanged), figma + "?x=1", "http" + figma.dropFirst("https".count)] {
+        #expect(OAuthProviders.provider(authorizing: lookalike) == nil, "\(lookalike)")
+    }
+    // And for one of batch 3's (`zoho-mail`).
+    let zoho =
+        "https://oauth.raycast.com/v1/authorize/L56YnDJ7Pyv-SZlWPCgVlUHSVMI4Eo71Yzox2S9xDRtI83vegut87tcNRpoby4W-_L3m6rYKozB71tAb1THv3G00VX-9rvnQ5klOYengXzr7E8GE6pEIFP9rCqF2KCHqAV_yVzzjYYgt7ztx3FS1"
+    var zohoChanged = Array(zoho)
+    zohoChanged[zohoChanged.count - 1] = zohoChanged.last == "A" ? "B" : "A"
+    for lookalike in [zoho + "/", String(zohoChanged), zoho + "?x=1", "http" + zoho.dropFirst("https".count)] {
+        #expect(OAuthProviders.provider(authorizing: lookalike) == nil, "\(lookalike)")
+    }
+    // And for batch 4's: `wave`'s address, and Raycast's WHOOP and Miro proxies.
+    let wave =
+        "https://oauth.raycast.com/v1/authorize/FM5tM_5g15vFDnfj7nm3vtkcoByMUAI69cCl58SB27ud1QGVoveYNA_BgjcsXvWyDqBQVyZoLYaUlIlZvpFcPvXxK7MqOHeO5hN5y0qwEnShw9Hv9PofZM7xqADLOih2-W62ftFCaRDVJIur7F0ccG7xVu8t8wSt3VXL5i7o3IQIPQ7ODWqswTt6Fx5KxL5y5MuqAgxP2jr7Xwz-yWQWc_A7EaKPxbno2oTPaz9AArfAd-t-YaPbXvTL3bi69cu1CmVTJygRdhM"
+    var waveChanged = Array(wave)
+    waveChanged[waveChanged.count - 1] = waveChanged.last == "A" ? "B" : "A"
+    for lookalike in [
+        wave + "/", String(waveChanged), wave + "?x=1", "http" + wave.dropFirst("https".count),
+        "https://whoop.oauth.raycast.com.evil.test/authorize", "http://miro.oauth.raycast.com/authorize",
+        "https://miro.oauth.raycast.com/authorize/x",
+    ] {
+        #expect(OAuthProviders.provider(authorizing: lookalike) == nil, "\(lookalike)")
+    }
+}
+
 /// A sign-in the relay's Atlassian provider made while it was still called "jira" counts as Atlassian's.
 @Test func aSignInMarkedWithTheOldJiraNameCountsAsAtlassians() throws {
     let secrets = MemorySecretStore()
     let store = OAuthTokenStore(secrets: secrets)
     var old = StoredTokenSet(accessToken: "a", updatedAt: "2026-11-21T12:00:00Z")
     old.relayProvider = "jira"
-    try store.save(old, extension: "jira", provider: "jira")
-    let calls = SignInCalls(store: store, extensionName: "jira", pending: [])
+    try store.save(old, extension: id("jira"), provider: "jira")
+    let calls = SignInCalls(store: store, extension: id("jira"), pending: [])
     #expect(try calls.hasRelaySignIn(provider: "atlassian"))
     #expect(try !calls.hasRelaySignIn(provider: "zoom"))
     #expect(OAuthProviders.currentRelayProvider("jira") == "atlassian")
@@ -415,16 +615,17 @@ private final class Listener {}
     let secrets = MemorySecretStore()
     let store = OAuthTokenStore(secrets: secrets)
     #expect(OAuthTokenStore.service == "io.github.jakeobsen.fudge.oauth")
-    #expect(try store.tokens(extension: "github", provider: "github") == nil)
+    #expect(try store.tokens(extension: id("github"), provider: "github") == nil)
     let tokens = StoredTokenSet(
         accessToken: "a", refreshToken: "r", expiresIn: 3600, scope: "repo", updatedAt: "2026-11-21T02:00:00Z",
         providerName: "GitHub")
-    try store.save(tokens, extension: "github", provider: "github")
+    try store.save(tokens, extension: id("github"), provider: "github")
     try store.save(
-        StoredTokenSet(accessToken: "b", updatedAt: "2026-11-21T03:00:00Z"), extension: "linear", provider: "linear")
+        StoredTokenSet(accessToken: "b", updatedAt: "2026-11-21T03:00:00Z"), extension: id("linear"),
+        provider: "linear")
     #expect(try secrets.accounts() == ["github/github", "linear/linear"])
-    #expect(try store.tokens(extension: "github", provider: "github") == tokens)
-    #expect(try store.tokens(extension: "linear", provider: "github") == nil, "another extension's are its own")
+    #expect(try store.tokens(extension: id("github"), provider: "github") == tokens)
+    #expect(try store.tokens(extension: id("linear"), provider: "github") == nil, "another extension's are its own")
 
     let entries = try store.entries()
     #expect(entries.map(\.id) == ["github/github", "linear/linear"])
@@ -432,15 +633,15 @@ private final class Listener {}
     #expect(entries[1].providerName == "linear", "without a name, the provider id")
     #expect(entries[0].updatedAt == ISO8601DateFormatter().date(from: "2026-11-21T02:00:00Z"))
 
-    try store.remove(extension: "github", provider: "github")
-    #expect(try store.tokens(extension: "github", provider: "github") == nil)
+    try store.remove(extension: id("github"), provider: "github")
+    #expect(try store.tokens(extension: id("github"), provider: "github") == nil)
     try store.removeAll()
     #expect(try store.entries().isEmpty)
 
-    #expect(throws: OAuthTokenStore.Failure.invalidName) { try store.tokens(extension: "a/b", provider: "x") }
-    #expect(throws: OAuthTokenStore.Failure.invalidName) { try store.tokens(extension: "a", provider: "x/y") }
-    #expect(throws: OAuthTokenStore.Failure.invalidName) { try store.tokens(extension: "a", provider: "") }
-    #expect(throws: OAuthTokenStore.Failure.invalidName) { try store.tokens(extension: "", provider: "x") }
+    #expect(ExtensionID(stored: "a/b") == nil, "no id holds a slash, so an account splits one way only")
+    #expect(throws: OAuthTokenStore.Failure.invalidName) { try store.tokens(extension: id("a"), provider: "x/y") }
+    #expect(throws: OAuthTokenStore.Failure.invalidName) { try store.tokens(extension: id("a"), provider: "") }
+    #expect(ExtensionID(stored: "") == nil, "and no id is empty")
 }
 
 @Test func tokensTravelToAndFromTheWorkerAsJSON() {
@@ -464,8 +665,8 @@ private final class Listener {}
     let secrets = MemorySecretStore()
     let store = OAuthTokenStore(secrets: secrets)
     let theirs = StoredTokenSet(accessToken: "theirs", updatedAt: "2026-11-21T02:00:00Z")
-    try store.save(theirs, extension: "other", provider: "github")
-    let calls = SignInCalls(store: store, extensionName: "mine", pending: [])
+    try store.save(theirs, extension: id("other"), provider: "github")
+    let calls = SignInCalls(store: store, extension: id("mine"), pending: [])
     func call(_ method: String, _ params: [String: JSONValue]) throws -> JSONValue {
         try calls.answer(method, .object(params))
     }
@@ -477,10 +678,10 @@ private final class Listener {}
     let mine: JSONValue = .object(["accessToken": .string("mine"), "updatedAt": .string("2026-11-21T03:00:00Z")])
     _ = try call("oauth.tokens.set", ["providerId": .string("github"), "tokens": mine, "extension": .string("other")])
     _ = try call("oauth.tokens.remove", ["providerId": .string("github"), "extension": .string("other")])
-    #expect(try store.tokens(extension: "other", provider: "github") == theirs, "theirs untouched")
-    #expect(try store.tokens(extension: "mine", provider: "github") == nil, "set, then removed: its own")
+    #expect(try store.tokens(extension: id("other"), provider: "github") == theirs, "theirs untouched")
+    #expect(try store.tokens(extension: id("mine"), provider: "github") == nil, "set, then removed: its own")
     _ = try call("oauth.tokens.set", ["providerId": .string("github"), "tokens": mine])
-    #expect(try store.tokens(extension: "mine", provider: "github")?.accessToken == "mine")
+    #expect(try store.tokens(extension: id("mine"), provider: "github")?.accessToken == "mine")
     #expect(throws: OAuthTokenStore.Failure.invalidTokens) {
         try call("oauth.tokens.set", ["providerId": .string("github"), "tokens": .object([:])])
     }
@@ -493,25 +694,25 @@ private final class Listener {}
         if let relay { object["relayProvider"] = .string(relay) }
         return .object(object)
     }
-    let prepared = SignInCalls(store: store, extensionName: "google-ext", pending: ["google"])
+    let prepared = SignInCalls(store: store, extension: id("google-ext"), pending: ["google"])
     #expect(try prepared.hasRelaySignIn(provider: "google"), "pending")
     _ = try prepared.answer("oauth.tokens.set", .object(["providerId": .string("google"), "tokens": tokens("google")]))
-    #expect(try store.tokens(extension: "google-ext", provider: "google")?.relayProvider == "google")
+    #expect(try store.tokens(extension: id("google-ext"), provider: "google")?.relayProvider == "google")
 
     // A later worker refreshes without a sign-in: the stored mark stays, and it still counts.
-    let later = SignInCalls(store: store, extensionName: "google-ext", pending: [])
+    let later = SignInCalls(store: store, extension: id("google-ext"), pending: [])
     #expect(try later.hasRelaySignIn(provider: "google"), "stored")
     _ = try later.answer("oauth.tokens.set", .object(["providerId": .string("google"), "tokens": tokens(nil)]))
-    #expect(try store.tokens(extension: "google-ext", provider: "google")?.relayProvider == "google")
+    #expect(try store.tokens(extension: id("google-ext"), provider: "google")?.relayProvider == "google")
     #expect(try !later.hasRelaySignIn(provider: "zoom"))
 
     // An extension can't claim a relay sign-in it didn't prepare.
-    let claims = SignInCalls(store: store, extensionName: "own-flow", pending: [])
+    let claims = SignInCalls(store: store, extension: id("own-flow"), pending: [])
     _ = try claims.answer("oauth.tokens.set", .object(["providerId": .string("google"), "tokens": tokens("google")]))
-    #expect(try store.tokens(extension: "own-flow", provider: "google")?.relayProvider == nil)
+    #expect(try store.tokens(extension: id("own-flow"), provider: "google")?.relayProvider == nil)
     #expect(try !claims.hasRelaySignIn(provider: "google"))
     // Nor see another extension's.
-    #expect(try !SignInCalls(store: store, extensionName: "google", pending: []).hasRelaySignIn(provider: "google"))
+    #expect(try !SignInCalls(store: store, extension: id("google"), pending: []).hasRelaySignIn(provider: "google"))
 }
 
 @Test func onlyThisSignInsCallbackEndsTheWait() {

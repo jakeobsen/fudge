@@ -85,8 +85,97 @@ export async function clearClipboardHistory(): Promise<void> {
     await callApp("clipboardHistory.clear", {});
 }
 
+/**
+ * Writes a line into `Fudge.log` (SPEC-124), for what the Extension Store does on Fudge's behalf: a failed install,
+ * update or uninstall with the build's output, and a list that couldn't be downloaded. Only the store may call it.
+ */
+export async function logToFudge(level: "error" | "warning" | "info", message: string): Promise<void> {
+    await callApp("fudge.log", { level, message });
+}
+
+// The Extension Store's calls about extensions with a part written in Swift (SPEC-145 §3). Only the store may make
+// them; the app refuses any other extension.
+
+/**
+ * Whether Apple's Command Line Tools are set up, found exactly as Settings → Development and `fudge build` find them,
+ * so the store and the build never disagree.
+ */
+export async function commandLineToolsReady(): Promise<boolean> {
+    return (await callApp("commandLineTools.ready")) === true;
+}
+
+/** Opens Settings → Development. Only from the user's own action in the store: a background call is refused. */
+export async function openDevelopmentSettings(): Promise<void> {
+    await callApp("commandLineTools.openSettings");
+}
+
+// The Extension Store's install notifications (SPEC-156). Only the store may make these calls; the app refuses any
+// other extension.
+
+/** An install or update the store ended: the last build it ran (a refusal before any build has none), and how. */
+export type InstallEndReport = {
+    build?: { pid: number; startedAt: string };
+    name: string;
+    dir: string;
+    /** The folder of the repository it's from; none is Raycast's. */
+    repository?: string;
+    title: string;
+    updating: boolean;
+    outcome: "installed" | "failed";
+};
+
+/** The app's answer: whether the store is on screen, and whether a notification went out. */
+export type InstallAnswer = { onScreen: boolean; notified: boolean };
+
+/** What a click on a notification opens: the extension's row, and its failure view when it failed. */
+export type NotificationClick = { name: string; dir: string; failed: boolean; repository?: string };
+
+/** Tells the app an install or update ended, so it decides whether a notification goes out, once per build. */
+export async function installEnded(report: InstallEndReport): Promise<InstallAnswer> {
+    const answer = (await callApp("store.installEnded", report)) as Record<string, unknown> | null;
+    if (typeof answer?.onScreen !== "boolean" || typeof answer.notified !== "boolean") {
+        throw new Error("The app's answer about the notification isn't one");
+    }
+    return { onScreen: answer.onScreen, notified: answer.notified };
+}
+
+/** After the user confirmed an install or update: macOS asks whether Fudge may show notifications, if it hasn't yet. */
+export async function askForNotifications(): Promise<void> {
+    await callApp("store.askForNotifications");
+}
+
+/**
+ * Waits for the next click on one of Fudge's install notifications while this store session is loaded; null when the
+ * call was replaced by a newer one.
+ */
+export async function nextNotificationClick(): Promise<NotificationClick | null> {
+    const click = (await callApp("store.nextNotificationClick")) as Record<string, unknown> | null;
+    if (click === null || typeof click !== "object") return null;
+    const { name, dir, failed, repository } = click;
+    if (typeof name !== "string" || typeof dir !== "string" || typeof failed !== "boolean") return null;
+    return typeof repository === "string" ? { name, dir, failed, repository } : { name, dir, failed };
+}
+
+// The Extension Store's repositories (FUD-182). Only the store may ask; the app refuses any other extension.
+
+/**
+ * The list of repositories from Settings, as the app answers it: Raycast's official repository first, then each added
+ * one, `{ copyId, folder, address, branch?, name, on }`. It comes as it is; the store checks it again with
+ * `checkRepositoriesAnswer` (`repository-address.ts`) before using any of it.
+ */
+export async function extensionRepositories(): Promise<unknown> {
+    return await callApp("store.repositories");
+}
+
 export function createFudgeAppModule() {
     return Object.freeze({
+        logToFudge,
+        commandLineToolsReady,
+        openDevelopmentSettings,
+        installEnded,
+        askForNotifications,
+        nextNotificationClick,
+        extensionRepositories,
         searchFiles,
         listClipboardHistory,
         clipboardImage,

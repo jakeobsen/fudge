@@ -20,6 +20,32 @@ public struct FudgePaths: Sendable, Equatable {
         return FudgePaths(supportDirectory: applicationSupport.appendingPathComponent("fudge", isDirectory: true))
     }
 
+    /// Where the log files go (SPEC-124): `~/Library/Logs/Fudge`, or `$FUDGE_SUPPORT_DIR/Logs` when that is set, so
+    /// a throwaway run (tests, snapshot runs) never writes into the user's logs.
+    public static func logsDirectory(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        if let override = environment["FUDGE_SUPPORT_DIR"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true).appendingPathComponent("Logs", isDirectory: true)
+        }
+        let library = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+        return library.appendingPathComponent("Logs/Fudge", isDirectory: true)
+    }
+
+    /// SwiftPM's shared cache for extensions' parts written in Swift (SPEC-145 §2), so a later build doesn't fetch
+    /// their packages again: `~/Library/Caches/Fudge/SwiftPM`, or `$FUDGE_SUPPORT_DIR/Caches/SwiftPM` when that is set,
+    /// so a throwaway run never writes into the user's caches.
+    public static func swiftPackageCache(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        if let override = environment["FUDGE_SUPPORT_DIR"], !override.isEmpty {
+            return URL(fileURLWithPath: override, isDirectory: true)
+                .appendingPathComponent("Caches/SwiftPM", isDirectory: true)
+        }
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        return caches.appendingPathComponent("Fudge/SwiftPM", isDirectory: true)
+    }
+
     /// fudge's own settings.
     /// The certificates the Mac trusts, for a Node without `--use-system-ca` (`NodeTrust`).
     public var trustRootsFile: URL {
@@ -100,19 +126,19 @@ public struct FudgePaths: Sendable, Equatable {
         supportDirectory.appendingPathComponent("preferences", isDirectory: true)
     }
 
-    /// An extension's own folder for files it keeps (`environment.supportPath`).
-    public func supportDirectory(forExtension name: String) -> URL {
-        supportDirectory.appendingPathComponent("extension-data/\(name)", isDirectory: true)
+    /// An extension's own folder for files it keeps (`environment.supportPath`), by its id.
+    public func supportDirectory(forExtension id: ExtensionID) -> URL {
+        supportDirectory.appendingPathComponent("extension-data/\(id.key)", isDirectory: true)
     }
 
-    /// Where an extension's `Cache` lives.
-    public func cacheDirectory(forExtension name: String) -> URL {
-        supportDirectory.appendingPathComponent("cache/\(name)", isDirectory: true)
+    /// Where an extension's `Cache` lives, by its id.
+    public func cacheDirectory(forExtension id: ExtensionID) -> URL {
+        supportDirectory.appendingPathComponent("cache/\(id.key)", isDirectory: true)
     }
 
-    /// Where an extension's `LocalStorage` lives.
-    public func localStorageFile(forExtension name: String) -> URL {
-        supportDirectory.appendingPathComponent("local-storage/\(name).json")
+    /// Where an extension's `LocalStorage` lives, by its id.
+    public func localStorageFile(forExtension id: ExtensionID) -> URL {
+        supportDirectory.appendingPathComponent("local-storage/\(id.key).json")
     }
 
     /// The https images extensions showed, kept by `RemoteImageCache`.

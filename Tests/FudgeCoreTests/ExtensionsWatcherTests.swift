@@ -9,12 +9,20 @@ private let root = URL(fileURLWithPath: "/tmp/fudge-watch/extensions", isDirecto
 private let staging = ".staging-x-8D1B2E0C-6F2A-4C1E-9E52-3F0D4B7A9C11"
 private let old = ".old-x-0B7C1D3E-2F4A-4B5C-8D6E-7F8091A2B3C4"
 
-@Test(arguments: ["\(staging)/dist/x.cjs", staging, old, "\(old)/package.json", ".DS_Store"])
+@Test(arguments: [
+    "\(staging)/dist/x.cjs", staging, old, "\(old)/package.json", ".DS_Store", "x/.DS_Store",
+    // In a repository's folder (FUD-183): a build's staging folder, its old copy and a lock.
+    "someone/tools/\(staging)", "someone/tools/\(staging)/package.json", "someone/tools/\(old)",
+    "raycast/extensions/\(staging)/x.cjs", "git.example.org/team/.lock", "someone/.tools/x/package.json",
+])
 func pathsUnderADotFolderOrFileDontCount(_ relative: String) {
     #expect(!ExtensionsWatcher.counts(path: root.path + "/" + relative, in: root))
 }
 
-@Test(arguments: ["x", "x/package.json", "x/x.cjs", "x/dist/x.cjs", "x/.DS_Store"])
+@Test(arguments: [
+    "x", "x/package.json", "x/x.cjs", "x/dist/x.cjs", "someone/tools/github", "someone/tools/github/package.json",
+    "raycast/extensions/x/x.cjs", "fudgeapp/development/x", "git.example.org/team/extensions/x/x.cjs",
+])
 func pathsUnderAnExtensionFolderCount(_ relative: String) {
     #expect(ExtensionsWatcher.counts(path: root.path + "/" + relative, in: root))
 }
@@ -107,6 +115,27 @@ private final class Reloads: @unchecked Sendable {
     }
 }
 
+/// Whether the watcher's stream has started: `start` queues the stream's start on `queue` and returns at once, so the
+/// stream may start well after it (FUD-156), and a batch it delivers after `settle`'s quiet second would count as the
+/// change's reload. The wait runs on a thread of its own and ends at `limit` (`OffThePool.run(within:)`), so a queue
+/// that never runs, a stuck `fseventsd`, fails the test instead of hanging it (FUD-153).
+private func streamStarted(on queue: DispatchQueue, within limit: Duration = noHang) async -> Bool {
+    (try? await OffThePool.run(within: limit) { queue.sync {} }) != nil
+}
+
+/// A queue of the test's own for a watcher's stream, so the test can wait for the stream to start.
+private func streamQueue() -> DispatchQueue {
+    DispatchQueue(label: "io.github.jakeobsen.fudge.extensions-watcher.test")
+}
+
+/// Starts `watcher` and waits until its stream has started on `queue`, then until it has gone quiet, so a batch
+/// already on its way is counted before the test's change, never as its reload.
+@MainActor
+private func startAndSettle(_ watcher: ExtensionsWatcher, on queue: DispatchQueue, _ reloads: Reloads) async throws {
+    try #require(await streamStarted(on: queue), "the watcher's stream didn't start")
+    await settle(watcher, reloads)
+}
+
 /// Waits until the watcher has gone quiet: a second with no reload and none waiting for its debounce, up to `noHang`.
 /// FSEvents can report the folder's own creation, made just before the stream started. A batch the main queue hasn't
 /// run yet is ahead of this function's turn there, so it shows as a pending change rather than being missed.
@@ -118,7 +147,8 @@ private func settle(_ watcher: ExtensionsWatcher, _ reloads: Reloads) async {
     }
 }
 
-/// Starts a watcher on a new temporary extensions folder (after `prepare`), lets it settle, makes `change`, and
+/// Starts a watcher on a new temporary extensions folder (after `prepare`), with its stream on `queue`, waits for the
+/// stream to start and lets it settle, makes `change`, and
 /// returns how long after the change each reload came. It waits for a first reload, up to `noHang` when one is
 /// expected, so the wait ends when it comes, or for `watching` when none is (a window a stall can only lengthen),
 /// then 1 s more for any further one.
@@ -126,20 +156,20 @@ private func settle(_ watcher: ExtensionsWatcher, _ reloads: Reloads) async {
 @MainActor
 private func reloads(
     preparing prepare: (URL) async throws -> Void = { _ in }, watching: Duration = noHang,
-    onReload: @escaping @MainActor (URL) -> Void = { _ in },
+    queue: DispatchQueue = streamQueue(), onReload: @escaping @MainActor (URL) -> Void = { _ in },
     after change: (URL) async throws -> Void
 ) async throws -> [Duration] {
     let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
     try FileManager.default.createDirectory(at: extensions, withIntermediateDirectories: true)
     try await prepare(extensions)
     let reloads = Reloads()
-    let watcher = ExtensionsWatcher(directory: extensions) {
+    let watcher = ExtensionsWatcher(directory: extensions, queue: queue) {
         onReload(extensions)
         reloads.record()
     }
     try watcher.start()
     defer { watcher.stop() }
-    await settle(watcher, reloads)
+    try await startAndSettle(watcher, on: queue, reloads)
     reloads.reset()
     try await change(extensions)
     let changed = ContinuousClock.now
@@ -266,10 +296,11 @@ struct ExtensionsWatcherTests {
     @Test func nothingCallsBackAfterStop() async throws {
         let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
         let reloads = Reloads()
-        let watcher = ExtensionsWatcher(directory: extensions) { reloads.record() }
+        let queue = streamQueue()
+        let watcher = ExtensionsWatcher(directory: extensions, queue: queue) { reloads.record() }
         try watcher.start()
         #expect(watcher.isRunning)
-        await settle(watcher, reloads)
+        try await startAndSettle(watcher, on: queue, reloads)
         reloads.reset()
         try install(in: extensions)
         watcher.stop()
@@ -284,13 +315,14 @@ struct ExtensionsWatcherTests {
         // Under /var, a link to /private/var: the folder's real path is only known once it exists.
         let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("support/extensions")
         let reloads = Reloads()
-        let watcher = ExtensionsWatcher(directory: extensions) { reloads.record() }
+        let queue = streamQueue()
+        let watcher = ExtensionsWatcher(directory: extensions, queue: queue) { reloads.record() }
         try watcher.start()
         defer { watcher.stop() }
         var isDirectory: ObjCBool = false
         #expect(FileManager.default.fileExists(atPath: extensions.path, isDirectory: &isDirectory))
         #expect(isDirectory.boolValue)
-        await settle(watcher, reloads)
+        try await startAndSettle(watcher, on: queue, reloads)
         reloads.reset()
         try install(in: extensions)
         let installed = ContinuousClock.now
@@ -319,6 +351,154 @@ struct ExtensionsWatcherTests {
         #expect(ContinuousClock.now - began < noHang, "start, the wait and stop all ended")
     }
 
+    /// FUD-156: a stream that starts late, as with a slow `fseventsd` (here its queue runs 2 s after `start`), is
+    /// waited for before the watcher settles. Without the wait, `settle`'s quiet second ends first, the change comes
+    /// before the stream exists, and it's never reported.
+    /// The change is an edit inside an install, in place: it leaves the folder's own entries as they were, so the
+    /// folder's stamp can't see it, and only the wait makes it count. An install or a removal would change the stamp,
+    /// which reports it once the late stream starts, wait or no wait.
+    @Test func aStreamThatStartsLateIsWaitedForBeforeTheChange() async throws {
+        let late = DispatchQueue(label: "a slow fseventsd")
+        late.suspend()
+        OffThePool.after(.seconds(2)) { late.resume() }
+        expectOnce(
+            try await reloads(preparing: { extensions in try install(in: extensions) }, queue: late) { extensions in
+                try write(#"{"name":"x","title":"X"}"#, to: extensions.appendingPathComponent("x/package.json"))
+            })
+    }
+
+    /// FUD-156: FSEvents never reports a change made before the stream exists, so one made after `start` while the
+    /// stream is still to start (a slow `fseventsd`, here a queue that runs only after the install) is found by
+    /// comparing the folder with what it was at `start`, and is one reload.
+    @Test func aChangeBeforeTheStreamStartsReloadsOnce() async throws {
+        let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
+        let slow = DispatchQueue(label: "a slow fseventsd")
+        slow.suspend()
+        var resumed = false
+        defer { if !resumed { slow.resume() } }
+        let reloads = Reloads()
+        let watcher = ExtensionsWatcher(directory: extensions, queue: slow) { reloads.record() }
+        try watcher.start()
+        defer { watcher.stop() }
+        try install(in: extensions)
+        // Long enough for FSEvents to place the install before the stream, which it can report when it's only
+        // just before.
+        try await Task.sleep(for: .milliseconds(500))
+        let started = ContinuousClock.now
+        slow.resume()
+        resumed = true
+        try #require(await streamStarted(on: slow), "the watcher's stream didn't start")
+        _ = await reloads.first(within: noHang)
+        try await Task.sleep(for: .seconds(1))
+        expectOnce(reloads.all.map { $0 - started })
+    }
+
+    /// Nothing changed between `start` and the stream starting, so the stamp adds no reload.
+    @Test func aStreamThatStartsLateWithNothingChangedDoesntReload() async throws {
+        let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
+        try FileManager.default.createDirectory(at: extensions, withIntermediateDirectories: true)
+        try install(in: extensions)
+        let slow = DispatchQueue(label: "a slow fseventsd")
+        slow.suspend()
+        var resumed = false
+        defer { if !resumed { slow.resume() } }
+        let reloads = Reloads()
+        let watcher = ExtensionsWatcher(directory: extensions, queue: slow) { reloads.record() }
+        // Past FSEvents' latency, so the install before `start` isn't reported either.
+        try await Task.sleep(for: .milliseconds(500))
+        try watcher.start()
+        defer { watcher.stop() }
+        try await Task.sleep(for: .milliseconds(500))
+        slow.resume()
+        resumed = true
+        try #require(await streamStarted(on: slow), "the watcher's stream didn't start")
+        #expect(await reloads.first(within: .seconds(1.5)) == nil, "reloads: \(reloads.all)")
+    }
+
+    /// FUD-183: an install renamed into `raycast/extensions/` changes that folder's time, not the top one's, and one
+    /// into a new repository folder changes its owner's; the startup check stamps both, so either, made between
+    /// `start` and the stream starting, is one reload.
+    @Test(arguments: [false, true])
+    func anInstallIntoARepositorysFolderBeforeTheStreamStartsReloadsOnce(newRepository: Bool) async throws {
+        let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
+        let staging = try Layout.install("x", at: "raycast/extensions/.staging-x", in: extensions)
+        try FileManager.default.createDirectory(
+            at: extensions.appendingPathComponent("someone"), withIntermediateDirectories: true)
+        let slow = DispatchQueue(label: "a slow fseventsd")
+        slow.suspend()
+        var resumed = false
+        defer { if !resumed { slow.resume() } }
+        let reloads = Reloads()
+        let watcher = ExtensionsWatcher(directory: extensions, queue: slow) { reloads.record() }
+        // Past FSEvents' latency, so what was made before `start` isn't reported.
+        try await Task.sleep(for: .milliseconds(500))
+        let top = try #require(FolderStamp(path: extensions.path))
+        try watcher.start()
+        defer { watcher.stop() }
+        if newRepository {
+            try Layout.install("x", at: "someone/tools/x", in: extensions)
+        } else {
+            try FileManager.default.moveItem(at: staging, to: extensions.appendingPathComponent("raycast/extensions/x"))
+        }
+        #expect(FolderStamp(path: extensions.path) == top, "the top folder didn't change")
+        try await Task.sleep(for: .milliseconds(500))
+        let started = ContinuousClock.now
+        slow.resume()
+        resumed = true
+        try #require(await streamStarted(on: slow), "the watcher's stream didn't start")
+        _ = await reloads.first(within: noHang)
+        try await Task.sleep(for: .seconds(1))
+        expectOnce(reloads.all.map { $0 - started })
+    }
+
+    @Test func theStampsSeeEveryFolderAnInstallCanLandIn() throws {
+        let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
+        try Layout.install("github", at: "someone/tools/github", in: extensions)
+        try Layout.install("github", at: "git.example.org/team/extensions/github", in: extensions)
+        let before = FolderStamps(directory: extensions)
+        #expect(
+            before.stamps.keys.sorted() == [
+                "", "git.example.org", "git.example.org/team", "git.example.org/team/extensions", "someone",
+                "someone/tools",
+            ], "raycast/extensions and fudgeapp/development aren't there yet")
+        #expect(FolderStamps(directory: extensions) == before)
+        try FileManager.default.createDirectory(
+            at: extensions.appendingPathComponent("git.example.org/team/extensions/.staging-x"),
+            withIntermediateDirectories: false)
+        let staged = FolderStamps(directory: extensions)
+        #expect(staged != before, "a host's repository folder")
+        try Layout.install("weather", at: "fudgeapp/development/weather", in: extensions)
+        let developed = FolderStamps(directory: extensions)
+        #expect(developed != staged)
+        #expect(developed.stamps.keys.contains("fudgeapp/development"))
+    }
+
+    @Test func aFolderStampChangesWithAnEntryAddedOrRemovedOrTheFolderReplaced() throws {
+        let extensions = try Fixtures.temporaryDirectory().appendingPathComponent("extensions")
+        try FileManager.default.createDirectory(at: extensions, withIntermediateDirectories: true)
+        let empty = try #require(FolderStamp(path: extensions.path))
+        #expect(FolderStamp(path: extensions.path) == empty)
+        try install(in: extensions)
+        let installed = try #require(FolderStamp(path: extensions.path))
+        #expect(installed != empty)
+        try FileManager.default.removeItem(at: extensions.appendingPathComponent("x"))
+        #expect(FolderStamp(path: extensions.path) != installed)
+        try FileManager.default.removeItem(at: extensions)
+        #expect(FolderStamp(path: extensions.path) == nil)
+    }
+
+    /// The reviewer's MUST on SPEC-125: waiting for a stream that never starts ends at its deadline, saying so.
+    @Test func waitingForAStreamThatNeverStartsEndsAtItsDeadline() async {
+        let stuck = DispatchQueue(label: "a stuck fseventsd")
+        stuck.suspend()
+        defer { stuck.resume() }
+        let began = ContinuousClock.now
+        #expect(await !streamStarted(on: stuck, within: .milliseconds(200)))
+        #expect(ContinuousClock.now - began < noHang)
+        let running = streamQueue()
+        #expect(await streamStarted(on: running, within: noHang))
+    }
+
     /// A wait's deadline is enforced off the main actor: here the main actor is held until the wait has ended (or 30 s
     /// have passed), and a deadline that needed the main actor would never come.
     @Test func aWaitEndsAtItsDeadlineWhileTheMainActorIsHeldUp() {
@@ -333,10 +513,10 @@ struct ExtensionsWatcherTests {
 }
 
 @Suite(
-    .enabled(if: Fixtures.esbuild != nil, "needs esbuild: run `make test`, which installs it"), .timeLimit(.minutes(2)))
+    .enabled(if: Fixtures.canBuild, "needs esbuild and Fudge's Node.js: run `make test`"), .timeLimit(.minutes(2)))
 @MainActor
 struct ExtensionsWatcherBuildTests {
-    let builder = ExtensionBuilder(esbuild: Fixtures.esbuild ?? URL(fileURLWithPath: "/missing"))
+    let builder = Fixtures.builder()
 
     /// Builds the greeter on a thread of its own, so its seconds of esbuild hold up neither the main actor nor the
     /// shared pool (a `Task.detached` would take a pool thread).
@@ -345,8 +525,21 @@ struct ExtensionsWatcherBuildTests {
         _ = try await OffThePool.run { try builder.build(source: Fixtures.greeter, into: extensions) }
     }
 
+    /// Into a development folder that's there already, as after the first build, an install is one reload.
     @Test func installingWithTheBuilderReloadsOnce() async throws {
-        expectOnce(try await reloads { extensions in try await build(into: extensions) })
+        expectOnce(
+            try await reloads(preparing: { extensions in
+                try FileManager.default.createDirectory(
+                    at: Development.folder(in: extensions), withIntermediateDirectories: true)
+            }) { extensions in try await build(into: extensions) })
+    }
+
+    /// The first build into an empty extensions folder makes `fudgeapp/development` before it compiles, which can be a
+    /// reload of its own when the compile outlasts the debounce; then the install is one more. Never more than two.
+    @Test func theFirstBuildIntoANewRepositoryFolderReloadsAtMostTwice() async throws {
+        let times = try await reloads { extensions in try await build(into: extensions) }
+        #expect((1...2).contains(times.count), "reloads: \(times)")
+        #expect(times.last.map { $0 >= .zero } == true, "the last one comes once the install has landed: \(times)")
     }
 
     @Test func rebuildingWithTheBuilderReloadsOnce() async throws {

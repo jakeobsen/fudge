@@ -491,6 +491,7 @@ public final class UpdateChecker {
             state.failedChecks = []
         } catch {
             state.failure = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            FudgeLog.error("couldn't check for updates: \(state.failure ?? "")")
             state.failedChecks = UpdateCheckPolicy.recentFailures(state.failedChecks, now: now)
             if scheduled { state.failedChecks.append(now) }
         }
@@ -504,7 +505,7 @@ public final class UpdateChecker {
             do {
                 try self.state.save(to: stateFile)
             } catch {
-                FileHandle.standardError.write(Data("fudge: couldn't save \(stateFile.path): \(error)\n".utf8))
+                FudgeLog.error("couldn't save \(stateFile.path): \(error)")
             }
         }
         onChange()

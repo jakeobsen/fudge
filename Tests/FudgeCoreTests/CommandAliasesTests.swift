@@ -7,10 +7,11 @@ private func command(
     _ extensionName: String, _ name: String, title: String, mode: String = "view", alias: String? = nil,
     arguments: [ExtensionManifest.Argument] = []
 ) -> RootItem {
+    let id = ExtensionID(stored: extensionName)!
     var item = RootItem(
-        id: RootItem.commandID(extension: extensionName, command: name), title: title, subtitle: extensionName,
+        id: RootItem.commandID(owner: .extension(id), command: name), title: title, subtitle: extensionName,
         kind: .command(
-            extension: extensionName, command: name, mode: mode,
+            extension: id, command: name, mode: mode,
             entry: URL(fileURLWithPath: "/x/\(extensionName)/\(name).cjs")),
         arguments: arguments)
     item.alias = alias
@@ -91,7 +92,7 @@ private let label = ExtensionManifest.Argument(name: "label", type: "text", plac
     var settings = FudgeSettings()
     settings.commands["scratch/create-scratch"] = .init(alias: "cs")
     settings.commands["scratch/scratch-folders"] = .init(enabled: false)
-    settings.extensions["next-task"] = .init(enabled: false)
+    settings.extensions[.extension(ExtensionID(stored: "next-task")!)] = .init(enabled: false)
     let items = RootSearch.applying(
         settings,
         to: [
@@ -125,7 +126,7 @@ private let label = ExtensionManifest.Argument(name: "label", type: "text", plac
     settings.commands["scratch/scratch-folders"] = .init(hotkey: "option+s")
     settings.commands["scratch/create-scratch"] = .init(hotkey: "option+c", enabled: false)
     settings.commands["gone/old"] = .init(hotkey: "option+g")
-    settings.extensions["vscode"] = .init(enabled: false)
+    settings.extensions[.extension(ExtensionID(stored: "vscode")!)] = .init(enabled: false)
     settings.commands["vscode/projects"] = .init(hotkey: "option+v")
     let available = settings.availableHotkeys(
         installed: ["scratch/scratch-folders", "scratch/create-scratch", "vscode/projects"])

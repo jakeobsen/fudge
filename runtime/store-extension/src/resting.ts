@@ -19,6 +19,7 @@ export class RestingWork<Result> {
     readonly #done: (key: string) => boolean;
     readonly #run: (key: string, cancelled: () => boolean, signal: AbortSignal) => Promise<Result | undefined>;
     readonly #changed: (key: string, result: Result | "failed") => void;
+    readonly #scheduled: (key: string) => void;
     #timer: unknown;
     #current = { cancelled: true, key: "", controller: new AbortController() };
 
@@ -28,12 +29,16 @@ export class RestingWork<Result> {
         done: (key: string) => boolean;
         run: (key: string, cancelled: () => boolean, signal: AbortSignal) => Promise<Result | undefined>;
         changed: (key: string, result: Result | "failed") => void;
+        /** A key's work is waiting or running from now on: a new selection, or `again`. Until it ends, a "failed"
+         * from before is out of date. */
+        scheduled?: (key: string) => void;
     }) {
         this.#delay = options.delay ?? 500;
         this.#timers = options.timers ?? realTimers;
         this.#done = options.done;
         this.#run = options.run;
         this.#changed = options.changed;
+        this.#scheduled = options.scheduled ?? (() => undefined);
     }
 
     /** The key now selected, or nothing. */
@@ -43,6 +48,7 @@ export class RestingWork<Result> {
         if (!key || this.#done(key)) return;
         const token = { cancelled: false, key, controller: new AbortController() };
         this.#current = token;
+        this.#scheduled(key);
         this.#timer = this.#timers.set(() => {
             this.#timer = undefined;
             void this.#run(key, () => token.cancelled, token.controller.signal).then(

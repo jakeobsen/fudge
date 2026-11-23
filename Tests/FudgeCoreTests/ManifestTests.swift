@@ -56,3 +56,30 @@ private func decode(_ json: String) throws -> ExtensionManifest {
     for name in valid { #expect(ExtensionManifest.isValidName(name), "\(name)") }
     for name in invalid { #expect(!ExtensionManifest.isValidName(name), "\(name)") }
 }
+
+/// The compatibility scan and the Extension Store share `isCommandName`, tested against the same file, so the rules
+/// can't drift apart.
+@Test func validatesCommandNamesAsTheSharedFixtureSays() throws {
+    let fixture = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("runtime/test/fixtures/command-names.json")
+    let names = try #require(
+        try JSONSerialization.jsonObject(with: Data(contentsOf: fixture)) as? [String: Any])
+    let valid = try #require(names["valid"] as? [String])
+    let invalid = try #require(names["invalid"] as? [String])
+    #expect(!valid.isEmpty && !invalid.isEmpty)
+    for name in valid { #expect(ExtensionManifest.isValidCommandName(name), "\(name)") }
+    for name in invalid { #expect(!ExtensionManifest.isValidCommandName(name), "\(name)") }
+}
+
+@Test func commandNamesTakeLettersOfEitherCaseAndDotsAsRaycastDoes() {
+    for name in ["caffeinateWhile", "addSchedule", "search-ableton-live-projects.command", "a_b-c.d", "x1"] {
+        #expect(ExtensionManifest.isValidCommandName(name), "\(name)")
+    }
+    for name in ["", ".hidden", "-x", "_x", "a/b", "../x", "a b", "é", "a\\b"] {
+        #expect(!ExtensionManifest.isValidCommandName(name), "\(name)")
+    }
+    // The extension name rule is unchanged.
+    #expect(!ExtensionManifest.isValidName("caffeinateWhile"))
+    #expect(!ExtensionManifest.isValidName("a.b"))
+}

@@ -70,6 +70,21 @@ test("npm missing means a damaged Fudge, since npm and Node.js come with it: Rei
     );
 });
 
+test("the compile step missing is a damaged Fudge too, in its own words rather than npm's (SPEC-147)", () => {
+    // `fudge build` with no Node.js or bundling script beside it (BuildError.noBundler), as it prints it.
+    const output =
+        "fudge: compiling needs Fudge's own Node.js and its bundling script, which aren't beside this fudge tool; " +
+        "use the fudge inside Fudge.app\n";
+    const cause = causeOf({ output, command: npmCommand, code: 1 });
+    assert.equal(cause.kind, "bundlerMissing");
+    assert.equal(
+        cause.text,
+        "Fudge couldn't find a part it needs to build extensions. It comes with Fudge, so this copy of Fudge is " +
+            "damaged. Reinstall Fudge.",
+    );
+    assert.doesNotMatch(cause.text, /npm/);
+});
+
 test("the npm registry unreachable, by npm's own error codes, and only when npm said so", () => {
     for (const line of [
         "npm error code ENOTFOUND\nnpm error network request to https://registry.npmjs.org/react failed, reason: getaddrinfo ENOTFOUND registry.npmjs.org",
@@ -118,6 +133,31 @@ test("GitHub unreachable, by git's own words", () => {
     }
 });
 
+test("a repository on another host is named by its host in \"couldn't reach\" (SPEC-157 C.6)", () => {
+    for (const [output, host] of [
+        ["fatal: unable to access 'https://gitlab.com/group/tools/': Could not resolve host: gitlab.com", "gitlab.com"],
+        ["fatal: unable to access 'https://git.example.com:8443/tools/': Failed to connect to git.example.com port 8443", "git.example.com:8443"],
+        ["fatal: unable to access 'https://codeberg.org/someone/tools/': Proxy CONNECT aborted", "codeberg.org"],
+        // Only git's "unable to access" says it here, as it does for GitHub.
+        ["fatal: unable to access 'https://git.example.org/tools/': getaddrinfo() thread failed to start", "git.example.org"],
+    ] as const) {
+        const cause = causeOf({ output, command: "git clone --filter=blob:none", host });
+        assert.equal(cause.kind, "githubUnreachable", output);
+        assert.equal(cause.text, `Fudge couldn't reach ${host}. A proxy or firewall may be blocking it.`);
+        assert.equal(
+            causeOf({ output, command: "git clone", host }, { autoConfig: true }).text,
+            `Fudge couldn't reach ${host}. A proxy or firewall may be blocking it. Your Mac picks its proxy with an automatic configuration file, which npm and git can't read.`,
+        );
+    }
+    const github = "fatal: unable to access 'https://github.com/owner/tools/': Could not resolve host: github.com";
+    for (const host of [undefined, "github.com"]) {
+        assert.match(causeOf({ output: github, command: "git fetch", ...(host ? { host } : {}) }).text, /^Fudge couldn't reach GitHub \(github\.com\)\./);
+    }
+    // Only git's words name a host: an npm failure on another repository's row still names the registry.
+    const npm = causeOf({ output: "npm error code ENOTFOUND\nnpm error network request to https://registry.npmjs.org/x failed", command: "node npm-cli.js ci", host: "gitlab.com" });
+    assert.equal(npm.kind, "registryUnreachable");
+});
+
 test("the store's list failing to download: a failed git clone says GitHub can't be reached, with the proxy note", () => {
     // As `StoreRepository.clone` throws it: git's stderr, and the command that ran.
     const error = new GitError(
@@ -146,6 +186,15 @@ test("git missing, a build error with its first line, and anything else", () => 
         code: 1,
     });
     assert.deepEqual(build, { kind: "buildFailed", text: 'The extension didn\'t build: Could not resolve "left-pad"' });
+    // The same, as `fudge build` prints it: the compile step's own first line, then esbuild's output (SPEC-147).
+    const printed = causeOf({
+        output:
+            '  compiling 1 command\nfudge: compiling the extension failed (exit 1):\n✘ [ERROR] Could not resolve "left-pad"' +
+            "\n\n    src/index.tsx:1:20:\n",
+        command: npmCommand,
+        code: 1,
+    });
+    assert.deepEqual(printed, build);
     assert.equal(causeOf({ output: "something odd happened", code: 1 }).text, "Something went wrong. Copy Error copies the whole error.");
     assert.deepEqual(causeOf({ output: "Another extension called a is installed. Uninstall it first.", refused: true }), {
         kind: "refused",
@@ -345,7 +394,8 @@ const action = (mounted: Mounted, title: string) => all(top(mounted), "Action").
 
 /** Waits until `fudge version` has answered and the view has drawn again with it. */
 async function versionArrives(mounted: Mounted) {
-    for (let i = 0; i < 100 && mounted.snapshots.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    // Up to 10 s: the made-up `fudge --version` is a process of its own, slow to start on a busy Mac.
+    for (let i = 0; i < 1000 && mounted.snapshots.length < 2; i++) await new Promise((resolve) => setTimeout(resolve, 10));
     await mounted.settle();
 }
 

@@ -333,7 +333,7 @@ public struct MenuItemsSearch<System: MenuSystem>: MenuItemsSource {
 extension BuiltInCommandGroup {
     /// Apps: commands about the app the user was in. Search Menu Items (`MenuItemsList`).
     public static let apps = BuiltInCommandGroup(
-        name: ":apps", title: "Apps",
+        name: .apps, title: "Apps",
         commands: [
             BuiltInCommand(
                 name: MenuItemsList.commandName, title: MenuItemsList.title,

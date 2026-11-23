@@ -11,7 +11,7 @@ Extensions run in a separate Node.js process, the extension host.
 
 ## Architecture
 
-- **One Swift package, three targets.**
+- **One Swift package, five targets.**
   - `FudgeApp` is the app: an accessory app with a menu bar item and no Dock icon.
     The item's glyph is `MenuBarIcon`, a fudge cube drawn in code as a template image.
     Its autosave name is `fudge` (`AppDelegate.statusItemName`), because macOS keeps whether a status item is shown in the app's preferences under that name, and an unnamed item's `Item-0` was once saved as hidden.
@@ -21,7 +21,7 @@ Extensions run in a separate Node.js process, the extension host.
     The GPL family calls these the Appropriate Legal Notices (v3 §0, §5(d)), so they stay in the panel.
     Esc, ⌘W and ⌘Q close it (`AboutFudge.closesPanel`), since an accessory app has no File menu; snapshot runs have no menu, so they never open it.
     - **Global hotkeys** go through Carbon (`CarbonHotKeys` in `HotKey.swift`), which needs no Accessibility permission: one event handler, one id per registration.
-      `HotKeyRegistry` (core) decides what's registered: the launcher's hotkey (`hotkey` in `settings.json`, default ⌥Space, read and written through `FudgeSettings.launcherHotkey`) and each installed command's (`commands` in `settings.json`, by `<extension>/<command>`), registering only what changed.
+      `HotKeyRegistry` (core) decides what's registered: the launcher's hotkey (`hotkey` in `settings.json`, default ⌥Space, read and written through `FudgeSettings.launcherHotkey`) and each installed command's (`commands` in `settings.json`, by `<id>/<command>`), registering only what changed.
       A refused change of the launcher's hotkey registers the old one again (`setLauncher`); one refused at launch stays wanted, marked `launcherRefused`, and is tried again on every `resume`.
       A change that's registered but can't be saved puts back exactly what was there, the old hotkey registered or still refused (`changeLauncher`), so the registration and the file never disagree.
       `AppDelegate.launcherHotkeyChanged` shows the outcome on the General page and in the menu bar item's "Open Fudge (…)" title.
@@ -29,6 +29,9 @@ Extensions run in a separate Node.js process, the extension host.
       `HotKeySpec` (core) is the text form (`option+s`, `f5`, `keycode:<n>` for keys with no name), and an F-key may stand alone.
       `FudgeSettings` reads `settings.json` tolerantly, and writes it atomically, keeping keys it doesn't know.
       A pressed command hotkey calls `LauncherModel.openFromHotkey`, which follows `HotKeyLaunch` (core): open it as root search would, hide the panel when it's the view command on screen, or show root search with the fields when a required argument is empty.
+      While the launcher holds the keyboard (`LauncherPanel.holdsKeyboard`), a command hotkey whose keys an action there takes runs that action as the key would, and doesn't open its command (`LauncherModel.pressHotkey`, `LauncherKeys.hotkeyPress`, SPEC-127).
+      Its key is named as a key press is, through the current keyboard layout (`KeyShortcut(hotkey:layout:)`, with `KeyLayout.character(for:)`), so the two match on any layout.
+      Fudge's own keys (⌘K, and ⌘, and ⌘⇧, unless an action has them) aren't actions', so a hotkey on one of them opens its command; outside the launcher every command hotkey does.
       A no-view command run by hotkey doesn't clear root search when it finishes (`LaunchOrigin`).
       Root-search rows show a command's hotkey as keycaps (`Keycaps`, labelled as the current keyboard layout types the key).
     - `LauncherPanel` is a non-activating `NSPanel`: it takes keys while the app you were in stays frontmost.
@@ -109,7 +112,7 @@ Extensions run in a separate Node.js process, the extension host.
       `captureLayout` keeps every standard window (`AXWindow.standard`, `kAXStandardWindowSubrole`) of the regular apps on the screens: its app's bundle id, its place among that app's standard windows front to back (a full-screen window counts but isn't kept), its screen (`WindowScreen.name`, `NSScreen.localizedName`, and its place in the screen list) and its fractions; never a title.
       `apply` places each saved window by app and place on its screen (`SavedScreen.match`: by name, then place, then the primary), once (a hand-edited file's second entry for the same app and place is skipped), skips what isn't there (an app that isn't running is never launched), and the HUD says `LayoutPlacement.message` ("Placed 5 windows; skipped 2").
       Save Layout… reads the windows (`WindowLayoutActions`; a snapshot run's are `--layout-windows`' made-up ones, and it moves nothing), then asks for the name in the Save Layout form (`LayoutForm`, `LayoutDraft`), shown like Create Snippet.
-      **The Window Management page** (`WindowManagementPage.swift`, after Snippets) lists the positions (+, Edit…, −; the sheet takes x, y, width and height in percent, checked by `PositionDraft.problems`, with a drawing) and the layouts (Rename…, −).
+      **The Window Management page** (`WindowManagementPage.swift`, under Extensions) lists the positions (+, Edit…, −; the sheet takes x, y, width and height in percent, checked by `PositionDraft.problems`, with a drawing) and the layouts (Rename…, −).
       Deleting one also removes its command's alias, hotkey and Enabled from `settings.json`.
       `--edit-position [<name>]` shows the sheet in the page in a snapshot run, never as a sheet.
     - **System commands** (`BuiltInCommandGroup.system`, one command per `SystemCommand`): Lock Screen, Sleep, Restart, Shut Down, Log Out, Empty Trash, Eject All Disks, Toggle Dark Mode, Hide All Apps and Quit All Apps.
@@ -155,8 +158,8 @@ Extensions run in a separate Node.js process, the extension host.
       `HyperkeyMapping` (core) reads `hidutil`'s output (`(null)`, or CoreFoundation's description of the list), adds or removes only Fudge's entry and writes the whole list back.
       It refuses, naming the key, when Caps Lock is mapped elsewhere: in the mapping every keyboard gets, in a keyboard's own (`--matching keyboard`), or in System Settings → Keyboard → Modifier Keys (`HIDKeyboardModifierMappingPairs`, per keyboard; Caps Lock left as itself there isn't a mapping).
       It also refuses when any of them can't be read.
-      A Caps Lock → Caps Lock entry, which some tools write, isn't a mapping, but Fudge's entry takes its place rather than adding a second one for Caps Lock (`HyperkeyMapping.capsLockItself`, SPEC-118 §1).
-      Removing Fudge's entry puts it back where it was, the launch cleanup after a crash included, since `HidutilKeyMapping` remembers it in `hyperkey.json` in the support folder (written before the mapping, never in a backup).
+      A Caps Lock → Caps Lock entry, which some tools write, isn't a mapping, but Fudge's entry takes the first one's place rather than adding a second one for Caps Lock, and any others go too (`HyperkeyMapping.capsLockItself`, SPEC-118 §1, SPEC-126 §4).
+      Removing Fudge's entry puts as many back where it was, since they're alike, the launch cleanup after a crash included, because `HidutilKeyMapping` remembers how many in `hyperkey.json` in the support folder (`{"replacedCapsLock": <count>}`, written before the mapping, never in a backup; an older file's `true` counts as one).
       Turning it on needs Accessibility (`SystemCalls.mayPostKeysForUser`, the usual prompt and offer) and is saved only once the tap runs and the mapping is in; a refusal shows under the switch (`hyperkeyProblem`).
       An active `CGEventTap` at the HID level runs on a thread and run loop of its own (`HyperTapThread`), and sees only the keyboard's own events (`eventSourceStateID` is the HID system's, so keys Fudge or another app posts are left alone).
       It hands each key's code, kind, repeat flag and time to `HyperTap` (core): F18's own events are swallowed, and any other key gets ⌘⌥⌃⇧ while F18 is down in the HID system.
@@ -185,7 +188,7 @@ Extensions run in a separate Node.js process, the extension host.
       each copy hides the panel with a HUD.
       Its empty view offers Pick Color.
       Its hotkey shows it as a view command's does, or hides the panel when it's already on screen.
-      **The Color Picker page** (`ColorPickerPage.swift`, after Sign-in) has Copy Format, a `SettingsPopupRow`; changing it draws Recent Colors again if it's open.
+      **The Color Picker page** (`ColorPickerPage.swift`, under Extensions) has Copy Format, a `SettingsPopupRow`; changing it draws Recent Colors again if it's open.
     - **Define Word** (SPEC-091, the Tools group) takes an optional Word argument (`DefineWord.argument`), and `define` is its default alias (`BuiltInCommand.defaultAlias`), so `define serendipity` hands "serendipity" to the field.
       `DefineWord.start` (core) takes the typed word, else the frontmost app's selection (`LauncherModel.selectedText`, `selection.text` as the user's own call, read only when nothing was typed), each cut to its first line that isn't blank, trimmed, at most 100 characters (`DefineWord.word`); with neither, root search shows the Word field with the keyboard in it.
       The word is looked up through `DefinitionLookup`: the app's `DictionaryServicesLookup` is `DCSCopyTextDefinition`, the Mac's active dictionaries, offline; snapshot runs read no selection and get `FixedDefinitions` (`--definitions <file>`, a JSON object of word to made-up definition, else none), and tests fakes.
@@ -213,7 +216,15 @@ Extensions run in a separate Node.js process, the extension host.
       After a new read (a calendar change, Days Ahead, a refresh), the selection stays on the event it was on (`ScheduleList.row(after:selected:in:)`), known by its day, its start and a hash of its title held in memory only, or keeps its place when that event is gone.
       The calendars are read off the main thread (`LauncherModel.readSchedule`, and the Calendar page's `loadCalendars`), since every EventKit call waits on the calendar agent: the list shows as loading until the read lands, and ⌘D draws again from it without reading again.
       `EventKitCalendarSource` runs every call on one serial queue, and makes its store on first use.
-      **Settings → Calendar** (`CalendarPage.swift`, after Sign-in) has Days Ahead and a checkbox per calendar.
+      **Settings → Calendar** (`CalendarPage.swift`, under Extensions) has Days Ahead and a checkbox per calendar.
+    - **Settings → Development** (`DevelopmentPage.swift`, after Sign-in, SPEC-145 §1) has one row: **Command Line Tools**, the folder Fudge builds extensions' parts written in Swift with, and its status line.
+      `CommandLineTools.resolve` (core) is the one place that finds them, for the page, the Extension Store and `fudge build`, so they never disagree: the folder chosen with Choose… (`commandLineTools` in `settings.json`, an absolute path; Use Default clears it), else `/Library/Developer/CommandLineTools`, the only one found by itself (D-117: "only Apple's Command Line Tools").
+      A chosen folder's Swift is its `usr/bin/swift`, else `Toolchains/XcodeDefault.xctoolchain/usr/bin/swift`, so choosing Xcode's `Contents/Developer` works too.
+      A Swift that is, or leads to, one of macOS's stubs in `/usr/bin` (a chosen `/`) is never run, and counts as not found, since the stub offers to install the tools; nothing runs `xcrun` either.
+      The status line runs the folder's Swift with `--version` and shows `Swift 6.3.3`, the version after `Apple Swift version` (the first number on that line is the driver's), or `Not found`; older than 6.0 shows `Swift 6.0 or later is needed` and counts as not found.
+      Install…, shown while nothing is found, runs `xcode-select --install`, Apple's own download prompt, and the page reads the status again every few seconds until something is found.
+      The setting is this Mac's: an import keeps it (`Backup.consentKeys`).
+      Snapshot runs take `--command-line-tools found|old|missing` (`CommandLineTools.fixedStatus`) and never ask the Mac.
     - **Arguments.**
       A selected command's `arguments` get fields after the query, which then shrinks to its text.
       `ArgumentInput` (core) holds what's entered and which field has the keyboard, and takes the keys: Tab and ⇧Tab between the fields, Esc back to the query, ⌫ in an empty field back one, ↑↓ on a dropdown argument. ↵ with a required argument empty moves the keyboard there and outlines it.
@@ -308,13 +319,42 @@ Extensions run in a separate Node.js process, the extension host.
       The `CalculatorResult` shows as a card above the results: the question and answer, and a label under each.
       The card's answer has 10 significant digits, or, while it's written out (below 1e15), as many as its integer part has, up to 15, so it never rounds the integer part; a copied answer has up to 15, so floating-point noise (`0.1+0.2`) rounds away.
       A zone's label is its familiar abbreviation where `TimeZoneConversion.named` has one (`Copenhagen, CET`), else Foundation's offset (`GMT+8`).
+      **Places** (SPEC-162): `TimeZoneConversion.place` looks a name up in this order: the abbreviations, offsets from UTC, the IANA zones' cities, `otherCities`, then from the `PlaceTable`, the countries, the towns' own and ASCII names, and the towns' alternate names, and last the places Apple Maps found (below).
+      So `jamaica` is the zone's city before the town in New York, and `armenia` is the country before the town in Colombia.
+      **Offsets** are `utc` or `gmt`, a sign (`+`, `-` or `−`) and `h`, `hh`, `h:mm`, `hh:mm` or `hhmm`, up to 14 hours, shown normalized (`gmt+0530` is `GMT+5:30`, `utc-0` is `UTC+0`) and with no abbreviation after them.
+      They're `TimeZone(secondsFromGMT:)`, never `Etc/GMT-2`, whose sign is the other way round.
+      A split at `to` or `in` still needs a clock time or the word `time`, so `copenhagen to new york` stays a search, unless both sides are abbreviations or offsets (`gmt+2 to utc`, `cet to pst`).
+      `<place> time` alone (`denmark time`, `utc time`) is the time there now, but never in a town, since `sunrise time` and `tea time` would each find one.
+      **A unit or currency word is never a country or a town** (`UnitConversion.knows`, `CurrencyConversion.knows`): time zones are tried first, so a town named like a unit would take `5 kgs to lbs` away; a test pairs every two spellings of each dimension, and every two currencies.
+      **State and province names** of the US, Canada and Australia (`TimeZoneConversion.states`) never answer from the table either: `arizona` would be Arizona, Honduras, and `georgia` the country, so they give no card unless an earlier table knows them (`new york`, `washington`).
+      **`PlaceTable`** (core) holds GeoNames' towns of 15,000 people or more and its country names, from `runtime/vendor/geonames/places.tsv` and `countries.tsv`, which `make app` copies into `Contents/Resources/places/`.
+      `LauncherModel.loadPlaces` reads them once at launch, off the main actor (about 0.2 s and 20 MB); until then, and in `swift run`, the calculator knows only its own tables, and their arrival evaluates the card again, keeping the selection.
+      Names are folded (`PlaceTable.fold`: no case, no diacritics), and a town's ASCII name is a name too, since `ø` isn't a diacritic (`hillerod`).
+      A town is shown by its own name; of towns sharing a name, the bigger one has it, and a town's own name always beats another town's alternate name.
+      Rows with a missing column, a population that isn't a number or a zone Foundation doesn't know are skipped.
+      **Countries** are worked out at load, never by the generator: two zones share a clock when their offset at the start of the year and their summer time changes that year are the same, and a country answers when one clock covers at least 90% of its towns' people, with that clock's most populous zone (`canada` and `united states` don't).
+      **The files** come from `scripts/geonames/make-places.py` (Python's standard library only, no Unicode tables, so the same download gives the same bytes anywhere), which `scripts/geonames/update.sh` runs on GeoNames' download.
+      Their folder's `SOURCE` lists each downloaded file's address, sha256 and dates, and its `LICENSE` is GeoNames' licence, credited in the README and the notices.
+      **The "Update GeoNames database" workflow** (`.github/workflows/update-geonames.yml`, on Linux) downloads them again and opens a pull request into `development` (`scripts/geonames/open-pull-request.sh`); only the repository's owner can start it, and no agent ever runs, dispatches or re-runs it.
+      Builds never go online for the list.
+      **Apple Maps** (SPEC-162 B) looks up other places only while **Look up other places with Apple Maps** (`appleMapsPlaces` in `settings.json`, off by default; the Calculator page's switch and its onboarding step) is on.
+      What may go is decided in core, by the same reading of the query that answers it (`TimeZoneConversion.namesToLookUp`), and only when nothing answers the query already: `time in <name>` and `now in <name>`, `<a> time to <b> time` (or `in`) when that's the whole query, and `<clock> <a> to <b>` when the clock has a colon, a dot, am or pm and starts the query.
+      So `add time to calendar`, `how to save time in excel`, `3 apples to oranges` and `meeting 3pm to 4pm` send nothing, and neither does `<place> time` alone.
+      A name goes only when no table answers it (a state or province name may go), it has a letter and 2 or more characters, it's at most 4 words, it doesn't start with a number (`time in 5 kg`, and so `time in 3pm`), and it's no unit or currency word.
+      A found place answers only in those same shapes, so a name typed elsewhere never converts because of an earlier lookup.
+      `PlaceLookups` (core, `@MainActor`) holds a `PlaceLookup` only while the setting is on: on each root query change it stops the lookup under way, waits 400 ms for the typing to stop, then looks up each name one at a time.
+      Each answer, found or not, is kept in memory for the run by folded name, so a name goes once; a throttled or failed lookup isn't an answer, and turning it off forgets everything.
+      An answer to the query still typed evaluates the card again, keeping the selection (onto the card when nothing was selected); there's no card while it waits.
+      `LauncherModel` hands it queries only once `loadPlaces` has read the table, since the table may know the name.
+      The app's `MapKitPlaceLookup` is only the call: `MKLocalSearch` with `MKLocalSearch.Request(naturalLanguageQuery:)` and `resultTypes = .address`, no region and no location permission, the first `MKMapItem` with a `timeZone`, by its `name`, and `cancel()` when stopped; never `CLGeocoder`, `MKMapItem.placemark` or `MKGeocodingRequest`.
+      The lookup is picked at launch: a snapshot run gets `InertPlaceLookup`, which answers nothing, even with the setting on, and tests use a fake, so nothing goes to Apple from either.
       The card is selected first, and ↵ copies the answer (`RootActions.calculatorSections`, plus Copy Question and Answer ⌘⇧C) and closes the panel with a HUD.
       `now` and the time zone are parameters, so tests fix them.
-    - **Currency rates** come from the European Central Bank, and only while `currencyRates` is on in `settings.json` (off by default; the General page's switch).
+    - **Currency rates** come from the European Central Bank, and only while `currencyRates` is on in `settings.json` (off by default; the Calculator page's switch).
       `ExchangeRateUpdater` (core) loads `exchange-rates.json` and downloads when `ExchangeRatePolicy` says so: on turning it on, when the rates are a day old, at most once per 12 hours, one download at a time, keeping the old rates when one fails. ↵ on the "Couldn't download exchange rates" card retries at once.
       `ExchangeRates` parses the ECB's XML and says how fresh the rates are, under the card's arrow.
       The app's `ECBRatesFetcher` uses an ephemeral `URLSession` (no cookies, credentials or cache; 15 s; 1 MB), and `ExchangeRateSchedule` checks every hour.
-      With the setting off, a currency query still gets a card ("Currency conversion is off"), and its ↵ opens Settings on the General page.
+      With the setting off, a currency query still gets a card ("Currency conversion is off"), and its ↵, like its Turn On Currency Conversion, opens Settings on the Calculator page (`RootActions.currencySettingsPage`).
       When the rates change (they arrive, a download starts or fails), a currency card is evaluated again for the open query, keeping the selection (`Calculator.afterRatesChange`), with a command open too, so the card is right when the user comes back to root search.
       Snapshots never download.
     - **The update check** (SPEC-082) asks GitHub for the newest release, and only once `updateCheck` in `settings.json` has been chosen: `daily`, `weekly`, `monthly` or `off` (`UpdateCheckSetting`; unset until onboarding's Updates step or General's Check for Updates saves it, and an unknown value reads as unset).
@@ -379,7 +419,7 @@ Extensions run in a separate Node.js process, the extension host.
       One whose first load comes from the disk cache that old is shown at once and refreshed straight away, not at the next ask.
       Nothing starts while a load for that source runs.
       A source that leaves memory in back-off, or failed for good, keeps that (`RemoteImageRetries`, at most 1,000, oldest out): asked for again, it shows the fallback and loads only when it's due.
-    - **Detail and Form** have no search field: their navigation title takes its place, and `handleKey` takes ↵ and Esc.
+    - **Detail and Form** have no search field: their navigation title takes its place, and `handleKey` takes ↵ and Esc, and Tab and ⇧Tab in a Form.
       `DetailScreen` shows the markdown with the metadata in a column beside it.
       `FormContent` (core) reads a Form's fields for `FormScreen`, and its `searchBarAccessory` when that's a `Form.LinkAccessory` with a text and a target (`LinkAccessory`):
       the title bar shows it at the right as a link (`ViewTitle`), mouse-only as in Raycast, truncating before the title and never wider than 40% of the bar, and a click opens the target as `Action.OpenInBrowser` does, then hides the panel.
@@ -389,27 +429,56 @@ Extensions run in a separate Node.js process, the extension host.
       Each edit goes to the field's `onChange`.
       A `Form.Dropdown` reads like a search bar dropdown (`SearchBarDropdown`), and a `Form.TagPicker`'s tokens are kept by `TagPicking` (core).
       A `Form.DatePicker` shows its date, with a `DateTime`'s time beside it to edit in place, and a clear button (or ⌫).
+      Its `value: null` is controlled and shows no date, since its value is `Date | null` in Raycast's types; on every other field a null `value` counts as no value (uncontrolled) (`FormContent.controlledValue`).
       Space, ↵ or a click opens its calendar under the field: `DateCalendar` (core) highlights the field's day or today, ←→↑↓ and ⇞⇟ move it within `min` and `max`, and nothing is picked until ↵, Space or a click on a day picks one.
       The field keeps the keyboard, so `handleKey` gives the open calendar its keys first, Esc closes it before anything else, and any other key closes it and does what it always does.
       `FormDates` (core) makes a `Date` picker's value local midnight and a `DateTime` picker's whole minutes (limits with seconds clamp to whole minutes within them), within `min` and `max`, and `null` when cleared.
       A `Form.FilePicker` lists its paths with a × each, and Select… opens an `NSOpenPanel` as a sheet on the launcher (`FilePicking`, core, keeps the paths).
       The open panel only takes typing while Fudge is the active app, so Fudge activates for it, and `hidePanel` gives the keyboard back to the app that had it.
       The Dropdown and TagPicker both open the dropdown panel under the field: the panel has a source (`DropdownPanelSource`: the List's search bar, a Form dropdown or a TagPicker), and `FormFieldBounds` tells `LauncherView` where the field is.
-      A field with `storeValue` (never a PasswordField) starts on the value saved when its form was last submitted (`FormValueStore`: `form-values/<extension>.json`, by command and field `id`), ahead of `defaultValue`.
+      A field with `storeValue` (never a PasswordField) starts on the value saved when its form was last submitted (`FormValueStore`: `form-values/<extension id>.json`, by command and field `id`), ahead of `defaultValue`.
       A Dropdown's or TagPicker's stored value waits for the field's items when they arrive after the first render, unless the field is changed first (`FormContent.Field.start`).
       When a field starts on something the extension's Form didn't register, such as a stored value or a dropdown's first item, the app reports it with `onChange`.
       `onFocus` and `onBlur` fire with Raycast's `FormEvent` when the keyboard moves from one field to another.
+      **A Form's first field gets the keyboard** (FUD-185): `FormScreen.onAppear` asks for it through `refocus` (nil, then the field a turn later), never by setting `focused` at once, since the launcher swaps its search field for the form's title in the same update and the search field going away leaves the panel itself as first responder.
+      The field is the first editable one with `autoFocus`, else the first editable one, and none while an overlay holds the keyboard (`KeyboardFocus.formFieldOnAppear`); that covers a form as the first view, pushed from the action panel and pushed by a shortcut.
+      **Tab and ⇧Tab** move between a Form's fields whichever field has the keyboard, a text area and the bare panel included, because AppKit's key view loop doesn't reach the fields in the launcher's panel (the hosting view sits in an `NSVisualEffectView`).
+      `LauncherKeys.outcome` answers `.moveInForm` for them in a Form, after an open overlay, which keeps its own Tab, and before any action's shortcut, as Raycast's manual says Tab moves (`LauncherKeys.formTab`); ⌥Tab isn't taken, so a text area types a tab.
+      The place to go is `KeyboardFocus.formFieldAfterTab`'s, from where the keyboard is now: the next or previous editable field, wrapping at both ends; the first (or, backwards, the last) from nowhere; and nothing in a form with no editable field, which still takes the key.
+      A `DateTime` field with a date counts its time box as a stop after its date (`FormContent.tabFields`, `FormContent.Field.showsTimeBox`).
+      `LauncherModel.formMove` hands it to `FormScreen`, which gives it the keyboard through `refocus`, and an open calendar closes on Tab first, as on any key.
+      `FormScreen` also scrolls that field into view (`ScrollViewReader`), since giving it the keyboard there doesn't scroll as AppKit's key view loop does.
+      **Where the keyboard is now** is `FormKeyboard` (core), which `CommandScreen` holds and `FormScreen` reports every move to, nowhere included (`formKeyboardMoved`).
+      Its `now` goes to nil when the keyboard leaves every field (a click on the form's background), so Tab starts from the first field again, while its last place ignores nil, so `onBlur`, an overlay's closing and the panel's showing still go by it.
+      The panel's showing gives back the same place as an overlay's closing (`KeyboardFocus.target` goes through `formPlaceAfterOverlay`): a time box while its field still shows one (`Target.formTimeBox`), else its field.
+      A time box counts as its field for `onBlur` and `onFocus`.
+      When a time box that had the keyboard goes (its date was cleared, by ⌫ in an `Action.PickDate` picker, an action or the extension), its field gets the keyboard, unless an overlay holds it (`KeyboardFocus.formFieldAfterTimeBoxGone`, which `FormScreen` asks when the fields that show a time box change); `onBlur` and `onFocus` don't fire for it.
+      When fields come or go, a field or a time box that has the keyboard keeps it, and a field that's gone, or nowhere, gives the field the form starts in (`KeyboardFocus.formFieldAfterFieldsChange`, given `FormScreen`'s place, a time box included).
+      A render with a new depth (a push or a pop) starts a new `FormKeyboard`, so a Form on the new top view starts in its first field, never in a place of the view before it.
+      The places Tab asked for that the keyboard hasn't reached yet are kept in order, and Tab goes on from the last of them, so several Tabs at once each move one place, even when an earlier one lands late.
+      A `Form.Checkbox` is `.focusable(true, interactions: .edit)`, as the pickers are, since with macOS's Keyboard navigation off (the default) asking for a plain `Toggle` gives the keyboard to the first text field instead; Space toggles it.
     - **Actions.**
       `ActionPanelReader` (core) turns an `ActionPanel` node into sections of `ActionEntry`. ↵ runs the first entry and ⌘↵ the second; in a Form, where ↵ belongs to the fields, ⌘↵ and ⌘⇧↵. ⌘K opens the action panel overlay, with search, sections and submenus (opening one calls its `onOpen`).
+      A command's action panel belongs to what it opened on: the command, its view and the List or Grid item whose actions it shows, by node and `id` prop (`ActionMenuOwner`, core, SPEC-170).
+      When the selection moves to another item (a render or a click), the item or the items go, or a List's first items come, it closes with any submenu or picker in it, as root search's does when its selection moves; a render that keeps the selection leaves it open.
+      Its rows show those keys on the first and second entries, counted across sections, in place of their own shortcuts, which still run them, as Raycast does (`ActionPanelReader.shownKey`, FUD-186); every other entry, and every entry in a submenu or in root search, shows its own.
+      Entries are matched against the whole panel, so a search in the panel keeps each key on its action.
       An `Action.PickDate` (an `Action` with a `pickDate` prop and an `onChange`, `ActionEntry.pickDate`) opens a picker there in place of the list, as a submenu does; run with ↵, ⌘↵ or its shortcut, the overlay opens straight to it.
       `DatePick` (core) holds it: Form.DatePicker's calendar (`DateCalendar`, drawn by the shared `MonthView`) and a `DateTime`'s time, which Tab moves to. ↵, Space or a click on a day picks and calls `onChange` once with `FormDates`' value, ⌫ calls it with null, and Esc goes back to the list it came from, or closes the overlay, calling nothing.
       Closing the overlay any other way calls nothing either.
-      The picker's keys come through `handleKey` with no field holding the keyboard (a Form's field lets go of it while the picker is open, and takes it back when the overlay closes), so typing filters nothing; a render keeps it open with the action's new title and limits (`DatePick.following`), or closes it when the action is gone.
-      No Form field takes the keyboard while an overlay holds it, the action panel (picker or not) or a dropdown's panel, even when the fields change or the panel is shown again; the overlay's closing gives it to the last field, or the first if that's gone (`KeyboardFocus.formFieldAfterFieldsChange`, `formFieldAfterOverlay`).
+      The picker's keys come through `handleKey` with no field holding the keyboard (a Form's field or time box lets go of it while the picker is open, and takes it back when the overlay closes), so typing filters nothing; a render keeps it open with the action's new title and limits (`DatePick.following`), or closes it when the action is gone.
+      No Form field takes the keyboard while an overlay holds it, the action panel (picker or not) or a dropdown's panel, even when the fields change or the panel is shown again (`KeyboardFocus.formFieldAfterFieldsChange`).
+      The overlay's closing gives it back to the place it was last in, from the model's `FormKeyboard.last` (`KeyboardFocus.formPlaceAfterOverlay`): a time box while its field still shows one; the field when that's where it was, or when its time box went meanwhile; else the field the form starts in.
+      A pick or ⌫ in the picker closes the overlay before the extension hears `onChange`, so the time box gets the keyboard back first, and its field gets it when the time box goes.
+      A Dropdown's or TagPicker's panel records its field as where the keyboard is when it opens (`LauncherModel.openFormDropdown`, `openTagPicker`), so its closing gives that field back whatever order SwiftUI reports focus in.
+      The sign-in prompt takes the Form's place on screen, so the Form is built again when it closes, and its `onAppear` gives back the place it was last in (`KeyboardFocus.formPlaceOnAppear`), while a Form shown for the first time, or after a push or a pop, starts in its first field.
       In root search the same overlay shows Fudge's own actions for the selected item, from `RootActions` (core): Open (↵) on everything, Configure Extension (⌘⇧,) on a command, Show in Finder (⌘⇧F) on an application.
       Their shortcuts work without opening the panel.
       An entry's `target` says what it runs: an extension's `Action` node (`onAction` in the running command), a `RootAction`, or `toggleQuickLook`, which the app performs itself (an `Action` with `fudgeBuiltIn: "toggleQuickLook"`, `ActionPanelReader.builtInProp`).
       An `NSEvent` local monitor in `AppDelegate` turns key presses into `KeyShortcut`s for `LauncherModel.handleKey` (⌘K, ⌘↵, actions' shortcuts) before the search field sees them.
+      Which action a key runs is `LauncherKeys.outcome` (core), which a command hotkey asks too.
+      With the action panel open, a key with a modifier runs the view's action with that shortcut, submenus included, as with the panel shut (SPEC-127 §0); plain keys go to "Search for actions…", and with a picker or a dropdown's panel open no action runs.
+      So an action on ⌘A, ⌘C, ⌘V, ⌘X or ⌘Z wins over editing in the focused field, as it does with the panel shut.
       The key is named by what it types with no modifier at all (`characters(byApplyingModifiers: [])`), so ⌘⇧, is `,` with cmd and shift, not `<`.
       It leaves every key alone while an input method is composing (marked text), so ↑↓, Esc and ↵ reach the input method.
     - **Quick Look** (`Action.ToggleQuickLook`, however it's run) previews the selected item's `quickLook` file in macOS's Quick Look panel.
@@ -426,10 +495,39 @@ Extensions run in a separate Node.js process, the extension host.
       **The launcher's log** (`LauncherLog`, the unified log's subsystem `io.github.jakeobsen.fudge`, category `launcher`) records each step from a shortcut press to the panel hiding: the key and `handleKey`'s answer, Quick Look's toggle and show, each resign and its settled decision, Fudge becoming active or not, and every `hidePanel` with its reason (the model's `hide()` passes its caller).
       It holds public facts only: window classes and levels, bundle ids and decisions, never paths, titles or typing.
       Read it with `/usr/bin/log show --last 2m --predicate 'subsystem == "io.github.jakeobsen.fudge"' --info` (in zsh, a bare `log` is a builtin).
+    - **The log files** (SPEC-124) are in `~/Library/Logs/Fudge/` (`FudgePaths.logsDirectory`), or `$FUDGE_SUPPORT_DIR/Logs/` when that's set, so tests and snapshot runs never write the user's logs.
+      `Fudge.log` is Fudge's own, and `Extensions/<id>.log` each extension's, bundled ones included, by its id (`LogFile.extension`, checked with the id rule), which is the manifest `name` for Raycast's and the bundled ones.
+      Folders and files are made with the first line written to them.
+      A line is a local ISO 8601 time with milliseconds and its offset, the level, `[<command>]` on an extension's line, and the message, its further lines indented under the first (`LogLine`).
+      Each file's first line in a run is Fudge's version and commit.
+      **What goes in `Fudge.log`:** every `fudge: couldn't …` line, through `FudgeLog`, which also writes it to stderr as before, so `make run` from a terminal still shows them.
+      Also the extension host's own stderr, a refused protocol message, a launch that failed, and the host stopping, naming the commands it ended.
+      A command that fails gets one line of Fudge's own, `<id>/<command> failed` and where its error is (`FudgeLog.commandError`), never the error's text or stack, which go to the extension's file and stderr.
+      Also installs, updates and removals as the app sees them when it reads the extensions folder (`InstallStamp`), so the store's and `fudge build`'s alike.
+      Also the Extension Store's failed downloads, installs, updates and uninstalls with the build's output (`logToFudge` in `fudge:app`, the `fudge.log` call, answered only for the store), sign-in errors, and failed update checks.
+      **What goes in an extension's file:** its `console` (`console.error` an error, `console.warn` a warning, `console.log` and `console.info` info, `console.debug` debug), and what it writes to stdout (info) or stderr (error) itself.
+      Also uncaught exceptions and unhandled rejections with their stack, and a command that crashed or was stopped for not finishing after it was closed.
+      Also failure toasts with their title and message, including an animated toast that becomes one, logged once with the title and message it ends up with.
+      An extension's lines go only to its own file and stderr, never `Fudge.log`.
+      Menu bar commands' lines in `Fudge.log` name an item by its position, never its title, which can be the extension's data.
+      **Log level** (`logLevel` in `settings.json`, General's Logs section): Errors (the default), Warnings, Info or Debug; each records its own lines and every level above.
+      Lines below it are dropped where they're made: in the worker before they're formatted (`src/log.ts`), in the host for a command's raw output, and in `FudgeLog`; errors and warnings of Fudge's own still go to stderr.
+      A change goes to the host as a `logLevel` message, which passes it to every running worker, and the host gets it at each start before any launch.
+      **Nothing slows the launcher:** the host stamps each `log` line with the extension's and command's names from the launch, and `ExtensionHost` hands it to `FudgeLog.command` on the thread that reads the host, never through the main actor.
+      The host lets a command send 1,000 lines a second, then drops and counts them and sends one `… N lines dropped` line when the second is up, as severe as the worst line it stands for.
+      Its own lines about a command (the worker failed, it crashed, it was stopped) go outside that bound, after the count, so a flood just before can't hide them (`hostLine`).
+      `LogWriter` writes on a queue of its own, in order, with a buffer of 2,000 lines per file: a full buffer drops and counts in the same way, and other files are unaffected.
+      Past 5 MB (`Fudge.log`) or 1 MB (an extension's), a file becomes `<name>.old.log`, replacing the last one; nothing else is kept.
+      A failed write goes to stderr only, and the next line tries again.
+      Uninstalling an extension leaves its log, and a reinstall appends to it.
+      Only the app writes these files; the `fudge` tool writes to its own stderr.
+      **Never logged:** what the user types, clipboard and snippet contents, preference values, tokens, OAuth codes, secrets, URLs with their query and response bodies; a sign-in error names the call, the extension and the refusal, or only the error's domain and code.
+      An extension's own output is written as it wrote it, which is why the default is Errors.
+      Show Logs opens the folder in Finder (`NSWorkspace`), making it first.
     - **The General page** (`GeneralPage.swift`) is the Settings window's first page, and the one ⌘, Settings… and "Fudge Settings" open on:
       Open at Login, the launcher's hotkey, Show Fudge on, Pop to Root Search, Escape Key Behavior (all three `SettingsPopupRow`s), Keyboard (Hyperkey and its Quick press switch, which is disabled while Hyperkey is off), Updates (Check for Updates, another `SettingsPopupRow` with Daily, Weekly, Monthly and Never, then `UpdateStatusRow`:
       While the update check is unset, that popup shows Not Chosen first (`UpdateCheckSetting.popupOptions`): it checks nothing, as Never does, and can't be picked again once something is chosen.
-      the last check's result and time, Check Now, and Download… while a newer release is known; saved through `change {}`), the currency switch, the calculator's Number format (Same as macOS, "1,234.5" or "1.234,5", saved through `change {}`; changing it re-evaluates the open query), Clear Search History…, and Import / Export.
+      the last check's result and time, Check Now, and Download… while a newer release is known; saved through `change {}`), Clear Search History…, Logs, and Import / Export.
       The launcher's hotkey is recorded like a command's, through the same `HotkeyRecordingPrompt`, but it can't be cleared: ⌫ and the Reset button set ⌥Space (`HotKeyRecording.launcherEdit`).
       A command's hotkey wins, so a launcher hotkey that equals one is refused, naming the command.
       It's registered before it's saved, and a refusal or a failed save leaves both the registration and the file as they were (`HotKeyRegistry.changeLauncher`); a failed save shows the `settingsProblem` banner.
@@ -438,6 +536,7 @@ Extensions run in a separate Node.js process, the extension host.
       `LoginItemState.change` registers or unregisters, then reads the status back, with any error to show.
       It turns nothing on while Fudge runs from its disk image or a translocated copy (`AppLocation.loginItemRefusal`), since that path goes away, and says to move Fudge to Applications first.
       **Clear Search History…** confirms in a sheet, then `LauncherModel.clearHistory()` empties `LaunchHistory` and `history.json`.
+    - **The Calculator page** (`CalculatorPage.swift`, under Extensions) has the currency switch, the Apple Maps switch (`AppleMapsPlacesToggle`) and the calculator's Number format (Same as macOS, "1,234.5" or "1.234,5", saved through `change {}`; changing it re-evaluates the open query), under the `settingsProblem` banner.
     - **Import / Export** (`BackupSection.swift`, at the bottom of General) writes and reads a `.fudgebackup` (declared in `App/Info.plist`).
       `Backup` (core) collects the parts from the support folder:
       - `colors.json`
@@ -472,7 +571,7 @@ Extensions run in a separate Node.js process, the extension host.
       The import's summary lists the backup's extensions that are installed but changed since (`Backup.changedExtensions`, matched by name and shown with the current title): the first of a different version when both have one, a different store tree when both have one, or a different source; what it can't tell, and the bundled store, aren't listed.
       It only flags them, and the import restores them like any other.
       `Backup.apply` then saves the current state, unencrypted, to `backups/before-import-<time>.fudgebackup` (folder 0700, file 0600, the last 3 kept, always including the one just written), and replaces each part the backup holds:
-      an extension's data folder whole, the keyed files extension by extension, `settings.json` keeping this Mac's `extensionStore`, `signInServer` and their consent dates (`Backup.consentKeys`), since this Mac's sign-ins are in its Keychain.
+      an extension's data folder whole, the keyed files extension by extension, `settings.json` keeping this Mac's `extensionStore`, `signInServer` and their consent dates (`Backup.consentKeys`), since this Mac's sign-ins are in its Keychain, and its `extensionRepositories` and `raycastRepository`, since adding a repository is a choice to trust its code.
       A failed write puts back everything changed so far, trying every step; if one fails, the staging folder stays and the error names the before-import file.
       The app then reloads settings, hotkeys, history and root search (`AppDelegate.afterImport`).
     - **Bundled extensions** (`BundledExtensions`, core) are the Extension Store, Search Files, Search Emoji & Symbols and Clipboard History.
@@ -515,23 +614,65 @@ Extensions run in a separate Node.js process, the extension host.
       The `clipboardHistory.*` calls (`list`, `image`, `paste`, `copy`, `pin`, `delete`, `clear`) answer only Clipboard History's sessions.
       `list` sends at most 20,000 characters of an entry's text, `paste` goes through `clipboard.paste`'s path and turn, and `image` decrypts a copy into a private folder that's deleted when the command ends or Fudge quits.
       Any extension's `Clipboard.read({ offset })` from 1 to 5, Raycast's documented range, gets the nth previous copy from the history (`ClipboardHistory.entry(offset:)`), or nothing while it's off; `ClipboardOffset` (core) reads the offset without an `Int` conversion that could trap, and anything above 5 or fractional is no copy, so no extension pages through the history.
-      The caller check is `ClipboardHistory.mayCall`.
+      The caller check is `ClipboardHistory.mayCall`, through `BundledCalls`.
     - **The Extension Store** (FUD-50) is an extension bundled with the app (`Contents/Resources/store-extension`).
       Using it takes two steps.
-      **Enabled**, on the Commands page, is off by default for the store alone (`FudgeSettings.isEnabled(extension:)`, which always writes the store's state), so until it's ticked the store isn't in root search, its hotkeys aren't registered and `launchCommand` can't reach it.
+      **Enabled**, on the Commands page, is off by default for the store alone (`FudgeSettings.isEnabled(owner:)`, which always writes the store's state), so until it's ticked the store isn't in root search, its hotkeys aren't registered and `launchCommand` can't reach it.
       An install that had the store switched on before counts as enabled until either is changed.
       **The switch** is the first row of the store's Settings page (`ExtensionStoreSwitch`): turning it on shows the consent sheet and writes `extensionStore` and the ISO 8601 `extensionStoreConsentAt`.
       `FudgeSettings.isExtensionStoreOn` needs both, so a hand-set `true` counts as off.
       `FudgeSettings.setExtensionStore` writes the store's Enabled down first, so the switch never changes it.
-      Turning it off, after its own sheet, removes both keys and deletes only the store's `repo/` (`ExtensionStore.deleteRepository`), keeping its `installed.json`.
+      Turning it off, after its own sheet, removes both keys and deletes only the store's downloaded copies (`ExtensionStore.deleteRepository`): `repo/`, `repo-status.json` and `repositories/`, keeping its `installed.json` and the list of repositories.
       **While it's off, the app never starts the store's code:** `LauncherModel.launch` checks `ExtensionStore.isOff` against `settings.json` first.
       A launch the user started shows "The Extension Store is off." instead, a `Failure` with a `Notice`, drawn like an empty view.
       Its one action, Open Extension Store Settings (↵, ⌘K or ⌘⇧,), opens the store's page.
       A background launch is refused with the same words.
-      The extension host's environment carries `FUDGE_CLI` (the bundle's `fudge`) and `FUDGE_EXTENSIONS_DIR` to every worker, and the store installs with `fudge build <folder> --into "$FUDGE_EXTENSIONS_DIR"` (`BuildArguments`: an absolute path to a folder that exists).
+      The extension host's environment carries `FUDGE_CLI` (the bundle's `fudge`) and `FUDGE_EXTENSIONS_DIR` to every worker, and the store installs with `fudge build <folder> --into "$FUDGE_EXTENSIONS_DIR" --repository <repository folder>` (`BuildArguments`: an absolute path to a folder that exists).
+      `<repository folder>` is the row's repository's folder, so each install lands in `<repository folder>/<name>`, Raycast's rows' in `raycast/extensions/<name>` (SPEC-157 E.4).
+      Every place in the store that works out an install's folder takes it from `installFolder(extensionsDir, repository, name)` (`store.ts`): the install's check that the name is free in that repository's folder, the compatibility read after a build, uninstall's Trash and adoption.
+      So do the rows of development builds and of installs whose repository isn't on, and `withoutSwift`, a set of ids (`installOf`).
+      Another repository's install of that name, or a development build in `fudgeapp/development`, refuses nothing: each is another extension, with its own id.
+      **Parts written in Swift** (SPEC-145 §3, `store-extension/src/swift-parts.ts`): before each install or update the store asks the app whether the Command Line Tools are set up (`commandLineToolsReady` in `fudge:app`, answered only for the store, resolved afresh each time).
+      Set up, it passes `--swift-parts build` and shows nothing more (D-118), which changes nothing for an extension without such a part.
+      Building an extension's Swift part, or building with `--swift-parts build` when the check didn't answer, gets 20 minutes (`swiftBuildTimeout`), since the first one fetches and compiles SwiftPM's packages; any other build gets `buildTimeout`'s 10.
+      Not set up, an extension whose scan named a `swift:` import first gets a view (`SwiftPartsView`) saying what it needs, with Don't Install (↵), Install Without the Swift Part and Install with Command Line Tools, which installs once the tools are set up and until then opens Settings → Development (`openDevelopmentSettings`, from the user's own action only).
+      A `swift:` import the scan missed makes the build stop asking for `--swift-parts`, and the store shows the view then instead of the error.
+      An extension installed without its part says so on its detail page.
+      **Install notifications** (SPEC-156) add three `fudge:app` calls that only the store may make, as with `fudge.log`: `installEnded` (`store.installEnded`, an install's end, answered with `{ onScreen, notified }`), `askForNotifications` (`store.askForNotifications`) and `nextNotificationClick` (`store.nextNotificationClick`, which waits for a click).
+      Any other extension gets an error.
+      **Extension repositories** (FUD-182, SPEC-157 A-B): the store's page has **Extension Repositories** below its switch (`ExtensionRepositoriesSection`), disabled while the store is off.
+      Every repository has the same row (SPEC-160): its name, its address (and branch) and its status line, a switch and a remove button.
+      Raycast's official repository is first while it's in the list, named `raycast/extensions` with the address `https://github.com/raycast/extensions` (`ExtensionRepositoryText.raycastName`, `raycastAddress`, and in `storeAnswer`); then the added ones in order.
+      Behind those names nothing changes: its copy id stays `raycast`, its copy `repo/`, and its folder `raycast/extensions`.
+      `raycastRepository` in `settings.json` (`RaycastRepositoryState`, core) is absent while it's in the list and on, `"off"` while it's switched off, and `"removed"` once it's removed; the `false` older builds wrote reads as `"off"`, and anything else as on.
+      `FudgeSettings.removeRaycastRepository`, `restoreRaycastRepository` and `showsAddRaycastRepository` are its three states' functions, and `storeAnswer` leaves its entry out while it's removed.
+      They're kept in `extensionRepositories`, a list of `{ "address", "branch"?, "off"? }` written only when it isn't empty, `off` only when true (`FudgeSettings.listedRepositories`); reading parses each entry again beside those before it and skips any the rule refuses, a duplicate included, so a hand edit never adds what Settings would refuse.
+      `ExtensionRepository.parse(address:branch:existing:raycastListed:)` (core) is the rule, checked by hand on the address's UTF-8 bytes, never with `URL`, which disagrees with the runtime's `new URL` on `..`, `\`, tabs, `:443` and hosts outside ASCII.
+      Its checks run in one order: trimmed of ASCII spaces only, the `https` scheme in any case, no `@` before the path, and only letters, digits, `.`, `-` and `:` in the server and port, and letters, digits, `.`, `_`, `~`, `-` and `/` in the path.
+      Then a port of 1 to 5 digits with no leading zero, from 1 to 65535, a server, one trailing `/` and then one `.git` dropped, and no `.` or `..` segment.
+      Then the identity, the folder (`ExtensionRepositoryFolder`, whose refusals keep their own sentences), the branch (`isValidBranch`, the store's `git.ts` rule), at most 10, no duplicate identity, no equal or nesting folder, and last the folder of Raycast's or Fudge's own repository, a second guard.
+      The identity is `https://`, the server in lowercase with a port other than 443, and the path, in lowercase on `github.com` with no port or port 443; Raycast's identity is refused as already listed while it's in the list, and `https://github.com/fudgeapp/development` with its own sentence, both by identity, before the branch and the list, and again by folder at the end.
+      The copy id is the identity's SHA-256's first 16 hex digits (`isValidCopyId`: those or `raycast`), and the name is `owner/repository` as typed on GitHub, else the identity without `https://`.
+      The Extension Store's `repository-address.ts` (`parseRepositoryAddress`) is the same rule, step for step, and `runtime/test/fixtures/repository-addresses.json` pins both to the same cases, with each refusal's sentence and the status problems' sentences.
+      Under the rows are **Add Raycast's Repository**, only while it's removed, which puts it back first and on with no window, and **Add Repository…**, which opens the add window (`AddRepositoryWindow`, a sheet): Address, with the cursor in it, Branch, the warning, a refused address's reason in red, and Cancel (Esc) and Add (↵).
+      The window is the warning, so nothing asks again after Add.
+      Its fields live in `ExtensionRepositoryDraft` (core), which the section keeps in its own state and makes new each time the window opens, never in `SettingsModel`.
+      `ExtensionRepositoryDraft.add(existing:raycastListed:)` checks the address against the list and Raycast's place as they are when Add is pressed, and `SettingsModel.addRepository(_:)` saves what it accepts through `FudgeSettings.addRepository`; a refusal, or a save that fails, stays in the window as its reason.
+      While Raycast's is removed, its address in the window (`parse(…, raycastListed: false)`) gives Raycast's own entry, copy id `raycast`, however many are added, and a branch typed with it is refused (`raycastBranch`); saved lists are always parsed with Raycast's refused, so it never becomes a second copy.
+      The minus button asks "Remove <name>?" first, and for Raycast's official repository the sheet also says how to add it back; the store deletes the copy the next time it opens.
+      Each row's status line comes from the copy's status file (`ExtensionRepositoryStatus.read`: Raycast's `repo-status.json`, an added one's `repositories/<copyId>/status.json`), read when the page appears and when the window becomes key.
+      It's at most 4 KB, a JSON object with an ISO 8601 `checkedAt`, and a whole `extensions` count from 0 to 5,000 or a known `problem` kind, else `failed`; no file is "Not checked yet".
+      Only a regular file counts (`RegularFile.read`): a link, a FIFO or a device there is `failed`, never followed or waited on, since Settings reads it on the main thread.
+      Any extension running in the host could write that file, so the row shows only Fudge's own sentences, with the branch from `settings.json`.
+      The store asks for the list with `extensionRepositories()` in `fudge:app` (`store.repositories`, answered only for the store's sessions, as `fudge.log` is, `BundledCalls.Call.storeRepositories`): `settings.json` is read afresh for each call, and the answer (`ExtensionRepository.storeAnswer`) is `[{ copyId, folder, address, branch?, name, on }]`, Raycast's first.
+      The store checks it again (`checkRepositoriesAnswer` in `repository-address.ts`): an entry is Raycast's by its copy id `raycast` and its folder, only in first place, as `RAYCAST_COPY` with its `on`; any other entry, at any place, counts when it parses again, with Raycast's listed, beside those before it, to the copy id and folder answered.
+      An array answer with no entry of copy id `raycast` at all means Raycast's was removed (`raycastRemoved`): `readRepositoryList` then deletes `repo/` and `repo-status.json` under the hold key `remove:raycast`, and a failed call, an answer that isn't an array, or a Raycast entry the check leaves out deletes nothing.
+      A snapshot run takes `--add-repository <address>`, which draws the add window over the store's page with the address typed (`SettingsModel.snapshotAddRepository`), since a snapshot run never begins a sheet, and `--add-repository-add`, which presses its Add, so a refused address shows its reason.
     - **The Commands page** (`CommandsPage.swift`) is the Settings window's second page:
       Fudge's own command groups, then the quicklinks as a group of their own (`SettingsModel.commandGroups`, shown once there is one, its Type "Quicklinks" and theirs "Quicklink", `BuiltInCommandGroup.typeLabels`),
       then every installed extension, each expanded to its commands (menu-bar ones included), with each command's alias, hotkey and Enabled checkbox (an extension's row has its own checkbox).
+      An extension's group is keyed by its id (`CommandOwner.extension`) and titled with its `displayTitle`, so two extensions of one name are two groups that read apart.
+      `CommandsPageRows` (core) builds the rows, and the page only draws them; each command row is identified by its whole command id, since the page's lazy stack keeps one row per id across every group, and two extensions of one name have commands of the same names.
       The bundled Extension Store is listed too, unticked until it's enabled.
       An alias is saved on ↵, and Esc puts the old one back.
       Recording a hotkey suspends all of Fudge's hotkeys (`HotKeyRegistry.suspend`), so pressing one records it instead of firing.
@@ -540,13 +681,32 @@ Extensions run in a separate Node.js process, the extension host.
       A conflict (`HotKeyConflict`: the launcher's key, another installed command's, named by its title, with its extension's when two share one, `CommandNames`, or no ⌘ ⌥ ⌃) or a shortcut the system refuses keeps the old hotkey and shows why in the cell.
       A command that isn't installed keeps its saved hotkey for a reinstall, but doesn't block the key: taking it clears that one's hotkey, keeping its alias and Enabled state (`HotKeyConflict.displaced`), and the cell says so (`HotKeyConflict.displacedNote`): by the command's title, and a deleted quicklink's key as "a deleted quicklink", never its id.
       A command that's off by default says why on a line under its title (`SettingsModel.offByDefaultReason`, `CommandCompatibility.reason`: "Uses Raycast AI, which Fudge doesn't support.").
-    - **The Sign-in page** (`SignInPage.swift`, after Window Management) sets the server extensions sign in through (SPEC-056): Off (the default), **Fudge's sign-in server** (`SignInServer.fudgeURL`, `https://fudge-oauth.rackofpain.net`) or **Your own server…**, whose address is saved on ↵ once `SignInServer.validate` accepts it (`https://`, or `http://` on `localhost` or `127.0.0.1`;
+    - **The Sign-in page** (`SignInPage.swift`, after Commands) sets the server extensions sign in through (SPEC-056): Off (the default), **Fudge's sign-in server** (`SignInServer.fudgeURL`, `https://fudge-oauth.rackofpain.net`) or **Your own server…**, whose address is saved on ↵ once `SignInServer.validate` accepts it (`https://`, or `http://` on `localhost` or `127.0.0.1`;
       no user info, query or fragment).
       It's saved as the worker's `new URL()` writes it (scheme and host in lowercase, no default port, dot segments resolved), since a sign-in's authorize URL is compared with what the worker sends back; a host that parser would rewrite otherwise (non-ASCII, percent-encoded, IPv6, IPv4 in another notation) isn't accepted.
       Every choice but Off shows a consent sheet first ("Extensions will sign in through <host>."), and only Continue saves `signInServer` (`"fudge"` or the URL) with `signInServerConsentAt`; `FudgeSettings.signIn` needs both, so a hand-set server counts as off, and Off removes both.
       Changing the server signs out of everything, after its own sheet when there are sign-ins.
-      Below it, **Signed in** lists each stored sign-in (the extension's title, the provider, when) with Sign Out.
-      **Sign-ins** are Keychain generic passwords (`KeychainSecretStore`), service `io.github.jakeobsen.fudge.oauth`, account `<extension>/<providerId>`, holding a JSON `StoredTokenSet`;
+      **The line under the choice** (SPEC-149) names the services the server on screen offers, from its answer to `GET <server>/api/services` (`SignInServer.servicesURL`, built as `endpoint` builds a provider's, so a server under a path works).
+      `SignInServices` (core) reads only each entry's `id`, keeps the ids `OAuthProviders` has, in the server's order and once each, and writes Fudge's own names for them, so no text from the server reaches the page.
+      Up to five names, the line is "This server offers sign in through GitHub, Linear and Slack", with no comma before "and" and no full stop (SPEC-155).
+      Past five, it's "This server offers sign in through 26 services" and **Show All**, whose popover lists every name in the server's order under "Services on this server".
+      The number counts Fudge's names, after that mapping and dedupe.
+      Anything else shows `SignInServer.explanation`, with no error: Off, still loading, an address of your own that's typed but not saved (`SignInServices.serverOnScreen`), no answer, any status but 200, a redirect, more than 64 KB, more than 5 s for the whole request, another shape of JSON, or no id Fudge knows.
+      `SignInServerControls` asks through `.task(id:)` on the server on screen, and `SignInServicesLine` drops an answer that comes after the server changed or its task was cancelled; nothing is stored.
+      Past five names, `SignInServerControls` puts Show All after the number, in the picker's label (`SignInServicesLine.showsAll`, false while loading and after a change of server, so the button and its popover go then).
+      It's a popover, not a sheet, because a popover anchors to the button in whichever window it's in, so the Settings window and onboarding's both get it without `ask`.
+      `URLSessionSignInServices` (core) is the request: an ephemeral `URLSession` with no cookies, credentials or cache, `User-Agent: Fudge/<version>`, `Accept: application/json` and `Accept-Language: en`, `timeoutIntervalForResource` 5 s, and no redirects.
+      The fetcher is picked once at launch (`SignInServices.fetcher`): a snapshot run gets `FixedSignInServices`, never the network, even with a server chosen.
+      Under the server choice, **Extensions with their own sign-in** (SPEC-132 §5, D-89, `OwnAppSignInControls`) is a switch of its own, off by default and independent of the server.
+      Its line, "Let extensions sign in with their own apps. Most of them come back through raycast.com.", is one string (`OwnAppSignIn.explanation`) for the page, its consent sheet and onboarding.
+      Only the sheet's Continue saves `ownAppSignIn` with `ownAppSignInConsentAt` (`FudgeSettings.isOwnAppSignInOn` needs both, and both are this Mac's, in `Backup.consentKeys`); off removes both, and sign-ins already stored stay under Signed in.
+      Under it, the **Fudge opens Raycast links** switch (`RaycastLinksRow`, `RaycastLinksToggle` in core, D-114) is on while Fudge Links opens both `raycast://oauth` and `com.raycast:/oauth`, read from LaunchServices when the page appears and when the window becomes key, never stored.
+      Its line says who opens them while it's off (another app by name, no app, or "another copy of Fudge": another copy's Fudge Links, or a build from before Fudge Links that declares the schemes itself), and who gets them back while it's on.
+      On does what onboarding's Open Raycast Links with Fudge does (`RaycastLinks.openWithFudge(helper:location:)`), and is refused while Fudge runs from its disk image or a translocated copy (`AppLocation.raycastLinksRefusal`), as Open at Login is.
+      Off gives both schemes back explicitly to the first other app that claims both and isn't Fudge's (`handBackTarget`, `giveBack`), so the choice macOS saves names that app; with no such app it's disabled while on, and its line says there's nothing to give them back to.
+      A change that doesn't take shows the system's message, or that macOS didn't make it, and the switch shows what LaunchServices says.
+      Below them, **Signed in** lists each stored sign-in (the extension's `displayTitle`, the provider, when) with Sign Out.
+      **Sign-ins** are Keychain generic passwords (`KeychainSecretStore`), service `io.github.jakeobsen.fudge.oauth`, account `<extension id>/<providerId>`, holding a JSON `StoredTokenSet`;
       `OAuthTokenStore` (core) reads and writes them through the `SecretStore` protocol, and the `oauth.tokens.*` calls go through `SignInCalls` (core) with the calling session's extension, never one named in the call, so one extension never reads, sets or removes another's.
       A stored sign-in keeps `relayProvider`, the provider its relay sign-in was for, only when the session prepared that sign-in; a refresh keeps the mark.
       **Signing in** (`LauncherModel.authorizeSignIn`): a background call is refused ("Sign in from Fudge to continue.").
@@ -558,20 +718,40 @@ Extensions run in a separate Node.js process, the extension host.
       A wrong path gets a 404 and a wrong `state` a 400, and the sign-in keeps waiting.
       The wait lasts at most 5 minutes, and a request never used closes after 5 minutes too.
       On the code, the launcher comes back to the command.
+      **The direct path** (SPEC-132, FUD-165) is for an extension with an OAuth app of its own: `oauth.prepare` also sends the client's `redirectMethod`, and `PreparedSignIn.route` (core) decides, in order.
+      An endpoint in `OAuthProviders` takes the relay path as above.
+      One on Raycast's hosts (`OAuthProviders.isRaycastDomainHost`: `raycastDomains`, so `raycast.com` and every host under it, ignoring case and trailing dots) or on a table entry's own authorize host (`ownAuthorizeHosts`, read from the table) is refused as before.
+      Any other `https` endpoint with a host and no user info takes the direct path while its switch is on (else the `off` refusal), for the Web, App and AppURI methods only.
+      There no listener starts, nothing is pending for the fetch rewrite, the stored sign-in has no `relayProvider`, and the redirect is Raycast's for the method (`OAuthRedirectMethod.raycastRedirectURI`).
+      Its ↵ opens any `https` URL on neither of those hosts whose `state` is the request's (`PreparedSignIn.isDirectURL`), since some extensions build the URL themselves.
+      The browser comes back through a `raycast://oauth` or `com.raycast:/oauth` link, which Fudge Links hands on as a get-URL Apple Event, whose handler Fudge sets in `applicationWillFinishLaunching`, so a link that launches Fudge isn't missed.
+      Fudge.app itself declares no URL types (D-107).
+      `RaycastReturn.read(link:state:)` (core) answers only those two shapes, reading the query as the loopback's is read (`OAuthCallback.read(query:state:)`, the state compared in constant time).
+      Every other link, a link with another state, and any link while no direct sign-in waits is ignored: nothing happens, nothing is shown, and nothing logs it.
+      `OAuthLinkWait` (app) is the direct sign-in's wait, in place of `OAuthLoopback`.
+      **The paste** (Web only, `SignInPrompt.canPaste`): while it waits, the prompt says to copy the browser's address and press ⌘V, which reads the clipboard then and only then.
+      `RaycastReturn.read(pasted:state:)` takes an `https` URL with any host or a `raycast://oauth` link, at most 16 KB; anything else shows "That address isn't from this sign-in." and the sign-in keeps waiting, and the text is never logged or kept.
+      When Fudge doesn't open Raycast's links, the prompt says so in one line (`RaycastReturn.elsewhereHint`), pointing to Settings → Sign-in.
+      **Who opens Raycast's links** is read through `RaycastLinks` (core): `SystemRaycastLinks` (`NSWorkspace.urlForApplication(toOpen:)` and `urlsForApplications(toOpen:)`; on a click, `LSRegisterURL` on Fudge Links and `setDefaultApplication(at:toOpenURLsWithScheme:)`) in the app, and `FixedRaycastLinks` in tests and snapshot runs, so neither touches LaunchServices.
+      Only the user's click registers Fudge Links or changes the handler, never a launch, a move, an update or anything in the background.
+      After a move or an update to a new path, Raycast's links go back to the other app that claims them until the user turns the switch on again.
+      Snapshot runs take `--raycast-links fudge|<app name>` for who opens them (`fudge` is Fudge Links, and `fudge,<app name>` has that app claim them too), and `--own-app-sign-in` shows the switch on, in memory only.
       **A sign-in stopped on purpose** (SPEC-095) names why in its refusal (`SignInRefusal.notice`: off, cancelled, timed out, or refused by the provider or the relay), and the error the command reports with that `notice` (`HostMessage.error`) shows as `SignInNotice` (core) in the command's place, drawn like the store's "off" notice, with no trace and nothing red:
       Like any failure that stands in for a command, the notice keeps the command's title in the bottom bar (`LauncherFooter`); one that belongs to no command, like the store's, says "Fudge".
       "Sign-in is off" with Open Extension Settings (↵, ⌘⇧,) and Open Sign-in Settings (⌘⌥,), or the others with Try Again (`RootAction.retryCommand`, as root search runs it).
       A background or menu-bar command shows its `hud` instead.
       Any other error keeps the failure view with its details.
-      Snapshot runs keep sign-ins in memory (`--sign-ins <extension>/<providerId>=<Provider>,…`), and `--sign-in-consent` saves the Sign-in page's consent alert: laid out by `NSAlert.layout()` without being shown, and moved to a `SnapshotSheet` that refuses key status and is never ordered in (`SettingsWindowController.snapshotSheet`).
+      Snapshot runs keep sign-ins in memory (`--sign-ins <extension id>/<providerId>=<Provider>,…`, an id the id rule refuses left out), and `--sign-in-consent` saves the Sign-in page's consent alert: laid out by `NSAlert.layout()` without being shown, and moved to a `SnapshotSheet` that refuses key status and is never ordered in (`SettingsWindowController.snapshotSheet`).
       So the image has the app's icon, which the real sheet leaves out.
+      `--sign-in-services "github|atlassian"` is the sign-in server's answer in a snapshot run: relay ids, read, named and limited as a server's are; without it there's no answer, and the line under the choice is the plain one.
+      `--sign-in-services-list`, with `--settings :sign-in`, draws Show All's list over the page in place of its popover (`SettingsModel.snapshotServicesList`), and nothing while the line names five services or fewer.
     - **Menu bar commands.**
       `MenuBarController` puts each active `menu-bar` command in the menu bar as one `NSStatusItem` with an `NSMenu`.
       Running one from root search (or its hotkey) activates it; running it again refreshes it and opens its menu. ⌘K on an active one offers Deactivate Menu Bar Item (`RootAction.deactivateMenuBarItem`).
       `MenuBarStore` (core) keeps the active commands in `menu-bar.json`, at most 50, pruned of commands that aren't installed.
       It keeps keys it doesn't know, and never overwrites a file it can't read (`Unreadable`): activating or deactivating then fails with a toast saying why.
       A disabled command, or one of a disabled extension, stays in it but leaves the menu bar and stops refreshing, and comes back when it's turned on again (`MenuBarStore.shown`; `LauncherModel.applySettings` hands the controller the settings).
-      Each item's autosave name is `menubar:<extension>/<command>` (`MenuBarStore.autosaveName`), so it keeps its own position and never takes over another item's saved state, and it's made visible whenever it's put in the menu bar.
+      Each item's autosave name is `menubar:<id>/<command>` (`MenuBarStore.autosaveName`), so it keeps its own position and never takes over another item's saved state, and it's made visible whenever it's put in the menu bar.
       `MenuBarContent` (core) reads the `MenuBarExtra` tree: items without `onAction` disabled, sections as a heading between separators, submenus, ⌥ alternates, and each item's position path.
       `MenuBarLifecycle` (core) decides loads and unloads: at most one instance per command; Background at Fudge's start and on the manifest `interval` (`MenuBarInterval`, at least 10 s, a `.common`-mode timer), UserInitiated when the menu opens or root search runs it; a tick while loaded is skipped and a click just opens the menu;
       unloaded once it has rendered without `isLoading`, its menu is closed and every `onAction` has settled (`eventSettled`).
@@ -580,12 +760,12 @@ Extensions run in a separate Node.js process, the extension host.
       Waiting picks are dropped too once no instance is still to render (`MenuBarLifecycle.awaitsFirstRender`: it failed or exited first, or the host stopped), so a later launch never runs them.
       UserInitiated errors show in the HUD; Background ones are logged and add a disabled "⚠ Last refresh failed" until a later render.
       `LauncherModel` starts the controller's commands (`launchMenuBarCommand`) and routes their sessions' `render`, `error`, `eventSettled` and `exit` to it; their rpcs are answered like any command's.
-    - **The Quicklinks page** (`QuicklinksPage.swift`) comes after Commands:
+    - **The Quicklinks page** (`QuicklinksPage.swift`, under Extensions):
       a table of every quicklink's Name, Link, Open With, and its Alias and Hotkey, read only, with "Edit on the Commands page" as their help, sorted by name, read again whenever the page is shown or the window becomes key, so changes made in the launcher show. + opens a sheet with the same three fields, Edit… (or a double-click) opens it filled in, and − (or ⌫) deletes after a confirmation sheet.
       The sheet saves through `SettingsModel.saveQuicklink`, which reads the file again and shows `QuicklinkDraft.problems` under the fields.
       An unreadable `quicklinks.json` shows the notice and disables changes.
       Each change calls `quicklinksChanged`, so root search reads the file again.
-    - **The Snippets page** (`SnippetsPage.swift`) comes after Quicklinks and works like it, under the Expand Snippets as You Type switch: a table of every snippet's Name, Keyword and the start of its text on one line, sorted by name, read again when the page is shown or the window becomes key.
+    - **The Snippets page** (`SnippetsPage.swift`, under Extensions) works like the Quicklinks page, under the Expand Snippets as You Type switch: a table of every snippet's Name, Keyword and the start of its text on one line, sorted by name, read again when the page is shown or the window becomes key.
       + and Edit… (or a double-click) open a sheet with Name, a several-line Snippet and Keyword, and − (or ⌫) deletes after a confirmation sheet.
       The sheet saves through `SettingsModel.saveSnippet`, which reads the file again and shows `SnippetDraft.problems` under the fields.
       An unreadable `snippets.json` shows the notice and disables changes.
@@ -593,9 +773,23 @@ Extensions run in a separate Node.js process, the extension host.
     - **The Permissions page** (`PermissionsPage.swift`) comes after General: Accessibility's status (`AccessibilityStatus`, read without a prompt when it's shown and every second while it's on screen), its reason, and Open Accessibility Settings.
       The reason (`AccessibilityPermission.reason`, which onboarding's Accessibility step shows too) names Fudge's own commands that need it first, then extensions that read the selection or paste.
       That button asks for macOS's prompt on the first click and opens the pane on later ones, or at once when something in this run already asked for the prompt (`AccessibilityPermission.request`, `SystemAccessibility.promptShown`), so the prompt and the pane never stack.
-      Below it, always shown, are the answers to "Allow <A> to open <B>'s commands?" (`LaunchPermissionsSection`, `LaunchPermissions.entries`), each changeable or forgotten, with the file read again before each change, a line saying none has asked yet when there are none, and the unreadable-file notice.
+      Below it, always shown, are the answers to "Allow <A> to open <B>'s commands?" (`LaunchPermissionsSection`, `LaunchPermissions.entries`, each extension shown by its `displayTitle`), each changeable or forgotten, with the file read again before each change, a line saying none has asked yet when there are none, and the unreadable-file notice.
       Between them is Calendar access as macOS has it, with Open Privacy Settings (`CalendarAccessRow`); My Schedule asks for it, never this page.
       Show Onboarding Again restarts onboarding from Welcome.
+    - **The Notifications page** (`NotificationsPage.swift`, SPEC-156) comes after Permissions: macOS's answer for Fudge (`NotificationPermission.statusLine`), read and never asked when the page appears and when the window becomes key, with Ask Now while macOS hasn't been asked and Open Notification Settings otherwise.
+      Below it is one switch per Extension Store notification, Install or update finished and Install or update failed (`notifyInstallFinished` and `notifyInstallFailed` in `settings.json`, true unless `false`; only `false` is written).
+      **One decision per build** (`InstallNoticeCenter`, `InstallNotices`, core), known by its pid and `startedAt` and kept for the last 256 builds: nothing while the store is on screen (the panel visible with a store session on it) or for status 75, else a notification when its switch is on and macOS allows it.
+      While a store session is loaded, only its `store.installEnded` reports decide.
+      With none loaded, `InstallOutcomeWatcher` (an FSEvents stream on the store's `installing/`, on its own queue) decides from each new `<pid>.ended.json` that still has its record (`StoreBuildRecord`), and when a store session ends, the app reads the folder once for the outcomes it left undecided.
+      At launch the stream starts first, and then the outcomes already in the folder count as decided, with nothing posted.
+      **The notification** (`InstallNotice`) is `<title> is installed` or `<title> is updated`, or `Couldn't install <title>` or `Couldn't update <title>` with "Click to see what went wrong.", with the identifier `store:<name>` and the `userInfo` `{ name, dir, failed }`.
+      It shows even while Fudge is the active app (`willPresent` answers `.banner` and `.list`).
+      **A click** (`NotificationClicks`) with a store session still running on the screen's command (`ExtensionStore.sessionOnScreen`) shows the panel without the reset and answers the store's waiting `store.nextNotificationClick` call, or keeps the click for its next one.
+      With no store loaded, the command on screen is left and the store launches as from root search, with `launchContext.storeNotification`.
+      **macOS is asked** (`requestAuthorization(options: [.alert])`) only while it hasn't been, at most once a run, and only when the user confirms an install or update (`store.askForNotifications`, from a user-initiated store session), turns a switch on, or presses Ask Now.
+      It's never asked at launch, at a build's end, in a snapshot run or in a test.
+      **Only `SystemInstallNotifications` touches `UNUserNotificationCenter`**, as the poster, the asker and the delegate, made in `applicationWillFinishLaunching` unless the launch is a snapshot run.
+      A snapshot run gets `FixedInstallNotifications` (`--notifications not-asked|allowed|quiet|off|unknown`), and tests use a recording fake.
     - **Moving to Applications** (SPEC-114 §1).
       At launch, before onboarding, `AppLocation` (core) reads where the app runs from: a read-only volume is the disk image, and a path through `AppTranslocation` is macOS's read-only copy of a quarantined download.
       Either gets one alert, **Move to Applications** (↵) or **Not Now**, which keeps it running and asks nothing more this run.
@@ -608,10 +802,14 @@ Extensions run in a separate Node.js process, the extension host.
       `Onboarding` (core) keeps the answered step ids in `onboarding.json` and decides what to show (`pending`): the unanswered steps, in order, then Done.
       Once it has been completed, Welcome isn't shown again, and a step added later shows on its own, then Done, under "Something new to decide" (`hasSomethingNew`).
       **`OnboardingStep`'s cases are the one list of steps**: adding a step means adding its case and drawing it.
-      The steps use General's own controls (`LauncherHotkeyControls`, `OpenAtLoginControls`, `CurrencyRatesToggle`, `HyperkeyControls`, and the Permissions page's `AccessibilityControls`), so an answer takes effect at once.
-      The **Extension Store** step (after Currency) shows the store's consent sheet's own words (`ExtensionStore.Consent`), with **Turn On Extension Store**, which writes what the switch and its sheet write and also ticks the store's Enabled (`FudgeSettings.turnOnExtensionStore`), and **Not Now**, which is ↵.
+      The steps use General's own controls (`LauncherHotkeyControls`, `OpenAtLoginControls`, `HyperkeyControls`, the Calculator page's `CurrencyRatesToggle` and `AppleMapsPlacesToggle`, and the Permissions page's `AccessibilityControls`), so an answer takes effect at once.
+      **Look up places with Apple Maps?** (right after Currency) shows the Calculator page's Apple Maps switch, with **Not Now** as ↵ while it's off.
+      The **Extension Store** step (after Apple Maps) shows the store's consent sheet's own words (`ExtensionStore.Consent`), with **Turn On Extension Store**, which writes what the switch and its sheet write and also ticks the store's Enabled (`FudgeSettings.turnOnExtensionStore`), and **Not Now**, which is ↵.
       The **Sign-in** step is the Sign-in page's own choice (`SignInServerControls`, shared with the page, with `SignInServer.explanation`), whose consent sheets show on the onboarding window (`OnboardingModel.ask`; laid out off-screen in snapshot runs), with Continue as ↵, so Off stays Off.
-      The **Clipboard history** step (after Sign-in) shows the consent sheet's own words (`ClipboardHistory.consentMessage`, the one string both use) with **Keep Clipboard History**, which does what the switch and its sheet do (`SettingsModel.keepClipboardHistory`), and **Not Now**, which is ↵, so going through onboarding with ↵ never starts recording.
+      The **Raycast** step (after Sign-in, SPEC-132 §3.3, D-88, `RaycastStep`) says that Fudge runs extensions made for Raycast, that with Raycast on the same Mac the two can get in each other's way, and that signing in to some extensions ends with a Raycast link, which has to open Fudge.
+      It offers **Open Raycast Links with Fudge**, which does what turning the Sign-in page's switch on does, while another app opens them (saying that Raycast's own links then open Fudge too), and **Turn On** for extensions with their own sign-in, with the switch's own line (`OnboardingStep.optIns` maps `ownAppSignIn` to it).
+      Its Continue, or Not Now while it offers something, is ↵ and changes nothing (`RaycastStep.buttons`), so going through onboarding with ↵ leaves the switch and the links as they were.
+      The **Clipboard history** step (after Raycast) shows the consent sheet's own words (`ClipboardHistory.consentMessage`, the one string both use) with **Keep Clipboard History**, which does what the switch and its sheet do (`SettingsModel.keepClipboardHistory`), and **Not Now**, which is ↵, so going through onboarding with ↵ never starts recording.
       When it's already on, the step says so and turning it off is left to Settings.
       **Expand snippets as you type**, after Clipboard history, works the same way: it explains Input Monitoring, and that pasting the snippet needs Accessibility (`SnippetExpander.permissionsExplanation`, the Snippets page's sheet's own words), **Turn On** does what the switch does (`SettingsModel.turnOnSnippetExpansion`, then macOS's prompt or pane), and **Not Now** is ↵.
       **Use Caps Lock as Hyper?** (after Snippet expansion) shows General's `HyperkeyControls`, with **Not Now** as ↵ while it's off.
@@ -624,8 +822,15 @@ Extensions run in a separate Node.js process, the extension host.
     - `SettingsWindow.swift` is the Settings window, with a fixed 200 pt sidebar beside the page (a `List` with the sidebar material, not a `NavigationSplitView`, so there's no divider to drag and nothing to collapse).
       Every way in goes through `SettingsWindowController.show`, which deminiaturizes the window, moves it to the current Space, activates Fudge with `activate(ignoringOtherApps:)` (`activateFromUserAction`; the plain `activate()` can be declined since macOS 14, leaving the window behind the app in front) and orders it front and key.
       It's for user-initiated entries only, never a background path: `show` takes the call's `CallOrigin` and does nothing for a background one. ⌘Q closes the window as ⌘W and its close button do (`SettingsNSWindow.performKeyEquivalent`, `WindowShortcut` in core), and Fudge keeps running; while a hotkey is being recorded, the recorder takes ⌘Q like any other key.
-      The sidebar lists the extensions with preferences, and the Extension Store, whose page starts with its switch (`InstalledExtension.settingsPages`), enabled or not.
-      The window holds each extension's preferences, stored by `PreferenceStore` in `preferences/<extension>.json`.
+      The sidebar lists Fudge's core pages on top: General, Permissions, Notifications, Commands, Sign-in and Development.
+      Under Extensions, one list sorted by title with `localizedStandardCompare` holds Fudge's Calculator, Calendar, Color Picker, Quicklinks, Snippets and Window Management pages, the extensions with preferences, and the Extension Store, whose page starts with its switch (`InstalledExtension.settingsPages`), enabled or not.
+      `SettingsSidebar` (core) gives both lists and the tags of Fudge's own pages, which start with `:`, so no extension id can take one; `SettingsView` only draws them.
+      An extension's page is tagged with its id (`SettingsSidebar.tag(of:)`), so two extensions of one name have a page each, and `--settings <id>` opens one in a snapshot run.
+      Rows with exactly the same title have a fixed order, so it never changes: Fudge's own page first, then the copy from Raycast's official repository, then the development folder's, then the added repositories' by their folder, a segment at a time (`SettingsSidebar.Place`), then by tag.
+      An extension from Raycast's official repository with exactly the title of one of Fudge's own pages shows " (installed)" after its title (`SettingsSidebar.title(of:)`; the Extension Store has a Color Picker of its own).
+      A development build's and an added repository's rows show their `displayTitle` instead ("GitHub (development)", "GitHub (someone/tools)"), never " (installed)" as well.
+      A selected page that's no longer listed, such as an extension removed while its page is open, gives way to General (`SettingsSidebar.lists`).
+      The window holds each extension's preferences by its id (`InstalledExtension.index`, so a duplicate can't trap), stored by `PreferenceStore` in `preferences/<extension id>.json`, and each field (`PreferenceField`) reads and saves them by that id.
       Before a launch, `PreferenceResolver` merges stored values, manifest defaults and type defaults.
       It turns appPicker references into Raycast `Application` objects, and the launch message carries the values to `getPreferenceValues()`.
       A command with an unset required preference opens this window instead of running.
@@ -641,10 +846,15 @@ Extensions run in a separate Node.js process, the extension host.
       `NSApplication.activateFromUserAction(origin:)` is the one way an extension's call brings Fudge forward, and asserts that the origin it's passed is user-initiated; every caller passes it explicitly.
       Fudge's own windows use `NSApp.activate()`: onboarding at launch, and a FilePicker's Select… click.
   - `FudgeCLI` is the `fudge` command-line tool.
+  - `FudgeLinks` is `Fudge Links.app` in `Contents/Helpers`, the only part of Fudge that declares `raycast:` and `com.raycast:` (`App/Links/Info.plist`, SPEC-140, D-107).
+    It's an `LSUIElement` app that hands each such link to Fudge as a get-URL Apple Event (`NSWorkspace.open(_:withApplicationAt:configuration:)`, never activating): to every running Fudge, the one that holds it first, else to the one that holds it, launched in the background (`RaycastLinksHelper.targets`).
+    It drops any other link, logs nothing, and quits once its links are handed on, or 10 s after a launch with none.
+    Only the Sign-in page's switch, or onboarding's Open Raycast Links with Fudge, registers it with LaunchServices, so no build, launch, snapshot run, copy or Spotlight makes it, or Fudge, open Raycast's links.
+  - `FudgeDiskImage` is `make dmg-image`'s tool, which lays out the disk image's Finder window (see `make dmg`); it's built, never shipped.
   - `FudgeCore` is shared code, and the only target with tests.
 
   Put logic in `FudgeCore`, where it can be tested.
-  Keep the app and the tool thin.
+  Keep the app, the tools and Fudge Links thin.
 - **The extension host lives in `runtime/`.**
   It's written in TypeScript.
   Extensions trust the certificates the Mac trusts (SPEC-081, `NodeTrust`): the app starts the host with `--use-system-ca` when its Node has it (22.15+, 23.8+, 24 and later).
@@ -672,7 +882,7 @@ Extensions run in a separate Node.js process, the extension host.
     - Search Snippets
     - Switch Windows
 
-    stdout carries nothing but the protocol: in the host, `console.log` goes to stderr, and a worker's output arrives as `log` messages.
+    stdout carries nothing but the protocol: in the host, `console.log` goes to stderr, and a worker's `console` and output arrive as `log` messages, named and bounded by the host (see the log files).
   - **Extensions share one process, as in Raycast.**
     Every command is a worker thread in the one host, so a running extension can read and write the protocol channel (the host's stdin and stdout) and reach the host's main thread (`inspector`).
     Extensions running together can reach each other and the host.
@@ -727,10 +937,14 @@ Extensions run in a separate Node.js process, the extension host.
     `make raycast-types` regenerates them after updating the types, or run `npm run generate` by hand.
     `npm run typecheck` fails while either is stale.
   - **`OAuth`** (`src/api/oauth.ts`) signs in through a fudge-oauth relay (D-63), never Raycast's servers.
+    An extension with an OAuth app of its own signs in to its service directly instead (SPEC-132), coming back through Raycast's return address for its `RedirectMethod`, which is the redirect its app has registered.
     The relay lives in its own repository, `jakeobsen/fudge-oauth`; it holds the OAuth apps' secrets, so Fudge holds none.
     `OAuth.PKCEClient` can be built with any `RedirectMethod`, as `@raycast/utils`' `OAuthService` does when an extension loads.
-    `authorizationRequest()` asks the app for the request (`oauth.prepare`): the app refuses while sign-in is off, or for an `endpoint` that isn't one of `OAuthProviders`' authorize URLs, and otherwise starts the loopback listener and answers with the relay's authorize URL and the redirect.
-    The client makes the PKCE verifier (64 unreserved characters from `crypto.getRandomValues`), its S256 challenge and the `state`, and `toURL()` puts them on the relay's URL with the extension's `clientId`, `scope` and extra parameters.
+    `authorizationRequest()` asks the app for the request (`oauth.prepare`, with the client's `redirectMethod`): for one of `OAuthProviders`' authorize URLs the app refuses while sign-in is off, and otherwise starts the loopback listener and answers with the relay's authorize URL and the redirect.
+    For any other endpoint it answers as the direct path decides (see the Sign-in page): no provider, the endpoint itself and Raycast's redirect for the method.
+    The client makes the PKCE verifier (64 unreserved characters from `crypto.getRandomValues`), its S256 challenge and the `state`, and `toURL()` puts them on the URL with the extension's `clientId`, `scope` and extra parameters.
+    The `state` is the base64url of `{"id":"<16 random bytes, base64url>"}`, 42 characters with nothing else in it (`randomState`), which raycast.com's return page passes on unchanged.
+    On the direct path the extension's `extraParameters.redirect_uri` wins over Raycast's and becomes the request's `redirectURI`, as Raycast documents; the relay's loopback redirect is never overridden.
     `authorize()` sends the URL and its state to the app (`oauth.authorize`) and resolves `{ authorizationCode }`.
     `getTokens()`, `setTokens()` and `removeTokens()` call `oauth.tokens.*`; `getTokens()` returns a `TokenSet` whose `isExpired()` is true from 10 s before `expiresIn` runs out, so `OAuthService` refreshes on its own; without `expiresIn`, or with 0, it never is.
     `withAccessToken` retries a refused sign-in with a new promise until React gives up on the root (error #482), so after a refusal the worker reports that error as the refusal's own message (`explainRenderError`), once.
@@ -743,16 +957,28 @@ Extensions run in a separate Node.js process, the extension host.
     `OAuthService` fetches its token and refresh URLs itself, so the worker wraps `fetch`: a `Request`, or anything else read as a string, as `fetch` reads it.
     A request goes to the relay, as `<server>/<provider>/token` or `/refresh-token` with the same method, headers and body, only when it's a `POST` to one of the table's token or refresh URLs (by scheme, host and path) with `grant_type` `authorization_code` or `refresh_token`.
     Google, Atlassian and Zoom refresh at their own token URL, so there the grant picks the endpoint, and since those are the providers' own URLs, they go to the relay only when this extension has a relay sign-in for that provider, pending or stored (`SignInCalls.hasRelaySignIn`); an extension's own flow, or a service account's grant, goes where it was going.
+    Todoist's, `raycast-pomodoro-notion`'s, `github-copilot`'s and `bangumi`'s entries refresh at their token URL too, so the grant picks the endpoint there as well.
+    Being Raycast's addresses, they always go to the relay, never to their own host: a table match on any of Raycast's hosts (`isRaycastDomainHost`, or the proxy hosts) isn't an own host (`ownHost`).
     **Nothing is ever sent to Raycast's proxy hosts** (`*.oauth.raycast.com`, with or without a trailing dot): what isn't rewritten there is refused, with sign-in on or off.
+    **Token and refresh grants to any of Raycast's hosts are refused too** (SPEC-132 §2 step 5, `isRaycastDomainHost`, by the domains core hands over in `FUDGE_RAYCAST_DOMAINS`), through `fetch`, `http` and `https` alike.
+    Any other request there, a plain `GET` to raycast.com included, goes where it was going, and only a request with a body is read for its grant (`needsDecision`).
     A rewritten request goes to the relay through Node's `http`/`https` (`sendToRelay`), never undici, as the `Request` `fetch` would send (its method, headers and serialized body, its `signal`), and comes back as the `Response` `fetch` would give, streamed and decoded.
     Its connection always verifies (`relayTLSOptions`: `rejectUnauthorized: true` and TLS 1.2 at least), whatever the worker's `NODE_TLS_REJECT_UNAUTHORIZED` says, since it carries the code and verifier or the refresh token.
     A redirect from the relay is an error, never followed, since a 307 or 308 would send that body on.
     Every other request keeps `fetch`'s own redirects, as in Raycast (D-65), so a third party's redirect to `*.oauth.raycast.com` isn't intercepted.
     The table holds the seven providers `OAuthService` has built in, at their default URLs, and Raycast's proxies for Jira and Zoom (`jira.oauth.raycast.com`, `zoom.oauth.raycast.com`), which the store's Jira and Zoom extensions set (FUD-137).
-    Those go to the relay's `atlassian` and `zoom` providers, beside Atlassian's and Zoom's own URLs, so two entries can share a relay provider (`OAuthProvider.id`), and an entry is known by its authorize URL.
+    The table also holds the addresses of store extensions that sign in through Raycast's other proxies (FUD-166).
+    Those are Notion's (`notion.oauth.raycast.com`) and Todoist's (`todoist.oauth-proxy.raycast.com`) proxies, and the exact shared-proxy addresses (`oauth.raycast.com/v1/…`) of `raycast-pomodoro-notion`, `trek`, `gumroad`, `moneybird`, `github-copilot`, `freeagent`, `mollie-for-raycast`, `plane`, `homey` and `figma-files`.
+    They go to the relay's `notion`, `todoist`, `basecamp`, `gumroad`, `moneybird`, `github`, `freeagent`, `mollie`, `plane`, `homey` and `figma` providers, where the relay's own app takes the place of the extension author's.
+    The table also holds the exact shared-proxy addresses of `42-api`, `ticktick-plus`, `zoho-mail` and `webflow-sites`, which go to the relay's `intra42`, `ticktick`, `zoho` and `webflow` providers.
+    The table also holds WHOOP's and Miro's proxies (`whoop.oauth.raycast.com`, `miro.oauth.raycast.com`) and the exact shared-proxy addresses of `bangumi`, `wave` and `tesla-energy`, which go to the relay's `whoop`, `miro`, `bangumi`, `wave` and `tesla` providers.
+    A shared-proxy entry stops matching when the extension's author makes new addresses.
+    These entries are the one allowed exception to the rule against fixes for particular extensions (Conventions).
+    The Jira and Zoom entries go to the relay's `atlassian` and `zoom` providers, beside Atlassian's and Zoom's own URLs, so two entries can share a relay provider (`OAuthProvider.id`), and an entry is known by its authorize URL.
     One Atlassian app covers Jira and Confluence, so both Atlassian entries are named **Atlassian (Jira, Confluence)**.
     A sign-in stored with `relayProvider: "jira"`, the relay's Atlassian provider before fudge-oauth v0.3.0, counts as Atlassian's (`OAuthProviders.currentRelayProvider`).
     The table is core's (`OAuthProviders`), handed to the host as JSON in `FUDGE_OAUTH_PROVIDERS`; `runtime/test/fixtures/oauth-providers.json` is the same table, pinned by a Swift test, for the runtime's tests.
+    `src/api/oauth-table.ts` reads it and Raycast's domains, and holds both host checks (`isRaycastHost`, `isRaycastDomainHost`); it imports nothing, so the Extension Store uses it too, and `oauth-fetch.ts` re-exports it.
     Only for a request that may go to the relay does the worker ask the app (`oauth.server`, with the provider): the server in use, so a change while a command runs is honoured, and whether the extension has a relay sign-in there.
   - **Below `fetch`** (`src/api/oauth-http.ts`, SPEC-075).
     Extensions bundle their own HTTP clients (`@raycast/utils` 1.x posts its token requests through `cross-fetch` → `node-fetch` → `https.request`, as axios and got go through `http`/`https`), so the same rules (`decide` in `oauth-fetch.ts`, the one decision function for every entry point) apply to `http` and `https`'s `request` and `get`.
@@ -769,17 +995,19 @@ Extensions run in a separate Node.js process, the extension host.
     `LauncherModel` handles `preferences.*`, `oauth.*` (sign-in), `command.launch`, `command.updateMetadata`, `clipboard.paste` (it hides the panel), `form.storeValues` and the window calls: toasts in the bottom bar, the HUD (`HUDWindow`), `alert.confirm` (an `NSAlert` sheet on the panel), `window.close`, `window.popToRoot` and `searchBar.clear`.
     A toast's actions come back through the `toastAction` message.
   - **`updateCommandMetadata`** (`src/api/command-metadata.ts`) sends `command.updateMetadata` with the calling command's new root-search subtitle, or null to go back to the manifest's.
-    `CommandMetadata` (core) keeps it in `command-metadata.json`, by `<extension>/<command>`, keeps keys it doesn't know, and drops the entries of commands that aren't installed when the file is loaded (never from an empty listing); the manifest is never touched.
+    `CommandMetadata` (core) keeps it in `command-metadata.json`, by `<id>/<command>`, keeps keys it doesn't know, and drops the entries of commands that aren't installed when the file is loaded (never from an empty listing); the manifest is never touched.
     It never overwrites a file it can't read (`Unreadable`): the update fails instead, and the extension's promise rejects saying why.
     A command's root item shows that subtitle, else the manifest's `subtitle`, else its extension's title, and search matches the extension's title either way.
     The extension's title is left out when it only repeats the command's title, ignoring case and spaces around them (`RootItem.subtitle(_:unlessItRepeats:)`, SPEC-120), so a one-command extension named like its command shows its name once; a subtitle the author set is shown as set, and a built-in group's title falls back the same way.
   - **`launchCommand`** (`src/api/launch-command.ts`) checks its options in the worker, makes the arguments strings, and encodes `context` with `encode` (`src/protocol.ts`): Dates as `{ "$date": iso }`, Buffers as `{ "$buffer": base64 }`.
     It then sends `command.launch`.
     In the app, `LaunchRequest` reads the call and `CommandLocator` (core) finds the command: in the caller's extension, or in the one with that name and owner (else author).
+    When several installs have that name and owner, it takes the caller itself, then the one from the caller's repository, then Raycast's, then the development build, and refuses two or more left after that (`LaunchCommandError.ambiguous`); a bundled extension is the only one with its name.
     It fills every manifest argument, and its checks turn away what can't run: view commands in the background, a menu-bar command in the background unless it's active (`checkMode`), and missing required arguments or preferences in the background.
     A menu-bar command goes to `MenuBarController`: Background refreshes it like an interval tick, and UserInitiated activates it if needed and refreshes it, without opening its menu.
     A user-initiated launch with a required argument empty shows root search with the command's fields instead; an unset required preference opens Settings.
-    The first time an extension opens another extension's command, the user is asked through `confirm`, and `LaunchPermissions` keeps the answer in `launch-permissions.json`; only a call from a session the user is using may ask, whatever `LaunchType` it requests.
+    The refusals for unset preferences and for a missing permission name the extension by its `displayTitle`, so they say which of two installs of one name they mean.
+    The first time an extension opens another extension's command, the user is asked through `confirm`, and `LaunchPermissions` keeps the answer in `launch-permissions.json`, by the caller's and the target's ids; only a call from a session the user is using may ask, whatever `LaunchType` it requests.
     The caller's origin is read when the call comes in, and a background caller's request runs as Background (`LaunchRequest.asCalled(from:)`), so it fails where a Background launch would instead of showing the panel, argument fields or Settings.
     It never overwrites a file it can't read (`Unreadable`), which the Permissions page then says.
     The launch itself goes through `prepareLaunch` and `launch`, as from root search.
@@ -839,7 +1067,7 @@ Extensions run in a separate Node.js process, the extension host.
     `LocalStorage` (one JSON file) and `Cache` (one `cache.json` per namespace, least recently used dropped beyond its capacity) read and write in the worker, under the paths the environment names in Fudge's support folder.
 - **The Extension Store** is an extension bundled with Fudge, in `runtime/store-extension/` (`fudge-extension-store`), written against `@raycast/api` like any other.
   `npm run typecheck` checks it with its own `tsconfig.json`, and `runtime/test/store.test.ts` tests its modules, with a fake git runner and a local bare repository (no network).
-  - `git.ts` keeps a shallow, blobless, sparse clone of github.com/raycast/extensions in its support folder's `repo/`, with only `/extensions/*/package.json` checked out.
+  - `git.ts` keeps a shallow, blobless, sparse clone (`StoreRepository`) of each repository that's on, in its support folder: Raycast's in `repo/` with `repo-status.json` beside it, an added one's in `repositories/<copyId>/repo` with its `status.json` (`copyPath`, `statusPath`), each with only `/extensions/*/package.json` checked out.
     A README or an extension's source comes on demand through `sparse-checkout add`; the detail's scan adds only a folder's source files (`scanPatterns`: `src/**/*.tsx`, `.ts`, `.jsx`, `.js`) and takes those patterns out again afterwards (`drop`, through `sparse-checkout set --no-cone --stdin` with every other pattern), so a later refresh doesn't fetch their changes.
     Those extensions are the scanner's own (`sourceExtensions`, in `scripts/compat/source-files.ts`, which the store imports).
     What was downloaded stays in `.git` while the copy's commit reaches it (a refresh prunes only what its new commit doesn't), so a checked folder's source is downloaded once per version.
@@ -848,22 +1076,40 @@ Extensions run in a separate Node.js process, the extension host.
     The copy is refreshed when it's a day old or on ⌘R: the default branch's name (checked by `isValidBranch`) is fetched as `refs/heads/<branch>` into its remote-tracking ref, the branch moves there, every other ref and the reflogs go, and only what the refs reach is packed again, into one pack marked as the remote's, before `git prune`.
     So the copy stays one commit deep and `.git/shallow` names only that commit.
     `gc` can't do this in a blobless clone: it keeps every object that came from the remote, reachable or not, and its repack asks the remote for the old commits `.git/shallow` still names.
+    A copy with no `origin/HEAD` (cloned on a named branch whose entry now gives none) asks its remote once with `git ls-remote --symref origin HEAD`, through the same guards, and keeps the answer as `origin/HEAD`, and a default branch's fetch that finds no such branch (the remote renamed it) asks the same way (SPEC-167).
     Every git call is an argument array with a timeout (`timeouts.ts`: the long one for anything that downloads or rewrites the copy), and runs with `GIT_TERMINAL_PROMPT=0` and without the user's git configuration (`storeEnvironment`), so an `insteadOf` rule can't redirect it.
-    Git isn't run until `xcode-select -p` succeeds, so macOS's offer to install the Command Line Tools never shows.
+    Inherited `GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_*`, `GIT_CONFIG_VALUE_*` and `GIT_CONFIG_PARAMETERS` go too, every call has `GIT_ALLOW_PROTOCOL` (`https`, or a test's `allowProtocols`) and an empty `GIT_ASKPASS`, and `clone` and `fetch` get `-c credential.helper=` and `--` before the address, so no password is asked for or kept (SPEC-157 C.4).
+    An added copy follows its branch (`NoBranch` when the server has none).
+    A server that can't send a partial clone (`partialCloneWarning`, which `stopOn` looks for in all the stderr so far) stops the clone, the copy is deleted, and `noPartialClone` stays in its status file, so it isn't cloned again at open until ⌘R or its branch changes (`waitsForRetry`).
+    Git isn't run until `xcode-select -p` succeeds and the developer folder it names holds `usr/bin/git` (checked with `stat`, since that folder can outlive its tools), so macOS's offer to install the Command Line Tools never shows.
     Without them the store shows `NeedsGit` (`failure-view.tsx`): ↵ Install Command Line Tools runs `xcode-select --install`, macOS's own installer, only from that action (`installCommandLineTools`), and ⌘R Refresh checks again.
     A failure whose cause is Git missing has the same action.
     Unloading the store ends its running git (`stopRunningGit`, in the command's effect cleanup, which `unload` runs), and turning the store off unloads its sessions and waits for them to exit (`LauncherModel.unloadSessions(ofExtension:)`) before Part A deletes `repo/`.
     A copy that can't be read, such as a clone stopped halfway, is deleted and cloned again.
-    A failure before the list has ever loaded, which can only be the clone, shows in the load-error view (`LoadFailure` in `failure-view.tsx`), whose Refresh (↵, ⌘R) opens the copy again the same way and then refreshes it.
+    Raycast's load-error view (`LoadFailure` in `failure-view.tsx`) shows only while no copy has rows and the copy of Raycast's official repository failed (`raycastLoadFailure`); any other failure is that copy's problem row.
+    Its Refresh (↵, ⌘R) opens every copy again the same way (`open(true)`) and refreshes each.
     That view has the failure view's cause line (a clone that can't reach GitHub says so), ⌘C Copy Error and ⌘D Show Details, which pushes the failure view with the end of git's output.
-    A refresh runs only once the list has loaded from the copy, so a failed one, a default branch name `isValidBranch` refuses included, shows as a toast over the list, which stays usable.
+    Each copy is refreshed in its own turn, so a failed refresh, a default branch name `isValidBranch` refuses included, shows as a toast naming its repository ("Couldn't update the list from <name>") and as that copy's problem row, over a list that stays usable.
+  - **Each copy takes its own turns** (`copy-turns.ts`, SPEC-157 C.3): the list (`readRepositoryList`, from `store.repositories`) comes first, then each copy is opened and, when a day old or on ⌘R, refreshed, in the git queue, each held under its own key (`refresh:<copyId>`) while a build from another session runs, so one copy's failure never ends the load.
+    A copy's rows show as soon as it's read, and its problem (`problemOf`, a kind from `problemKinds` or `failed`) shows as a row of its own under **Repositories** (`problemRows`), with Show Details, ⌘R and ⌘C Copy Error; its status file keeps the last count or problem for Settings.
+    A removed repository's copy is deleted the next time the store opens, under `remove:<copyId>` (`removeUnlistedCopies`).
+    Until you act, the Extension Store keeps the list's top row selected as later copies' rows come (`RowSelection`'s following, SPEC-166): each render records its top row (`topRowId`: the first problem row, else the first Installed row, else the first under Extensions), and the effect after it asks for that row through `selectedItemId`.
+    Following ends when you move the selection, type (`onSearchTextChange`, with `filtering={true}` so Fudge still filters), show or hide the detail pane, run Install, Update, Try Again, Uninstall, Show Error, a problem row's Show Details or ⌘R, when the Extension Store selects a row for you, and once the first open has read every copy.
+    Rows with the same title come Raycast's official repository's first, then the added repositories' in their Settings order (`byTitleIn`), then the development build, then Not updated (`installedSection`).
+    Each row carries its `copyId` and `repositoryFolder` (`StoreEntry`), and its list id is `<repositoryFolder>:<dir>` (`rowId`).
+    Its install, README, scan and links use its own copy (`rowCopy`, refused with "This repository is off or was removed." when that copy is gone), and an added repository's row names it first among its accessories and in its detail.
+    **Installs whose repository isn't on** (`not-updated.ts`, E.8) get a row from their own `package.json` under All and Installed, "Not updated", with only Copy Name (↵) and Uninstall (⌃X) (`installOnlyRowActions`), so ↵ never uninstalls.
+    **Development builds** in `fudgeapp/development` (`development-builds.ts`, E.9) get one too, "Development build", list id `development:<folder>`, whose Uninstall moves the folder to the Trash and reads no record.
+    Both kinds show with the first copy's rows, or once no copy is being read (`installOnlyRowsReady`): the installs are read before any copy, so shown earlier, the Extension Store would select one of them before the first copy's rows came.
   - **Files from the copy are read as regular files only** (`files.ts`, `readRegularFile`: opened with `O_NOFOLLOW` and `O_NONBLOCK`, then `fstat`), each kind with a size cap: every `package.json` for the list, a README, and the package-source check's `package.json` and lockfiles. git checks out a committed link as a link, so `README.md -> /dev/zero` would otherwise read forever.
   - `catalog.ts` gives each row two things, each checked by its own rule before it's used.
-    `name` is the manifest's name (`isValidName`, the app's rule, pinned to `ExtensionManifest.isValidName` by `runtime/test/fixtures/extension-names.json`): the extension's identity, its installed folder (`<extensions>/<name>`) and its `installed.json` key.
+    `name` is the manifest's name (`isValidName`, the app's rule, pinned to `ExtensionManifest.isValidName` by `runtime/test/fixtures/extension-names.json`): with the row's repository's folder, it gives the extension's id (`entryId`: the bare name in Raycast's folder, else the folder's segments and the name joined with `+`), its `installed.json` key.
+    Its installed folder is `<extensions>/<repository folder>/<name>` (`installFolder`).
     `dir` is its folder in the repository (`isValidFolder`: one segment of letters, digits, `.`, `_` and `-`, starting with a letter or digit), which can differ (`amazon-aws` holds `aws`): the sparse pattern, the README, the scan, the build's source and the URLs.
     Folders that differ only by case are one on APFS, so only the first is read (`distinctFolders`).
-    Two folders whose manifests share a name are both listed; `installed.json` records each install's folder (`dir`; an entry from before has its name's), and only that folder's row is installed or has an update (`installedRecord`).
-    An install is refused while another extension of that name is installed, from another folder or not from the store ("Another extension called … is installed. Uninstall it first."), for a bundled extension's name (`bundledNames`), and when the folder's manifest no longer has the listed name.
+    Two folders whose manifests share a name are both listed; `installed.json` records each install's folder (`dir`; an entry from before has its name's) and, for an added repository's, that repository's folder (`repository`, which must be its id's), and only that folder's row in that repository is installed or has an update (`installedRecord`).
+    An install is refused while another extension of that name is in the row's repository's folder, from another folder of that repository or not from the store ("Another extension called … is installed. Uninstall it first."), for a bundled extension's name (`bundledNames`), and when the folder's manifest no longer has the listed name.
+    The same name from another repository, or a development build, is installed beside it (SPEC-157 E.5, E.6).
   - `sources.ts` refuses an extension that could get packages from anywhere but registry.npmjs.org: an `.npmrc` anywhere in it, a lockfile entry off the registry (both lockfile shapes;
     `link`, and a `file:`, path, `user/repo` or tarball version too), an entry's own dependency specs that aren't registry versions (its dependency sections, or a version 1 entry's `requires`), or a dependency spec or override that isn't a registry version (a tarball name like `x.tgz` isn't).
     File names are compared ignoring case, as APFS and the build's copy by name do, and two names that differ only by case are refused.
@@ -871,18 +1117,24 @@ Extensions run in a separate Node.js process, the extension host.
     `detailMarkdown` lists each command with its mode (view, no-view, menu bar) and runs everything in the detail pane through it, the manifest's own text included.
     A source the renderer would read differently (whitespace, `<`, `>`, `)`) is refused, and a last pass (`rendererPass`) applies the renderer's own image rule to the finished text.
   - `compatibility.ts` is what the store says about compatibility (FUD-118).
-    A scan's result (`Compatibility`: the categories Fudge doesn't support, the APIs it lacks, signing in, unreadable source;
+    A scan's result (`Compatibility`: the categories Fudge doesn't support, the APIs it lacks, signing in, whether that goes through raycast.com, unreadable source;
     or `notChecked`) is cached by the folder's git tree id in `compatibility.json` in the store's data folder (the newest 4,000, entries checked on reading, API names identifiers only), with the scanner that wrote it: the `fudge` tool's size and modification time, so a new build of Fudge, which may support more, scans again (`scannerIdentity`).
+    The file has a `version` (`cacheVersion`, 2 since `signsInThroughRaycast`), and a file of another version reads as empty, so no result from before a new field is used.
+    **Signing in goes through raycast.com** (`signsInThroughRaycast`, SPEC-132 §7) when the extension's own code names `OAuth.RedirectMethod.Web` and one of its authorize URLs (the scan's `signIn`), an unresolved one included, is neither the table's, exactly as `oauth.prepare` matches it, nor on Raycast's hosts (`isRaycastDomainHost`).
+    Such a sign-in takes the direct path, whose Web redirect is raycast.com's page; App and AppURI come straight back, so they never count.
+    The table and the domains are the ones the app hands every worker (`signInTableFromEnvironment`: `FUDGE_OAUTH_PROVIDERS`, `FUDGE_RAYCAST_DOMAINS`), never a copy.
+    The detail pane and the install confirmation then say "Signing in goes through raycast.com. The extension's author chose that, so Fudge can't change it." (`throughRaycastSentence`) in place of the sign-in server's sentence, which doesn't apply.
     The list never scans: a row whose cached result uses something Fudge doesn't support gets a tag (`compatibilityTag`), a red **Not compatible** when every command does, or an orange **Partly compatible** when only some do.
     A result keeps which commands do (`byCommand`, from the scan's per-command results); one without it, or whose scan has none, counts the whole extension, as before SPEC-109.
     What only an AI tool uses counts for no command, so it isn't mentioned.
-    The detail pane's first fact is **Compatibility** (`compatibilityText`): Checking…, Compatible, Partly compatible: 2 of 9 commands use Raycast AI: and their titles, Not compatible: Raycast AI, Missing: the APIs, Signs in with OAuth, Couldn't check, or Not checked.
+    The detail pane's first fact is **Compatibility** (`compatibilityText`): Checking…, Compatible, Partly compatible: 2 of 9 commands use Raycast AI: and their titles, Not compatible: Raycast AI, Missing: the APIs, Signs in with OAuth or the raycast.com sentence, Couldn't check, or Not checked.
     **Browsing never turns into downloading** (`CompatibilityChecks`): only the row the selection rests on, with the detail showing, is checked, after half a second, and moving on cancels its timer, or the check itself: its download ends at once, and the check stops between its other steps; selecting the same row again changes nothing, and a cached row is never fetched.
     Only the download (`fetchSource`) is ever ended, since it writes nothing but new packs: it runs in a process group of its own, which the cancel's `signal` sends SIGTERM, then SIGKILL after `cancelGrace` (a second).
     Every other git step runs to its end, since one that writes the index holds `index.lock`, and ending it would leave that behind for every later checkout and install.
     The README waits the same way: both run through `RestingWork` (`resting.ts`), and only the resting row's README is fetched (`fetchReadme`), once per folder tree, since READMEs are kept by tree id.
     It's selected before the check, so its quick fetch goes ahead of the check's download in the git queue.
-    A README git couldn't fetch isn't kept (it shows as none), and ⌘R fetches it again (`RestingWork.again`).
+    A README git couldn't fetch isn't kept: the detail says so (`readmeNotFetched`), and ⌘R fetches it again (`RestingWork.again`), as does coming back to its row.
+    While a fetch is on its way, waiting or running, the detail shows it as loading (`RestingWork`'s `scheduled` clears the failure, `shownReadme`), so showing no README means the folder has none.
     A check (`checkFolder`) runs in the git queue, one at a time: it counts the files under the folder's `src/` from the trees (`srcFiles`), the source files (`isScanned`: what the patterns check out, a folder named like a script included) and all of them, and isn't checked past either cap (`maxScanFiles`, 300 source files; `maxSrcFiles`, 1,000 files).
     It then downloads what isn't here yet with each file's size capped (`fetchSource`), only when a source file is missing (`missingObjects`), so a folder checked before in this version downloads nothing again.
     That's the `src/` tree fetched again (`--refetch`) with a `blob:limit` of `maxScanBytes`, which the server applies to what it finds under the tree, assets included, since a filter can't pick files by name; that's why every file counts toward `maxSrcFiles`.
@@ -895,15 +1147,41 @@ Extensions run in a separate Node.js process, the extension host.
     Install shares the cache both ways.
   - `store.ts` installs with `$FUDGE_CLI build <source> --into $FUDGE_EXTENSIONS_DIR`.
     Every git operation (refresh, a README's `sparse-checkout add`, a detail's scan, install, uninstall) waits its turn in one queue (`oneAtATime`), so none overlaps another.
+    A press of Install, Update or Try Again on a row whose extension id is already installing or updating does nothing (`InstallPresses`, SPEC-153 B, by id since SPEC-157 E.7): every row of that id says `Installing…` or `Updating…` and offers no Install, Update or Uninstall until the install's run ends, while the same name from another repository can install meanwhile.
+    No refresh rewrites a copy while a build from a closed store session runs: the refresh, and the removal and clone after a copy that can't be read, wait under that copy's key before they enter the queue (`OtherBuilds.hold`, `heldRefresh`), never in it, since a record settles in the queue.
     Before asking, it takes this version's cached result, or runs `$FUDGE_CLI scan <source> --json` and caches it, and the confirmation says what it found (`compatibilityLine`).
     For Raycast AI or the Raycast Browser Extension, which Fudge doesn't support, it's "Partly compatible with Fudge", naming the commands its scan found, which the build turns off, or "Not compatible with Fudge" when that's every command; installing stays possible either way.
-    The build scans the source again, exactly what it installs, so its `compatibility.json` is what's true: after the build, the store reads it (`builtCompatibility`), and when it isn't what the confirmation named, the done message says what is, in a toast instead of the HUD (`installNote`, SPEC-121 §2).
+    The build scans the source again, exactly what it installs, so its `compatibility.json` is what's true: after the build, the store reads it (`builtCompatibility`), and when it isn't what the confirmation named, the done toast says what is (`installNote`, SPEC-121 §2).
     That's "Turned off: …" for commands the confirmation didn't name (its scan failed, say), "Every command is on" when the build found none, and that Fudge couldn't check, so every command is on, when the build's scan failed after the confirmation named some.
-    Then it names up to five APIs it doesn't have yet and how many more; that it signs in with OAuth, which works if the chosen sign-in server supports its provider (never called not compatible); everything supported; or that the scan couldn't run, which doesn't stop the install.
+    Then it names up to five APIs it doesn't have yet and how many more; that it signs in with OAuth, which works if the chosen sign-in server supports its provider, or the raycast.com sentence (never called not compatible); everything supported; or that the scan couldn't run, which doesn't stop the install.
+    Every install or update that finishes ends in a Success toast, `Installed <title>` or `Updated <title>` with that note as its message when there is one, and the store stays open on its list (`doneToast`, SPEC-130); it never calls `showHUD`, `closeMainWindow` or `popToRoot`, which close the launcher.
     It records the folder's git tree id in `installed.json` ("Update available" when the id changes), and uninstalls only what it recorded.
     **Unloading the store doesn't stop a `fudge build` it started** (or npm under it), unlike its git: the worker's timeout goes with it, so the build runs to the end, or until npm's own network timeouts give up.
     That's acceptable because nothing is installed half-way: the build writes into a staging folder and swaps it in only at the end, and the extensions watcher picks the result up like any install.
-    The store just doesn't record it, so it counts as installed another way.
+    **The store records each running build** in `installing/<pid>.json` in its support folder (`build-records.ts`, SPEC-153 C), written atomically once the build has a pid (`Run`'s `started`) and removed when its run ends, after the write has settled; a record it can't write or remove is logged, and never changes the install.
+    A reopened store reads them before its list (`openCopy`), apart from the copy, and while one runs its rows say `Installing…` and the open store checks it every 2 s (`OtherBuilds`).
+    An orphaned build stays a child of the host, so once it ends it's a zombie that `kill(pid, 0)` still finds: a build counts as running only while `ps -ww -o stat=,args=` shows a state that doesn't start with `Z` and exactly the recorded command, so a reused pid isn't taken for it.
+    An ended one is settled in the queue: it's adopted into `installed.json`, under the record's `id` with its `repository` for an added repository's build, only when its install folder was made between its start and the end bound (when the open store saw it end, or its deadline when it ended before the store opened) and the record has a tree, and dropped otherwise.
+    That folder is `installFolder`'s in the record's repository's folder, or, for one of Raycast's when that isn't there, the unmoved `<extensions>/<name>` an older `fudge build` finished at the top level, which the next move files in Raycast's folder.
+    One still running past its deadline gets SIGTERM, as the closed session's timer would have sent; this session's own records end through their own run.
+    A build that exits 75 (another build of that extension is running, `fudge build`'s lock) is neither a failure nor an install: the toast says it's already being installed.
+    **A build's output and outcome** (SPEC-156 A): `recordedBuild` passes `--outcome <support>/installing`, and the build's stdout and stderr go to two files in `installing/` instead of pipes (`Run`'s `output`), so a build that outlives its worker never gets SIGPIPE and its whole output stays.
+    `spawnProgram` opens them `wx+` with mode 0600, gives them to the child as fd 1 and 2, and reads back at most the last 1 MiB of each through its own descriptors; git and `fudge scan` keep their pipes.
+    `recordBuild` makes them under dot names and renames them to `<pid>.out` and `<pid>.err` before it writes `<pid>.json`, and its `ended()` removes `<pid>.out`, `<pid>.err`, `<pid>.ended.json` and then the record.
+    The reader keeps these files while their record exists, deletes one without it once it's an hour old, and uses an `.ended.json` only when it's valid (`parseBuildOutcome`).
+    **Settling with an outcome** (D.2): status 0 is adopted when the folder was made between `startedAt` and the outcome's `endedAt`, and is otherwise dropped quietly with one Fudge.log line; 75 is dropped quietly; any other status is a failed drop.
+    A record without an outcome (killed, or crashed) is settled as before, and a failed drop's output then ends with `Its build stopped before it finished.` (`stoppedLine`).
+    A failed drop has details like `BuildFailed`'s (the two files' output, the command and the exit status), is logged and marks its row (`settledNotice`), and all of the pid's files are deleted.
+    **The report** (D.1): `installPressed` reports every install or update it ends, apart from `AlreadyBuilding` and a cancel, through `installEnded` with the last build's pid and `startedAt` (`reportEnd`), and a record seen ending is reported the same way.
+    A report that fails or isn't answered within 5 s counts as on screen and not notified.
+    The answer decides: notified hides the animated toast; a success not on screen selects its row once; a notified failure is logged, marked, selected and saved for a click, with no `FailureView`; a failure not notified pushes `FailureView` as before.
+    **The row mark** (D.3, `RowMarks`, in memory for the store session only) is `Couldn't install` or `Couldn't update` in red in place of the row's tag (a busy tag wins), with Try Again (↵) and Show Error (⌘↵) first; it goes when that name installs or updates.
+    `accessoryTexts` and `rowActions` take the mark as they take `busy`.
+    **A failure saved for a click** (D.4) is `<support>/failures/<id>.json`, by the extension's id in its repository (`failureId`, SPEC-157), (`saveFailure`, atomic, mode 0600), written only for a failure that got a notification, and deleted when a click or Show Error opens it, when the name is pressed again, and at the store's open once it's 7 days old.
+    **The launch context** (D.5, `LaunchTarget`): `launchContext.storeNotification` (`{ name, dir, failed, repository? }`, checked by `noticeTarget`, the repository's folder with the folder rule and a missing one Raycast's) selects that row once after the first load, once the records found at open have settled (held outside the queue).
+    With `failed`, it pushes `FailureView` from the session's mark, or else from the saved file, which then goes (`openNoticeTarget`).
+    A click while the store is loaded comes through one waiting `nextNotificationClick` call, made again after each answer (`followClicks`).
+    Right after the user confirms an install or update, before the build, the store calls `askForNotifications` without waiting for it (SPEC-156 G).
     **A failed install or update** pushes `FailureView` (`failure-view.tsx`, SPEC-116) over the list, and the toast only says where to look.
     It has the title, the likely cause in plain words (`causeOf` in `failure.ts`: npm or Node.js not found, which, since both come with Fudge, means a damaged app to reinstall, the npm registry or GitHub unreachable, Git missing, the extension's own build error with its first line, or else something went wrong), and the last 40 lines of the step's output.
     The output is untrusted (package names, build scripts' output), so it's in a code block nothing in it can close (`codeBlock`), and the title and cause are escaped code point by code point (`escapeMarkdown`), so no package can add an image, a link or formatting.
@@ -915,24 +1193,100 @@ Extensions run in a separate Node.js process, the extension host.
     That `NO_PROXY` is `localhost`, `127.0.0.1` and the Mac's bypass list, unless the user set their own.
     A proxy auto-configuration file can't be passed on, so a network failure's cause line says so.
 - **`fudge build <folder>` installs an extension** (`ExtensionBuilder` in `FudgeCore`).
-  - It reads `package.json` (`ExtensionManifest`) and compiles every command's `src/<command>.{tsx,ts,jsx,js}` with esbuild into `<extensions>/<name>/<command>.cjs`, beside `package.json` and `assets/`, as Raycast installs it (SPEC-123).
+  - **The layout** (FUD-183): the extensions folder holds each repository's installs in a folder of their own, where `<name>` is always the manifest's name.
+    `raycast/extensions/<name>` is Raycast's official repository (the Extension Store's installs), `<owner>/<repository>/<name>` one on GitHub, `<host>/<path…>/<name>` one on another server, and `fudgeapp/development/<name>` the development builds.
+    `fudge build --repository <folder>` (`BuildArguments`, checked with `ExtensionRepositoryFolder.isValid`) installs into `<into>/<folder>/<name>`; without it, or with `fudgeapp/development`, the build is a development build, with the id `fudgeapp+development+<name>`, beside any other install of that name.
+    Only the address `https://github.com/fudgeapp/development` is refused as a repository (SPEC-157), never the folder: the GitHub organization `fudgeapp` is Fudge's own, so no one else's repository has it.
+    Before writing anything, the build checks that the destination isn't the source (`checkSource`), and that no folder on the way from `--into` to the repository's folder holds `package.json`: "That repository's folder is inside an installed extension."
+    A destination that doesn't exist yet passes `checkDestination`, so without that check a build could write inside an install.
+    Then it makes the folders on the way (0755), and they go again when the build fails.
+    An id over `ExtensionID.maxBytes` is refused ("That extension's name is too long for Fudge to keep its files."), so `Extensions/<id>.old.log` stays a valid file name.
+    A build never checks, refuses or replaces an install in another repository's folder: `--repository raycast/extensions` replaces the store's install of that name and keeps its bare-name keys, and never writes the store's `installed.json`, so the store's next Update puts its version back.
+  - **One build per id** (SPEC-153 A): after the move below, and before anything is written, the build takes a non-blocking `flock` on `<extensions>/.build-<id>.lock` at the top whatever the repository (`lockBuild`), opened with `O_CLOEXEC` on top of `ChildProcesses.spawn`'s `POSIX_SPAWN_CLOEXEC_DEFAULT`, so no program it starts holds the lock.
+    So Raycast's, a development build and an added repository's extension of one name each have their own lock (`.build-github.lock`, `.build-fudgeapp+development+github.lock`, `.build-someone+tools+github.lock`).
+    A second build of that id stops with `BuildError.alreadyBuilding` and exits with status 75 (`EX_TEMPFAIL`, used for nothing else), which the Extension Store reads; `runtime/test/fixtures/build-statuses.json` pins both sides.
+    The kernel drops the lock when the build's process ends, however it ends, and the empty dot file stays, since deleting a lock file another build may have open would break the lock.
+    The build gives it back with `LOCK_UN` before it closes the file (`unlockBuild`): a program another thread is starting holds a copy of every descriptor until its exec, so `close` alone could leave the lock with that copy for a moment.
+  - **`--outcome <folder>`** (SPEC-156 A.3), an absolute path to a folder that exists, checked as `--into` is: on every exit the tool makes itself (0, 1, 75, and 128+n from `endChildrenOnSignals`), it first writes `<folder>/<pid>.ended.json` atomically, `{ pid, status, endedAt }` (`BuildOutcomeFile`, `BuildOutcomeRecorder`, where the first status wins).
+    A file it can't write prints `fudge: couldn't save the build's outcome in <folder>: <reason>` to stderr and never changes the exit status; SIGKILL or a crash writes nothing.
+    The Extension Store passes `--outcome <support>/installing` on every build, and `runtime/test/fixtures/build-outcome.json` pins the format on both sides.
+  - It reads `package.json` (`ExtensionManifest`) and compiles every command's `src/<command>.{tsx,ts,jsx,js}` with esbuild into `<extensions>/<repository folder>/<name>/<command>.cjs`, beside `package.json` and `assets/`, as Raycast installs it (SPEC-123).
     So a command's `__dirname` is the extension's folder, and `${__dirname}/assets/…` and `${__dirname}/package.json` are its own, as extensions such as the store's amazon-aws expect.
     esbuild writes into a folder of its own inside the staging folder, and only the commands' files move up, so anything else it writes (a stylesheet an import pulls in) never reaches the install.
     The modules the host provides (`ExtensionBuilder.providedModules`) stay external.
-    Extension and command names are lowercase letters, digits, `-` and `_`, starting with a letter or digit, as Raycast's rule allows (`notion_researcher`): `ExtensionManifest.isValidName` is the one name rule, which every check of an extension's name uses (the build, backups and their paths, settings keys, built-in group names) and the store's `catalog.ts` mirrors.
-  - It writes the build into `.staging-<name>-<uuid>` with `package.json` and `assets/` alongside, then swaps the whole folder into place (a previous install is moved to `.old-<name>-<uuid>` first, then deleted).
+  - **The compile step** (SPEC-144) is esbuild's JavaScript API rather than its command line, which can't take plugins: `runtime/scripts/compile/bundle.ts`, which `npm run build` bundles with esbuild's JavaScript inside (`scripts/compile/make-bundler.ts`) into `dist/bundle-extension.cjs`, and `make app` ships as `Contents/Resources/runtime/bundle-extension.cjs`.
+    The tool finds it there beside itself, or at `$FUDGE_BUNDLER` (`ExtensionBuilder.locateBundler`), and runs it with Fudge's own Node.js in the source folder, driving the esbuild program it found (`ESBUILD_BINARY_PATH`).
+    esbuild's options go to it in a JSON file in the build's scratch folder (`ExtensionBuilder.BundleOptions`), one for one the flags the tool passed the command line before, so an extension without `rust:` or `swift:` imports compiles to the same bytes, and esbuild prints its warnings and errors as the command line did.
+    That includes the command line's default `logLimit` of 6, which the JavaScript API doesn't share: a build shows at most 6 errors or warnings, then how many there were.
+    So every build needs Fudge's Node.js and the script: a `fudge` without them beside it, as outside Fudge.app, stops with `BuildError.noBundler`.
+    A `rust:` import is handled as Raycast handles it on a Mac (`scripts/compile/rust.ts`, from `@raycast/api`'s `rust-files.js` and `rust-parser.js`): Rust parts are for Windows, so nothing is compiled, and the module written in the package's place exports each `#[raycast]` function, the same functions as its default export, and `RustError`.
+    Every call rejects with Raycast's own `Rust functions are not supported on macOS`.
+    The functions are found with Raycast's own patterns, in the `.rs` files under the package's `src/`, reading only regular files and following no link.
+    The package's folder must hold a `Cargo.toml` and be inside the extension's folder, links resolved, both checked at the import, and nothing of it goes into the install.
+    A `swift:` import (SPEC-145 §2, `scripts/compile/swift.ts`, from `@raycast/api` 2.13.1's `swift-files.js`) is a Swift package whose `@raycast` functions the extension calls, and `fudge build` must be told what to do with it: `--swift-parts build` or `--swift-parts leave-out` (`BuildArguments.SwiftParts`, `ExtensionBuilder.swiftParts`).
+    Without either, the build stops at the import, asking for one; without such an import, the flag changes nothing.
+    The package's folder must hold a `Package.swift` and be inside the extension's folder, links resolved, both checked at the import.
+    **build** needs the Command Line Tools (`ExtensionBuilder.commandLineTools`, `CommandLineTools.resolve`, asked only then), else stops saying where to set them up.
+    The plugin copies the package, keeping its folder's name, into the build's scratch folder, never building in the extension's source.
+    There it runs the tools' own `swift` with `DEVELOPER_DIR` added to the environment `fudge build` has, nothing else added or taken away: `package dump-package` (exactly one executable target, else Raycast's messages), then `swift build -c release --product <target> --cache-path <cache>` and its `--show-bin-path`.
+    The cache is one shared SwiftPM cache (`FudgePaths.swiftPackageCache`: `~/Library/Caches/Fudge/SwiftPM`, or under `$FUDGE_SUPPORT_DIR`), so a later build doesn't fetch the packages again.
+    The program goes into the install's `assets/compiled_raycast_swift/<package folder name>` with mode 755, Raycast's path, which its JavaScript runs (`ExtensionBuilder.installSwiftParts`), and the `.build` folder goes with the scratch folder.
+    The module is Raycast's: its `runSwiftFunction` without the Windows check (JSON arguments, `JSON.parse` of the trimmed stdout, a `SwiftError` with stderr, else stdout, as its message), the `raycast.js` the package's own plugin wrote (at `.build/plugins/outputs/<folder name lowercased>/<target>/destination/RaycastTypeScriptPlugin/`), and `SwiftError`.
+    A build that fails stops the install with SwiftPM's output after `the part written in Swift didn't build`, and a signal that ends the script ends `swift` too.
+    `swift` runs in a process group of its own, which gets SIGINT, the signal SwiftPM answers by cancelling its compile jobs (they run in process groups of their own, so no other signal reaches them), and the script waits up to 0.8 s for that, inside `ChildProcesses.endAll`'s 1 s before SIGKILL.
+    **leave-out** runs nothing: the module exports `SwiftError` and the package's functions, each refusing every call with a `SwiftError` saying the part wasn't installed and where to set up the tools.
+    The functions are found in every `.swift` file of the package's folder outside `.build` (targets can keep their sources elsewhere, `path: "src"`), comments stripped: `@raycast`, then any whitespace, attributes and modifiers, then `func <name>`, and the older `#exportFunction(<name>)`.
+    A build with a `swift:` import writes `swift-parts.json` into the install (`SwiftPartsRecord`: `build` or `leave-out`), one of `installedItems`, so the store can say an extension was installed without its part.
+    Extension names are lowercase letters, digits, `-` and `_`, starting with a letter or digit, as Raycast's rule allows (`notion_researcher`): `ExtensionManifest.isValidName` is the one extension name rule, which every check of an extension's name uses (the build, backups and their paths, settings keys, built-in group names).
+    The runtime's `src/extension-id.ts` mirrors it, for the id rule and the store's `catalog.ts` alike.
+    **Extension ids** (FUD-183) keep two extensions of one name from different repositories apart.
+    `ExtensionID` (core) is an installed extension's key: Raycast's extensions and the bundled ones keep their manifest name, and an extension from any other repository, the development folder `fudgeapp/development` included, has its repository folder's segments, then its name, joined with `+` (`someone+tools+github`, `fudgeapp+development+github`).
+    `+` is in no extension name, folder segment or command name, so an id splits back one way only and no qualified id equals a name; it isn't `/`, which joins an id and a command in `<id>/<command>` keys.
+    An id comes from where an install is (`ExtensionID(name:repositoryFolder:)`), from the bundled extensions' constants (`ExtensionStore.id`, `ClipboardHistory.id`, `FileSearch.id`, `BundledExtensions.emojiID`), or from a key read back (`ExtensionID(stored:)`, checked by `ExtensionID.isValid`).
+    There's no unchecked init and no conversion from a manifest, so a key never comes from `manifest.name` by accident.
+    It's `Codable` and `CodingKeyRepresentable` as its string, so a dictionary keyed by it is still a JSON object; one bad key fails a whole dictionary, so a store reads its keys as strings and keeps those the rule accepts.
+    `ExtensionRepositoryFolder` (core) gives a repository's folder from its parsed address (`folder(host:port:segments:)`): two lowercase segments on GitHub, else the server's name, `_<port>` for a port other than 443, and one to six lowercase segments, at most 160 bytes.
+    `isValid(_:)` accepts exactly those folders, `conflict(_:with:)` refuses an equal or nesting folder, and each refusal's sentence is defined there once (`Refusal`).
+    The runtime has both rules in `src/extension-id.ts` (`isValidExtensionId`, `isValidRepositoryFolder`) and the Extension Store's `repository-folder.ts`, pinned to Swift's by `runtime/test/fixtures/extension-ids.json` and `repository-folders.json`.
+    `InstalledExtension` carries its `id` and its `repository` (`.raycast`, `.development`, `.added(folder)` or `.bundled`), both from where it was found, and `displayTitle` adds " (development)" or " (<folder>)".
+    **The loader walks the layout** (`ExtensionWalk`, `InstalledExtension.load(walking:)`, which `all(in:)` uses).
+    A top-level folder holding `package.json` itself is an unmoved install (below), loaded as Raycast's under its manifest name unless Raycast's folder has that id, which wins.
+    Any other top-level folder without a dot is a GitHub owner (`raycast` and `fudgeapp` included): each of its folders is a repository's, and each folder in that holding `package.json` is an install.
+    A top-level folder with a dot is a host: below it, the first folder holding `package.json` on each path is an install, at most seven folders down (six path segments and the extension).
+    At every level, entries starting with `.` and links are skipped, and nothing is followed (`lstat`); a link at the top level gets a line in `Fudge.log`.
+    An install loads only when its folder's name is its manifest's name and, outside Raycast's, its repository folder passes `isValid` (`fudgeapp/development` does), so each id is found once; the check is in the walk, not `load(from:)`, since the bundled extensions load from folders named differently.
+    Each folder skipped gets one line in `Fudge.log`, naming it relative to the extensions folder, once per run (`ExtensionsFolderLog`).
+    **The move into the layout** (`ExtensionLayout.moveIntoRepositories`, `ExtensionMove.swift`) files every install from before, at the top level, in `raycast/extensions/<manifest name>`, whether the store recorded it or not, so it keeps its name as its id, and with it its settings, data and sign-ins; it reads no store record.
+    The app runs it at launch, before the extensions first load and before the watcher starts (`moveAtLaunch`, never in a snapshot run), and `fudge build` before it works out where the build goes, so a build never meets an unmoved install (a legacy `fudgeapp` one) on its way.
+    Both take `<extensions>/.move.lock` first, polling `flock(LOCK_EX | LOCK_NB)` every 100 ms and never blocking: the app gives up after 5 s (`launchMoveWait`, since launch is on the main thread), writes one line and loads the extensions as they are; `fudge build` gives up after 60 s (`buildMoveWait`) with `BuildError.cantLock`.
+    The lock goes back with `LOCK_UN` and then `close`, as the build's does, and `fudge build` gives it back before it takes its own.
+    Each install moves by one `renamex_np` with `RENAME_EXCL`, so it's whole in one place or the other and keeps its inode and creation time; a target that's there already is never replaced, and the old folder stays with a line in `Fudge.log`, as does one whose manifest can't be read.
+    A legacy install named `raycast` would land inside itself, so it's renamed to `.move-raycast` and filed from there before any other install, whatever their names, since the first one filed makes `raycast/extensions/`; every move finishes a `.move-raycast` it finds before anything else.
+    One whose manifest can't be read is filed as `raycast`, since at the top it would keep `raycast/` from being Raycast's folder and every other install would stay.
+    A move stopped halfway leaves both kinds, which both load, and the next launch moves the rest.
+    `CommandOwner` (core) is a command id's owner, one of Fudge's groups (`BuiltInGroup`, the six `:` keys) or an `ExtensionID`, and `BundledCalls.mayCall` says whether a session's extension may make a call only one bundled extension makes, comparing whole ids.
+    **Every keyed store and helper takes an `ExtensionID`**, never a `String` or `manifest.name`: the support, cache and LocalStorage folders (`FudgePaths`), `PreferenceStore`, `FormValueStore`, the dropdown values' key, `CommandMetadata`, `OAuthTokenStore` and `SignInCalls`, `LaunchPermissions`, `LogFile`, `InstallStamp` and the launcher's index (`InstalledExtension.index`).
+    So a place that passes a manifest name to a store doesn't compile, and no app code makes an id from a name: a running session keeps its install's id (`LauncherModel.sessionExtensions`), as do the command screen and its notices.
+    Command ids are made only by `FudgeSettings.commandID(owner:command:)` and `RootItem.commandID(owner:command:)`, which take a `CommandOwner`, as the Enabled functions do; `isEnabled(commandID:)` and `availableHotkeys` read the owner back with `CommandOwner(stored:)`, and an id whose owner is neither a group nor an id has only the command's own Enabled.
+    `settings.json`'s `extensions` and `launch-permissions.json` read their keys as strings and keep those an owner or an id accepts; any other key is left out in memory and written back as the file has it.
+    The only place an extension's manifest name stands for it is what it sees of itself, `environment.extensionName`: the launch message carries its id as `extensionId`, beside `environment`, and the host names its log lines by it without passing it to the worker.
+    The calls only one bundled extension may make (`fudge.log`, `commandLineTools.*` and `store.*` for the Extension Store, `clipboardHistory.*`, `files.search`), and the checks for the store's own sessions, go through `BundledCalls.mayCall`, so an extension of the same name from another repository is refused like any other.
+    Command names are letters of either case, digits, `.`, `-` and `_`, starting with a letter or digit, as Raycast accepts them (`caffeinateWhile`, `search-projects.command`): `ExtensionManifest.isValidCommandName`, which the build and `compatibility.json` use.
+    The compatibility scan and the store share it as `isCommandName` (`scripts/compat/source-files.ts`), and `runtime/test/fixtures/command-names.json` pins both.
+    A command's name keeps its case everywhere: its `src/<command>.…` file is found as the disk finds it (the Mac's usually ignores case), but its built file and its id are the name as written, and two commands whose names differ only in case are refused.
+  - It writes the build into `.staging-<name>-<uuid>`, in the repository's folder beside the destination so the swap is a rename on one volume, with `package.json` and `assets/` alongside, then swaps the whole folder into place (a previous install is moved to `.old-<name>-<uuid>` first, then deleted).
     It replaces only a folder that holds what a build writes, hidden files aside (`ExtensionBuilder.holdsOnlyABuild`): `package.json`, `assets/`, `compatibility.json`, `dist/` (the old layout), and `<command>.cjs` for each command that folder's own `package.json` names, so an update that renames a command still replaces it; anything else is `BuildError.notAnInstall`.
   - **Installs from before SPEC-123** have their commands in `dist/`.
-    At launch, before the extensions first load and before the watcher starts, the app moves each such install in the extensions folder over (`ExtensionLayout.moveUp`, from `AppDelegate`; never in a snapshot run, and never the bundled extensions inside the app).
+    At launch, right after the move into the layout and before the extensions first load and the watcher starts, the app moves each install the walk finds over (`ExtensionLayout.moveUp`, from `AppDelegate`; never in a snapshot run, and never the bundled extensions inside the app).
     Each `dist/<command>.cjs` is renamed up with `RENAME_EXCL`, never copied, so a command is whole in one place or the other, and then `dist/` goes with `rmdir`, only when it's empty.
     The compiled files are self-contained bundles, so moving them needs no rebuild.
-    An install isn't touched unless it passes `holdsOnlyABuild`, and one whose `dist/` holds anything but regular `<command>.cjs` files its manifest names, or a command in both places, is left as it is, with one line in the unified log (category `extensions`, the extension's name private).
+    An install isn't touched unless it passes `holdsOnlyABuild`, and one whose `dist/` holds anything but regular `<command>.cjs` files its manifest names, or a command in both places, is left as it is, with one line in the unified log (category `extensions`, its folder relative to the extensions folder, private).
     `InstalledExtension.entry(for:)` finds a command at the root first, then in `dist/`, so a move stopped halfway or refused still launches every command, and the next launch finishes a stopped one.
     When a command is in both places, the root's wins and the `dist/` copy stays.
   - Before the swap it scans the source (`ExtensionBuilder.scanCommands`: the CLI runs `fudge scan --json` through `CompatScanner.commands`, reading its stdout alone) and writes which commands use Raycast AI or the Browser Extension into the install as `compatibility.json`.
     A scan that can't run or fails leaves it out, and every command is on.
   - It never writes into the source folder.
-    When the source has no `node_modules`, it installs the dependencies into a temporary folder (`npm ci --ignore-scripts`; under `$TMPDIR` when it's set, which Foundation's `temporaryDirectory` ignores) and points esbuild at it with `NODE_PATH`.
+    When the source has no `node_modules`, it installs the dependencies into a temporary folder (`npm ci --ignore-scripts`; under `$TMPDIR` when it's set, which Foundation's `temporaryDirectory` ignores) and points esbuild at it with `nodePaths`, which stands for the command line's `NODE_PATH`.
   - **Ending the tool ends what it started.**
     `fudge build` and `fudge scan` run every program (esbuild, npm, node) through `ChildProcesses` (core): `posix_spawn` in a process group of its own, with default signals and only stdin, stdout and stderr passed on.
     On SIGTERM, SIGINT or SIGHUP the tool signals each child's whole group, so npm's and node's own children go too, waits up to a second, kills what's left, deletes `fudge build`'s staging and scratch folders, which `defer` would miss (`ChildProcesses.deleteOnSignal`; not a staging folder already being moved into place), and exits with 128 + the signal (`ChildProcesses.endChildrenOnSignals`).
@@ -941,12 +1295,19 @@ Extensions run in a separate Node.js process, the extension host.
   - **The running app picks it up.**
     `ExtensionsWatcher` (core) watches the extensions folder through FSEvents, with file-level events.
     Its stream is made, started, stopped and released on a serial queue of its own, which it delivers on, never on the main thread, since each of those calls asks `fseventsd`, which can take seconds or not answer (FUD-153); `start` and `stop` return at once, and a batch goes on to the main queue.
-    A path counts unless its first component under the folder starts with `.` (`.staging-*`, `.old-*`, `.DS_Store`), and a trailing 0.3 s debounce makes each install, rebuild or removal one reload: `LauncherModel.reloadExtensions()` (the installed extensions only, keeping the scanned applications, the query and the selection), the command hotkeys, and the Settings window if it's open.
+    FSEvents reports nothing from before the stream exists, so the stamps of every folder an install can land in (`FolderStamps`: each folder's `FolderStamp`, its modification time and inode) are read at `start` and again once the stream has started, and a difference counts as a batch for the folder (FUD-156).
+    Those folders are the top, `raycast/extensions`, `fudgeapp/development` and every folder the walk reads on its way to an install, since an install renamed into `raycast/extensions/` changes that folder's time, not the top one's; a folder added or gone differs too.
+    A test that counts reloads waits for the stream's queue first (`streamStarted`, with a deadline), then for the watcher to go quiet.
+    A path counts unless any of its components under the folder starts with `.` (`.staging-*`, `.old-*`, the locks and `.DS_Store`), in a repository's folder as at the top.
+    A trailing 0.3 s debounce makes each install, rebuild or removal one reload: `LauncherModel.reloadExtensions()` (the installed extensions only, keeping the scanned applications, the query and the selection), the command hotkeys, and the Settings window if it's open.
+    A first build into a repository folder that doesn't exist yet can be two reloads, since it makes the folder before it compiles and the compile can outlast the debounce.
     The menu's Reload Extensions also scans applications again.
     Snapshot runs don't watch.
 - **The Makefile assembles the app bundle** (`make app`):
   - the `FudgeApp` binary becomes `Contents/MacOS/Fudge`
   - the `fudge` tool and esbuild's native binary go into `Contents/Helpers/`, where `ExtensionBuilder.locateEsbuild` finds esbuild next to the tool
+  - `fudge build`'s compile step (`runtime/dist/bundle-extension.cjs`) goes into `Contents/Resources/runtime/`, before the bundled extensions are built through it
+  - `Fudge Links.app` goes into `Contents/Helpers/` too, the `FudgeLinks` binary with `App/Links/Info.plist` and Fudge's versions: a nested app there is registered by nothing but `LSRegisterURL` on it (one in `Contents/Library/LoginItems` is registered at every launch)
   - **Node.js** (SPEC-115): an official build from nodejs.org, `NODE_VERSION` in the `Makefile`, for the architecture the Mac builds for (arm64 or x64, never both: the app itself is built for one).
     Its tarball's SHA-256, copied from the release's `SHASUMS256.txt`, is pinned beside the version, and `make` checks it before unpacking anything; a tarball that doesn't match is deleted, and the build fails.
     It's downloaded once into `.cache/node` (ignored, and kept by `make clean`), and every Node step of the build runs it (`npm ci`, esbuild, the runtime's tests), since the `Makefile` puts it first on `PATH`.
@@ -954,22 +1315,22 @@ Extensions run in a separate Node.js process, the extension host.
     The bundle gets the binary as `Contents/Helpers/node`, npm from the same distribution as `Contents/Resources/node/npm`, and its `LICENSE` (Node.js's, with what it bundles) as `Contents/Resources/node/LICENSE`.
     `fudge build` runs npm as `node npm-cli.js` (`BundledNode.npm`), with the helpers first on `PATH` so whatever npm starts gets the same Node.js.
     Its entitlements are in `App/Helpers/node.entitlements`, which `scripts/sign-app.sh` gives it (below), so a release's Developer ID signature keeps them: `allow-jit`, without which V8 can't start, and `disable-library-validation`, without which an extension's native addon (`.node`), signed by whoever built it, is refused ("different Team IDs").
-  - `App/Info.plist` gets three versions from `git describe --tags --always --dirty` (`VERSION`, or the release workflow's `RELEASE_TAG`):
+  - `App/Info.plist` gets three versions from `git describe --tags --always --dirty` (`VERSION`, which the release workflow sets to the version it releases, or `RELEASE_TAG`):
     `CFBundleShortVersionString` is the version tag's major, minor and patch, as macOS expects (`runtime/scripts/bundle-version.ts`: `v0.3.0-14-ga539cdd` is `0.3.0`, and with no version tag `0.0.0`), `CFBundleVersion` is `git rev-list --count HEAD`, and `FudgeGitDescribe` is the describe itself.
     Fudge shows its own form of the describe (`FudgeVersion.display`: `0.3.0`, `1.2.0-rc.1`, or after a tag `0.3.0-dev+14.a539cdd.dirty`), in the menu, General's update row, About, `fudge version` and its `User-Agent`s.
     `FudgeVersion` (core) reads the keys in the app, and in the `fudge` tool from the app's `Info.plist` beside `Contents/Helpers` (through a symlink too), only when its bundle id is Fudge's; anywhere else it's `0.0.0-dev`.
     **A release build stops rather than number itself wrong** (`make release-check`, before anything is built): with `CONFIG=release`, a shallow clone, which has no tags and would make the build number 1; with `RELEASE_TAG`, a tag that isn't on this commit.
-    The release workflow checks out the whole history and its tags, and passes `RELEASE_TAG` for a tag's build.
+    The release workflow checks out the whole history and its tags, and passes the version it releases as `VERSION` (`scripts/release.sh --version`), since its tag doesn't exist until the release is published.
   - `App/AppIcon.icon` (an Icon Composer icon) is compiled by `actool` into `Assets.car` and an `AppIcon.icns` fallback.
     That needs Xcode 26 or later.
-  - the bundled extensions (`BUNDLED_EXTENSIONS`, as `BundledExtensions.folders` lists them) are built with `fudge build` from `runtime/<folder>` into `Contents/Resources/<folder>`
+  - the bundled extensions (`BUNDLED_EXTENSIONS`, as `BundledExtensions.folders` lists them) are built with `fudge build` from `runtime/<folder>` into a scratch folder's `fudgeapp/development/`, without `--repository`, and moved from there to `Contents/Resources/<folder>`
   - the host and worker bundles go into `Contents/Resources/runtime/`, with `fudge scan`'s `compat-scan.js` and Raycast's types beside it (`raycast-api.d.ts`, with its MIT notice as `raycast-api.LICENSE`)
   - Fudge's `LICENSE` goes into `Contents/Resources/LICENSE.txt`, and `runtime/scripts/notices.ts --text` writes `Contents/Resources/Third-Party Notices.txt`: each third-party component the app ships, with its version and its own license file's text.
     Its `components` list is the one place they're named, and the repo's `THIRD-PARTY-NOTICES.md` is the same, written by `npm run generate`.
     Node.js's entry is the `LICENSE` of the Node.js the `Makefile` pins (`NODE_VERSION`), read from `.cache/node`: the same file `make app` copies to `Contents/Resources/node/LICENSE`.
     `npm run typecheck` fails while that file is stale, or when a bundle Fudge ships (the host, the worker, `compat-scan.js`, a bundled extension) takes in an npm package the list doesn't have; anything else the app ships, such as a binary in `Helpers/`, adds its entry by hand.
-  - with `CONFIG=release`, `strip -S -x` takes the debug and local symbols out of `Contents/MacOS/Fudge` and `Contents/Helpers/fudge`, which otherwise name the builder's folders (`/Users/…`, about 300 paths each) and double their size
-  - `scripts/sign-app.sh` signs it inside-out, each executable in `Contents/Helpers` (the `fudge` tool, esbuild and Node.js), then the app with `App/Fudge.entitlements`, all with the hardened runtime (FUD-44).
+  - with `CONFIG=release`, `strip -S -x` takes the debug and local symbols out of `Contents/MacOS/Fudge`, `Contents/Helpers/fudge` and Fudge Links' executable, which otherwise name the builder's folders (`/Users/…`, about 300 paths each) and double their size
+  - `scripts/sign-app.sh` signs it inside-out, each item in `Contents/Helpers` (the `fudge` tool, esbuild, Node.js and Fudge Links), then the app with `App/Fudge.entitlements`, all with the hardened runtime (FUD-44).
     A helper that needs entitlements of its own has them in `App/Helpers/<its file name>.entitlements`, so a release's signing with the Developer ID gives them too.
     Any other executable added to the bundle (a dylib, a `.node` addon) must be signed there too, or notarization refuses the release.
     The identity is `SIGN_IDENTITY`: from what `security find-identity -v -p codesigning` lists, the default is "fudge local signing", else the first `Apple Development:` identity, else ad hoc (see the README).
@@ -1003,8 +1364,14 @@ Extensions run in a separate Node.js process, the extension host.
     the types beside the script, unless it's set already or there are none there, as with `FUDGE_COMPAT_SCAN=runtime/dist/compat-scan.js` in a checkout, which then reads the vendored ones.
     The JSON report (`report`) names the extension, says `supported` (no gaps and every file read), and lists each gap with its kind and, for one counted apart, its category (`byDesign`).
     It also has `commands`: each command of the manifest with the categories Fudge doesn't support that it reaches (`unsupported`), and whether every import it makes could be followed (`traced`).
+    And `signIn` (SPEC-132 §7): the `OAuth.RedirectMethod`s the extension's own code names, its authorize URLs (`authorizeUrl` in an object, as `OAuthService` takes it, and `endpoint` in `authorizationRequest({ … })`), and whether any was left unresolved.
+    A URL is resolved through string literals, templates, sums and constants declared in any of its files (`resolveString`); one from a preference, a parameter, a call or a name with two values is unresolved.
+    It's a pattern search, so an extension that picks its URL in a way the scan doesn't read could be missed.
     A command is traced from its entry (`src/<name>.{tsx,ts,jsx,js}`, as the build finds it) through every import esbuild leaves, re-exports, `import()` and `require` included (`imports`), resolved among the files the scan read, ignoring case as APFS does (`resolveImport`): relative paths, `@/…` and `~/…` as `src/…`, and TypeScript's `./x.js` for `x.ts`.
     A bare import is a package's only when the manifest lists that package in any of its dependency sections, it's one of Node's built-ins, or the host provides it (`packages`), and a data file (`.json`, `.css`, an image) can't reach the API.
+    A `rust:` import counts as a package's too, with nothing to follow, since the build writes its module from the Rust sources (SPEC-144).
+    So does a `swift:` import (SPEC-145 §3): its module runs a program or refuses, and holds none of the extension's JavaScript.
+    The report names the `swift:` imports (`swiftParts`), which the store reads.
     A command with an import that can't be followed (outside `src/`, an unreadable file, any other bare import, such as a tsconfig `paths` alias or a `baseUrl` import, or an `import()` or `require()` of a computed path, `hasComputedImport`) counts as reaching the whole extension.
     So does every command when a file that uses Raycast AI or the Browser Extension is reached by no entry, a command's or a tool's (`src/tools/<name>`), since something the scan can't see reaches it.
     A barrel's re-exports are followed whole, so a command can be counted for a module of the barrel it doesn't use; in the store that decides 3 of 224 commands.
@@ -1024,6 +1391,9 @@ Extensions run in a separate Node.js process, the extension host.
 
 - **Names must differ by more than case.** macOS file systems are case-insensitive, so no two products or targets may differ only by case.
   The tool's product is `fudge`, which is why the app's product is `FudgeApp`.
+- **Fudge.app declares no URL schemes** (D-107).
+  Spotlight registers a new build in an indexed folder within seconds, and it then claims its schemes; any launch of it (`make run`, a snapshot run, a probe) makes it the app that opens them.
+  Raycast's schemes are declared only by Fudge Links, which only the user's click registers.
 - **Scripts that also run as a command guard it by their own file name** (`import.meta.url.endsWith(".ts")`), as `raycast-types.ts` and `raycast-utils.ts` do.
   Bundled into another script, `import.meta.url` and `process.argv[1]` are both the bundle's, so a guard on those alone would run the generator from inside `compat-scan.js`.
 - **Proxies must return frozen properties untouched.**
@@ -1043,7 +1413,7 @@ Extensions run in a separate Node.js process, the extension host.
   CI's runners have three cores, so the pool has about three threads, and Swift Testing itself needs the pool to start and report tests: with it full, nothing runs, fails or prints until a thread frees.
   A child process, a pipe read, a build or a long semaphore wait runs on a thread of its own (`OffThePool.run`, in the tests), never in `Task.detached`, which takes a pool thread.
   A deadline fires from Dispatch (`OffThePool.after`, or `run(within:)`), not from a `Task.sleep`, and a wait for an event ends as it comes (`Reloads` in `ExtensionsWatcherTests`).
-  A pool that's full for good can still stop the run, so CI's 20-minute step timeout is the last net.
+  A pool that's full for good can still stop the run, so CI's 15-minute job timeout is the last net.
 - **SwiftUI's `TextField` writes its unchanged text back** now and then, three times on ↵ before `onSubmit` and again when it loses the keyboard.
   Setters bound to a field must ignore writes that change nothing, or they'll redo work such as resetting the selection.
 - **`.onAppear` runs once for the panel's lifetime**, not each time it's shown.
@@ -1069,6 +1439,8 @@ Extensions run in a separate Node.js process, the extension host.
     - `--run-action <title>`, given once or more, runs those actions in order, half a second apart (e.g. an extension's Create Quicklink, then Save Quicklink).
     - `--search text` types into its search field.
   - `--accessibility allowed|missing`, `--input-monitoring allowed|missing` and `--login-item <status>` fix what Accessibility, the Snippets page's Input Monitoring and Open at Login show, so nothing asks the system.
+  - `--add-repository <address>` draws the Extension Store's page with the Add Repository window over it and that address typed; it implies `--settings` and that page, as `--clipboard-consent` does.
+  - `--add-repository-add`, with `--add-repository`, presses Add in that window, so a refused address shows its reason.
   - `--calendar-events <file>` gives My Schedule made-up events (`FixedCalendarSource.load`), and without it nothing has been asked.
   - `--clipboard-consent` saves Clipboard History's consent sheet, laid out off-screen like the sign-in one; it implies `--settings` and that page, as `--sign-in-consent` does.
   - `--clipboard-entries <file>` gives Clipboard History made-up entries (a JSON array of `clipboardHistory.list` entries); snapshots never read the clipboard or watch it.
@@ -1091,19 +1463,23 @@ Extensions run in a separate Node.js process, the extension host.
   An ad hoc signature's is its cdhash, which changes with every build, so each ad hoc `make run` drops them; builds signed with an identity keep them.
   **The first signing with an identity shows a keychain prompt** that only a person can answer (Always Allow).
   Until someone has, `make app` waits on it, so build with `SIGN_IDENTITY=-` where nobody has.
-  CI has no identity and stays ad hoc; a release is signed again with the Developer ID identity (see CI and releases).
+  CI has no identity and stays ad hoc; a release is signed again with the Developer ID identity (see Branches, CI and releases).
   No certificate, key, name or team ID ever goes into the repo.
 - **The hardened runtime refuses a protected resource without its entitlement**, with no prompt, whatever the user allowed.
-  `App/Fudge.entitlements` has the two Fudge uses, each with a comment: Apple Events (Finder, System Events and the login window) and Calendars (My Schedule's EventKit).
-  A feature that starts using the camera, the microphone, location, contacts, photos, calendars or Apple Events adds its entitlement there in the same change.
+  `App/Fudge.entitlements` has what Fudge and its extensions may use, each with a comment: Apple Events (Finder, System Events, the login window and extensions' AppleScript), Calendars (My Schedule's EventKit, and extensions' events and reminders), and, for extensions only, Contacts, location, Photos, the camera and the microphone (SPEC-151).
+  Fudge starts extensions' processes and never disclaims them, so macOS counts their requests as Fudge's, and one answer for Fudge covers every extension.
+  Each has the text macOS asks with in `App/Info.plist`; Bluetooth has no hardened-runtime entitlement, only its text (`NSBluetoothAlwaysUsageDescription`).
+  Nothing asks for them at launch: macOS asks when an extension first uses one, and My Schedule asks for Calendars.
+  `AppPermissionsTests` pins both files' keys and texts, so changing either means changing the test too.
+  A feature that starts using another protected resource adds its entitlement and its text in the same change.
   Accessibility, Input Monitoring, Screen Recording and Full Disk Access are permissions the user grants, with no entitlement.
 - **The local-network check reads the URL, not DNS.**
   A public name that resolves to a private address isn't caught. https mostly covers it, since a LAN device rarely has a certificate for a public name.
 - **AppKit draws nothing inside an SVG `<a>` element**, so `RemoteImageDecoder.svgForDrawing` unwraps links before `NSImage(data:)` sees the SVG.
 - **Tests must not touch the user's system.**
   Never trash, open, copy, read the selection, post key events or send Apple Events for real in a test, and smoke-run extensions with a throwaway `HOME`: commands do what they say.
-- **Swift tests that build extensions need esbuild** from `runtime/node_modules`.
-  `make test` installs it; without it, `swift test` skips those tests.
+- **Swift tests that build extensions need esbuild** from `runtime/node_modules`, and Fudge's Node.js (`FUDGE_TEST_NODE`), with which they make the compile step once, as it ships (`Fixtures.bundler`).
+  `make test` gives both; without them, `swift test` skips those tests.
 - **npm may block install scripts.** esbuild works without its postinstall step, so don't approve it just to silence the warning.
 
 ## Commands
@@ -1131,31 +1507,75 @@ Extensions run in a separate Node.js process, the extension host.
 - **Help text, in the app and the README, is brief and says what a feature does, for an end user.**
 - **Every feature that's off by default has an onboarding step** asking whether to turn it on, using the feature's own Settings control and consent, with ↵ leaving it off and nothing preselected.
   `OnboardingStep.optIns` maps each such `FudgeSettings` property to its step, and a test fails for a property that's neither there nor listed as not an opt-in.
+- **Fudge has no fixes for particular extensions** (D-83).
+  When an extension misbehaves, first check whether Fudge differs from Raycast's documented behaviour.
+  If it does, the fix goes in Fudge's implementation of `@raycast/api` (`runtime/src/api/`, or the app code behind it, such as the window calls), applies to every extension, and stays compatible with Raycast.
+  If it doesn't, the bug is the extension's, and Fudge changes nothing: no special case, setting or workaround keyed on any extension's name, owner or files, wherever it came from (Fudge's bundled extensions aside, see below).
+  **The one exception is sign-in** (D-84).
+  The sign-in table (`OAuthProviders`) sends Raycast's sign-in addresses to the relay: GitHub, Linear, Slack and Asana, which `OAuthService` uses by default, and Jira and Zoom, which only the store's Jira and Zoom extensions set.
+  It also sends Notion's, Todoist's, WHOOP's and Miro's proxies, and the shared-proxy addresses of seventeen store extensions, which only those extensions set (FUD-166).
+  Every other `*.oauth.raycast.com` address is refused (see "The fetch rewrite" above).
+  A new entry in that table is built from a reviewed spec like any other change, and needs an app on the relay before its sign-in works.
+  Fudge's bundled extensions (the Extension Store, Search Files, Search Emoji & Symbols and Clipboard History, in `runtime/`) are Fudge's own code: changing them isn't a fix for an extension, and Fudge's own code may name them and give them what other extensions don't get.
 - **Docs are one sentence per line.**
   In `CLAUDE.md` and `README.md`, start each sentence on a new line, and add an item to a list as its own line, so two changes rarely touch the same line.
   `make lint` fails on a line over 400 characters outside code blocks and tables.
 - **The product's name is Fudge**, capitalized, in all text people read.
   `fudge` is only the CLI command, paths, env variables and identifiers.
+- **No em dash (U+2014) in Fudge's text**: write a colon or a comma instead, and join two parts of a message with `MessageText.joined`.
+  `make lint` fails on one in any file git tracks or would track, except Unicode's own data in `runtime/vendor/`; the en dash in ranges such as "09:00 – 09:30" stays.
 
-## CI and releases
+## Branches, CI and releases
 
-- **CI** (`.github/workflows/ci.yml`) runs `make lint` and `make test` on pull requests and pushes to `mainline`.
-  The test step, here and in the release workflow, stops after 20 minutes (`timeout-minutes`), so a hang fails the job instead of holding a runner.
-  `swift test` compiles every target, so the app's code is checked, but the app bundle is not assembled.
-- **The release workflow** (`.github/workflows/release.yml`) is the only place a release is built, and it runs on a pushed `v*` tag.
-  Tags are pushed only with the maintainer's explicit permission, never by an agent.
-  Two jobs:
-  - **`build`**, with a read-only token: the tag must be `v` and a semantic version (checked through an env var, never `${{ }}` in a script), then `make test`, `scripts/release.sh --tag <tag> --ad-hoc-without-secrets` and a `.sha256`, uploaded as an artifact.
-    `--tag` hands the tag to `make app` and `make dmg-image` as `RELEASE_TAG`, never as `VERSION`, so `make release-check` refuses a tag that isn't on the commit.
-  - **`publish`** runs only for a pushed tag, and has the only write token, and runs none of the repo's code: it checks the tag again, downloads the artifact and runs `gh release create` with GitHub's generated notes and one line on opening the app, which depends on how `build` signed it (its `signing` output).
+- **All work is based on and goes into `development`.**
+  Open every pull request with `--base development`: `mainline` is the default branch, so a pull request without it targets `mainline`.
+  Never open a pull request into `mainline` yourself.
+- **`mainline` changes only by a release**, in four steps, with the maintainer's yes before the second and the fourth:
+  1. The maintainer is asked: release `vX.Y.Z` from a `development` commit?
+     The version is `scripts/next-version.sh <commit>`'s, run locally.
+  2. On a yes, `release/vX.Y.Z` is pushed at exactly that commit, and its pull request into `mainline` opened.
+     CI runs on it once, and the reviewer runs `make lint` and `make test` locally at that commit.
+  3. When CI is green and the pull request approved, the maintainer is asked: merge, and so publish `vX.Y.Z`?
+  4. On a yes, it's merged with a merge commit (never a squash or a rebase) and GitHub's own title for it, `Merge pull request #N from jakeobsen/release/vX.Y.Z`, which starts the release, and `release/vX.Y.Z` is deleted.
+- **A release branch is never pushed to again** once it's created: no merge from `development`, no fix.
+  If CI is red, the pull request is closed and the branch deleted, nothing is published, and the fix goes into `development` and a later release.
+- **GitHub Actions run only on a release's pull request into `mainline` (CI) and on its merge (the release)**, because macOS runners cost money.
+  Never run, re-run or dispatch a workflow by hand, and never add another trigger.
+  The one other workflow, "Update GeoNames database" (the calculator's places), runs on Linux and only when the repository's owner starts it.
+  Pull requests into `development` run nothing: their builder and the reviewer run `make lint` and `make test` locally.
+- **The version is worked out, never written down.**
+  `scripts/next-version.sh [<commit>]` prints the next version, with its `v`, from the conventional commit subjects since the highest `v1.2.3` tag in the commit's history, merges left out:
+  a breaking change (`type!:`, or a `BREAKING CHANGE:` or `BREAKING-CHANGE:` footer) bumps the major version from 1.0.0 on and the minor below it, otherwise a `feat` the minor, otherwise the patch.
+  With no release yet it's `v0.1.0`, and with nothing since the last one, or in a shallow clone, it fails.
+  Commit subjects must stay conventional, since they decide the version.
+  A release's tag is on its release commit, which is in `development`, so `git describe` there finds it; `runtime/test/next-version.test.ts` tries the script in throwaway repositories.
+- **CI** (`.github/workflows/ci.yml`) runs on pull requests into `mainline` only, in three jobs:
+  - **`release-branch`** (Linux, seconds) fails unless the head is this repository's `release/vX.Y.Z` (both passed through `env:`), so a pull request into `mainline` from anything else never starts a macOS runner and can't merge.
+  - **`macos`** runs `make lint` and `make test`, capped at 15 minutes (`timeout-minutes`), so a hang fails the job instead of holding a paid runner.
+    `swift test` compiles every target, so the app's code is checked, but the app bundle is not assembled.
+  - **`test`** (Linux) always runs and passes only when both did, since a skipped job counts as passed.
+    It's the check `mainline`'s ruleset requires, so its name stays `test`.
+- **The release workflow** (`.github/workflows/release.yml`) is the only place a release is built, and it runs on a push to `mainline`, a release's merge.
+  No one pushes a `v*` tag: the workflow creates it, on the release commit, once everything has passed.
+  Runs never overlap (`concurrency`), and if any job fails, nothing is published and there's no tag.
+  Three jobs:
+  - **`version`** (Linux, 3 minutes at most, the whole history): the pushed commit must be a merge whose tree is its second parent's, the release commit's, so what's published is what CI and the reviewer tested.
+    `scripts/next-version.sh` names the version from the release commit, and the run stops if it fails, if the merge's title isn't GitHub's for `release/<that version>` (so the version published is the one the maintainer said yes to, and a merge of any other branch never publishes), or if that tag exists.
+  - **`build`** (macOS, 30 minutes at most, a read-only token) checks out the release commit itself, with the whole history, so its build number is the one any later build of the tag gets.
+    It runs `make test`, then `scripts/release.sh --version <version>` and a `.sha256`, uploaded as an artifact.
+    The tag doesn't exist yet, so the version goes to `make` as `VERSION`, in the tag's form (`v0.2.0`), and the app and the disk image show it as a tag build would.
+    `release.sh` refuses a bare `0.2.0`, which the app would show as 0.0.0, and takes anything else `git describe` gives, as `make release` passes it (`runtime/test/release-version.test.ts`).
+    In jakeobsen/fudge, missing signing secrets fail it; a fork, which has none, gets an ad hoc build (`--ad-hoc-without-secrets`).
+  - **`publish`** has the only write token, and runs none of the repo's code: it runs `gh release create <version> --target <release commit>`, which creates the tag with the Release, with GitHub's generated notes and one line on opening the app, which depends on how `build` signed it (its `signing` output).
+    The "Release Tags" ruleset must let the workflow's token create `v*` tags, or this last step is refused.
+    Before that, a step copies the one `Fudge-<version>.dmg` as `Fudge.dmg` and writes its checksum, `Fudge.dmg.sha256`, so the release attaches both too; with no image or more than one, it fails and nothing is published.
+    The website's Download button links to `https://github.com/jakeobsen/fudge/releases/latest/download/Fudge.dmg`, which GitHub sends to that file in the newest full release.
+    So the name `Fudge.dmg` must never change, or the button breaks.
     **The first release** gets that line and the hand-written `.github/first-release-notes.md` instead of generated notes, which would list every pull request so far (SPEC-117 §5).
-    `build` decides it (its `first` output) with `scripts/first-release.sh <tag>`: a tag is the first when no full release (`v1.2.3`, no pre-release suffix) other than itself is in its history (`git tag --merged HEAD`), so `v0.1.0` gets them after a `v0.1.0-rc.1` too.
+    `build` decides it (its `first` output) with `scripts/first-release.sh <version>`: a version is the first when no full release (`v1.2.3`, no pre-release suffix) other than itself is in its history (`git tag --merged HEAD`).
     That needs the whole history, so a shallow checkout fails the step rather than guess; `build` then uploads the file as a second artifact, `notes`.
-    The step only runs on a real tag, so `runtime/test/first-release.test.ts` tries the script in throwaway repositories.
-    A tag with a pre-release suffix (`v1.2.0-rc.1`) is a pre-release.
-  - **Run by hand** (Actions → Release → Run workflow, `workflow_dispatch`), it's the dry run: no tag check, the version `git describe` gives the commit, signed, notarized and stapled, and the disk image as an artifact.
-    Nothing is published.
-  - **The secrets are the `release` environment's**, not the repository's: only `mainline` and `v*` tags may use that environment, and only `build` names it, so no workflow on another branch can read them, one an unreviewed branch adds included.
+    The step only runs in a release, so `runtime/test/first-release.test.ts` tries the script in throwaway repositories.
+  - **The secrets are the `release` environment's**, not the repository's: only `mainline` may use that environment, and only `build` names it, so no workflow on another branch or a tag can read them, one an unreviewed branch adds included.
     Never add them as repository secrets again.
 - **Release signing** (`scripts/release.sh`, FUD-44) reads five secrets, which the workflow gives to that one step only:
   - `APPLE_CERTIFICATE_BASE64`: the Developer ID Application certificate with its private key, a `.p12` in base64
@@ -1168,10 +1588,21 @@ Extensions run in a separate Node.js process, the extension host.
   It signs again with the Developer ID identity (`scripts/sign-app.sh`), notarizes the app with `notarytool` and staples it, makes the disk image from it (`make dmg-image`), signs, notarizes and staples that, and checks both with `spctl`.
   Both signings take the identity from that keychain alone (`codesign --keychain`, `sign-app.sh`'s third argument), so on a Mac whose login keychain has the same Developer ID, `make release` neither finds it twice nor asks for that key's password.
   It never prints a secret or the identity's name: the tools' output shows only when one fails, with those values as `***`.
-  Without any of the five, a tag still makes a release, ad hoc, and its notes say so (a fork has none); the dry run fails instead, as does any run with only some of them.
+  Notarization waits 10 minutes at most for each submission (`notarytool --timeout 10m`), so a stuck one fails the release rather than hold a paid runner.
+  Without any of the five, a fork's release is built ad hoc (`--ad-hoc-without-secrets`), and its notes say so; anywhere else that's a failure, as is any run with only some of them.
 - **`make release`** does the same on the maintainer's Mac, for a release built without CI, after `secret env apple`, which sets the same five variables.
   It refuses a tree with changes, never pushes or tags, and writes no secret to disk but the temporary keychain.
   `make release RELEASE_TAG=<tag>` builds that tag's release (`--tag`), and without it the version is `git describe`'s (`--version`).
+  It's for a build by hand: a published release always comes from the release workflow.
 - **Dev builds** still sign with the Apple Development identity (or "fudge local signing", or ad hoc; see `make app`), so only a release has the Developer ID, and switching between the two asks for permissions again.
-- **`make dmg`** builds the app, then `build/Fudge-<version>.dmg` (the version without its `v`) with `make dmg-image`, which packs the app as it is: the app and a link to `/Applications`, UDZO, volume name Fudge, made with `hdiutil` from a staging folder that's removed afterwards.
+- **`make dmg`** builds the app, then `build/Fudge-<version>.dmg` (the version without its `v`) with `make dmg-image`, which packs the app as it is: the app and a link to `/Applications`, UDZO, volume name Fudge.
+  `make dmg-image` builds only `FudgeDiskImage`, never the app, and runs `scripts/disk-image.sh`, so the notarized and stapled app the release script hands it goes in untouched.
+  **The Finder window** (SPEC-150): 600 × 400 points of content, icon view with no toolbar, sidebar or status bar, Fudge on the left and Applications on the right at 128 points, over a light picture with an arrow between them.
+  It's all in the volume's `.DS_Store`, which `FudgeDiskImage layout` writes (`DiskImageLayout`, `DSStore`, `AliasRecord` in core), so nothing scripts Finder, and a build machine with no one logged in makes the same image.
+  The script makes a writable HFS+ image from a staging folder, mounts it `-nobrowse -noautoopen` at `build/dmg/mount`, so no Finder window opens, lets the tool write the layout, detaches it (tried 5 times, then forced) and compresses it; a trap detaches and deletes the scratch image however it ends.
+  HFS+ rather than APFS is Apple's advice for a disk image whose window has a background picture, which older macOS doesn't show from APFS.
+  The picture is `.background/background.tiff` on the volume, a TIFF with the 1× and 2× images (`App/DiskImage/background.tiff`, which `FudgeDiskImage background <file>` draws from `DiskImageBackground`); Finder finds it through an alias record in the icon view's settings.
+  That alias is written by `AliasRecord` itself, from the volume's name and the path on it: one from `FSNewAliasFromPath`, or a bookmark from `URL.bookmarkData` (the `pBBk` record Finder adds on a writable volume), names the disk image file it was made in, so a published image would carry the build folder's path.
+  `WindowBounds` sets the window's whole frame, title bar included (32 points on macOS 26, 28 before), from the bottom left of the screen.
+  Finder draws the names under the icons dark over a background picture, in dark mode too, which is why the picture is light.
 - **Linting the workflows:** actionlint isn't in CI; run it by hand after changing one: `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml`.

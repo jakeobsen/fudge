@@ -1,0 +1,181 @@
+{
+  "about": "The store's installing/<pid>.json (SPEC-153 C.1), as the app reads it for a notification (SPEC-156 C.2). StoreBuildRecord.parse (Swift) and parseBuildRecord (the store) read each case alike. An added repository's build also names its `repository` folder and the `id` it gets there (SPEC-157 E.3); Raycast's names neither.",
+  "valid": [
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"alpha\", \"dir\": \"alpha\", \"title\": \"Alpha\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/alpha\", \"--into\", \"/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "name": "alpha",
+      "dir": "alpha",
+      "title": "Alpha",
+      "updating": false,
+      "startedAt": "2026-11-20T12:00:00.000Z"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"aws\", \"dir\": \"amazon-aws\", \"title\": \"Amazon AWS\", \"commit\": \"c0ffee1234\", \"updating\": true, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/alpha\", \"--into\", \"/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "name": "aws",
+      "dir": "amazon-aws",
+      "title": "Amazon AWS",
+      "updating": true,
+      "startedAt": "2026-11-20T12:00:00.000Z"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"alpha\", \"dir\": \"http.cat\", \"title\": \"\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/alpha\", \"--into\", \"/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "name": "alpha",
+      "dir": "http.cat",
+      "title": "",
+      "updating": false,
+      "startedAt": "2026-11-20T12:00:00.000Z"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"someone+tools+github\", \"repository\": \"someone/tools\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"someone/tools\", \"--outcome\", \"/support/installing\"]}",
+      "name": "github",
+      "dir": "github",
+      "title": "GitHub",
+      "updating": false,
+      "startedAt": "2026-11-20T12:00:00.000Z",
+      "id": "someone+tools+github",
+      "repository": "someone/tools"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"git.example.org_8443+team+extensions+github\", \"repository\": \"git.example.org_8443/team/extensions\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"git.example.org_8443/team/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "name": "github",
+      "dir": "github",
+      "title": "GitHub",
+      "updating": false,
+      "startedAt": "2026-11-20T12:00:00.000Z",
+      "id": "git.example.org_8443+team+extensions+github",
+      "repository": "git.example.org_8443/team/extensions"
+    }
+  ],
+  "invalid": [
+    {
+      "file": "4242.ended.json",
+      "text": "{\"pid\": 4242, \"name\": \"alpha\", \"dir\": \"alpha\", \"title\": \"Alpha\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/alpha\", \"--into\", \"/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "not a record's name"
+    },
+    {
+      "file": ".4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"alpha\", \"dir\": \"alpha\", \"title\": \"Alpha\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/alpha\", \"--into\", \"/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "a temporary file"
+    },
+    {
+      "file": "4243.json",
+      "text": "{\"pid\": 4242, \"name\": \"alpha\", \"dir\": \"alpha\", \"title\": \"Alpha\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/alpha\", \"--into\", \"/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "another pid"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 0, \"name\": \"alpha\", \"dir\": \"alpha\", \"title\": \"Alpha\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/alpha\", \"--into\", \"/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "pid 0"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"Alpha\", \"dir\": \"alpha\", \"title\": \"Alpha\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/alpha\", \"--into\", \"/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "a name that isn't valid"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"alpha\", \"dir\": \"../alpha\", \"title\": \"Alpha\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/alpha\", \"--into\", \"/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "a folder that isn't valid"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"alpha\", \"dir\": \".alpha\", \"title\": \"Alpha\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/alpha\", \"--into\", \"/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "a folder starting with a dot"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"alpha\", \"dir\": \"alpha\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/alpha\", \"--into\", \"/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "no title"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"alpha\", \"dir\": \"alpha\", \"title\": \"Alpha\", \"tree\": \"aaa1\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/alpha\", \"--into\", \"/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "no commit"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"alpha\", \"dir\": \"alpha\", \"title\": \"Alpha\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": 0, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/alpha\", \"--into\", \"/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "updating as a number"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"alpha\", \"dir\": \"alpha\", \"title\": \"Alpha\", \"tree\": 7, \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/alpha\", \"--into\", \"/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "a tree that isn't a string"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"alpha\", \"dir\": \"alpha\", \"title\": \"Alpha\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/alpha\", \"--into\", \"/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "a start without milliseconds"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"alpha\", \"dir\": \"alpha\", \"title\": \"Alpha\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/alpha\", \"--into\", \"/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "no deadline"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"alpha\", \"dir\": \"alpha\", \"title\": \"Alpha\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"command\": []}",
+      "why": "an empty command"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"alpha\", \"dir\": \"alpha\", \"title\": \"Alpha\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"command\": [\"fudge\", 1]}",
+      "why": "a command part that isn't a string"
+    },
+    {
+      "file": "4242.json",
+      "text": "{",
+      "why": "broken JSON"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"repository\": \"someone/tools\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"someone/tools\", \"--outcome\", \"/support/installing\"]}",
+      "why": "a repository without its id"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"someone+tools+github\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"raycast/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "an id without its repository"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"someone+tools+gist\", \"repository\": \"someone/tools\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"someone/tools\", \"--outcome\", \"/support/installing\"]}",
+      "why": "an id that isn't the repository's and the name"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"someone+other+github\", \"repository\": \"someone/tools\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"someone/tools\", \"--outcome\", \"/support/installing\"]}",
+      "why": "an id of another repository"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"someone+tools+github\", \"repository\": \"Someone/Tools\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"Someone/Tools\", \"--outcome\", \"/support/installing\"]}",
+      "why": "a repository that isn't a folder"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"github\", \"repository\": \"raycast/extensions\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"raycast/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "Raycast's folder named, which its builds never name"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"someone/tools+github\", \"repository\": \"someone/tools\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"someone/tools\", \"--outcome\", \"/support/installing\"]}",
+      "why": "an id with a /"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": \"someone+tools+github\", \"repository\": 7, \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"raycast/extensions\", \"--outcome\", \"/support/installing\"]}",
+      "why": "a repository that isn't a string"
+    },
+    {
+      "file": "4242.json",
+      "text": "{\"pid\": 4242, \"name\": \"github\", \"dir\": \"github\", \"title\": \"GitHub\", \"tree\": \"aaa1\", \"commit\": \"c0ffee1234\", \"updating\": false, \"startedAt\": \"2026-11-20T12:00:00.000Z\", \"deadline\": \"2026-11-20T12:10:00.000Z\", \"id\": 7, \"repository\": \"someone/tools\", \"command\": [\"/Applications/Fudge.app/Contents/Helpers/fudge\", \"build\", \"/repo/extensions/github\", \"--into\", \"/extensions\", \"--repository\", \"someone/tools\", \"--outcome\", \"/support/installing\"]}",
+      "why": "an id that isn't a string"
+    }
+  ]
+}

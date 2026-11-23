@@ -8,14 +8,18 @@ import { basename, join, posix, relative, sep } from "node:path";
 import { maxManifestBytes, maxSourceBytes, readRegularFile } from "./files.ts";
 import { RAYCAST_UTILS_PATHS } from "./raycast-utils.generated.ts";
 import { unsupported } from "../../src/api/stubs.ts";
-import { isExtensionSource, sourceExtensions } from "./source-files.ts";
+import { isCommandName, isExtensionSource, sourceExtensions } from "./source-files.ts";
 import {
     gaps,
     hasComputedImport,
     imports,
+    redirectMethods,
+    resolveString,
+    signInSites,
     toJavaScript,
     uses,
     type Gap,
+    type SignInSites,
     type Transform,
     type Uses,
 } from "./scan.ts";
@@ -63,6 +67,18 @@ export interface CommandResult {
     traced: boolean;
 }
 
+/**
+ * Where the extension's own code signs in (SPEC-132 §7): the `OAuth.RedirectMethod`s it names, the authorize URLs it
+ * gives an OAuth client that the scan could resolve (string constants across its files, a template or a sum of
+ * those), sorted and each once, and whether any authorize URL was left unresolved (a preference, a parameter, a
+ * call). It's a pattern search: an extension that picks its URL in a way the scan doesn't read could be missed.
+ */
+export interface SignIn {
+    methods: string[];
+    authorizeURLs: string[];
+    unresolved: boolean;
+}
+
 export interface Result {
     gaps: Gap[];
     notRaycast: string[];
@@ -71,6 +87,10 @@ export interface Result {
     unreadable: string[];
     /** Each command in the manifest, in its order; none when the manifest can't be read. */
     commands: CommandResult[];
+    signIn: SignIn;
+    /** The `swift:` imports its source makes, each once, sorted (SPEC-145 §3): the store builds or leaves those parts
+     * out. */
+    swiftParts: string[];
 }
 
 export interface ScanOptions {
@@ -155,6 +175,7 @@ export async function scanExtension(folder: string, options: ScanOptions): Promi
                 uses: uses(code),
                 imports: imports(code),
                 computed: hasComputedImport(code),
+                signIn: signInSites(code),
             });
         } catch {
             unreadable.push(relative(folder, file));
@@ -188,7 +209,27 @@ export async function scanExtension(folder: string, options: ScanOptions): Promi
         utils: [...found.utils].sort(),
         unreadable,
         commands,
+        signIn: signIn(found, [...scanned.values()].map((module) => module.signIn)),
+        swiftParts: [
+            ...new Set([...scanned.values()].flatMap((module) => module.imports.filter(isSwiftPart))),
+        ].sort(),
     };
+}
+
+/** A `swift:` import: a part written in Swift (SPEC-145). */
+const isSwiftPart = (specifier: string) => specifier.startsWith("swift:");
+
+/** Where the extension signs in (`SignIn`), from what it uses and each file's `SignInSites`. */
+function signIn(found: Uses, sites: SignInSites[]): SignIn {
+    const constants = new Map<string, string[]>();
+    for (const site of sites) {
+        for (const [name, values] of site.constants) constants.set(name, [...(constants.get(name) ?? []), ...values]);
+    }
+    const resolved = sites.flatMap((site) =>
+        site.urls.map((url) => (url === undefined ? undefined : resolveString(url, constants))),
+    );
+    const authorizeURLs = [...new Set(resolved.filter((url) => url !== undefined))].sort();
+    return { methods: redirectMethods(found), authorizeURLs, unresolved: resolved.includes(undefined) };
 }
 
 /** The categories Fudge doesn't support at all, in `unsupported`'s order. */
@@ -203,11 +244,13 @@ function union(all: Uses[]): Uses {
     return found;
 }
 
-/** What one source file holds for tracing: what it uses, what it imports, and whether it imports a computed path. */
+/** What one source file holds for tracing: what it uses, what it imports, and whether it imports a computed path; and
+ * where it signs in. */
 interface Module {
     uses: Uses;
     imports: string[];
     computed: boolean;
+    signIn: SignInSites;
 }
 
 /**
@@ -227,7 +270,7 @@ function entries(folder: string): { commands: string[]; tools: string[]; depende
         Array.isArray(list)
             ? list.flatMap((entry: unknown) => {
                   const name = (entry as { name?: unknown } | null)?.name;
-                  return typeof name === "string" && /^[a-z0-9][a-z0-9_-]*$/.test(name) ? [name] : [];
+                  return isCommandName(name) ? [name] : [];
               })
             : [];
     const sections = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
@@ -246,13 +289,24 @@ export type Packages = (specifier: string) => boolean;
 
 /**
  * A bare import is a package's only when the manifest lists that package (in any of its dependency sections), it's
- * one of Node's built-ins, or the host provides it. Anything else, such as a tsconfig `paths` alias (`@lib/ai`) or an
- * import from its `baseUrl` (`lib/ai`), names a file of the extension's own the scan can't find.
+ * one of Node's built-ins, or the host provides it. A `rust:` import counts as one too: on a Mac its module is written
+ * from the Rust sources, as Raycast writes it, and holds nothing to follow (`scripts/compile/rust.ts`). So does a
+ * `swift:` import (SPEC-145 §3): its module runs a program or refuses, and holds no JavaScript of the extension's to
+ * follow (`scripts/compile/swift.ts`). Anything else,
+ * such as a tsconfig `paths` alias (`@lib/ai`) or an import from its `baseUrl` (`lib/ai`), names a file of the
+ * extension's own the scan can't find.
  */
 export function packages(dependencies: string[]): Packages {
     const listed = new Set(dependencies);
     return (specifier) => {
-        if (specifier.startsWith("node:") || providedModules.includes(specifier)) return true;
+        if (
+            specifier.startsWith("node:") ||
+            specifier.startsWith("rust:") ||
+            isSwiftPart(specifier) ||
+            providedModules.includes(specifier)
+        ) {
+            return true;
+        }
         const segments = specifier.split("/");
         const name = specifier.startsWith("@") ? segments.slice(0, 2).join("/") : segments[0]!;
         return listed.has(name) || builtinModules.includes(specifier) || builtinModules.includes(name);
@@ -359,6 +413,10 @@ export interface Report {
     unreadable: string[];
     /** Each command and what it reaches that Fudge doesn't support (`CommandResult`). */
     commands: CommandResult[];
+    /** Where its own code signs in (`SignIn`). */
+    signIn: SignIn;
+    /** Its `swift:` imports (`Result.swiftParts`). */
+    swiftParts: string[];
 }
 
 /** The report for one scanned extension, named by its manifest's `name` (else its folder's). */
@@ -381,6 +439,8 @@ export function report(folder: string, result: Result): Report {
         }),
         unreadable: result.unreadable,
         commands: result.commands,
+        signIn: result.signIn,
+        swiftParts: result.swiftParts,
     };
 }
 

@@ -94,6 +94,8 @@ public struct ClipboardHistory: Sendable, Equatable, Codable {
 
     /// The bundled extension whose sessions may call `clipboardHistory.*`.
     public static let extensionName = "fudge-clipboard-history"
+    /// Its id, the key its settings and data are kept under.
+    public static let id = ExtensionID.bundled(extensionName)
     /// What any other caller gets.
     public static let notClipboardHistory = "clipboardHistory calls are only for Fudge's Clipboard History."
     /// At most this many entries; the oldest unpinned go first.
@@ -381,6 +383,6 @@ public enum ClipboardOffset: Equatable, Sendable {
 }
 
 extension ClipboardHistory {
-    /// Whether a session of `caller` may make `clipboardHistory.*` calls: Clipboard History's own only.
-    public static func mayCall(_ caller: String?) -> Bool { caller == extensionName }
+    /// Whether a session of `caller` may make `clipboardHistory.*` calls: Clipboard History's own only, by its whole id.
+    public static func mayCall(_ caller: ExtensionID?) -> Bool { BundledCalls.mayCall(.clipboardHistory, from: caller) }
 }

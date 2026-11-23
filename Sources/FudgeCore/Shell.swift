@@ -13,9 +13,12 @@ public struct ShellError: Error, CustomStringConvertible {
     public var status: Int32
     public var output: String
 
-    public var description: String {
+    public var description: String { Self.describe("`\(command)`", status: status, output: output) }
+
+    /// "<what> failed (exit <status>)", then the output on the lines after it, when there is any.
+    static func describe(_ what: String, status: Int32, output: String) -> String {
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return "`\(command)` failed (exit \(status))" + (trimmed.isEmpty ? "" : ":\n\(trimmed)")
+        return "\(what) failed (exit \(status))" + (trimmed.isEmpty ? "" : ":\n\(trimmed)")
     }
 }
 

@@ -3,8 +3,9 @@
 #
 #   scripts/release.sh [--tag <tag> | --version <version>] [--ad-hoc-without-secrets]
 #
-# The release workflow runs it on a tag (and by hand, as a dry run), and `make release` on the maintainer's Mac,
-# after `secret env apple`. It reads five variables, the workflow's secrets of the same names:
+# The release workflow runs it when a release's pull request (release/vX.Y.Z) is merged into mainline, and `make
+# release` on the maintainer's Mac, after `secret env apple`. It reads five variables, the workflow's secrets of the
+# same names:
 #
 #   APPLE_CERTIFICATE_BASE64     the Developer ID Application certificate with its private key: a .p12, in base64
 #   APPLE_CERTIFICATE_PASSWORD   the .p12's password
@@ -21,12 +22,13 @@
 # timestamp (scripts/sign-app.sh), with the identity from that keychain alone, the app is notarized and stapled, then
 # the disk image is made from it, signed, notarized and stapled. Gatekeeper's assessment of both is the last check.
 #
-# Without any of the five, --ad-hoc-without-secrets (the tag workflow, so a fork can still build) makes the ad hoc
+# Without any of the five, --ad-hoc-without-secrets (the release workflow in a fork, which has none) makes the ad hoc
 # image instead and says so; otherwise that's a failure, as some of them without the others always is.
-# --tag names the tag a release is built from (the tag workflow's): it's the version, and the build passes it to make
-# as RELEASE_TAG, so `make release-check` refuses it unless it's a tag on this commit. Otherwise the version is
-# --version, else what `git describe` says, as `make app` takes it. A tree with changes is refused, since the
-# version names a commit. It never pushes or tags.
+# --version is the version, in the tag's form (v0.2.0): the release workflow's, whose tag is only created once the
+# release is published. --tag names a tag that already exists (`make release RELEASE_TAG=<tag>`): it's the version,
+# and the build passes it to make as RELEASE_TAG, so `make release-check` refuses it unless it's a tag on this commit.
+# Without either, the version is what `git describe` says, as `make app` takes it. A tree with changes is refused,
+# since the version names a commit. It never pushes or tags.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -67,6 +69,11 @@ done
 if [ -n "$tag" ] && [ -n "$version" ]; then
 	printf '%s\n' "$usage" >&2
 	exit 2
+fi
+# The app reads a version only in the tag's form, so a bare 0.2.0 would call itself 0.0.0. Anything else git describe
+# gives (v0.2.0-3-gabc1234, or a bare commit before the first tag) is make's VERSION as always.
+if [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+	fail "--version takes the version in the tag's form, v$version"
 fi
 
 present=()
@@ -191,9 +198,11 @@ json_field() {
 	plutil -extract "$1" raw -o - - 2>/dev/null || true
 }
 
+# notarytool waits 10 minutes at most for each submission, so a stuck notarization fails the release rather than hold
+# a paid runner until the job's cap.
 notarize() {
 	local file=$1 out status id
-	out=$(xcrun notarytool submit "$file" --keychain-profile "$profile" --keychain "$keychain" --wait --timeout 1h \
+	out=$(xcrun notarytool submit "$file" --keychain-profile "$profile" --keychain "$keychain" --wait --timeout 10m \
 		--output-format json 2>"$work/notarytool.log") || true
 	status=$(json_field status <<<"$out")
 	id=$(json_field id <<<"$out")

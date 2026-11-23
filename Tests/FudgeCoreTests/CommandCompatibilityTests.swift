@@ -7,8 +7,9 @@ import Testing
 // default never looks like the user's choice (the spec review's MUST).
 
 private let slack = "slack"
-private let emojis = FudgeSettings.commandID(extension: slack, command: "search-emojis")
-private let search = FudgeSettings.commandID(extension: slack, command: "search")
+private let slackOwner = CommandOwner.extension(ExtensionID(stored: slack)!)
+private let emojis = FudgeSettings.commandID(owner: slackOwner, command: "search-emojis")
+private let search = FudgeSettings.commandID(owner: slackOwner, command: "search")
 
 /// An installed extension with these commands, and what `compatibility.json` says they use.
 private func installed(_ commands: [String], using: [String: [CommandCompatibility.Unsupported]]) -> InstalledExtension
@@ -16,7 +17,7 @@ private func installed(_ commands: [String], using: [String: [CommandCompatibili
     let list = commands.map { #"{"name":"\#($0)","title":"\#($0)","mode":"view"}"# }.joined(separator: ",")
     let json = #"{"name":"\#(slack)","title":"Slack","commands":[\#(list)]}"#
     let manifest = try! JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8))
-    return InstalledExtension(
+    return InstalledExtension.topLevel(
         manifest: manifest, directory: URL(fileURLWithPath: "/nonexistent"),
         compatibility: CommandCompatibility(commands: using))
 }
@@ -64,6 +65,16 @@ private func installed(_ commands: [String], using: [String: [CommandCompatibili
     #expect(CommandCompatibility.load(from: folder.appendingPathComponent("missing")) == CommandCompatibility())
 }
 
+/// SPEC-143: command names as Raycast accepts them (`caffeinateWhile`, dots) are kept, in their own case.
+@Test func compatibilityJSONKeepsCommandNamesAsRaycastAcceptsThem() throws {
+    let folder = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let written = CommandCompatibility(commands: ["caffeinateWhile": [.ai], "show-recent.command": [.browserExtension]])
+    try written.write(to: folder)
+    #expect(CommandCompatibility.load(from: folder) == written)
+    #expect(CommandCompatibility.load(from: folder).commands["caffeinatewhile"] == nil, "the name keeps its case")
+}
+
 @Test func settingsSayWhyACommandIsOff() {
     let compatibility = CommandCompatibility(commands: ["ask": [.ai], "tabs": [.ai, .browserExtension]])
     #expect(compatibility.reason(for: "ask") == "Uses Raycast AI, which Fudge doesn't support.")
@@ -107,7 +118,7 @@ private func installed(_ commands: [String], using: [String: [CommandCompatibili
     #expect(!settings.isEnabled(commandID: emojis))
 
     // The extension's own Enabled still applies.
-    settings.extensions[slack] = .init(enabled: false)
+    settings.extensions[slackOwner] = .init(enabled: false)
     #expect(!settings.isEnabled(commandID: search))
 }
 
@@ -167,7 +178,7 @@ private func installed(_ commands: [String], using: [String: [CommandCompatibili
     #expect(reloaded.isEnabled(commandID: emojis))
 }
 
-@Suite(.enabled(if: Fixtures.esbuild != nil, "needs esbuild: run `make test`, which installs it"))
+@Suite(.enabled(if: Fixtures.canBuild, "needs esbuild and Fudge's Node.js: run `make test`"))
 struct BuildRecordsCommandCompatibility {
     @Test func theBuildWritesWhatTheScanFoundIntoTheInstall() throws {
         let source = try Fixtures.greeterCopy()
@@ -176,12 +187,12 @@ struct BuildRecordsCommandCompatibility {
             try? FileManager.default.removeItem(at: source.deletingLastPathComponent())
             try? FileManager.default.removeItem(at: extensions)
         }
-        let builder = ExtensionBuilder(
-            esbuild: try #require(Fixtures.esbuild),
-            scanCommands: { _ in CommandCompatibility(commands: ["quiet": [.ai]]) })
+        let builder = Fixtures.builder(scanCommands: { _ in CommandCompatibility(commands: ["quiet": [.ai]]) })
         let installed = try builder.build(source: source, into: extensions)
         #expect(installed.compatibility.commands == ["quiet": [.ai]])
-        #expect(try InstalledExtension.load(from: installed.directory).compatibility.commands == ["quiet": [.ai]])
+        #expect(
+            try InstalledExtension.load(from: installed.directory, id: installed.id, repository: installed.repository)
+                .compatibility.commands == ["quiet": [.ai]])
         // Its own file, so building over it again isn't refused as "not an install".
         _ = try builder.build(source: source, into: extensions)
     }
@@ -194,7 +205,7 @@ struct BuildRecordsCommandCompatibility {
             try? FileManager.default.removeItem(at: source.deletingLastPathComponent())
             try? FileManager.default.removeItem(at: extensions)
         }
-        let builder = ExtensionBuilder(esbuild: try #require(Fixtures.esbuild), scanCommands: { _ in throw Failed() })
+        let builder = Fixtures.builder(scanCommands: { _ in throw Failed() })
         let installed = try builder.build(source: source, into: extensions)
         #expect(installed.compatibility == CommandCompatibility())
         #expect(
@@ -203,10 +214,26 @@ struct BuildRecordsCommandCompatibility {
     }
 }
 
-@Suite(.enabled(if: Fixtures.esbuild != nil && Tool.node != nil, "needs esbuild and node: run `make test`"))
+@Suite(.enabled(if: Fixtures.canBuild && Tool.node != nil, "needs esbuild and node: run `make test`"))
 struct BuildScansEndToEnd {
     /// `fudge build` through the real tool and the real scanner: only the command that reaches AI is listed.
     @Test func fudgeBuildListsTheCommandThatUsesRaycastAI() async throws {
+        let installed = try await fudgeBuild(ask: "ask", plain: "plain")
+        #expect(installed.compatibility.commands == ["ask": [.ai]])
+        #expect(InstalledExtension.offByDefault([installed]) == ["fudgeapp+development+made-up/ask"])
+    }
+
+    /// SPEC-143: a command named as Raycast accepts it (`caffeinateWhile`) is scanned too, so one that uses AI is
+    /// still off by default.
+    @Test func fudgeBuildListsACamelCaseCommandThatUsesRaycastAI() async throws {
+        let installed = try await fudgeBuild(ask: "askAway", plain: "plain.command")
+        #expect(installed.compatibility.commands == ["askAway": [.ai]])
+        #expect(InstalledExtension.offByDefault([installed]) == ["fudgeapp+development+made-up/askAway"])
+    }
+
+    /// Builds a made-up extension with the real `fudge build`: a command named `ask` that reaches Raycast AI through
+    /// a module of its own, and one named `plain` that doesn't.
+    private func fudgeBuild(ask: String, plain: String) async throws -> InstalledExtension {
         let folder = try Fixtures.temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: folder) }
         let source = folder.appendingPathComponent("made-up")
@@ -214,13 +241,15 @@ struct BuildScansEndToEnd {
             at: source.appendingPathComponent("src/lib"), withIntermediateDirectories: true)
         let manifest = #"""
             {"name":"made-up","title":"Made Up","commands":[
-              {"name":"ask","title":"Ask","mode":"no-view"},{"name":"plain","title":"Plain","mode":"no-view"}]}
+              {"name":"\#(ask)","title":"Ask","mode":"no-view"},
+              {"name":"\#(plain)","title":"Plain","mode":"no-view"}]}
             """#
         let files = [
             "package.json": manifest,
-            "src/ask.ts": "import { ask } from \"./lib/ai\";\nexport default async () => { await ask(); };\n",
+            "src/\(ask).ts": "import { ask } from \"./lib/ai\";\nexport default async () => { await ask(); };\n",
             "src/lib/ai.ts": "import { AI } from \"@raycast/api\";\nexport const ask = () => AI.ask(\"hi\");\n",
-            "src/plain.ts": "import { showHUD } from \"@raycast/api\";\nexport default async () => showHUD(\"hi\");\n",
+            "src/\(plain).ts":
+                "import { showHUD } from \"@raycast/api\";\nexport default async () => showHUD(\"hi\");\n",
         ]
         for (path, text) in files {
             try text.write(to: source.appendingPathComponent(path), atomically: true, encoding: .utf8)
@@ -232,7 +261,7 @@ struct BuildScansEndToEnd {
         process.arguments = ["build", source.path, "--into", extensions.path]
         process.environment = [
             "HOME": folder.path, "PATH": "/usr/bin:/bin", "TMPDIR": folder.path + "/",
-            "FUDGE_ESBUILD": try #require(Fixtures.esbuild).path,
+            "FUDGE_ESBUILD": try #require(Fixtures.esbuild).path, "FUDGE_BUNDLER": try #require(Fixtures.bundler).path,
             "FUDGE_COMPAT_SCAN": Fixtures.repository.appendingPathComponent("runtime/scripts/compat/fudge-scan.ts")
                 .path,
         ]
@@ -246,9 +275,7 @@ struct BuildScansEndToEnd {
         }
         if exited != true { process.terminate() }
         try #require(exited == true, "fudge build exited")
-        #expect(process.terminationStatus == 0)
-        let installed = try InstalledExtension.load(from: extensions.appendingPathComponent("made-up"))
-        #expect(installed.compatibility.commands == ["ask": [.ai]])
-        #expect(InstalledExtension.offByDefault([installed]) == ["made-up/ask"])
+        try #require(process.terminationStatus == 0)
+        return try #require(InstalledExtension.all(in: extensions).first { $0.manifest.name == "made-up" })
     }
 }

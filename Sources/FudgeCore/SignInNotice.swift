@@ -34,14 +34,14 @@ public struct SignInNotice: Equatable, Sendable {
     /// (the failure then shows as any other). `message` is the refusal's own: a refused sign-in shows it, since it's
     /// the provider's or the relay's reason. `commandID` is `<extension>/<command>`, which Try Again runs again.
     public init?(
-        notice: String?, message: String, extensionName: String, extensionTitle: String, commandID: String?,
+        notice: String?, message: String, extension id: ExtensionID, extensionTitle: String, commandID: String?,
         commandTitle: String? = nil
     ) {
         guard let notice, let kind = Kind(rawValue: notice) else { return nil }
         self.kind = kind
         self.commandTitle = commandTitle
-        let name = extensionTitle.isEmpty ? extensionName : extensionTitle
-        let settings = ("Open Extension Settings", RootAction.configureExtension(extensionName))
+        let name = extensionTitle.isEmpty ? id.key : extensionTitle
+        let settings = ("Open Extension Settings", RootAction.configureExtension(id))
         let retry: [(String, KeyShortcut?, RootAction)] =
             commandID.map { [("Try Again", RootActions.enter, .retryCommand($0))] } ?? []
         switch kind {

@@ -3,7 +3,8 @@
 // or `/refresh-token` instead. Nothing else is changed. With sign-in off, a request to one of Raycast's proxy hosts
 // is refused here, never sent.
 //
-// The provider table is core's (`OAuthProviders`), handed over by the app in `FUDGE_OAUTH_PROVIDERS`.
+// The provider table is core's (`OAuthProviders`), handed over by the app in `FUDGE_OAUTH_PROVIDERS` and read, with
+// Raycast's hosts, in `oauth-table.ts`.
 
 import http from "node:http";
 import https from "node:https";
@@ -12,35 +13,17 @@ import tls from "node:tls";
 import zlib from "node:zlib";
 import { markNotice } from "../notice.ts";
 import { signInOffMessage, signInOffNotice } from "./oauth.ts";
+import { isRaycastDomainHost, isRaycastHost, type OAuthProvider } from "./oauth-table.ts";
 
-export type OAuthProvider = { id: string; name: string; authorizeURL: string; tokenURL: string; refreshURL: string };
-
-export const providersVariable = "FUDGE_OAUTH_PROVIDERS";
-
-/** The table the app passed; empty when it's missing or doesn't read. */
-export function providersFromEnvironment(value = process.env[providersVariable]): OAuthProvider[] {
-    try {
-        const parsed: unknown = JSON.parse(value ?? "[]");
-        if (!Array.isArray(parsed)) return [];
-        return parsed.filter(
-            (entry): entry is OAuthProvider =>
-                typeof entry === "object" &&
-                entry !== null &&
-                ["id", "name", "authorizeURL", "tokenURL", "refreshURL"].every(
-                    (key) => typeof (entry as Record<string, unknown>)[key] === "string",
-                ),
-        );
-    } catch {
-        return [];
-    }
-}
-
-/** Raycast's sign-in proxies, `*.oauth.raycast.com`: Fudge never sends anything there. DNS ignores a trailing dot,
- * so `github.oauth.raycast.com.` is one of them too. */
-export function isRaycastHost(hostname: string): boolean {
-    const host = hostname.toLowerCase().replace(/\.+$/, "");
-    return host === "oauth.raycast.com" || host.endsWith(".oauth.raycast.com");
-}
+export {
+    isRaycastDomainHost,
+    isRaycastHost,
+    providersFromEnvironment,
+    providersVariable,
+    raycastDomainsFromEnvironment,
+    raycastDomainsVariable,
+    type OAuthProvider,
+} from "./oauth-table.ts";
 
 function parse(url: string): URL | null {
     try {
@@ -79,9 +62,16 @@ const grants = new Set(["authorization_code", "refresh_token"]);
 /**
  * Routes a request. Only a `POST` to a table token or refresh URL (by scheme, host and path) with `grant_type`
  * `authorization_code` or `refresh_token` can go to the relay; a URL that's both (Google, Jira, Zoom) goes to
- * `/refresh-token` for a refresh. Anything else on Raycast's proxy hosts is refused; everything else is untouched.
+ * `/refresh-token` for a refresh. Anything else on Raycast's proxy hosts is refused, and so is a token or refresh
+ * grant to any of Raycast's hosts (`isRaycastDomainHost`, SPEC-132 §2 step 5); everything else is untouched.
  */
-export function route(method: string, url: string, grant: string | null, providers: OAuthProvider[]): Route {
+export function route(
+    method: string,
+    url: string,
+    grant: string | null,
+    providers: OAuthProvider[],
+    domains?: readonly string[],
+): Route {
     const parsed = parse(url);
     if (parsed === null) return { kind: "untouched" };
     const provider = providerFor(parsed, providers);
@@ -97,9 +87,15 @@ export function route(method: string, url: string, grant: string | null, provide
             : token !== null && key(token) === key(parsed)
               ? "token"
               : "refresh-token";
-        return { kind: "relay", provider, endpoint, ownHost: !raycast };
+        // A table match on any of Raycast's hosts (FUD-166's Todoist proxy, `*.oauth-proxy.raycast.com`, included) is
+        // Raycast's address, never the provider's own host. The narrow check stays, since `domains` is empty when
+        // `FUDGE_RAYCAST_DOMAINS` isn't set.
+        const ownHost = !(raycast || isRaycastDomainHost(parsed.hostname, domains));
+        return { kind: "relay", provider, endpoint, ownHost };
     }
-    return raycast ? { kind: "refused" } : { kind: "untouched" };
+    if (raycast) return { kind: "refused" };
+    if (grant !== null && grants.has(grant) && isRaycastDomainHost(parsed.hostname, domains)) return { kind: "refused" };
+    return { kind: "untouched" };
 }
 
 /** A request body's `grant_type`: from URL-encoded parameters, a JSON object or a URL-encoded string. */
@@ -148,10 +144,19 @@ export function refusalError(decision: Extract<Decision, { kind: "refused" }>): 
     return decision.notice === undefined ? error : markNotice(error, decision.notice);
 }
 
-/** Whether a request to `url` needs a decision, and so its body: Raycast's proxy hosts and the table's token and
- * refresh URLs. Everything else goes where it was going, untouched and unread. */
-export function needsDecision(url: URL, providers: OAuthProvider[]): boolean {
-    return isRaycastHost(url.hostname) || providerFor(url, providers) !== null;
+/** Whether a request to `url` needs a decision, and so its body: Raycast's proxy hosts, the table's token and
+ * refresh URLs, and a request with a body to any of Raycast's hosts, which may be a token or refresh grant
+ * (SPEC-132 §2 step 5). Everything else, a plain `GET` to raycast.com included, goes where it was going, untouched and
+ * unread. */
+export function needsDecision(
+    url: URL,
+    providers: OAuthProvider[],
+    method = "GET",
+    domains?: readonly string[],
+): boolean {
+    if (isRaycastHost(url.hostname) || providerFor(url, providers) !== null) return true;
+    const bodiless = ["GET", "HEAD"].includes(method.toUpperCase());
+    return !bodiless && isRaycastDomainHost(url.hostname, domains);
 }
 
 /**
@@ -277,9 +282,9 @@ export function rewriteFetch(
         // Anything but a Request is read as `fetch` reads it, as a string: a URL, a URL from another realm, or any
         // object with a `toString()`.
         const parsed = parse(request ? request.url : String(input));
-        if (parsed === null || !needsDecision(parsed, providers)) return original(input, init);
-
         const method = init?.method ?? request?.method ?? "GET";
+        if (parsed === null || !needsDecision(parsed, providers, method)) return original(input, init);
+
         const body = init?.body ?? (request ? await request.clone().text() : undefined);
         const decision = await decide(method, parsed, body, providers, server);
         if (decision.kind === "untouched") return original(input, init);

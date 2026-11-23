@@ -25,22 +25,24 @@ enum Tool {
 
     static func isGone(_ pid: pid_t) -> Bool { kill(pid, 0) == -1 && errno == ESRCH }
 
-    /// A ceiling that only catches a hang: each wait ends as soon as what it waits for has happened, so a CI runner
-    /// that stalls for seconds can't fail it.
-    static let noHang: Duration = .seconds(30)
+    /// A ceiling that only catches a hang: each wait ends as soon as what it waits for has happened, so a machine that
+    /// stalls can't fail it. Stalls of about 30 s have been seen in full runs at background priority (`taskpolicy -b`).
+    static let noHang: Duration = .seconds(120)
 
     /// The pinned Node.js `make test` hands the tests.
     static let node = Fixtures.node
 
-    /// The tool laid out as in Fudge.app, `<folder>/Contents/Helpers/fudge` (a hard link, else a copy), with `node`
-    /// beside it, as a link, when given. The tool finds Node.js only there. The caller removes `folder`.
+    /// The tool laid out as in Fudge.app, `<folder>/Contents/Helpers/fudge`, a copy of its own, with `node` beside
+    /// it, as a link, when given. The tool finds Node.js only there. The caller removes `folder`.
+    /// Never a hard link: macOS checks each run of the tool by a path it finds for the file, and with one file under
+    /// many names, a name another test had deleted got a run killed (FUD-197).
     static func bundled(in folder: URL, node: URL?) throws -> URL {
         let tool = try #require(fudge, "swift test builds the fudge tool")
         let files = FileManager.default
         let helpers = folder.appendingPathComponent("Contents/Helpers", isDirectory: true)
         try files.createDirectory(at: helpers, withIntermediateDirectories: true)
         let bundled = helpers.appendingPathComponent("fudge")
-        do { try files.linkItem(at: tool, to: bundled) } catch { try files.copyItem(at: tool, to: bundled) }
+        try files.copyItem(at: tool, to: bundled)
         if let node {
             try files.createSymbolicLink(at: helpers.appendingPathComponent("node"), withDestinationURL: node)
         }
@@ -56,9 +58,14 @@ enum Tool {
         try await OffThePool.run { try runHere(tool, arguments, environment: environment) }
     }
 
-    private static func runHere(_ tool: URL, _ arguments: [String], environment: [String: String]) throws -> (
-        Int32, String, String
-    ) {
+    /// `run`'s work, on the calling thread. At `deadline` a tool still running gets SIGTERM, and `grace` later SIGKILL
+    /// (`kill`), each only while it's still running (`isRunning`): a tool that has exited, its pipe held open by a
+    /// leftover child, has been reaped, so its pid may be another process's by then.
+    static func runHere(
+        _ tool: URL, _ arguments: [String], environment: [String: String], deadline: Duration = noHang,
+        grace: Duration = .seconds(5), isRunning: (Process) -> Bool = { $0.isRunning },
+        kill: (pid_t, Int32) -> Void = { _ = Darwin.kill($0, $1) }
+    ) throws -> (Int32, String, String) {
         let process = Process()
         process.executableURL = tool
         process.arguments = arguments
@@ -69,10 +76,10 @@ enum Tool {
         process.standardError = errors
         let read = PipeReader(output, errors)
         try process.run()
-        if !read.ended(within: noHang) {
-            process.terminate()
-            if !read.ended(within: .seconds(5)) { kill(process.processIdentifier, SIGKILL) }
-            _ = read.ended(within: .seconds(5))
+        if !read.ended(within: deadline) {
+            if isRunning(process) { process.terminate() }
+            if !read.ended(within: grace), isRunning(process) { kill(process.processIdentifier, SIGKILL) }
+            _ = read.ended(within: grace)
         }
         process.waitUntilExit()
         let (out, err) = read.text
@@ -174,6 +181,67 @@ private final class PipeReader: @unchecked Sendable {
     }
 }
 
+/// The signals `Tool.runHere` decided to send, by pid; none is sent.
+private final class Signals: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sent: [Int32] = []
+    func record(_ signal: Int32) { lock.withLock { sent.append(signal) } }
+    var all: [Int32] { lock.withLock { sent } }
+}
+
+/// `Tool.runHere`'s ending of a tool whose pipe a leftover child holds open: `/bin/sh` starts that child, which ignores
+/// SIGTERM (`terminate` signals a tool's subtasks too) and only then writes its own pid to `pids`, and runs `then`.
+/// Whether the tool is still running is `running`'s answer, given once the child has written its pid, so no signal
+/// comes before the child is ready, however slowly the shell starts. Returns the tool's status and the signals
+/// `runHere` decided to send.
+private func endingATool(then: String, running: Bool) async throws -> (Int32, [Int32]) {
+    let folder = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let pids = folder.appendingPathComponent("pids")
+    defer {
+        let written = (try? String(contentsOf: pids, encoding: .utf8)) ?? ""
+        if let child = pid_t(written.trimmingCharacters(in: .whitespacesAndNewlines)), !Tool.isGone(child) {
+            kill(child, SIGKILL)
+        }
+    }
+    let signals = Signals()
+    // Single quotes, so `$$` is the child's own pid; the path is its argument.
+    let script = "(trap '' TERM; exec /bin/sh -c 'echo $$ > \"$1\"; exec /bin/sleep 600' sh '\(pids.path)') & \(then)"
+    let ran = try await OffThePool.run(within: Tool.noHang * 2) {
+        try Tool.runHere(
+            URL(fileURLWithPath: "/bin/sh"), ["-c", script], environment: [:], deadline: .milliseconds(200),
+            grace: .milliseconds(200), isRunning: { _ in answer(running, onceAPidIsIn: pids) },
+            kill: { _, signal in signals.record(signal) })
+    }
+    let (status, _, _) = try #require(ran, "runHere returned")
+    return (status, signals.all)
+}
+
+/// `running`, once `file` holds a pid, waiting on the calling thread up to `Tool.noHang`.
+private func answer(_ running: Bool, onceAPidIsIn file: URL) -> Bool {
+    let clock = ContinuousClock()
+    let started = clock.now
+    while clock.now - started < Tool.noHang {
+        let written = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+        if pid_t(written.trimmingCharacters(in: .whitespacesAndNewlines)) != nil { break }
+        Thread.sleep(forTimeInterval: 0.02)
+    }
+    return running
+}
+
+@Test func aToolThatHasExitedIsntKilledWhileItsChildHoldsThePipe() async throws {
+    let (status, signals) = try await endingATool(then: "exit 3", running: false)
+    #expect(status == 3, "it ended on its own")
+    #expect(signals.isEmpty, "it had exited, so its pid wasn't killed: it may be another process's by then")
+}
+
+@Test func aToolStillRunningAfterTheGraceIsKilled() async throws {
+    // SIGTERM ends the tool, but not the child, which keeps the pipe open, so `runHere` reaches the kill.
+    let (status, signals) = try await endingATool(then: "exec /bin/sleep 600", running: true)
+    #expect(status == SIGTERM)
+    #expect(signals == [SIGKILL], "a tool still running gets SIGKILL")
+}
+
 @Test func terminatingFudgeScanEndsNodeAndEverythingItStarted() async throws {
     let folder = try Fixtures.temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: folder) }
@@ -213,15 +281,38 @@ private final class PipeReader: @unchecked Sendable {
     #expect(!FileManager.default.fileExists(atPath: ran.path), "the other Node.js never ran")
 }
 
-@Test(.enabled(if: Fixtures.esbuild != nil, "needs esbuild: run `make test`"))
+/// Each test runs a copy of the tool that only it names, never a hard link to the one `swift test` built (FUD-197).
+@Test func eachTestRunsItsOwnCopyOfTheTool() throws {
+    let folder = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let files = FileManager.default
+    let built = try files.attributesOfItem(atPath: try #require(Tool.fudge, "swift test builds the fudge tool").path)
+    let tool = try Tool.bundled(in: folder.appendingPathComponent("app"), node: nil)
+    let copy = try files.attributesOfItem(atPath: tool.path)
+    #expect(copy[.type] as? FileAttributeType == .typeRegular, "a file, not a link")
+    #expect(copy[.referenceCount] as? Int == 1, "one name")
+    let builtFile = try #require(built[.systemFileNumber] as? Int)
+    let copyFile = try #require(copy[.systemFileNumber] as? Int)
+    #expect(copyFile != builtFile, "not the built file")
+    #expect(files.isExecutableFile(atPath: tool.path))
+}
+
+@Test(.enabled(if: Fixtures.canBuild, "needs esbuild and Fudge's Node.js: run `make test`"))
 func buildInstallsDependenciesWithTheBundledNpm() async throws {
     let folder = try Fixtures.temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: folder) }
-    // A stand-in for Node.js that writes down how it was run, and installs nothing.
+    // A stand-in for Node.js that writes down how npm was run, and installs nothing; the compile step gets the real one.
     let node = folder.appendingPathComponent("node")
     let ran = folder.appendingPathComponent("ran")
-    try "#!/bin/sh\nprintf '%s\\n' \"$PATH\" \"$@\" > '\(ran.path)'\n".write(
-        to: node, atomically: true, encoding: .utf8)
+    let realNode = try #require(Fixtures.node).path
+    try """
+    #!/bin/sh
+    case "$1" in
+    */npm-cli.js) printf '%s\\n' "$PATH" "$@" > '\(ran.path)' ;;
+    *) exec '\(realNode)' "$@" ;;
+    esac
+
+    """.write(to: node, atomically: true, encoding: .utf8)
     try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: node.path)
     let tool = try Tool.bundled(in: folder.appendingPathComponent("app"), node: node)
 
@@ -241,7 +332,7 @@ func buildInstallsDependenciesWithTheBundledNpm() async throws {
         tool, ["build", source.path, "--into", extensions.path],
         environment: [
             "HOME": folder.path, "PATH": "/usr/bin:/bin", "FUDGE_ESBUILD": try #require(Fixtures.esbuild).path,
-            "TMPDIR": temporary.path + "/",
+            "FUDGE_BUNDLER": try #require(Fixtures.bundler).path, "TMPDIR": temporary.path + "/",
         ])
     #expect(status == 0, "\(err)")
     let lines = try String(contentsOf: ran, encoding: .utf8).split(separator: "\n").map(String.init)
@@ -252,12 +343,43 @@ func buildInstallsDependenciesWithTheBundledNpm() async throws {
         Array(lines.dropFirst(2)) == ["install", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error"])
 }
 
-@Test func terminatingFudgeBuildEndsEsbuildAndEverythingItStarted() async throws {
+/// Every build runs Fudge's own Node.js and the bundling script (SPEC-144): a `fudge` without them beside it, as outside
+/// Fudge.app, stops before anything is made, even for an extension with no dependencies.
+@Test func aFudgeWithoutItsNodeOrBundlingScriptStopsClearly() async throws {
     let folder = try Fixtures.temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: folder) }
-    let esbuild = folder.appendingPathComponent("esbuild")
+    let source = try Fixtures.greeterCopy()
+    defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
+    let extensions = folder.appendingPathComponent("extensions")
+    try FileManager.default.createDirectory(at: extensions, withIntermediateDirectories: true)
+    for (index, node) in ([nil] + (Tool.node.map { [$0] } ?? [])).enumerated() {
+        let tool = try Tool.bundled(in: folder.appendingPathComponent("app-\(index)"), node: node)
+        let (status, _, err) = try await Tool.run(
+            tool, ["build", source.path, "--into", extensions.path],
+            environment: [
+                "HOME": folder.path, "PATH": "/usr/bin:/bin", "FUDGE_ESBUILD": "/nonexistent/esbuild",
+                "TMPDIR": folder.path + "/",
+            ])
+        #expect(status == 1, "node: \(node?.path ?? "none")")
+        #expect(
+            err == "fudge: compiling needs Fudge's own Node.js and its bundling script, which aren't beside this fudge "
+                + "tool; use the fudge inside Fudge.app\n")
+        // The move's lock and the build's come first, and their files stay (SPEC-153 A); nothing else is made.
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: extensions.path).sorted() == [
+                Development.lock("greeter"), ".move.lock",
+            ])
+    }
+}
+
+@Test func terminatingFudgeBuildEndsTheCompileStepAndEverythingItStarted() async throws {
+    let folder = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    // The compile step is Fudge's own Node.js running the bundling script, which drives esbuild: here a stand-in.
+    let node = folder.appendingPathComponent("node")
     let pids = folder.appendingPathComponent("pids")
-    try Tool.neverExiting(at: esbuild, pids: pids)
+    try Tool.neverExiting(at: node, pids: pids)
+    let tool = try Tool.bundled(in: folder.appendingPathComponent("app"), node: node)
     let source = try Fixtures.greeterCopy()
     defer { try? FileManager.default.removeItem(at: source.deletingLastPathComponent()) }
     let extensions = folder.appendingPathComponent("extensions")
@@ -268,12 +390,22 @@ func buildInstallsDependenciesWithTheBundledNpm() async throws {
     try await Tool.expectTerminationEndsEverything(
         ["build", source.path, "--into", extensions.path],
         environment: [
-            "HOME": folder.path, "PATH": "/usr/bin:/bin", "FUDGE_ESBUILD": esbuild.path, "TMPDIR": temporary.path + "/",
+            "HOME": folder.path, "PATH": "/usr/bin:/bin", "FUDGE_ESBUILD": "/nonexistent/esbuild",
+            "FUDGE_BUNDLER": "/nonexistent/bundle-extension.cjs", "TMPDIR": temporary.path + "/",
         ],
-        pids: pids)
-    #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("extensions/greeter").path))
-    // esbuild runs once both folders exist, so a terminated build has both to delete.
-    #expect(try FileManager.default.contentsOfDirectory(atPath: extensions.path) == [], "no .staging-* is left")
+        pids: pids, tool: tool)
+    #expect(
+        !FileManager.default.fileExists(
+            atPath: Development.folder(in: extensions).appendingPathComponent("greeter").path))
+    // The compile step runs once both folders exist, so a terminated build has both to delete. The development folder
+    // it made stays, empty: a signal skips the build's own clean-up, and the handler deletes only its own folders.
+    #expect(
+        try FileManager.default.contentsOfDirectory(atPath: extensions.path).sorted() == [
+            Development.lock("greeter"), ".move.lock", "fudgeapp",
+        ], "only the lock files")
+    #expect(
+        try FileManager.default.contentsOfDirectory(atPath: Development.folder(in: extensions).path) == [],
+        "no .staging-* is left")
     #expect(try FileManager.default.contentsOfDirectory(atPath: temporary.path) == [], "no fudge-build-* is left")
 }
 

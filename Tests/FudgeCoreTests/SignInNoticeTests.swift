@@ -6,8 +6,10 @@ import Testing
 private func notice(
     _ kind: String?, message: String = "", title: String = "GitHub", command: String? = "github/search-repositories"
 ) -> SignInNotice? {
-    SignInNotice(notice: kind, message: message, extensionName: "github", extensionTitle: title, commandID: command)
+    SignInNotice(notice: kind, message: message, extension: github, extensionTitle: title, commandID: command)
 }
+
+private let github = ExtensionID(stored: "github")!
 
 private let enter = KeyShortcut(key: "return", modifiers: [])
 
@@ -21,7 +23,7 @@ private let enter = KeyShortcut(key: "return", modifiers: [])
             + "takes a token, set it in its settings.")
     let entries = off.actions.flatMap(\.entries)
     #expect(entries.map(\.title) == ["Open Extension Settings", "Open Sign-in Settings"])
-    #expect(entries.map(\.target) == [.root(.configureExtension("github")), .root(.openSignInSettings)])
+    #expect(entries.map(\.target) == [.root(.configureExtension(github)), .root(.openSignInSettings)])
     #expect(entries.map(\.shortcut) == [enter, KeyShortcut(key: ",", modifiers: ["cmd", "opt"])])
     #expect(off.hud == "Sign-in is off. GitHub needs to sign in with OAuth to work.")
 }
@@ -35,7 +37,7 @@ private let enter = KeyShortcut(key: "return", modifiers: [])
         #expect(entries.map(\.title) == ["Try Again", "Open Extension Settings"])
         #expect(
             entries.map(\.target) == [
-                .root(.retryCommand("github/search-repositories")), .root(.configureExtension("github")),
+                .root(.retryCommand("github/search-repositories")), .root(.configureExtension(github)),
             ])
         #expect(entries.map(\.shortcut) == [enter, RootActions.configureExtensionShortcut])
         #expect(stopped.hud == "\(title). GitHub needs to sign in to work.")
@@ -97,14 +99,15 @@ private let enter = KeyShortcut(key: "return", modifiers: [])
 // MARK: - The footer names the command (FUD-135 §1)
 
 @Test func aNoticeInACommandsPlaceKeepsItsTitleInTheFooter() throws {
+    let acme = try #require(ExtensionID(stored: "acme"))
     let notice = try #require(
         SignInNotice(
-            notice: "signInOff", message: "x", extensionName: "acme", extensionTitle: "Acme",
+            notice: "signInOff", message: "x", extension: acme, extensionTitle: "Acme",
             commandID: "acme/issues", commandTitle: "Acme Issues"))
     #expect(notice.footerTitle == "Acme Issues")
     // One that belongs to no command, like the Extension Store's "off" notice, keeps "Fudge".
     let unnamed = try #require(
-        SignInNotice(notice: "signInOff", message: "x", extensionName: "acme", extensionTitle: "Acme", commandID: nil))
+        SignInNotice(notice: "signInOff", message: "x", extension: acme, extensionTitle: "Acme", commandID: nil))
     #expect(unnamed.footerTitle == "Fudge")
     #expect(LauncherFooter.title(standingInFor: nil) == LauncherFooter.fudge)
     #expect(LauncherFooter.title(standingInFor: "") == "Fudge")

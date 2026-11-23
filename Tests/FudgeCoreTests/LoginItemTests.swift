@@ -157,6 +157,13 @@ private struct Refused: LocalizedError {
     #expect(AppLocation.movedArgument == "--moved-to-applications")
 }
 
+@Test func raycastsLinksAreRefusedFromTheDiskImageOrATranslocatedCopy() {
+    for location in [AppLocation.diskImage, .translocated] {
+        #expect(location.raycastLinksRefusal == "Move Fudge to Applications first, so it can open Raycast links.")
+    }
+    #expect(AppLocation.installed.raycastLinksRefusal == nil)
+}
+
 @MainActor
 @Test func openAtLoginIsNeverSetFromTheDiskImageOrATranslocatedCopy() {
     for location in [AppLocation.diskImage, .translocated] {

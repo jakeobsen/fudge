@@ -8,12 +8,16 @@ public struct FudgeSettings: Sendable, Equatable {
     public var hotkey: String?
     /// By command id (`FudgeSettings.commandID`).
     public var commands: [String: CommandSettings]
-    /// By extension name.
-    public var extensions: [String: ExtensionSettings]
+    /// By owner: an extension's id or one of Fudge's groups (C.8). A key in the file that's neither is left out here
+    /// and kept in the file as it is.
+    public var extensions: [CommandOwner: ExtensionSettings]
     /// Download exchange rates from the European Central Bank for the calculator. Off unless set.
     public var currencyRates: Bool
     /// How the calculator reads and shows numbers: the Mac's format unless set. An unknown value reads as the Mac's.
     public var numberFormat: NumberFormatSetting
+    /// **Look up other places with Apple Maps** (`appleMapsPlaces`, SPEC-162 B): the calculator's time zones of places
+    /// its own tables don't know. Off unless set.
+    public var appleMapsPlaces = false
     /// The Extension Store's switch (`extensionStore`); it counts only with the consent date beside it.
     public var extensionStore = false
     /// When the user confirmed the Extension Store's consent sheet (`extensionStoreConsentAt`, ISO 8601).
@@ -23,6 +27,11 @@ public struct FudgeSettings: Sendable, Equatable {
     public var signInServer: String?
     /// When the user confirmed the sign-in server's consent sheet (`signInServerConsentAt`, ISO 8601).
     public var signInServerConsentAt: String?
+    /// **Extensions with their own sign-in** (`ownAppSignIn`, SPEC-132 §5); it counts only with the consent date
+    /// beside it (`isOwnAppSignInOn`).
+    public var ownAppSignIn = false
+    /// When the user confirmed its consent sheet (`ownAppSignInConsentAt`, ISO 8601).
+    public var ownAppSignInConsentAt: String?
     /// **Expand Snippets as You Type** (`expandSnippets`, SPEC-078 §5), off by default.
     public var expandSnippets = false
     /// Clipboard history's switch (`clipboardHistory`); it counts only with the consent date beside it.
@@ -56,6 +65,8 @@ public struct FudgeSettings: Sendable, Equatable {
     public var showOnScreen: ShowOnScreen = .default
     /// What Esc does in the panel (`escapeBehavior`).
     public var escapeBehavior: EscapeBehavior = .default
+    /// How much goes into the log files (`logLevel`, SPEC-124): Errors by default.
+    public var logLevel: LogLevel = .default
     /// How often Fudge checks for a new release (`updateCheck`); nil until the user chooses, and nothing is checked
     /// until then. An unknown value reads as unset.
     public var updateCheck: UpdateCheckSetting?
@@ -63,6 +74,20 @@ public struct FudgeSettings: Sendable, Equatable {
     public var hyperkey = false
     /// **Quick press toggles Caps Lock** (`hyperkeyQuickPress`): a tap of Caps Lock still toggles caps. Off by default.
     public var hyperkeyQuickPress = false
+    /// Settings → Notifications' **Install or update finished** (`notifyInstallFinished`, SPEC-156 F): on unless `false`,
+    /// and only `false` is written.
+    public var notifyInstallFinished = true
+    /// **Install or update failed** (`notifyInstallFailed`): on unless `false`, and only `false` is written.
+    public var notifyInstallFailed = true
+    /// The repositories added on the Extension Store's page (`extensionRepositories`, FUD-182), in the order added:
+    /// `{ "address", "branch"?, "off"? }` each, written only when there is one, `off` only when true. Reading parses
+    /// each again beside those before it and skips any `ExtensionRepository.parse` refuses, a duplicate included, so a
+    /// hand-edited file never adds what Settings would refuse.
+    public var extensionRepositories: [ListedRepository] = []
+    /// Raycast's official repository in that list (`raycastRepository`, SPEC-160): absent is in the list and on,
+    /// `"off"` (or the `false` written before) is switched off, `"removed"` is out of the list, and anything else reads
+    /// as on. Only off and removed are written.
+    public var raycastRepositoryState: RaycastRepositoryState = .on
     /// The Color Picker's **Copy Format** (`colorFormat`): HEX unless set. An unknown value reads as HEX.
     public var colorFormat: ColorFormat = .default
     /// The calendars My Schedule leaves out (`calendarHidden`, by EventKit's calendar id), so a new one shows.
@@ -70,6 +95,10 @@ public struct FudgeSettings: Sendable, Equatable {
     /// My Schedule's **Days Ahead** (`calendarDaysAhead`): one of `Schedule.daysAheadChoices`; anything else reads
     /// as the default.
     public var calendarDaysAhead = Schedule.defaultDaysAhead
+    /// The folder of Apple's Command Line Tools that builds extensions' parts written in Swift (`commandLineTools`,
+    /// SPEC-145 §1), chosen on the Development page; unset, Fudge finds them by itself (`CommandLineTools.resolve`).
+    /// Anything but an absolute path reads as unset.
+    public var commandLineTools: String?
 
     public struct CommandSettings: Sendable, Equatable {
         /// In `HotKeySpec` text form.
@@ -117,7 +146,8 @@ public struct FudgeSettings: Sendable, Equatable {
     }
 
     public init(
-        hotkey: String? = nil, commands: [String: CommandSettings] = [:], extensions: [String: ExtensionSettings] = [:],
+        hotkey: String? = nil, commands: [String: CommandSettings] = [:],
+        extensions: [CommandOwner: ExtensionSettings] = [:],
         currencyRates: Bool = false, numberFormat: NumberFormatSetting = .system
     ) {
         self.hotkey = hotkey
@@ -127,9 +157,9 @@ public struct FudgeSettings: Sendable, Equatable {
         self.numberFormat = numberFormat
     }
 
-    /// A command's key in `commands`: "<extension name>/<command name>".
-    public static func commandID(extension extensionName: String, command: String) -> String {
-        "\(extensionName)/\(command)"
+    /// A command's key in `commands`: "<owner>/<command name>", the owner an extension's id or a group's key.
+    public static func commandID(owner: CommandOwner, command: String) -> String {
+        "\(owner.key)/\(command)"
     }
 
     /// Commands that are off until the user turns them on, by id: those that use something Fudge doesn't support
@@ -139,9 +169,8 @@ public struct FudgeSettings: Sendable, Equatable {
 
     /// Whether a command is enabled: its extension is, and the command is by the user's choice or, without one, by
     /// default (`offByDefault`).
-    public func isEnabled(extension extensionName: String, command: String) -> Bool {
-        isEnabled(extension: extensionName)
-            && isEnabledOwn(commandID: Self.commandID(extension: extensionName, command: command))
+    public func isEnabled(owner: CommandOwner, command: String) -> Bool {
+        isEnabled(owner: owner) && isEnabledOwn(commandID: Self.commandID(owner: owner, command: command))
     }
 
     /// A command's own Enabled, its extension's aside: the user's choice, else the default.
@@ -149,19 +178,24 @@ public struct FudgeSettings: Sendable, Equatable {
         commands[id]?.enabled ?? !offByDefault.contains(id)
     }
 
-    /// `isEnabled` for a command id ("<extension name>/<command name>"), split at its first "/".
+    /// `isEnabled` for a command id ("<owner>/<command name>"), split at its first "/". An owner that's neither an
+    /// extension's id nor a group's key has no Enabled of its own, so the command's own decides.
     public func isEnabled(commandID id: String) -> Bool {
         guard let slash = id.firstIndex(of: "/") else { return true }
-        return isEnabled(extension: String(id[..<slash]), command: String(id[id.index(after: slash)...]))
+        guard let owner = CommandOwner(stored: String(id[..<slash])) else { return isEnabledOwn(commandID: id) }
+        return isEnabled(owner: owner, command: String(id[id.index(after: slash)...]))
     }
 
     /// Whether an extension is enabled on the Commands page. Every extension is until it's disabled, except the
     /// bundled Extension Store, which is off until it's enabled. An install from before that, with the store
     /// switched on, counts as enabled until either is changed.
-    public func isEnabled(extension name: String) -> Bool {
-        if let enabled = extensions[name]?.enabled { return enabled }
-        return name == ExtensionStore.extensionName ? isExtensionStoreOn : true
+    public func isEnabled(owner: CommandOwner) -> Bool {
+        if let enabled = extensions[owner]?.enabled { return enabled }
+        return owner == Self.extensionStore ? isExtensionStoreOn : true
     }
+
+    /// The bundled Extension Store, as an owner.
+    static let extensionStore = CommandOwner.extension(ExtensionStore.id)
 
     /// The user's Enabled toggle for a command (the Commands page's checkbox): written either way, true or false, so
     /// Fudge's default (`offByDefault`) never overrides it: a command the user turned on stays on, and one they turned
@@ -170,16 +204,16 @@ public struct FudgeSettings: Sendable, Equatable {
         commands[id, default: .init()].enabled = enabled
     }
 
-    /// Enables or disables an extension. The store's state is always written, since its default isn't on.
-    public mutating func setEnabled(_ enabled: Bool, extension name: String) {
-        extensions[name, default: .init()].enabled = enabled && name != ExtensionStore.extensionName ? nil : enabled
+    /// Enables or disables an extension or a group. The store's state is always written, since its default isn't on.
+    public mutating func setEnabled(_ enabled: Bool, owner: CommandOwner) {
+        extensions[owner, default: .init()].enabled = enabled && owner != Self.extensionStore ? nil : enabled
     }
 
     /// The Extension Store's switch: on records the consent date, off removes both keys. The store's Enabled is
     /// written down first, so the switch never changes it, even for an install from before, which takes it from
     /// the switch.
     public mutating func setExtensionStore(_ on: Bool, now: Date) {
-        setEnabled(isEnabled(extension: ExtensionStore.extensionName), extension: ExtensionStore.extensionName)
+        setEnabled(isEnabled(owner: Self.extensionStore), owner: Self.extensionStore)
         extensionStore = on
         extensionStoreConsentAt = on ? ISO8601DateFormatter().string(from: now) : nil
     }
@@ -188,15 +222,15 @@ public struct FudgeSettings: Sendable, Equatable {
     /// sheet write, and the store's Enabled on the Commands page too, so the store is in root search straight away.
     public mutating func turnOnExtensionStore(now: Date) {
         setExtensionStore(true, now: now)
-        setEnabled(true, extension: ExtensionStore.extensionName)
+        setEnabled(true, owner: Self.extensionStore)
     }
 
     /// The hotkeys to register: those of the commands in `installed` (command ids) that are enabled. Entries for
     /// commands that aren't installed are kept in the file but aren't available.
     public func availableHotkeys(installed: Set<String>) -> [String: HotKeySpec] {
         commandHotkeys.filter { id, _ in
-            guard installed.contains(id), let slash = id.firstIndex(of: "/") else { return false }
-            return isEnabled(extension: String(id[..<slash]), command: String(id[id.index(after: slash)...]))
+            guard installed.contains(id), id.contains("/") else { return false }
+            return isEnabled(commandID: id)
         }
     }
 
@@ -220,6 +254,32 @@ public struct FudgeSettings: Sendable, Equatable {
         (try? existingObject(at: file)) != nil
     }
 
+    /// Whether `value` is JSON's `false`: a boolean, never a number.
+    static func isJSONFalse(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return false }
+        return !number.boolValue
+    }
+
+    /// Whether `value` is JSON's `true`: a boolean, never a number.
+    static func isJSONTrue(_ value: Any?) -> Bool {
+        guard let number = value as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else { return false }
+        return number.boolValue
+    }
+
+    /// `extensionRepositories`' entries that parse, each beside those before it; an entry that isn't an object with a
+    /// text `address` (and a text `branch`, if it has one) is skipped too.
+    static func listedRepositories(_ value: Any?) -> [ListedRepository] {
+        var listed: [ListedRepository] = []
+        for case let entry as [String: Any] in value as? [Any] ?? [] {
+            guard let address = entry["address"] as? String, entry["branch"] == nil || entry["branch"] is String,
+                case .success(let repository) = ExtensionRepository.parse(
+                    address: address, branch: entry["branch"] as? String, existing: listed.map(\.repository))
+            else { continue }
+            listed.append(ListedRepository(repository: repository, on: !isJSONTrue(entry["off"])))
+        }
+        return listed
+    }
+
     /// The JSON object in `file`; empty when the file is missing or blank. Throws `Unreadable` for anything else.
     private static func existingObject(at file: URL) throws -> [String: Any] {
         guard FileManager.default.fileExists(atPath: file.path) else { return [:] }
@@ -235,10 +295,13 @@ public struct FudgeSettings: Sendable, Equatable {
         var settings = FudgeSettings(
             hotkey: object["hotkey"] as? String, currencyRates: object["currencyRates"] as? Bool ?? false,
             numberFormat: (object["numberFormat"] as? String).flatMap(NumberFormatSetting.init(rawValue:)) ?? .system)
+        settings.appleMapsPlaces = object["appleMapsPlaces"] as? Bool ?? false
         settings.extensionStore = object["extensionStore"] as? Bool ?? false
         settings.extensionStoreConsentAt = object["extensionStoreConsentAt"] as? String
         settings.signInServer = object["signInServer"] as? String
         settings.signInServerConsentAt = object["signInServerConsentAt"] as? String
+        settings.ownAppSignIn = object["ownAppSignIn"] as? Bool ?? false
+        settings.ownAppSignInConsentAt = object["ownAppSignInConsentAt"] as? String
         settings.expandSnippets = object["expandSnippets"] as? Bool ?? false
         settings.clipboardHistory = object["clipboardHistory"] as? Bool ?? false
         settings.clipboardHistoryConsentAt = object["clipboardHistoryConsentAt"] as? String
@@ -250,21 +313,32 @@ public struct FudgeSettings: Sendable, Equatable {
         settings.resetAfter = PanelResetSetting(settingsValue: object["resetAfterSeconds"])
         settings.showOnScreen = ShowOnScreen(settingsValue: object["showOnScreen"])
         settings.escapeBehavior = EscapeBehavior(settingsValue: object["escapeBehavior"])
+        settings.logLevel = LogLevel(settingsValue: object["logLevel"])
         settings.updateCheck = UpdateCheckSetting(settingsValue: object["updateCheck"])
         settings.hyperkey = object["hyperkey"] as? Bool ?? false
         settings.hyperkeyQuickPress = object["hyperkeyQuickPress"] as? Bool ?? false
+        // Only a JSON false turns one off; `as? Bool` would read a 0 as false too.
+        settings.notifyInstallFinished = !isJSONFalse(object["notifyInstallFinished"])
+        settings.notifyInstallFailed = !isJSONFalse(object["notifyInstallFailed"])
+        settings.extensionRepositories = listedRepositories(object["extensionRepositories"])
+        settings.raycastRepositoryState = RaycastRepositoryState(settingsValue: object["raycastRepository"])
         settings.colorFormat = (object["colorFormat"] as? String).flatMap(ColorFormat.init(rawValue:)) ?? .default
         settings.calendarHidden = (object["calendarHidden"] as? [Any] ?? []).compactMap { $0 as? String }
         if let days = object["calendarDaysAhead"] as? Int, Schedule.daysAheadChoices.contains(days) {
             settings.calendarDaysAhead = days
+        }
+        if let folder = object["commandLineTools"] as? String, CommandLineTools.folder(setting: folder) != nil {
+            settings.commandLineTools = folder
         }
         for case (let id, let entry as [String: Any]) in object["commands"] as? [String: Any] ?? [:] {
             settings.commands[id] = CommandSettings(
                 hotkey: entry["hotkey"] as? String, alias: entry["alias"] as? String, enabled: entry["enabled"] as? Bool
             )
         }
-        for case (let name, let entry as [String: Any]) in object["extensions"] as? [String: Any] ?? [:] {
-            settings.extensions[name] = ExtensionSettings(enabled: entry["enabled"] as? Bool)
+        // Each key read as a string and kept when it's an owner; any other stays in the file, untouched by `save`.
+        for case (let key, let entry as [String: Any]) in object["extensions"] as? [String: Any] ?? [:] {
+            guard let owner = CommandOwner(stored: key) else { continue }
+            settings.extensions[owner] = ExtensionSettings(enabled: entry["enabled"] as? Bool)
         }
         return settings
     }
@@ -277,10 +351,13 @@ public struct FudgeSettings: Sendable, Equatable {
         object["hotkey"] = hotkey
         object["currencyRates"] = currencyRates ? true : nil
         object["numberFormat"] = numberFormat == .system ? nil : numberFormat.rawValue
+        object["appleMapsPlaces"] = appleMapsPlaces ? true : nil
         object["extensionStore"] = extensionStore ? true : nil
         object["extensionStoreConsentAt"] = extensionStoreConsentAt
         object["signInServer"] = signInServer
         object["signInServerConsentAt"] = signInServerConsentAt
+        object["ownAppSignIn"] = ownAppSignIn ? true : nil
+        object["ownAppSignInConsentAt"] = ownAppSignInConsentAt
         object["expandSnippets"] = expandSnippets ? true : nil
         object["clipboardHistory"] = clipboardHistory ? true : nil
         object["clipboardHistoryConsentAt"] = clipboardHistoryConsentAt
@@ -290,12 +367,26 @@ public struct FudgeSettings: Sendable, Equatable {
         object["resetAfterSeconds"] = resetAfter.settingsValue
         object["showOnScreen"] = showOnScreen.settingsValue
         object["escapeBehavior"] = escapeBehavior.settingsValue
+        object["logLevel"] = logLevel.settingsValue
         object["updateCheck"] = updateCheck?.rawValue
         object["hyperkey"] = hyperkey ? true : nil
         object["hyperkeyQuickPress"] = hyperkeyQuickPress ? true : nil
+        object["notifyInstallFinished"] = notifyInstallFinished ? nil : false
+        object["notifyInstallFailed"] = notifyInstallFailed ? nil : false
+        object["extensionRepositories"] =
+            extensionRepositories.isEmpty
+            ? nil
+            : extensionRepositories.map { listed -> [String: Any] in
+                var entry: [String: Any] = ["address": listed.repository.address]
+                entry["branch"] = listed.repository.branch
+                entry["off"] = listed.on ? nil : true
+                return entry
+            }
+        object["raycastRepository"] = raycastRepositoryState.settingsValue
         object["colorFormat"] = colorFormat == .default ? nil : colorFormat.rawValue
         object["calendarHidden"] = calendarHidden.isEmpty ? nil : calendarHidden
         object["calendarDaysAhead"] = calendarDaysAhead == Schedule.defaultDaysAhead ? nil : calendarDaysAhead
+        object["commandLineTools"] = commandLineTools
 
         var commandObjects = object["commands"] as? [String: Any] ?? [:]
         let commandIDs = Set(commandObjects.keys).union(commands.keys)
@@ -310,12 +401,15 @@ public struct FudgeSettings: Sendable, Equatable {
         }
         object["commands"] = commandObjects.isEmpty ? nil : commandObjects
 
+        // Only the keys this reads or sets: one that's no owner (a hand edit, a newer Fudge's) is left as the file has
+        // it, never cleared because it isn't in memory.
         var extensionObjects = object["extensions"] as? [String: Any] ?? [:]
-        for name in Set(extensionObjects.keys).union(extensions.keys) {
-            var entry = extensionObjects[name] as? [String: Any] ?? [:]
-            let enabled = extensions[name]?.enabled
-            entry["enabled"] = name == ExtensionStore.extensionName ? enabled : (enabled == false ? false : nil)
-            extensionObjects[name] = entry.isEmpty ? nil : entry
+        let owners = Set(extensionObjects.keys.compactMap(CommandOwner.init(stored:))).union(extensions.keys)
+        for owner in owners {
+            var entry = extensionObjects[owner.key] as? [String: Any] ?? [:]
+            let enabled = extensions[owner]?.enabled
+            entry["enabled"] = owner == Self.extensionStore ? enabled : (enabled == false ? false : nil)
+            extensionObjects[owner.key] = entry.isEmpty ? nil : entry
         }
         object["extensions"] = extensionObjects.isEmpty ? nil : extensionObjects
 

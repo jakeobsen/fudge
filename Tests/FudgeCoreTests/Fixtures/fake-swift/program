@@ -1,0 +1,11 @@
+#!/bin/sh
+# What the made-up Swift part's program does, as Say's does: JSON in, JSON out, a failure on stderr.
+# Each run first appends its pid and arguments to program-runs.log beside it, and `fail` adds the status of its echo,
+# so a test that finds nothing on stderr can say whether the program ran, ended at the echo, or wrote.
+echo "$$ start: $*" >> "${0%/*}/program-runs.log"
+case "$1" in
+greet) name=$(printf '%s' "$2" | tr -d '"'); printf '"Hello, %s"\n' "$name" ;;
+fail) echo "the Swift part failed" >&2; echo "$$ fail: echo gave $?" >> "${0%/*}/program-runs.log"; exit 1 ;;
+nothing) exit 0 ;;
+*) echo "Not enough Command-Line arguments"; exit 1 ;;
+esac

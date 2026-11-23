@@ -104,7 +104,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         installed = [:]
         for installedExtension in extensions {
             for command in installedExtension.manifest.commands where command.mode == "menu-bar" {
-                let id = FudgeSettings.commandID(extension: installedExtension.manifest.name, command: command.name)
+                let id = FudgeSettings.commandID(owner: .extension(installedExtension.id), command: command.name)
                 installed[id] = (installedExtension, command)
             }
         }
@@ -237,7 +237,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             item.lifecycle.launchFailed()
             item.picks.removeAll()
             host.log(item.id, "error", "couldn't start \(item.id): \(failure.message)")
-            if userInitiated { host.showHUD("\(item.command.title) failed — \(failure.message)") }
+            if userInitiated { host.showHUD(MessageText.joined("\(item.command.title) failed", failure.message)) }
         }
     }
 
@@ -271,11 +271,10 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         case .error(_, let message, _, let fatal, let notice):
             guard let item else { return }
             // A refusal on purpose (sign-in is off, SPEC-095) says so, never as a failure with its trace.
-            let manifest = item.installed.manifest
             let signIn = SignInNotice(
-                notice: notice, message: message, extensionName: manifest.name, extensionTitle: manifest.title,
-                commandID: nil)
-            let hud = signIn?.hud ?? "\(item.command.title) failed — \(message)"
+                notice: notice, message: message, extension: item.installed.id,
+                extensionTitle: item.installed.displayTitle, commandID: nil)
+            let hud = signIn?.hud ?? MessageText.joined("\(item.command.title) failed", message)
             if fatal {
                 if item.lifecycle.failed(session) { host.showHUD(hud) }
                 draw(item)
@@ -326,8 +325,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             if let match = item.content?.item(matching: pick.path, title: pick.title) {
                 sendAction(item, session: session, node: match.node, event: pick.event)
             } else {
-                host.log(
-                    session, "info", "dropped a pick of \"\(pick.title)\" (\(pick.path)): it's not in the new menu")
+                host.log(session, "info", "dropped a pick of the item at \(pick.path): it's not in the new menu")
             }
         }
     }
@@ -339,9 +337,11 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     }
 
     private func dropPicks(_ item: Active, session: String?) {
-        let titles = item.picks.map { "\"\($0.title)\"" }.joined(separator: ", ")
+        // By position only: a menu item's title can be the extension's data, such as clipboard contents.
+        let paths = item.picks.map(\.path.description).joined(separator: ", ")
         item.picks.removeAll()
-        host.log(session ?? item.id, "info", "dropped picks of \(titles): no instance is still to render them")
+        host.log(
+            session ?? item.id, "info", "dropped picks of the items at \(paths): no instance is still to render them")
     }
 
     private func sendAction(_ item: Active, session: String, node: Int, event: String) {
@@ -361,7 +361,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
         } else if item.lifecycle.awaitsFirstRender {
             item.picks.append((target.item.path, target.item.title, type))
         } else {
-            host.log(item.id, "info", "dropped a pick of \"\(target.item.title)\": the command isn't running")
+            host.log(item.id, "info", "dropped a pick of the item at \(target.item.path): the command isn't running")
         }
     }
 

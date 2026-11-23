@@ -22,6 +22,24 @@ test("unknown types are rejected and keep the id", () => {
     });
 });
 
+test("launch keeps an extension id that passes the id rule, beside the environment, and drops any other", () => {
+    const launch = {
+        type: "launch",
+        session: "s1",
+        entry: "/x/cmd.js",
+        mode: "view",
+        launchProps: { arguments: {} },
+        preferences: {},
+        environment: { extensionName: "github", supportPath: "/s" },
+    };
+    for (const id of ["github", "someone+tools+github", "fudgeapp+development+github"]) {
+        assert.deepEqual(parse({ ...launch, extensionId: id }), { ok: true, message: { ...launch, extensionId: id } }, id);
+    }
+    for (const id of ["Bad Key", "someone/tools+github", "raycast+extensions+github", "", 7]) {
+        assert.deepEqual(parse({ ...launch, extensionId: id }), { ok: true, message: launch }, String(id));
+    }
+});
+
 test("launch needs a session, an entry and a known mode", () => {
     const launch = {
         type: "launch",

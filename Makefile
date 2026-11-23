@@ -1,4 +1,4 @@
-# fudge — a keyboard launcher for macOS, built to run Raycast extensions.
+# Fudge, a keyboard launcher for macOS, built to run Raycast extensions.
 #
 # Single command surface for building, testing and running fudge.
 # Run `make help` for targets.
@@ -18,6 +18,8 @@ SHORT_VERSION = $(shell '$(NODE)' runtime/scripts/bundle-version.ts '$(VERSION)'
 BUILD_NUMBER := $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
 CONFIG    ?= debug
 APP       := build/Fudge.app
+# Fudge Links (SPEC-140), the app inside Fudge.app that alone declares Raycast's link schemes.
+LINKS_APP := $(APP)/Contents/Helpers/Fudge Links.app
 # The disk image a release ships, named after the version without its leading v (Fudge-0.3.0.dmg).
 DMG       := build/Fudge-$(patsubst v%,%,$(VERSION)).dmg
 # The extensions bundled with the app, as BundledExtensions.folders lists them.
@@ -60,12 +62,12 @@ export PATH := $(NODE_HOME)/bin:$(PATH)
 .PHONY: help release-check app dmg dmg-image release run install-extension build runtime node test test-swift test-runtime lint fmt raycast-types compat-scan clean
 
 help:
-	@printf 'Fudge — a keyboard launcher for macOS, built to run Raycast extensions\n\n'
+	@printf 'Fudge, a keyboard launcher for macOS, built to run Raycast extensions\n\n'
 	@printf 'Usage: make <target>\n\n'
 	@printf '  help           Show this help (default).\n'
 	@printf '  app            Build %s (CONFIG=debug|release, now: %s). Signs with SIGN_IDENTITY: by default\n' '$(APP)' '$(CONFIG)'
 	@printf '                 "fudge local signing", else an Apple Development identity, else ad hoc (-). See README.md.\n'
-	@printf '  dmg            Build the app, then %s: the app and a link to Applications (RELEASE_TAG=<tag> for a release).\n' '$(DMG)'
+	@printf '  dmg            Build the app, then %s: the app and a link to Applications in a laid-out window (RELEASE_TAG=<tag> for a release).\n' '$(DMG)'
 	@printf '  dmg-image      Make %s from the app as it is, without building it.\n' '$(DMG)'
 	@printf '  release        Build %s signed with Developer ID, notarized and stapled, after secret env apple.\n' '$(DMG)'
 	@printf '  run            Build the app and open it, quitting a running copy first.\n'
@@ -132,6 +134,10 @@ app: release-check build
 	@mkdir -p '$(APP)/Contents/MacOS' '$(APP)/Contents/Helpers' '$(APP)/Contents/Resources/runtime'
 	@cp '$(SWIFT_BIN)/FudgeApp' '$(APP)/Contents/MacOS/Fudge'
 	@cp '$(SWIFT_BIN)/fudge' '$(ESBUILD)' '$(APP)/Contents/Helpers/'
+	@# Fudge Links: a nested app here, since nothing but turning on "Fudge opens Raycast links" (or onboarding's button)
+	@# registers it, by LSRegisterURL on it (Contents/Library/LoginItems is registered at every launch).
+	@mkdir -p '$(LINKS_APP)/Contents/MacOS' && cp '$(SWIFT_BIN)/FudgeLinks' '$(LINKS_APP)/Contents/MacOS/FudgeLinks' \
+		&& cp App/Links/Info.plist '$(LINKS_APP)/Contents/Info.plist'
 	@# Fudge's own Node.js (SPEC-115): the binary beside the helpers, npm from its distribution, and its license,
 	@# which also covers what Node.js bundles, npm included.
 	@cp '$(NODE)' '$(APP)/Contents/Helpers/node'
@@ -150,28 +156,38 @@ app: release-check build
 	@plutil -replace CFBundleShortVersionString -string '$(SHORT_VERSION)' '$(APP)/Contents/Info.plist'
 	@plutil -replace CFBundleVersion -string '$(BUILD_NUMBER)' '$(APP)/Contents/Info.plist'
 	@plutil -replace FudgeGitDescribe -string '$(VERSION)' '$(APP)/Contents/Info.plist'
+	@plutil -replace CFBundleShortVersionString -string '$(SHORT_VERSION)' '$(LINKS_APP)/Contents/Info.plist'
+	@plutil -replace CFBundleVersion -string '$(BUILD_NUMBER)' '$(LINKS_APP)/Contents/Info.plist'
 	@cp runtime/dist/host.js runtime/dist/worker.js '$(APP)/Contents/Resources/runtime/'
 	@# `fudge scan`'s scanner, and Raycast's types it reads, with their MIT notice.
 	@cp runtime/dist/compat-scan.js '$(APP)/Contents/Resources/runtime/'
+	@# `fudge build`'s compile step (ExtensionBuilder.locateBundler), with esbuild's JavaScript inside, before the
+	@# bundled extensions below are built through it.
+	@cp runtime/dist/bundle-extension.cjs '$(APP)/Contents/Resources/runtime/'
 	@cp runtime/vendor/raycast-api/index.d.ts '$(APP)/Contents/Resources/runtime/raycast-api.d.ts'
 	@cp runtime/vendor/raycast-api/LICENSE '$(APP)/Contents/Resources/runtime/raycast-api.LICENSE'
+	@# The calculator's towns and countries (PlaceTable in core), which the app reads at launch.
+	@mkdir -p '$(APP)/Contents/Resources/places'
+	@cp runtime/vendor/geonames/places.tsv runtime/vendor/geonames/countries.tsv '$(APP)/Contents/Resources/places/'
 	@# Fudge's own license, and the notices of the third-party code and data it ships, from their own license files.
 	@cp LICENSE '$(APP)/Contents/Resources/LICENSE.txt'
 	@cd runtime && node scripts/notices.ts --text '$(abspath $(APP))/Contents/Resources/Third-Party Notices.txt'
 	@# The bundled extensions (BundledExtensions in core), each built like any other into a scratch folder and
-	@# moved to Contents/Resources/<folder>. Their sources are runtime/<folder>; no source, no extension.
+	@# moved to Contents/Resources/<folder>. Their sources are runtime/<folder>; no source, no extension. Built with
+	@# no --repository, each lands in the scratch folder's fudgeapp/development, beside nothing but hidden lock files.
 	@for folder in $(BUNDLED_EXTENSIONS); do \
 		[ -f "runtime/$$folder/package.json" ] || continue; \
 		scratch="$(abspath build)/$$folder-build" && rm -rf "$$scratch" && mkdir -p "$$scratch" && \
 		'$(APP)/Contents/Helpers/fudge' build "runtime/$$folder" --into "$$scratch" >/dev/null && \
-		mv "$$scratch"/* "$(APP)/Contents/Resources/$$folder" && rm -rf "$$scratch" \
+		mv "$$scratch"/fudgeapp/development/* "$(APP)/Contents/Resources/$$folder" && rm -rf "$$scratch" \
 		|| { echo "make app: building runtime/$$folder failed"; exit 1; }; \
 	done
 	@# A release ships without the binaries' debug and local symbols, which name the builder's folders (/Users/…).
 	@# strip warns that it invalidates the linker's signature, which the signing below replaces, so its output shows
 	@# only when it fails.
 	@if [ '$(CONFIG)' = release ]; then \
-		out=$$(strip -S -x '$(APP)/Contents/MacOS/Fudge' '$(APP)/Contents/Helpers/fudge' 2>&1) || \
+		out=$$(strip -S -x '$(APP)/Contents/MacOS/Fudge' '$(APP)/Contents/Helpers/fudge' \
+			'$(LINKS_APP)/Contents/MacOS/FudgeLinks' 2>&1) || \
 			{ printf '%s\nmake app: strip failed\n' "$$out"; exit 1; }; \
 	fi
 	@# Signed inside-out with the hardened runtime (scripts/sign-app.sh): each helper with App/Helpers/<name>.entitlements
@@ -189,20 +205,20 @@ USER_FUDGE_PIDS = for pid in $$(pgrep -x Fudge); do \
 			&& echo $$pid; \
 	done; true
 
-# A release's disk image: the app as `make app` built it, and a link to /Applications to drag it onto, compressed
-# (UDZO), with the volume name Fudge. The staging folder is gone afterwards.
+# A release's disk image: the app as `make app` built it, and a link to /Applications to drag it onto, in a Finder
+# window with a picture behind them (SPEC-150), compressed (UDZO), with the volume name Fudge.
 dmg: app
 	@$(MAKE) --no-print-directory dmg-image
 
 # The disk image of the app as it is, without building it again: the release script notarizes and staples the app
-# before packing it.
+# before packing it. Only FudgeDiskImage, the tool that lays out the window, is built here, and it never touches the
+# app; scripts/disk-image.sh does the rest, with every mount out of sight. The window's picture is
+# App/DiskImage/background.tiff, which `FudgeDiskImage background <file>` draws.
 dmg-image:
 	@test -d '$(APP)' || { printf 'make dmg-image: there is no %s; run make app first\n' '$(APP)'; exit 1; }
-	@rm -rf build/dmg '$(DMG)' && mkdir -p build/dmg
-	@ditto '$(APP)' build/dmg/Fudge.app && ln -s /Applications build/dmg/Applications
-	@hdiutil create -volname Fudge -srcfolder build/dmg -format UDZO -ov '$(DMG)' >/dev/null \
-		|| { echo 'make dmg-image: hdiutil could not create $(DMG)'; rm -rf build/dmg; exit 1; }
-	@rm -rf build/dmg
+	@out=$$(swift build -c $(CONFIG) --product FudgeDiskImage 2>&1) \
+		|| { printf '%s\nmake dmg-image: building FudgeDiskImage failed\n' "$$out"; exit 1; }
+	@scripts/disk-image.sh '$(APP)' App/DiskImage/background.tiff '$(SWIFT_BIN)/FudgeDiskImage' '$(DMG)'
 	@printf '→ built %s\n' '$(DMG)'
 
 # A release's disk image signed with the Developer ID identity, notarized and stapled, with the variables
@@ -247,6 +263,12 @@ lint: runtime/node_modules
 	@cd runtime && npm run --silent typecheck
 	@# Docs are one sentence per line: no line of CLAUDE.md or README.md over 400 characters, outside code and tables.
 	@perl -CSD -ne 'chomp; if (/^\s*(```|~~~)/) { $$fence = !$$fence } elsif (!$$fence && !/^\s*\|/ && length > 400) { print STDERR "$$ARGV:$$.: " . length . " characters; write docs one sentence per line\n"; $$bad = 1 } if (eof) { close ARGV; $$fence = 0 } END { exit $$bad }' CLAUDE.md README.md
+	@# No em dash (U+2014) in any file git tracks or would track, except Unicode's own data in runtime/vendor; ignored
+	@# files (node_modules, dist, build) aren't read. The dash is written as its UTF-8 bytes, so this line can't match itself.
+	@# git grep exits 0 on a match, 1 on none and 128 on an error, so only 1 passes.
+	@found=0; git --no-pager grep --untracked -n -I -F -e $$'\xe2\x80\x94' -- . ':!runtime/vendor' || found=$$?; \
+	if [ "$$found" -eq 0 ]; then printf 'Fudge'\''s text has no em dash: use a colon or a comma (CLAUDE.md, Conventions).\n' >&2; exit 1; \
+	elif [ "$$found" -ne 1 ]; then printf 'Couldn'\''t check for em dashes: git grep exited with %s.\n' "$$found" >&2; exit 1; fi
 
 fmt:
 	@swift format --in-place --recursive Package.swift Sources Tests

@@ -7,11 +7,25 @@
 // worker and adds it on the way back.
 
 import type { LaunchEnvironment } from "./api/launch.ts";
+import { isValidExtensionId } from "./extension-id.ts";
 import type { RpcRequest } from "./bridge.ts";
 import type { ItemSlots } from "./renderer/root.ts";
 import type { UINode } from "./renderer/serialize.ts";
 
 export type CommandMode = "view" | "no-view" | "menu-bar";
+
+/** How much goes into the log files (SPEC-124): each level and every level above it. */
+export type LogLevel = "error" | "warning" | "info" | "debug";
+export const logLevels: readonly LogLevel[] = ["error", "warning", "info", "debug"];
+
+/** Whether a line at `level` is recorded while the setting is `setting`. */
+export function logs(level: LogLevel, setting: LogLevel): boolean {
+    return logLevels.indexOf(level) <= logLevels.indexOf(setting);
+}
+
+export function isLogLevel(value: unknown): value is LogLevel {
+    return typeof value === "string" && (logLevels as readonly string[]).includes(value);
+}
 
 export type LaunchProps = {
     arguments?: Record<string, string>;
@@ -23,6 +37,8 @@ export type LaunchProps = {
 /** App → host. */
 export type AppMessage =
     | { type: "ping"; id: number }
+    /** The Log level setting, for every command running now and every one launched after (SPEC-124). */
+    | { type: "logLevel"; level: LogLevel }
     | {
           type: "launch";
           session: string;
@@ -34,6 +50,11 @@ export type AppMessage =
           preferences?: Record<string, unknown>;
           /** Facts for `environment` and where LocalStorage and Cache live. */
           environment?: Partial<LaunchEnvironment>;
+          /**
+           * The extension's id (FUD-183), beside `environment` and never in it: the host names the command's log lines
+           * by it, and the worker never gets it, so the extension isn't given it.
+           */
+          extensionId?: string;
       }
     | { type: "event"; session: string; node: number; path: string[]; args: unknown[] }
     /** Asks for these List or Grid items' `actions` and `detail`, which renders send only for some (`$deferred`). */
@@ -52,7 +73,7 @@ export type WorkerMessage =
     | RpcRequest
     /** `notice`: the error was a refusal on purpose (`notice.ts`), shown as a notice, not a failure. */
     | { type: "error"; message: string; stack?: string; fatal: boolean; notice?: string }
-    | { type: "log"; level: "info" | "error"; message: string }
+    | { type: "log"; level: LogLevel; message: string }
     /** Answers every `event`, once its handler has returned, or settled when it returned a promise. */
     | { type: "eventSettled" }
     | { type: "exit"; reason: "finished" | "unloaded" | "crashed" };
@@ -64,13 +85,19 @@ export type HostToWorker =
     | { type: "pop" }
     | { type: "unload" }
     | { type: "rpcResult"; id: number; result?: unknown; error?: string; notice?: string }
-    | { type: "toastAction"; toast: number; action: "primary" | "secondary" };
+    | { type: "toastAction"; toast: number; action: "primary" | "secondary" }
+    | { type: "logLevel"; level: LogLevel };
 
 /** Host → app. */
 export type HostMessage =
     | { type: "pong"; id: number }
     | { type: "protocolError"; message: string; id?: number }
-    | (WorkerMessage & { session: string });
+    /**
+     * A line for the command's log file. The host adds the extension's id and the command's name from the launch, so
+     * the app can write it without looking the session up (SPEC-124, FUD-183).
+     */
+    | { type: "log"; session: string; level: LogLevel; message: string; extension?: string; command?: string }
+    | (Exclude<WorkerMessage, { type: "log" }> & { session: string });
 
 export type Parsed = { ok: true; message: AppMessage } | { ok: false; error: HostMessage };
 
@@ -94,6 +121,9 @@ export function parseAppMessage(line: string): Parsed {
         case "ping":
             if (id === undefined) return protocolError("`ping` needs a numeric `id`");
             return { ok: true, message: { type: "ping", id } };
+        case "logLevel":
+            if (!isLogLevel(value.level)) return protocolError("`logLevel` needs a `level` of `error`, `warning`, `info` or `debug`");
+            return { ok: true, message: { type: "logLevel", level: value.level } };
         case "launch": {
             const problem = needsSession();
             if (problem) return problem;
@@ -104,9 +134,20 @@ export function parseAppMessage(line: string): Parsed {
             const launchProps = isObject(value.launchProps) ? (value.launchProps as LaunchProps) : undefined;
             const preferences = isObject(value.preferences) ? value.preferences : undefined;
             const environment = isObject(value.environment) ? (value.environment as Partial<LaunchEnvironment>) : undefined;
+            // Kept only when it passes the id rule; anything else names no log file.
+            const extensionId = isValidExtensionId(value.extensionId) ? value.extensionId : undefined;
             return {
                 ok: true,
-                message: { type: "launch", session: session!, entry: value.entry, mode: value.mode, launchProps, preferences, environment },
+                message: {
+                    type: "launch",
+                    session: session!,
+                    entry: value.entry,
+                    mode: value.mode,
+                    launchProps,
+                    preferences,
+                    environment,
+                    ...(extensionId === undefined ? {} : { extensionId }),
+                },
             };
         }
         case "event": {

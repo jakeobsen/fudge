@@ -150,26 +150,23 @@ struct HidutilKeyMapping: KeyMappingSystem {
         var description: String { "hidutil ended with status \(status)" }
     }
 
-    /// Where it remembers that Fudge's entry replaced a Caps Lock → Caps Lock one: this Mac's, never in a backup.
+    /// Where it remembers how many Caps Lock → Caps Lock entries Fudge's entry replaced: this Mac's, never in a backup.
     static let stateFile = "hyperkey.json"
     /// `hyperkey.json` in the support folder.
     let state: URL
 
-    func replacedCapsLock() -> Bool {
-        guard let data = try? Data(contentsOf: state),
-            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return false }
-        return object["replacedCapsLock"] as? Bool == true
+    func replacedCapsLock() -> Int {
+        HyperkeyMapping.replacedCount(inState: try? Data(contentsOf: state))
     }
 
-    func setReplacedCapsLock(_ replaced: Bool) throws {
-        guard replaced else {
+    func setReplacedCapsLock(_ count: Int) throws {
+        guard count > 0 else {
             if FileManager.default.fileExists(atPath: state.path) { try FileManager.default.removeItem(at: state) }
             return
         }
         try FileManager.default.createDirectory(
             at: state.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try JSONSerialization.data(withJSONObject: ["replacedCapsLock": true]).write(to: state, options: .atomic)
+        try HyperkeyMapping.state(replaced: count).write(to: state, options: .atomic)
     }
 
     func readMapping() throws -> String {

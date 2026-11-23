@@ -17,9 +17,9 @@ final class LauncherModel {
         var commandTitle: String?
 
         /// A notice is drawn like an empty view: `symbol`, the title and the message. Its actions take Back's place
-        /// (↵ runs the first, ⌘K lists them, and their shortcuts work), and ⌘⇧, opens `extensionName`'s settings.
+        /// (↵ runs the first, ⌘K lists them, and their shortcuts work), and ⌘⇧, opens `extensionID`'s settings.
         struct Notice: Equatable {
-            var extensionName: String
+            var extensionID: ExtensionID?
             var actions: [ActionSection]
             /// An SF Symbol.
             var symbol = "puzzlepiece.extension"
@@ -29,14 +29,15 @@ final class LauncherModel {
         static let extensionStoreOff = Failure(
             title: ExtensionStore.Off.title, message: "",
             notice: Notice(
-                extensionName: ExtensionStore.extensionName, actions: RootActions.extensionStoreOffSections))
+                extensionID: ExtensionStore.id, actions: RootActions.extensionStoreOffSections))
     }
 
     /// A running view command.
     struct CommandScreen: Equatable {
         var session: String
         var title: String
-        var extensionName = ""
+        /// The extension the command is from; nil for Fudge's own forms.
+        var extensionID: ExtensionID?
         var commandName = ""
         /// The extension's assets folder, for its icons and images.
         var assets: URL?
@@ -77,8 +78,8 @@ final class LauncherModel {
         var storedFormValues: [String: JSONValue]?
         /// Stored values still waiting for their fields' items, by node id (`FormContent.Field.start`).
         var pendingStoredValues: [Int: JSONValue] = [:]
-        /// The Form field that had the keyboard last, by node id.
-        var lastFormField: Int?
+        /// Where the Form's keyboard is now, and the field that had it last, by node id (`FormKeyboard`).
+        var formKeyboard = FormKeyboard()
     }
 
     struct DropdownState: Equatable {
@@ -97,6 +98,7 @@ final class LauncherModel {
             followQuickLook()
             builtInFormLeft()
             dropHeldKeyIfLeft()
+            actionMenuFollowsSelection()
             switchWindowsLeft()
             menuItemsLeft()
         }
@@ -150,6 +152,11 @@ final class LauncherModel {
     /// delegate.
     /// Opens Settings for a call from `origin`; only a user-initiated one opens it (SPEC-045).
     @ObservationIgnored var openSettings: (String?, CallOrigin) -> Void = { _, _ in }
+    /// Finds the Command Line Tools for a `commandLineTools` setting, for the Extension Store's `commandLineTools.ready`
+    /// (`CommandLineTools.resolve`). Snapshot runs set a fixed answer (`--command-line-tools`).
+    @ObservationIgnored var resolveCommandLineTools: @Sendable (String?) -> CommandLineTools.Status = {
+        CommandLineTools.resolve(setting: $0)
+    }
     /// Shows a FilePicker's open panel and returns the chosen paths, or nil when cancelled; set by the app delegate.
     @ObservationIgnored var openPanel: (FilePickerOptions) async -> [String]? = { _ in nil }
     /// Downloads the exchange rates again at once (↵ on the "Couldn't download exchange rates" card).
@@ -176,6 +183,13 @@ final class LauncherModel {
     @ObservationIgnored var panelOnScreen: () -> Bool = { true }
     /// Whether the launcher panel is on screen; set by the app delegate.
     @ObservationIgnored var isVisible: () -> Bool = { false }
+    /// Install notifications' one decider (SPEC-156 C), set by the app delegate; nil until then.
+    @ObservationIgnored var installNotices: InstallNoticeCenter?
+    /// Reads `installing/` once on the outcome watcher's queue, for a store session that ended (C.2); set by the app
+    /// delegate.
+    @ObservationIgnored var readInstallOutcomes: (@escaping @MainActor ([InstallEnd]) -> Void) -> Void = { _ in }
+    /// Clicks on install notifications on their way to a store session (E.1), by its waiting call's id.
+    @ObservationIgnored private var notificationClicks = NotificationClicks<Int>()
     /// Pick Color's loupe. `AppDelegate` gives snapshot runs one that never shows it.
     @ObservationIgnored var colorSampler: any ColorSampling = ScreenColorSampler()
     /// Define Word's dictionary. `AppDelegate` gives snapshot runs `--definitions`' made-up ones.
@@ -201,9 +215,11 @@ final class LauncherModel {
     @ObservationIgnored var tokenSecrets: any SecretStore = MemorySecretStore()
     /// Opens a sign-in's URL in the default browser; false when it couldn't.
     @ObservationIgnored var openInBrowser: (URL) -> Bool = { NSWorkspace.shared.open($0) }
-    /// Each session's latest `oauth.prepare` and the one the prompt shows, with their loopback listeners, and the relay
-    /// sign-ins pending (`SignInCalls.pending`).
-    @ObservationIgnored private var signInRequests = SignInRequests<OAuthLoopback>()
+    /// Each session's latest `oauth.prepare` and the one the prompt shows, with what each waits on (a loopback
+    /// listener, or Raycast's return link for a direct sign-in), and the relay sign-ins pending (`SignInCalls.pending`).
+    @ObservationIgnored private var signInRequests = SignInRequests<SignInListener>()
+    /// Which app opens Raycast's links, for a direct sign-in's prompt (SPEC-132 §3.3); a fixed answer in snapshot runs.
+    @ObservationIgnored var raycastLinks: any RaycastLinks = FixedRaycastLinks(app: nil)
     /// `node --version` per binary, read off the main actor (SPEC-084).
     @ObservationIgnored private let nodeVersions = NodeVersionCache()
     /// The user's answer to the prompt on screen: true for ↵, false for Esc or the command going away.
@@ -227,7 +243,7 @@ final class LauncherModel {
 
     @ObservationIgnored private let paths: FudgePaths
     @ObservationIgnored private var items: [RootItem] = []
-    @ObservationIgnored private var extensions: [String: InstalledExtension] = [:]
+    @ObservationIgnored private var extensions: [ExtensionID: InstalledExtension] = [:]
     @ObservationIgnored private var history: LaunchHistory
     @ObservationIgnored private var host: ExtensionHost?
     /// The sessions host messages may name (SPEC-067).
@@ -264,14 +280,16 @@ final class LauncherModel {
         var unasked: Set<String> = []
     }
     /// The extension each session belongs to.
-    @ObservationIgnored private var sessionExtensions: [String: String] = [:]
+    @ObservationIgnored private var sessionExtensions: [String: ExtensionID] = [:]
+    /// The installed extensions at the last read, for `Fudge.log`'s install lines; nil before the first.
+    @ObservationIgnored private var installStamps: [ExtensionID: InstallStamp]?
 
-    /// Unloads every running session of `extensionName`'s commands and waits until each has exited (the host stops a
+    /// Unloads every running session of extension `id`'s commands and waits until each has exited (the host stops a
     /// worker 1 s after `unload` at the latest), or 2 s. Turning the Extension Store off calls it before deleting the
     /// copy the store's git works in; the store ends its git when it's unloaded. A view of it on screen goes back to
     /// root search.
-    func unloadSessions(ofExtension extensionName: String) async {
-        let sessions = sessionExtensions.filter { $0.value == extensionName }.map(\.key)
+    func unloadSessions(ofExtension id: ExtensionID) async {
+        let sessions = sessionExtensions.filter { $0.value == id }.map(\.key)
         guard !sessions.isEmpty else { return }
         for session in sessions {
             // A view under Fudge's form goes; the form then closes to root search.
@@ -327,7 +345,7 @@ final class LauncherModel {
         do {
             try history.save(to: paths.historyFile)
         } catch {
-            FileHandle.standardError.write(Data("fudge: couldn't clear the search history: \(error)\n".utf8))
+            FudgeLog.error("couldn't clear the search history: \(error)")
         }
         refreshResults()
     }
@@ -358,16 +376,28 @@ final class LauncherModel {
     private func readInstalledExtensions() {
         // The bundled Extension Store is listed with them; its Enabled is off by default (`FudgeSettings`).
         installedExtensions = InstalledExtension.all(paths: paths, resources: Bundle.main.resourceURL)
-        extensions = Dictionary(
-            installedExtensions.map { ($0.manifest.name, $0) }, uniquingKeysWith: { first, _ in first })
+        // Installs, updates and removals since the last read go into `Fudge.log` (SPEC-124); the first read is the
+        // starting point.
+        let stamps = InstallStamp.of(installedExtensions, bundled: Bundle.main.resourceURL)
+        if let installStamps {
+            for line in InstallStamp.changes(from: installStamps, to: stamps) { FudgeLog.info(line) }
+        }
+        installStamps = stamps
+        extensions = InstalledExtension.index(installedExtensions)
         loadCommandMetadata(installedExtensions)
     }
 
     /// Rebuilds root search and the menu bar from `settings.json`: commands that are disabled leave them, and the rest
     /// get their aliases and hotkeys. Settings calls it after each change.
     func applySettings(keepingSelection: Bool = false) {
+        let logLevel = settings.logLevel
         settings = FudgeSettings.load(from: paths.settingsFile)
         settings.offByDefault = InstalledExtension.offByDefault(installedExtensions)
+        if settings.logLevel != logLevel {
+            // At once, for running commands too (SPEC-124).
+            FudgeLog.setLevel(settings.logLevel)
+            if let host { try? host.send(.logLevel(settings.logLevel)) }
+        }
         panelReset.setting = settings.resetAfter
         let commands = installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
         windowLayouts = WindowLayoutStore.load(from: paths.windowLayoutsFile)
@@ -406,7 +436,7 @@ final class LauncherModel {
         var metadata = CommandMetadata.load(from: paths.commandMetadataFile)
         let ids = installed.flatMap { installed in
             installed.manifest.commands.map {
-                FudgeSettings.commandID(extension: installed.manifest.name, command: $0.name)
+                FudgeSettings.commandID(owner: .extension(installed.id), command: $0.name)
             }
         }
         if metadata.prune(keeping: Set(ids)) { try? metadata.save(to: paths.commandMetadataFile) }
@@ -416,12 +446,12 @@ final class LauncherModel {
     /// `updateCommandMetadata` from the command running in `session`: stores its subtitle, which root search
     /// shows the next time it's drawn. The results keep their order and selection.
     private func updateCommandMetadata(_ params: JSONValue, from session: String) throws {
-        guard let extensionName = sessionExtensions[session], let commandName = sessionCommands[session],
-            let installed = extensions[extensionName]
+        guard let id = sessionExtensions[session], let commandName = sessionCommands[session],
+            let installed = extensions[id]
         else { throw CommandMetadata.InvalidMetadata("the calling command isn't running") }
         let subtitle = try CommandMetadata.subtitle(fromParams: params)
         var metadata = commandMetadata
-        metadata.setSubtitle(subtitle, extension: extensionName, command: commandName)
+        metadata.setSubtitle(subtitle, extension: id, command: commandName)
         try metadata.save(to: paths.commandMetadataFile)
         commandMetadata = metadata
         // Through the settings too, so the command keeps its alias.
@@ -497,6 +527,7 @@ final class LauncherModel {
     /// there: then the selection doesn't change, so the action panel open on it stays open.
     private func refreshResults(keepingSelection: Bool = false) {
         calculator = evaluateCalculator()
+        lookUpPlaces()
         results = RootSearch.rank(items, query: rootQuery, history: history)
         let rows = rootRows
         if keepingSelection, let selectedItem, rows.contains(where: { $0.id == selectedItem }) {
@@ -531,19 +562,74 @@ final class LauncherModel {
         }
     }
 
+    /// The calculator's towns and countries (`PlaceTable`), once `loadPlaces` has read them. Until then, and in a
+    /// build without them (`swift run`), the calculator knows only its own tables. Their arrival evaluates the card
+    /// again for the open query, keeping the selection, as the exchange rates do.
+    private(set) var places: PlaceTable? {
+        didSet { evaluateCalculatorAgain() }
+    }
+
+    /// Whether `loadPlaces` has read the table, or found none. Until then nothing goes to Apple Maps, since the table
+    /// may know the name.
+    private var placesRead = false {
+        didSet { lookUpPlaces() }
+    }
+
+    /// Other places, looked up with Apple Maps while its setting is on (SPEC-162 B); set by the app delegate. A place
+    /// found for the open query evaluates the card again, keeping the selection.
+    var placeLookups: PlaceLookups? {
+        didSet { placeLookups?.onChange = { [weak self] in self?.evaluateCalculatorAgain() } }
+    }
+
+    /// Hands the root query to `placeLookups`, which looks up only what it allows, after the typing stops.
+    private func lookUpPlaces() {
+        guard placesRead else { return }
+        placeLookups?.queryChanged(rootQuery, places: places)
+    }
+
+    /// The card for the open query again, keeping the selection: it moves only off a card that's gone, and onto a
+    /// card that came when nothing was selected.
+    private func evaluateCalculatorAgain() {
+        let wasSelected = selectedItem == Self.calculatorID
+        calculator = evaluateCalculator()
+        guard case .root = screen else { return }
+        if calculator == nil, wasSelected { selectedItem = results.first?.id }
+        if calculator != nil, selectedItem == nil { selectedItem = Self.calculatorID }
+    }
+
+    /// Reads `Contents/Resources/places/` once, at launch, off the main actor (about 0.2 s). A snapshot run reads
+    /// them before it goes on (`waiting`), since it takes its picture a second after the query, which a load at low
+    /// priority can miss.
+    func loadPlaces(waiting: Bool = false) {
+        guard let folder = Bundle.main.resourceURL?.appendingPathComponent("places", isDirectory: true) else {
+            placesRead = true
+            return
+        }
+        if waiting {
+            places = PlaceTable.load(from: folder, now: Date())
+            placesRead = true
+            return
+        }
+        Task {
+            let loaded = await Task.detached(priority: .utility) { PlaceTable.load(from: folder, now: Date()) }.value
+            if let loaded { places = loaded }
+            placesRead = true
+        }
+    }
+
     /// "Same as macOS" is resolved here, for each query, so a change in System Settings applies at once.
     private func evaluateCalculator() -> CalculatorResult? {
         let locale = Locale.current
         return Calculator.evaluate(
             rootQuery, locale: locale, format: settings.numberFormat.resolve(locale), now: Date(), timeZone: .current,
-            currency: currency)
+            currency: currency, places: places, lookedUp: placeLookups?.found ?? [:])
     }
 
     /// ↵ on the Calculator card: copy its answer, or what the card offers instead (turning currency on, retrying).
     private func activateCalculator() {
         switch calculator?.enter {
         case .copy: copyCalculatorAnswer()
-        case .turnOnCurrencyConversion: showSettings(extension: nil)
+        case .turnOnCurrencyConversion: showSettings(extension: RootActions.currencySettingsPage)
         case .retryExchangeRates: retryExchangeRates()
         case .nothing, nil: break
         }
@@ -626,28 +712,54 @@ final class LauncherModel {
         case .command(let command):
             if command.failure != nil || command.view == nil || command.list != nil { return .search }
             guard let form = command.form else { return .noField }
-            let editable = form.fields.filter(\.isEditable)
+            let editable = form.editableFields
             let first = (editable.first(where: \.autoFocus) ?? editable.first)?.id
-            let last = command.lastFormField.flatMap { id in editable.contains { $0.id == id } ? id : nil }
-            return .form(lastField: last, firstField: first)
+            return .form(last: command.formKeyboard.last, fields: form.tabFields { fieldValue($0) }, firstField: first)
         }
     }
 
-    /// A Form field took the keyboard: the one that had it hears `onBlur`, this one `onFocus`. Moments without a
-    /// field (the keyboard going back through nil, the action panel) don't count, so each fires once per change.
-    func formFieldFocused(_ node: Int) {
-        guard var command, command.lastFormField != node else { return }
-        let previous = command.lastFormField
-        command.lastFormField = node
-        screen = .command(command)
-        if let previous, let field = formField(previous), field.hasOnBlur {
+    /// The Form's keyboard moved: into a field, a field's time box, or nowhere (nil), as FormScreen sees it. Tab goes
+    /// on from there (`moveInForm`). When it went into another field, the one that had it hears `onBlur` and this one
+    /// `onFocus`; moments without a field (the keyboard going back through nil, the action panel) don't count, so each
+    /// fires once per change (`FormKeyboard.moved`).
+    func formKeyboardMoved(to place: KeyboardFocus.FormStop?) {
+        guard var command else { return }
+        let before = command.formKeyboard
+        let change = command.formKeyboard.moved(to: place)
+        if command.formKeyboard != before { screen = .command(command) }
+        guard let change else { return }
+        if let previous = change.left, let field = formField(previous), field.hasOnBlur {
             let event = field.focusEvent("blur", value: fieldValue(previous) ?? .null)
             send(.event(session: command.session, node: previous, path: ["onBlur"], args: [event]))
         }
-        if let field = formField(node), field.hasOnFocus {
-            let event = field.focusEvent("focus", value: fieldValue(node) ?? .null)
-            send(.event(session: command.session, node: node, path: ["onFocus"], args: [event]))
+        if let field = formField(change.entered), field.hasOnFocus {
+            let event = field.focusEvent("focus", value: fieldValue(change.entered) ?? .null)
+            send(.event(session: command.session, node: change.entered, path: ["onFocus"], args: [event]))
         }
+    }
+
+    /// A move the launcher asked of the Form's view (Tab or ⇧Tab): the place to give the keyboard to. The view
+    /// answers each one.
+    struct FormMove: Equatable {
+        /// Counts them, so the same place twice is a change.
+        var count = 0
+        var to: KeyboardFocus.FormStop?
+    }
+
+    private(set) var formMove = FormMove()
+
+    /// Tab or ⇧Tab in a Form (`LauncherKeys.Outcome.moveInForm`): the next or previous place from where the keyboard
+    /// is now (`KeyboardFocus.formFieldAfterTab`), which the form's view gives the keyboard to. A form with no
+    /// editable field takes the key and does nothing.
+    private func moveInForm(backwards: Bool) {
+        guard var command, let form = command.form else { return }
+        guard
+            let place = KeyboardFocus.formFieldAfterTab(
+                now: command.formKeyboard.tabFrom, fields: form.tabFields { fieldValue($0) }, backwards: backwards)
+        else { return }
+        command.formKeyboard.ask(for: place)
+        screen = .command(command)
+        formMove = FormMove(count: formMove.count + 1, to: place)
     }
 
     // MARK: - Arguments
@@ -684,6 +796,106 @@ final class LauncherModel {
         if arguments.follows(index, panelHoldsKeyboard: panelHoldsKeyboard) { arguments.focus = index }
     }
 
+    // MARK: - Install notifications (SPEC-156)
+
+    /// The store session on screen's command, if the screen's command is one still running (the panel may be hidden).
+    private var storeSessionOnScreen: String? {
+        ExtensionStore.sessionOnScreen(
+            command?.session, extension: command.flatMap { sessionExtensions[$0.session] },
+            isRunning: { hostSessions.isRunning($0) })
+    }
+
+    /// Whether the store is on screen: the panel is visible and its command is a store session (C.1).
+    private var storeOnScreen: Bool { isVisible() && storeSessionOnScreen != nil }
+
+    /// Whether a store session is loaded: one is running in the host (C.2).
+    var storeSessionLoaded: Bool {
+        sessionExtensions.contains {
+            BundledCalls.mayCall(.storeNotifications, from: $0.value) && hostSessions.isRunning($0.key)
+        }
+    }
+
+    /// `store.installEnded`, `store.askForNotifications` and `store.nextNotificationClick`, from a store session.
+    private func storeNotificationCall(_ method: String, params: JSONValue, session: String, id: Int) {
+        switch method {
+        case "store.installEnded":
+            // D.1: decided once per build, answered with `{ onScreen, notified }`.
+            guard let end = InstallEnd(report: params), let center = installNotices else {
+                send(.rpcResult(session: session, id: id, result: nil, error: "That isn't an install's end"))
+                return
+            }
+            let onScreen = storeOnScreen
+            Task {
+                let answer = await center.report(end, onScreen: onScreen)
+                send(.rpcResult(session: session, id: id, result: answer.json, error: nil))
+            }
+        case "store.askForNotifications":
+            // G: only after the user confirmed an install, so only for a user-initiated session; not waited for.
+            send(.rpcResult(session: session, id: id, result: .null, error: nil))
+            guard origin(of: session).mayComeForward, let center = installNotices else { return }
+            Task { await center.ask(needsSwitch: true) }
+        default:
+            // E.1: kept waiting until a click comes, or answered at once with a click kept for it.
+            let (now, replaced) = notificationClicks.wait(session: session, call: id)
+            if let replaced { send(.rpcResult(session: session, id: replaced, result: .null, error: nil)) }
+            if let now { send(.rpcResult(session: session, id: id, result: now.json, error: nil)) }
+        }
+    }
+
+    /// A store session ended: its waiting call and kept click go, and the outcomes it left are decided (C.2), read on
+    /// the watcher's queue.
+    private func storeSessionEnded(_ session: String) {
+        _ = notificationClicks.ended(session: session)
+        guard let center = installNotices else { return }
+        readInstallOutcomes { [weak self] ends in
+            guard !ends.isEmpty else { return }
+            let onScreen = self?.storeOnScreen ?? false
+            Task { await center.sessionEnded(ends, onScreen: onScreen) }
+        }
+    }
+
+    /// A click on an install notification (E): to the store session on screen's command, which shows without the
+    /// reset (its waiting `nextNotificationClick` answered, or the click kept for its next call), else a launch of the
+    /// store as the user's own from root search, after the reset if it's due, with the target as its launch context.
+    func notificationClicked(_ target: NoticeTarget) {
+        let session = storeSessionOnScreen
+        switch notificationClicks.click(target, loadedSession: session) {
+        case .answer(let call, let target):
+            if let session { send(.rpcResult(session: session, id: call, result: target.json, error: nil)) }
+        case .kept:
+            break
+        case .launch(let target):
+            resettingFirst {
+                // As a hotkey's launch does: the command on screen is left first, so its session doesn't stay loaded.
+                if case .command = screen { leaveCommand() }
+                launchStore(for: target)
+            }
+        }
+        show()
+    }
+
+    /// Launches the store's view command for a click, as root search would.
+    private func launchStore(for target: NoticeTarget) {
+        guard let installed = extensions[ExtensionStore.id],
+            let command = installed.manifest.commands.first(where: { $0.mode == "view" })
+        else { return }
+        guard FudgeSettings.load(from: paths.settingsFile).isEnabled(owner: .extension(ExtensionStore.id)) else {
+            screen = .failure(.extensionStoreOff)
+            return
+        }
+        let prepared = prepareLaunch(of: installed, command: command, userInitiated: true)
+        guard prepared.preferences.missing.isEmpty else {
+            showNeedsSettings(
+                command.title, extension: ExtensionStore.id, missing: prepared.preferences.missing,
+                origin: .userInitiated)
+            return
+        }
+        launch(
+            command.title, of: installed, command: command,
+            launchProps: LaunchProps(launchContext: target.launchContext),
+            prepared: prepared)
+    }
+
     // MARK: - Command views
 
     /// The running command's screen, if one is showing.
@@ -699,10 +911,30 @@ final class LauncherModel {
 
     /// The selected item of the running command's List, with its deferred `actions` and `detail` once they've come.
     var selectedListItem: ListContent.Item? {
-        guard let command, let items = command.list?.items,
-            let item = items.first(where: { $0.id == command.selectedNode }) ?? items.first
-        else { return nil }
+        guard let command, let item = Self.shownItem(of: command) else { return nil }
         return item.filled(with: command.slots[item.id])
+    }
+
+    /// The List or Grid item whose actions and detail show: the selected one, else the first.
+    private static func shownItem(of command: CommandScreen) -> ListContent.Item? {
+        guard let items = command.list?.items else { return nil }
+        return items.first(where: { $0.id == command.selectedNode }) ?? items.first
+    }
+
+    /// What a command's action panel would belong to now (`ActionMenuOwner`): the command, its view and the List or
+    /// Grid item whose actions `currentActions` shows. Nil in root search and on a failure screen.
+    private var menuOwner: ActionMenuOwner? {
+        guard let command else { return nil }
+        let item = Self.shownItem(of: command)
+        return ActionMenuOwner(session: command.session, depth: command.depth, item: item?.id, itemId: item?.itemId)
+    }
+
+    /// Closes a command's action panel once what it opened on changed (`ActionMenuOwner.stays`): the selection moved
+    /// to another item, the item or the items went, the first items came, or the view or command changed. Every
+    /// change of a command's selection writes `screen` (a render, a click), so its didSet calls this.
+    private func actionMenuFollowsSelection() {
+        guard let owner = actionMenuOwner, !owner.stays(with: menuOwner) else { return }
+        actionPanel = nil
     }
 
     /// The actions for what's selected: in root search, fudge's own for the selected item (`RootActions`); in a
@@ -715,9 +947,9 @@ final class LauncherModel {
                 return RootActions.calculatorSections(for: calculator?.enter ?? .copy)
             }
             var isActiveInMenuBar = false
-            if case .command(let extensionName, let commandName, "menu-bar", _) = selectedRootItem?.kind {
+            if case .command(let id, let commandName, "menu-bar", _) = selectedRootItem?.kind {
                 isActiveInMenuBar = menuBar.isActive(
-                    FudgeSettings.commandID(extension: extensionName, command: commandName))
+                    FudgeSettings.commandID(owner: .extension(id), command: commandName))
             }
             return RootActions.sections(for: selectedRootItem, isActiveInMenuBar: isActiveInMenuBar)
         }
@@ -890,8 +1122,11 @@ final class LauncherModel {
         }
         let form = FormContent(view)
         if command.storedFormValues == nil {
-            command.storedFormValues = FormValueStore(directory: paths.formValuesDirectory)
-                .load(extension: command.extensionName, command: command.commandName)
+            command.storedFormValues =
+                command.extensionID.map {
+                    FormValueStore(directory: paths.formValuesDirectory).load(
+                        extension: $0, command: command.commandName)
+                } ?? [:]
         }
         var values: [Int: FieldValue] = [:]
         var pending: [Int: JSONValue] = [:]
@@ -922,8 +1157,10 @@ final class LauncherModel {
         guard case .command(var command) = screen, command.session == session, let form = command.form,
             case .object(let object) = params, case .object(let submitted) = object["values"]
         else { return }
-        try? FormValueStore(directory: paths.formValuesDirectory)
-            .save(form.valuesToStore(submitted), extension: command.extensionName, command: command.commandName)
+        if let id = command.extensionID {
+            try? FormValueStore(directory: paths.formValuesDirectory)
+                .save(form.valuesToStore(submitted), extension: id, command: command.commandName)
+        }
         command.storedFormValues = nil
         screen = .command(command)
     }
@@ -995,9 +1232,10 @@ final class LauncherModel {
             if let controlled = dropdown.value { command.dropdown?.value = controlled }
             return
         }
-        let key = SearchBarDropdown.Store.key(
-            extension: command.extensionName, command: command.commandName, dropdown: dropdown.name)
-        let stored = dropdown.storesValue ? dropdownStore.value(for: key) : nil
+        let key = command.extensionID.map {
+            SearchBarDropdown.Store.key(extension: $0, command: command.commandName, dropdown: dropdown.name)
+        }
+        let stored = dropdown.storesValue ? key.flatMap { dropdownStore.value(for: $0) } : nil
         let initial = dropdown.initialValue(stored: stored)
         command.dropdown = DropdownState(node: dropdown.id, value: initial)
         if let initial, dropdown.hasOnChange {
@@ -1010,9 +1248,8 @@ final class LauncherModel {
         guard var command, let dropdown = command.list?.dropdown else { return }
         command.dropdown = DropdownState(node: dropdown.id, value: value)
         screen = .command(command)
-        if dropdown.storesValue {
-            let key = SearchBarDropdown.Store.key(
-                extension: command.extensionName, command: command.commandName, dropdown: dropdown.name)
+        if dropdown.storesValue, let id = command.extensionID {
+            let key = SearchBarDropdown.Store.key(extension: id, command: command.commandName, dropdown: dropdown.name)
             try? dropdownStore.set(value, for: key)
         }
         if dropdown.hasOnChange {
@@ -1112,9 +1349,12 @@ final class LauncherModel {
         }
     }
 
-    /// Opens a Form.Dropdown's panel under it (Space, ↵ or a click).
+    /// Opens a Form.Dropdown's panel under it (Space, ↵ or a click). The field is where the keyboard is, so the
+    /// panel's closing gives it back to the field, whatever order SwiftUI reports focus in (`formKeyboardMoved`,
+    /// which sends `onBlur` and `onFocus` only when the field changed).
     func openFormDropdown(_ node: Int) {
         guard formField(node)?.kind == .dropdown else { return }
+        formKeyboardMoved(to: .field(node))
         actionPanel = nil
         datePanel = nil
         let current: String? = if case .string(let value) = fieldValue(node) { value } else { nil }
@@ -1126,7 +1366,7 @@ final class LauncherModel {
     /// False when there's none.
     func openFirstFormPicker(_ kind: FormContent.Kind) -> Bool {
         guard let field = command?.form?.fields.first(where: { $0.kind == kind }) else { return false }
-        formFieldFocused(field.id)
+        formKeyboardMoved(to: .field(field.id))
         switch kind {
         case .tagPicker: openTagPicker(field.id)
         case .datePicker: openDatePanel(field.id)
@@ -1135,9 +1375,11 @@ final class LauncherModel {
         return dropdownPanel != nil || datePanel != nil
     }
 
-    /// Opens a TagPicker's list of items to pick, starting the search with what was typed, if anything.
+    /// Opens a TagPicker's list of items to pick, starting the search with what was typed, if anything. The field is
+    /// where the keyboard is, as for `openFormDropdown`.
     func openTagPicker(_ node: Int, typing text: String = "") {
         guard formField(node)?.kind == .tagPicker else { return }
+        formKeyboardMoved(to: .field(node))
         actionPanel = nil
         datePanel = nil
         dropdownPanel = DropdownPanelState(source: .tagPicker(node), query: text)
@@ -1354,7 +1596,19 @@ final class LauncherModel {
         var pick: DatePick?
     }
 
-    private(set) var actionPanel: ActionPanelState?
+    private(set) var actionPanel: ActionPanelState? {
+        didSet {
+            // Every way it opens records what it opened on: ⌘K, a held ⌘K, a submenu's or a picker's shortcut.
+            if actionPanel == nil {
+                actionMenuOwner = nil
+            } else if oldValue == nil {
+                actionMenuOwner = menuOwner
+            }
+        }
+    }
+    /// What the open action panel opened on, in a command (`menuOwner`); nil in root search, which keeps its own rule
+    /// in `selectedItem`'s didSet, and on a failure screen.
+    @ObservationIgnored private var actionMenuOwner: ActionMenuOwner?
 
     /// The entries the open action panel shows: the current submenu's, filtered by its search.
     var actionPanelSections: [ActionSection] {
@@ -1367,6 +1621,15 @@ final class LauncherModel {
             sections = submenu
         }
         return ActionPanelReader.filter(sections, query: actionPanel.query)
+    }
+
+    /// The key the open action panel shows on `entry` (`ActionPanelReader.shownKey`): in a command's view, the primary
+    /// and secondary keys on its first two actions, which they run.
+    func shownKey(of entry: ActionEntry) -> KeyShortcut? {
+        let inCommand = command.map { $0.failure == nil } ?? false
+        return ActionPanelReader.shownKey(
+            of: entry, in: currentActions, primaryKey: inCommand ? primaryKey : nil,
+            secondaryKey: inCommand ? secondaryKey : nil, inSubmenu: actionPanel?.path.isEmpty == false)
     }
 
     var actionPanelQuery: String {
@@ -1576,8 +1839,8 @@ final class LauncherModel {
         switch action {
         case .open:
             activate()
-        case .configureExtension(let name):
-            showSettings(extension: name)
+        case .configureExtension(let id):
+            showSettings(extension: id.key)
         case .deactivateMenuBarItem(let id):
             do {
                 try menuBar.deactivate(id)
@@ -1592,7 +1855,7 @@ final class LauncherModel {
         case .copyQuestionAndAnswer:
             copyCalculatorAnswer(withQuestion: true)
         case .turnOnCurrencyConversion:
-            showSettings(extension: nil)
+            showSettings(extension: RootActions.currencySettingsPage)
         case .retryExchangeRates:
             retryExchangeRates()
         case .copyQuicklink(let link):
@@ -1621,11 +1884,11 @@ final class LauncherModel {
         _ notice: String?, message: String, session: String, commandTitle: String?
     ) -> SignInNotice? {
         guard notice != nil else { return nil }
-        let name = sessionExtensions[session] ?? ""
+        guard let id = sessionExtensions[session] else { return nil }
         return SignInNotice(
-            notice: notice, message: message, extensionName: name,
-            extensionTitle: extensions[name]?.manifest.title ?? "",
-            commandID: sessionCommands[session].map { FudgeSettings.commandID(extension: name, command: $0) },
+            notice: notice, message: message, extension: id,
+            extensionTitle: extensions[id]?.displayTitle ?? "",
+            commandID: sessionCommands[session].map { FudgeSettings.commandID(owner: .extension(id), command: $0) },
             commandTitle: commandTitle)
     }
 
@@ -1657,7 +1920,7 @@ final class LauncherModel {
         let clipboard = QuicklinkTemplate(quicklink.link).usesClipboard ? templateClipboard() : nil
         let failed = { [weak self] (message: String) in
             if fromHotkey {
-                self?.showHUD("Can't open \(quicklink.name) — \(message)")
+                self?.showHUD(MessageText.joined("Can't open \(quicklink.name)", message))
             } else {
                 self?.showFailureToast("Can't open \(quicklink.name)", message: message)
             }
@@ -2508,8 +2771,7 @@ final class LauncherModel {
         do {
             try pruned.save(to: paths.settingsFile)
         } catch {
-            FileHandle.standardError.write(
-                Data("fudge: couldn't remove a deleted quicklink's settings: \(error)\n".utf8))
+            FudgeLog.error("couldn't remove a deleted quicklink's settings: \(error)")
         }
     }
 
@@ -2527,45 +2789,69 @@ final class LauncherModel {
             return true
         }
         if pressed == RootActions.configureExtensionShortcut {
-            if let name = currentExtensionName { showSettings(extension: name) }
+            if let id = currentExtension { showSettings(extension: id.key) }
             return true
         }
         return false
     }
 
     /// The extension of the command selected in root search, or of the one running.
-    private var currentExtensionName: String? {
+    private var currentExtension: ExtensionID? {
         switch screen {
         case .root:
             if case .command(let name, _, _, _) = selectedRootItem?.kind { return name }
             return nil
         case .command(let command):
-            return command.extensionName.isEmpty ? nil : command.extensionName
+            return command.extensionID
         case .failure(let failure):
-            return failure.notice?.extensionName
+            return failure.notice?.extensionID
         }
     }
 
     /// ↵ runs the primary action, except in a Form, where ↵ belongs to the fields and ⌘↵ submits.
-    var primaryKey: KeyShortcut {
-        command?.form != nil
-            ? KeyShortcut(key: "return", modifiers: ["cmd"]) : KeyShortcut(key: "return", modifiers: [])
-    }
+    var primaryKey: KeyShortcut { LauncherKeys.primaryKey(form: command?.form != nil) }
 
     /// ⌘↵ runs the secondary action; ⌘⇧↵ in a Form.
-    var secondaryKey: KeyShortcut {
-        KeyShortcut(key: "return", modifiers: command?.form != nil ? ["cmd", "shift"] : ["cmd"])
+    var secondaryKey: KeyShortcut { LauncherKeys.secondaryKey(form: command?.form != nil) }
+
+    /// What the launcher shows, for `LauncherKeys`, which decides what a key runs of the view's actions.
+    private var keyState: LauncherKeys.State {
+        var overlay: LauncherKeys.State.Overlay?
+        if signIn != nil {
+            overlay = .signIn
+        } else if actionPanel?.pick != nil {
+            overlay = .datePick
+        } else if actionPanel != nil {
+            overlay = .actionPanel
+        } else if dropdownPanel != nil {
+            overlay = .dropdown
+        }
+        let place: LauncherKeys.State.Place
+        switch screen {
+        case .root: place = .root
+        case .failure: place = .failure
+        case .command(let running):
+            place =
+                running.failure != nil
+                ? .failedCommand
+                : .command(hasSearchField: running.view == nil || running.list != nil, isForm: running.form != nil)
+        }
+        let item = selectedListItem
+        return LauncherKeys.State(
+            place: place, overlay: overlay, actions: currentActions,
+            pendingShortcuts: item?.deferred.contains(.actions) == true ? item?.deferredShortcuts : nil)
     }
 
     /// Keys that the launcher handles itself: ⌘K, the primary and secondary actions' keys, and the actions'
-    /// shortcuts; in views without a search field (Detail, Form) also ↵ and Esc; in root search, the keys of the
-    /// argument fields (`ArgumentInput.handle`) and the root actions' shortcuts; everywhere, ⌘, and ⌘⇧, for the
-    /// Settings window, after the running command's own shortcuts.
+    /// shortcuts, also while the action panel is open; in views without a search field (Detail, Form) also ↵ and
+    /// Esc; in root search, the keys of the argument fields (`ArgumentInput.handle`) and the root actions' shortcuts;
+    /// everywhere, ⌘, and ⌘⇧, for the Settings window, after the running command's own shortcuts. Which action a key
+    /// runs is `LauncherKeys.outcome`'s, which a command hotkey asks too (`pressHotkey`).
     /// Returns false for everything else, which then goes to the focused field.
     func handleKey(_ pressed: KeyShortcut) -> Bool {
         if signIn != nil { return handleSignInKey(pressed) }
         if datePanel != nil, handleDatePanelKey(pressed) { return true }
-        if pressed == KeyShortcut(key: "k", modifiers: ["cmd"]) {
+        if pressed == LauncherKeys.actionPanelKey {
             if actionPanel != nil || !waitForActions(.actionPanel) { toggleActionPanel() }
             return true
         }
@@ -2576,10 +2862,8 @@ final class LauncherModel {
             closeDropdownPanel()
             return true
         }
-        guard actionPanel == nil, dropdownPanel == nil else { return false }
-        let command: CommandScreen
-        switch screen {
-        case .root:
+        let overlaid = actionPanel != nil || dropdownPanel != nil
+        if !overlaid, case .root = screen {
             switch arguments.handle(pressed) {
             case .ignored: break
             case .handled: return true
@@ -2587,49 +2871,53 @@ final class LauncherModel {
                 activate()
                 return true
             }
-            // ↵ stays with the fields, which submit on their own.
-            if !pressed.modifiers.isEmpty, let entry = ActionPanelReader.action(for: pressed, in: currentActions) {
-                run(entry)
-                return true
-            }
-            return handleSettingsKey(pressed)
-        case .failure:
-            // A notice's actions' shortcuts, such as ⌘⌥, on "Sign-in is off".
-            if !pressed.modifiers.isEmpty, let entry = ActionPanelReader.action(for: pressed, in: currentActions) {
-                run(entry)
-                return true
-            }
-            return handleSettingsKey(pressed)
-        case .command(let running):
-            guard running.failure == nil else { return handleSettingsKey(pressed) }
-            command = running
         }
-        let hasSearchField = command.view == nil || command.list != nil
-        if !hasSearchField, pressed == KeyShortcut(key: "escape", modifiers: []) {
+        if !overlaid, let command, command.failure == nil, command.view != nil, command.list == nil,
+            pressed == KeyShortcut(key: "escape", modifiers: [])
+        {
             escape()
             return true
         }
-        if pressed == secondaryKey {
-            if waitForActions(.secondary) { return true }
-            if let secondaryAction { run(secondaryAction) }
-            return true
-        }
-        if !hasSearchField, pressed == primaryKey {
-            if let primaryAction { run(primaryAction) }
-            return true
-        }
-        guard !pressed.modifiers.isEmpty else { return false }
-        // A shortcut of the selected item's actions works before they've come: it waits for them, as ↵ does.
-        if selectedListItem?.waitsForActions(pressed) == true, waitForActions(.shortcut(pressed)) { return true }
-        if let entry = ActionPanelReader.action(for: pressed, in: currentActions) {
+        // The view's actions, the open action panel's included: a notice's (⌘⌥, on "Sign-in is off"), root search's,
+        // and a command's, with a shortcut of the selected item's actions waiting for them before they've come.
+        switch LauncherKeys.outcome(of: pressed, in: keyState) {
+        case .run(let entry):
             run(entry)
             return true
+        case .wait(let key):
+            _ = waitForActions(key)
+            return true
+        // In a Form, Tab and ⇧Tab move between the fields here, whichever has the keyboard, since AppKit's key view
+        // loop doesn't reach them in the launcher's panel. A calendar open under a field closed above, as for any key.
+        case .moveInForm(let backwards):
+            moveInForm(backwards: backwards)
+            return true
+        case nil:
+            break
         }
+        guard !overlaid else { return false }
+        guard let command, command.failure == nil else { return handleSettingsKey(pressed) }
+        // The primary and secondary keys are the actions' even when there's no such action.
+        let hasSearchField = command.view == nil || command.list != nil
+        if pressed == secondaryKey || (!hasSearchField && pressed == primaryKey) { return true }
+        guard !pressed.modifiers.isEmpty else { return false }
         if pressed == commandP, command.list?.dropdown != nil {
             toggleDropdownPanel()
             return true
         }
         return handleSettingsKey(pressed)
+    }
+
+    /// A command hotkey pressed (SPEC-127): while the launcher holds the keyboard and an action there takes the
+    /// hotkey's keys, those keys run that action as if they'd been pressed in the launcher, and the answer is true,
+    /// so the command doesn't open. False otherwise: the hotkey opens its command as always.
+    func pressHotkey(_ spec: HotKeySpec, launcherHoldsKeyboard: Bool) -> Bool {
+        guard
+            let pressed = LauncherKeys.hotkeyPress(
+                spec, layout: KeyLayout.character(for:), launcherHoldsKeyboard: launcherHoldsKeyboard, in: keyState)
+        else { return false }
+        LauncherLog.note("hotkey \(spec.text) went to the launcher's action: \(LauncherLog.keyboard)")
+        return handleKey(pressed)
     }
 
     /// Tells the command the search text changed; with `throttle`, once typing pauses.
@@ -3288,11 +3576,11 @@ final class LauncherModel {
             return
         }
         let mode: String
-        var running: (extensionName: String, commandName: String)?
+        var running: (extensionID: ExtensionID, commandName: String)?
         switch item.kind {
-        case .command(let extensionName, let commandName, let commandMode, _):
+        case .command(let id, let commandName, let commandMode, _):
             mode = commandMode
-            running = (extensionName, commandName)
+            running = (id, commandName)
         case .quicklink:
             mode = "no-view"
         default:
@@ -3302,7 +3590,7 @@ final class LauncherModel {
         // too while the panel is hidden: the panel's next show would reset it anyway, so this changes nothing.
         resettingFirst {
             let onScreen =
-                isVisible() && running != nil && command?.extensionName == running?.extensionName
+                isVisible() && running != nil && command?.extensionID == running?.extensionID
                 && command?.commandName == running?.commandName
             let action: HotKeyLaunch
             if case .quicklink(let quicklink) = item.kind {
@@ -3398,11 +3686,11 @@ final class LauncherModel {
             recordLaunch(item.id)
             searchText = ""
             showSettings(extension: nil)
-        case .command(let extensionName, let commandName, "menu-bar", _):
+        case .command(let id, let commandName, "menu-bar", _):
             // Activates it, or refreshes it and opens its menu; the panel closes either way.
             recordLaunch(item)
             do {
-                try menuBar.runFromRootSearch(FudgeSettings.commandID(extension: extensionName, command: commandName))
+                try menuBar.runFromRootSearch(FudgeSettings.commandID(owner: .extension(id), command: commandName))
             } catch {
                 showFailureToast("Can't activate \(item.title)", message: String(describing: error))
                 return
@@ -3435,8 +3723,8 @@ final class LauncherModel {
             showSnippetForm(SnippetDraft())
         case .builtInCommand(let group, let command):
             runBuiltIn(item, group: group, command: command, fromHotkey: false)
-        case .command(let extensionName, let commandName, _, _):
-            guard let installed = extensions[extensionName],
+        case .command(let id, let commandName, _, _):
+            guard let installed = extensions[id],
                 let command = installed.manifest.commands.first(where: { $0.name == commandName })
             else {
                 recordLaunch(item.id)
@@ -3449,7 +3737,7 @@ final class LauncherModel {
             let prepared = prepareLaunch(of: installed, command: command, userInitiated: true)
             guard prepared.preferences.missing.isEmpty else {
                 showNeedsSettings(
-                    item.title, extension: extensionName, missing: prepared.preferences.missing,
+                    item.title, extension: id, missing: prepared.preferences.missing,
                     origin: .userInitiated)
                 return
             }
@@ -3476,7 +3764,7 @@ final class LauncherModel {
     /// Records a root item's launch, unless it's one that never counts (`RootItem.recordsLaunch`: Quit).
     /// Runs one of Fudge's own commands (`BuiltInCommandGroup`), from root search or its hotkey, which goes no other
     /// way: each group's commands decide whether the panel shows.
-    private func runBuiltIn(_ item: RootItem, group: String, command: String, fromHotkey: Bool) {
+    private func runBuiltIn(_ item: RootItem, group: BuiltInGroup, command: String, fromHotkey: Bool) {
         if group == BuiltInCommandGroup.windowManagement.name, command == SwitchWindowsList.commandName {
             openSwitchWindows(item, fromHotkey: fromHotkey)
             return
@@ -3596,10 +3884,10 @@ final class LauncherModel {
 
     /// The preferences of `session`'s command as they are now, resolved as a launch resolves them.
     private func preferenceValues(of session: String) -> [String: JSONValue] {
-        guard let name = sessionExtensions[session], let installed = extensions[name],
+        guard let id = sessionExtensions[session], let installed = extensions[id],
             let command = installed.manifest.commands.first(where: { $0.name == sessionCommands[session] })
         else { return [:] }
-        let stored = PreferenceStore(directory: paths.preferencesDirectory).load(name)
+        let stored = PreferenceStore(directory: paths.preferencesDirectory).load(id)
         return PreferenceResolver.resolve(installed.manifest, command: command, stored: stored).values
     }
 
@@ -3609,12 +3897,11 @@ final class LauncherModel {
     private func prepareLaunch(
         of installed: InstalledExtension, command: ExtensionManifest.Command, userInitiated: Bool
     ) -> (preferences: ResolvedPreferences, environment: LaunchEnvironment) {
-        let name = installed.manifest.name
-        if userInitiated { recordLaunch(RootItem.commandID(extension: name, command: command.name)) }
+        if userInitiated { recordLaunch(RootItem.commandID(owner: .extension(installed.id), command: command.name)) }
         let preferences = PreferenceResolver.resolve(
             installed.manifest,
             command: command,
-            stored: PreferenceStore(directory: paths.preferencesDirectory).load(name)
+            stored: PreferenceStore(directory: paths.preferencesDirectory).load(installed.id)
         )
         let environment = LaunchEnvironment.make(
             for: installed,
@@ -3628,7 +3915,7 @@ final class LauncherModel {
     /// A required preference isn't set: say so, and open Settings on the extension instead of running the command.
     /// Settings comes forward only for a user-initiated `origin`.
     private func showNeedsSettings(
-        _ title: String, extension name: String, missing: [ExtensionManifest.Preference], origin: CallOrigin
+        _ title: String, extension id: ExtensionID, missing: [ExtensionManifest.Preference], origin: CallOrigin
     ) {
         let names = missing.map { $0.title ?? $0.name }.joined(separator: ", ")
         screen = .failure(
@@ -3637,7 +3924,7 @@ final class LauncherModel {
                 message: "Set \(names) in the Settings window, then run the command again.", commandTitle: title
             )
         )
-        openSettings(name, origin)
+        openSettings(id.key, origin)
     }
 
     /// Starts a prepared command in the extension host: the one way commands launch, from root search and from
@@ -3653,9 +3940,9 @@ final class LauncherModel {
         prepared: (preferences: ResolvedPreferences, environment: LaunchEnvironment),
         quiet: Bool = false
     ) -> String? {
-        let extensionName = installed.manifest.name
+        let extensionID = installed.id
         // The app decides whether the store is on, from settings.json as it is now, before any of its code runs.
-        if ExtensionStore.isOff(extensionName, settings: FudgeSettings.load(from: paths.settingsFile)) {
+        if ExtensionStore.isOff(extensionID, settings: FudgeSettings.load(from: paths.settingsFile)) {
             if !quiet { screen = .failure(.extensionStoreOff) }
             return ExtensionStore.Off.title
         }
@@ -3663,17 +3950,19 @@ final class LauncherModel {
         do {
             host = try ensureHost()
         } catch {
+            FudgeLog.error(
+                "couldn't launch \(extensionID)/\(command.name): the extension host didn't start: \(error)")
             if !quiet { screen = .failure(Failure(title: "Can't run extensions", message: String(describing: error))) }
             return String(describing: error)
         }
         let session = SessionID.make()
         hostSessions.started(session)
-        sessionExtensions[session] = extensionName
+        sessionExtensions[session] = extensionID
         sessionCommands[session] = command.name
         if command.mode == "view" {
             screen = .command(
                 CommandScreen(
-                    session: session, title: title, extensionName: extensionName, commandName: command.name,
+                    session: session, title: title, extensionID: extensionID, commandName: command.name,
                     assets: installed.assetsDirectory))
         } else if quiet {
             quietSessions[session] = QuietSession(title: title)
@@ -3687,9 +3976,10 @@ final class LauncherModel {
                 .launch(
                     session: session, entry: installed.entry(for: command.name).path, mode: command.mode,
                     launchProps: launchProps, preferences: prepared.preferences.values,
-                    environment: prepared.environment)
+                    environment: prepared.environment, extensionId: installed.id)
             )
         } catch {
+            FudgeLog.error("couldn't launch \(extensionID)/\(command.name): \(error)")
             hostSessions.ended(session)
             sessionExtensions[session] = nil
             sessionCommands[session] = nil
@@ -3712,7 +4002,7 @@ final class LauncherModel {
         let prepared = prepareLaunch(of: installed, command: command, userInitiated: false)
         guard prepared.preferences.missing.isEmpty else {
             let origin = CallOrigin.launched(userInitiated: userInitiated)
-            if origin.mayComeForward { openSettings(installed.manifest.name, origin) }
+            if origin.mayComeForward { openSettings(installed.id.key, origin) }
             let names = prepared.preferences.missing.map { $0.title ?? $0.name }.joined(separator: ", ")
             return .failure(.init(message: "set \(names) in the Settings window first"))
         }
@@ -3724,7 +4014,7 @@ final class LauncherModel {
         }
         let session = SessionID.make()
         hostSessions.started(session)
-        sessionExtensions[session] = installed.manifest.name
+        sessionExtensions[session] = installed.id
         sessionCommands[session] = command.name
         let launchProps = LaunchProps(launchType: userInitiated ? "userInitiated" : "background")
         do {
@@ -3732,7 +4022,7 @@ final class LauncherModel {
                 .launch(
                     session: session, entry: installed.entry(for: command.name).path, mode: command.mode,
                     launchProps: launchProps, preferences: prepared.preferences.values,
-                    environment: prepared.environment))
+                    environment: prepared.environment, extensionId: installed.id))
         } catch {
             hostSessions.ended(session)
             sessionExtensions[session] = nil
@@ -3760,13 +4050,13 @@ final class LauncherModel {
     private func launchCommand(
         _ params: JSONValue, from session: String, call id: Int, origin: CallOrigin
     ) async throws {
-        guard let callerName = sessionExtensions[session], let caller = extensions[callerName] else {
+        guard let callerID = sessionExtensions[session], let caller = extensions[callerID] else {
             throw LaunchCommandError.invalid("the calling command isn't running")
         }
         let request = try LaunchRequest(params: params).asCalled(from: origin)
         let target = try CommandLocator.locate(
-            request, caller: callerName, in: Array(extensions.values), settings: settings)
-        let targetID = FudgeSettings.commandID(extension: target.installed.manifest.name, command: target.command.name)
+            request, caller: caller, in: Array(extensions.values), settings: settings)
+        let targetID = FudgeSettings.commandID(owner: .extension(target.installed.id), command: target.command.name)
         try CommandLocator.checkMode(target.command, type: request.type, isActiveInMenuBar: menuBar.isActive(targetID))
         if target.isOtherExtension {
             try await checkPermission(of: caller, toOpen: target, origin: origin, from: session)
@@ -3788,7 +4078,7 @@ final class LauncherModel {
             answer()
             if onScreen != nil { leaveCommand() }
             showNeedsSettings(
-                target.command.title, extension: target.installed.manifest.name,
+                target.command.title, extension: target.installed.id,
                 missing: prepared.preferences.missing, origin: origin)
             return
         }
@@ -3842,8 +4132,8 @@ final class LauncherModel {
     ) async throws {
         let file = paths.launchPermissionsFile
         var permissions = LaunchPermissions.load(from: file)
-        let callerName = caller.manifest.name
-        let targetName = target.installed.manifest.name
+        let callerName = caller.id
+        let targetName = target.installed.id
         let allowed: Bool
         switch LaunchPermissions.step(
             answer: permissions.answer(caller: callerName, target: targetName), origin: origin)
@@ -3856,16 +4146,16 @@ final class LauncherModel {
             if backgroundNotices.first("launch:\(callerName)/\(targetName)") {
                 showHUD(
                     LaunchPermissions.unaskedNotice(
-                        callerTitle: caller.manifest.title, targetTitle: target.installed.manifest.title))
+                        callerTitle: caller.displayTitle, targetTitle: target.installed.displayTitle))
             }
-            let refusal = LaunchCommandError.permissionNeeded(extensionTitle: target.installed.manifest.title)
+            let refusal = LaunchCommandError.permissionNeeded(extensionTitle: target.installed.displayTitle)
             quietSessions[session]?.unasked.insert(refusal.description)
             throw refusal
         case .ask:
             allowed = await confirm(
                 AlertRequest(
                     title:
-                        "“\(caller.manifest.title)” wants to open “\(target.command.title)” from “\(target.installed.manifest.title)”.",
+                        "“\(caller.displayTitle)” wants to open “\(target.command.title)” from “\(target.installed.displayTitle)”.",
                     message: nil,
                     primary: "Allow",
                     dismiss: "Don't Allow",
@@ -3876,7 +4166,7 @@ final class LauncherModel {
             permissions.record(allowed, caller: callerName, target: targetName)
             try? permissions.save(to: file)
         }
-        guard allowed else { throw LaunchCommandError.notAllowed(extensionTitle: target.installed.manifest.title) }
+        guard allowed else { throw LaunchCommandError.notAllowed(extensionTitle: target.installed.displayTitle) }
     }
 
     /// A required argument has no value: root search shows the command, its fields filled with what was given and the
@@ -3941,9 +4231,18 @@ final class LauncherModel {
             environment: ExtensionStore.hostEnvironment(
                 cli: FileManager.default.isExecutableFile(atPath: cli.path) ? cli : nil, paths: paths,
                 proxy: Self.systemProxy()
-            ).merging([OAuthProviders.environmentKey: OAuthProviders.environmentValue]) { _, new in new }
-                .merging(trust.environment) { _, new in new })
+            ).merging([
+                OAuthProviders.environmentKey: OAuthProviders.environmentValue,
+                OAuthProviders.raycastDomainsEnvironmentKey: OAuthProviders.raycastDomainsEnvironmentValue,
+            ]) { _, new in new }
+            .merging(trust.environment) { _, new in new },
+            log: { session, level, message, source in
+                FudgeLog.command(
+                    level, message, session: session, extension: source?.extensionID, command: source?.command)
+            })
         self.host = host
+        // Before any launch, so every command starts at the setting (SPEC-124).
+        try? host.send(.logLevel(settings.logLevel))
         let startedWithFlag = trust.arguments.contains(NodeTrust.systemCAFlag)
         let started = ContinuousClock.now
         Task { [weak self] in
@@ -4014,6 +4313,16 @@ final class LauncherModel {
     private func hostStopped(_ stopped: ExtensionHost) {
         guard host === stopped else { return }
         host = nil
+        // Each command running in it, by name, so its extension's failure is in the log too (SPEC-124).
+        let running = Set(sessionExtensions.keys).subtracting(Self.builtInSessions).compactMap { session in
+            sessionExtensions[session].map { "\($0)/\(sessionCommands[session] ?? "?")" }
+        }
+        FudgeLog.error(
+            "the extension host stopped"
+                + (running.isEmpty ? "" : ", ending \(running.sorted().joined(separator: ", "))"))
+        for (session, id) in sessionExtensions where BundledCalls.mayCall(.storeNotifications, from: id) {
+            if hostSessions.isRunning(session) { storeSessionEnded(session) }
+        }
         hostSessions.endAll()
         background.removeAll()
         quietSessions.removeAll()
@@ -4070,9 +4379,11 @@ final class LauncherModel {
             case .render, .eventSettled:
                 menuBar.handle(message)
                 return
-            case .error(_, let text, let stack, _, _):
+            case .error(_, let text, let stack, let fatal, _):
                 menuBar.handle(message)
-                log(session, "error", stack ?? text)
+                FudgeLog.commandError(
+                    text, stack: stack, fatal: fatal, session: session, extension: sessionExtensions[session],
+                    command: sessionCommands[session])
                 return
             case .exit:
                 sessionExtensions[session] = nil
@@ -4106,6 +4417,8 @@ final class LauncherModel {
                 actionPanel = nil
                 dropdownPanel = nil
                 datePanel = nil
+                // A Form on the new top view starts in its first field, never in a place of the view before it.
+                command.formKeyboard = FormKeyboard()
             }
             command.view = view
             command.depth = depth
@@ -4148,14 +4461,16 @@ final class LauncherModel {
             if var quiet = quietSessions[session] {
                 // A background launch: the panel stays as it is, and the failure shows in the HUD, once.
                 let alreadySaid = quiet.unasked.contains { message.contains($0) }
-                if !quiet.failed, !alreadySaid { showHUD(signIn?.hud ?? "\(quiet.title) failed — \(message)") }
+                if !quiet.failed, !alreadySaid {
+                    showHUD(signIn?.hud ?? MessageText.joined("\(quiet.title) failed", message))
+                }
                 quiet.failed = true
                 quietSessions[session] = quiet
             } else if case .command(var command) = screen, command.session == session {
                 if fatal, let signIn {
                     // The command can't go on: the notice takes its place, as the store's "off" one does.
                     leaveCommand()
-                    screen = .failure(Failure(signIn, extensionName: command.extensionName))
+                    screen = .failure(Failure(signIn, extension: command.extensionID))
                 } else if fatal {
                     command.failure = Failure(title: "\(command.title) failed", message: message, details: stack)
                     screen = .command(command)
@@ -4164,14 +4479,19 @@ final class LauncherModel {
                 }
             } else if let title = background[session] {
                 screen = .failure(
-                    signIn.map { Failure($0, extensionName: sessionExtensions[session] ?? "") }
+                    signIn.map { Failure($0, extension: sessionExtensions[session]) }
                         ?? Failure(title: "\(title) failed", message: message, details: stack, commandTitle: title))
             }
-            log(session, "error", stack ?? message)
+            FudgeLog.commandError(
+                message, stack: stack, fatal: fatal, session: session, extension: sessionExtensions[session],
+                command: sessionCommands[session])
 
         case .exit(let session, let reason):
             endSignIn(of: session)
-            if sessionExtensions[session] == ClipboardHistory.extensionName { clipboardHistory.clearPreviews() }
+            if BundledCalls.mayCall(.storeNotifications, from: sessionExtensions[session]) {
+                storeSessionEnded(session)
+            }
+            if sessionExtensions[session] == ClipboardHistory.id { clipboardHistory.clearPreviews() }
             sessionExtensions[session] = nil
             sessionCommands[session] = nil
             if let quiet = quietSessions.removeValue(forKey: session) {
@@ -4215,7 +4535,7 @@ final class LauncherModel {
                     send(.rpcResult(session: session, id: id, result: nil, error: Self.backgroundSettingsError))
                     break
                 }
-                if let extensionName = sessionExtensions[session] { openSettings(extensionName, origin) }
+                if let id = sessionExtensions[session] { openSettings(id.key, origin) }
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
             case let method where method.hasPrefix("clipboardHistory."):
                 // Clipboard History's own calls (SPEC-077), refused for any other extension.
@@ -4242,6 +4562,74 @@ final class LauncherModel {
             case "form.storeValues":
                 storeFormValues(params, session: session)
                 send(.rpcResult(session: session, id: id, result: .null, error: nil))
+            case "fudge.log":
+                // The Extension Store's failures, for `Fudge.log` (SPEC-124); no other extension writes there.
+                guard BundledCalls.mayCall(.fudgeLog, from: sessionExtensions[session]),
+                    case .object(let values) = params, case .string(let message) = values["message"]
+                else {
+                    send(
+                        .rpcResult(
+                            session: session, id: id, result: nil,
+                            error: "Only the Extension Store writes to Fudge's log"))
+                    break
+                }
+                let level: LogLevel =
+                    if case .string(let name) = values["level"] { LogLevel(rawValue: name) ?? .error } else { .error }
+                FudgeLog.write(level, "Extension Store: \(message)")
+                send(.rpcResult(session: session, id: id, result: .null, error: nil))
+            case "store.installEnded", "store.askForNotifications", "store.nextNotificationClick":
+                // Install notifications (SPEC-156 C.5): the Extension Store's calls, refused for any other extension.
+                guard BundledCalls.mayCall(.storeNotifications, from: sessionExtensions[session]) else {
+                    send(
+                        .rpcResult(
+                            session: session, id: id, result: nil,
+                            error: "Only the Extension Store asks about install notifications"))
+                    break
+                }
+                storeNotificationCall(method, params: params, session: session, id: id)
+            case "store.repositories":
+                // The list of repositories from Settings (FUD-182), read afresh for each call: the Extension Store's
+                // call, refused for any other extension.
+                guard BundledCalls.mayCall(.storeRepositories, from: sessionExtensions[session]) else {
+                    send(
+                        .rpcResult(
+                            session: session, id: id, result: nil,
+                            error: "Only the Extension Store asks for the list of repositories"))
+                    break
+                }
+                let settings = FudgeSettings.load(from: paths.settingsFile)
+                send(
+                    .rpcResult(
+                        session: session, id: id, result: ExtensionRepository.storeAnswer(settings: settings),
+                        error: nil))
+            case "commandLineTools.ready", "commandLineTools.openSettings":
+                // The Extension Store's questions about extensions with a part written in Swift (SPEC-145 §3), refused
+                // for any other extension.
+                guard BundledCalls.mayCall(.commandLineTools, from: sessionExtensions[session]) else {
+                    send(
+                        .rpcResult(
+                            session: session, id: id, result: nil,
+                            error: "Only the Extension Store asks about the Command Line Tools"))
+                    break
+                }
+                if method == "commandLineTools.openSettings" {
+                    // Settings comes to the front, so only from the user's own action (SPEC-045).
+                    let origin = origin(of: session)
+                    guard origin.mayComeForward else {
+                        send(.rpcResult(session: session, id: id, result: nil, error: Self.backgroundSettingsError))
+                        break
+                    }
+                    openSettings(SettingsModel.developmentPage, origin)
+                    send(.rpcResult(session: session, id: id, result: .null, error: nil))
+                    break
+                }
+                // Found as Settings → Development and `fudge build` find them, with the setting read now.
+                let setting = FudgeSettings.load(from: paths.settingsFile).commandLineTools
+                let resolve = resolveCommandLineTools
+                Task {
+                    let status = await Task.detached(priority: .userInitiated) { resolve(setting) }.value
+                    send(.rpcResult(session: session, id: id, result: .bool(status.tools != nil), error: nil))
+                }
             case "files.search":
                 // Search Files (SPEC-069): its own preferences say where, read now so a change applies at once.
                 let caller = sessionExtensions[session]
@@ -4290,11 +4678,21 @@ final class LauncherModel {
                         let result = try await signInCall(method, params, session: session, origin: origin)
                         send(.rpcResult(session: session, id: id, result: result, error: nil))
                     } catch let refusal as SignInRefusal {
+                        // The step and why, never a URL, token, code or response (SPEC-124). One stopped on purpose
+                        // (sign-in off, cancelled, timed out, refused) is a warning.
+                        FudgeLog.write(
+                            refusal.notice == nil ? .error : .warning,
+                            "sign-in: \(method) for \(sessionExtensions[session]?.key ?? "an extension"): \(refusal)")
                         send(
                             .rpcResult(
                                 session: session, id: id, result: nil, error: refusal.message,
                                 notice: refusal.notice?.rawValue))
                     } catch {
+                        // Only the error's kind: its description could hold the call's params, such as a token.
+                        let failure = error as NSError
+                        FudgeLog.error(
+                            "sign-in: \(method) for \(sessionExtensions[session]?.key ?? "an extension") failed: "
+                                + "\(failure.domain) \(failure.code)")
                         send(.rpcResult(session: session, id: id, result: nil, error: String(describing: error)))
                     }
                 }
@@ -4320,11 +4718,14 @@ final class LauncherModel {
                 }
             }
 
-        case .log(let session, let level, let message):
-            log(session, level, message)
+        case .log(let session, let level, let message, let source):
+            // Only from a host started without a log handler; the app's goes straight to the files.
+            FudgeLog.command(
+                LogLevel(rawValue: level) ?? .error, message, session: session,
+                extension: source?.extensionID, command: source?.command)
 
         case .protocolError(let message):
-            log("host", "error", message)
+            FudgeLog.error("the extension host refused a message: \(message)")
 
         case .pong, .eventSettled, .unknown:
             break
@@ -4359,7 +4760,7 @@ final class LauncherModel {
                 expireToast(toast)
             } else if toast.style != "ANIMATED" {
                 // With the window closed, a finished toast still deserves to be seen.
-                showHUD([toast.title, toast.message].compactMap { $0 }.joined(separator: " — "))
+                showHUD(MessageText.joined(toast.title, toast.message))
             }
         case "toast.hide":
             if case .number(let id) = values["id"], toast?.id == Int(id), toast?.session == session { toast = nil }
@@ -4448,8 +4849,9 @@ final class LauncherModel {
         )
     }
 
+    /// Fudge's own line about a command (the menu bar's), for `Fudge.log`.
     private func log(_ session: String, _ level: String, _ message: String) {
-        FileHandle.standardError.write(Data("[\(session)] \(level): \(message)\n".utf8))
+        FudgeLog.write(LogLevel(rawValue: level) ?? .error, "[\(session)] \(message)")
     }
 
     // MARK: - Sign-in (SPEC-056)
@@ -4469,23 +4871,36 @@ final class LauncherModel {
                 "server": server.url.map { .string($0.absoluteString) } ?? .null, "signedIn": .bool(signedIn ?? false),
             ])
         case "oauth.prepare":
-            let server = FudgeSettings.load(from: paths.settingsFile).signIn
-            let (provider, authorize) = try PreparedSignIn.provider(
-                for: string("endpoint") ?? "", providerName: string("providerName") ?? "", server: server
+            let settings = FudgeSettings.load(from: paths.settingsFile)
+            let route = try PreparedSignIn.route(
+                for: string("endpoint") ?? "", providerName: string("providerName") ?? "",
+                redirectMethod: string("redirectMethod") ?? "", server: settings.signIn,
+                ownAppSignIn: settings.isOwnAppSignInOn
             ).get()
-            let loopback = try await OAuthLoopback.start()
-            let request = PreparedSignIn(provider: provider, authorizeURL: authorize, redirectURI: loopback.redirectURI)
+            let request: PreparedSignIn
+            let wait: any SignInWait
+            switch route {
+            case .relay(let provider, let authorize):
+                let loopback = try await OAuthLoopback.start()
+                request = PreparedSignIn(provider: provider, authorizeURL: authorize, redirectURI: loopback.redirectURI)
+                wait = loopback
+            case .direct(let method, let authorize, let redirect):
+                // No listener: Raycast's return link, or a pasted address, ends the wait (SPEC-132 §2).
+                request = PreparedSignIn(path: .direct(method), authorizeURL: authorize, redirectURI: redirect)
+                wait = OAuthLinkWait()
+            }
+            let listener = SignInListener(wait)
             // An earlier request this session never used stops listening. One the prompt shows isn't among them.
-            signInRequests.prepare((request, loopback), for: session)?.close()
+            signInRequests.prepare((request, listener), for: session)?.close()
             // A request that's never used to sign in stops listening after 5 minutes.
             Task { [weak self] in
                 try? await Task.sleep(for: .seconds(300))
-                guard let self, self.signInRequests.expire(loopback, of: session) else { return }
-                loopback.close()
+                guard let self, self.signInRequests.expire(listener, of: session) else { return }
+                listener.close()
             }
             return .object([
-                "provider": .string(provider.id), "authorizeURL": .string(authorize),
-                "redirectURI": .string(loopback.redirectURI),
+                "provider": request.provider.map { .string($0.id) } ?? .null,
+                "authorizeURL": .string(request.authorizeURL), "redirectURI": .string(request.redirectURI),
             ])
         case "oauth.authorize":
             return .object([
@@ -4499,33 +4914,41 @@ final class LauncherModel {
 
     /// The token calls of `session`'s extension: the extension comes from the session, never from the call.
     private func signInCalls(_ session: String) -> SignInCalls? {
-        guard let extensionName = sessionExtensions[session] else { return nil }
+        guard let id = sessionExtensions[session] else { return nil }
         return SignInCalls(
-            store: OAuthTokenStore(secrets: tokenSecrets), extensionName: extensionName,
+            store: OAuthTokenStore(secrets: tokenSecrets), extension: id,
             pending: signInRequests.pending(of: session))
     }
 
     /// Signs in for `session`: shows "Sign in to <provider>", opens the browser on ↵, and waits up to 5 minutes for
-    /// the loopback callback. Brings the launcher back to the command when the browser returns.
+    /// the loopback callback, or, for a direct sign-in, Raycast's return link or a pasted address. Brings the launcher
+    /// back to the command when the browser returns.
     private func authorizeSignIn(_ values: [String: JSONValue], session: String, origin: CallOrigin) async throws
         -> String
     {
         guard origin.mayComeForward else { throw SignInRefusal.background }
         guard signIn == nil else { throw SignInRefusal.busy }
         let url: String = if case .string(let url) = values["url"] { url } else { "" }
+        let given: String? = if case .string(let state) = values["state"] { state } else { nil }
         guard let prepared = signInRequests.preparedRequest(of: session),
-            let state = prepared.request.state(ofAuthorizeURL: url), let target = URL(string: url)
+            let state = prepared.request.state(ofAuthorizeURL: url, given: given), let target = URL(string: url)
         else { throw SignInRefusal.notPrepared }
         // The prompt takes the request: Esc and the session ending reach its listener, whatever the session prepares
         // meanwhile.
         guard signInRequests.show(session) != nil else { throw SignInRefusal.busy }
-        let loopback = prepared.listener
+        let listener = prepared.listener
         func text(_ key: String) -> String? {
             if case .string(let value) = values[key], !value.isEmpty { value } else { nil }
         }
-        signIn = SignInPrompt(
-            session: session, providerName: text("providerName") ?? prepared.request.provider.name,
+        var prompt = SignInPrompt(
+            session: session, providerName: text("providerName") ?? prepared.request.provider?.name ?? "this service",
             description: text("description"), icon: values["providerIcon"].flatMap { $0 == .null ? nil : $0 })
+        if let method = prepared.request.directMethod {
+            prompt.canPaste = method.canPaste
+            let helper = RaycastLinksHelper.url(in: Bundle.main.bundleURL)
+            prompt.linksElsewhere = RaycastReturn.elsewhereHint(raycastLinks.status(helper: helper))
+        }
+        signIn = prompt
         actionPanel = nil
         // Nothing reaches the command while the prompt is up, a key held for the selected item's actions included.
         hold(nil)
@@ -4534,18 +4957,18 @@ final class LauncherModel {
         if !isVisible() { show() }
         let proceed = await withCheckedContinuation { signInAnswer = $0 }
         guard proceed, signIn?.session == session else {
-            finishSignIn(loopback, signedIn: false)
+            finishSignIn(listener, signedIn: false)
             throw SignInRefusal.cancelled
         }
         guard openInBrowser(target) else {
-            finishSignIn(loopback, signedIn: false)
+            finishSignIn(listener, signedIn: false)
             throw SignInRefusal.browser
         }
         signIn?.waiting = true
-        let outcome = await loopback.wait(state: state, timeout: 300)
-        let provider = signIn?.providerName ?? prepared.request.provider.name
-        // Only a code keeps the provider pending, for the token exchange that follows.
-        finishSignIn(loopback, signedIn: outcome.isCode)
+        let outcome = await listener.wait.wait(state: state, timeout: 300)
+        let provider = signIn?.providerName ?? prepared.request.provider?.name ?? "this service"
+        // Only a code keeps a relay provider pending, for the token exchange that follows.
+        finishSignIn(listener, signedIn: outcome.isCode)
         switch outcome {
         case .callback(.code(let code)):
             if !isVisible() { show() }
@@ -4569,7 +4992,25 @@ final class LauncherModel {
             if signIn?.waiting == false { answerSignIn(true) }
             return true
         }
+        if pressed == KeyShortcut(key: "v", modifiers: ["cmd"]), signIn?.waiting == true, signIn?.canPaste == true {
+            pasteSignIn()
+            return true
+        }
         return !pressed.modifiers.contains("cmd")
+    }
+
+    /// ⌘V while a direct Web sign-in waits (SPEC-132 §4): the clipboard is read then, and only then, and its text
+    /// ends the wait when it's this sign-in's address. The text is never logged or kept.
+    private func pasteSignIn() {
+        guard let wait = signInRequests.waitedOn?.linkWait else { return }
+        let text = NSPasteboard.general.string(forType: .string) ?? ""
+        signIn?.pasteProblem = wait.receive(pasted: text) ? nil : RaycastReturn.pasteProblem
+    }
+
+    /// A `raycast:` or `com.raycast:` link that opened Fudge (SPEC-132 §3.2). It ends the direct sign-in the prompt
+    /// waits on when it's that sign-in's return; anything else is ignored, with nothing shown or logged.
+    func receiveLink(_ link: String) {
+        signInRequests.waitedOn?.linkWait?.receive(link: link)
     }
 
     /// The prompt's ↵ (true) or Esc (false). Esc while the browser is open cancels the wait.
@@ -4583,15 +5024,15 @@ final class LauncherModel {
         }
     }
 
-    /// The sign-in on `loopback` is over, with a code or without: its listener closes, and the prompt goes when it was
+    /// The sign-in on `listener` is over, with a code or without: it stops waiting, and the prompt goes when it was
     /// the prompt's.
-    private func finishSignIn(_ loopback: OAuthLoopback, signedIn: Bool) {
+    private func finishSignIn(_ listener: SignInListener, signedIn: Bool) {
         let session = signInRequests.shown?.session
-        if signInRequests.finish(loopback, signedIn: signedIn) {
+        if signInRequests.finish(listener, signedIn: signedIn) {
             signIn = nil
             if let session { panelReset.release(session) }
         }
-        loopback.close()
+        listener.close()
     }
 
     /// A session that exits takes its sign-in with it.
@@ -4663,10 +5104,10 @@ final class LauncherModel {
 
 extension LauncherModel.Failure {
     /// A sign-in notice (SPEC-095), drawn like the store's "off" notice: no trace, and nothing red.
-    init(_ notice: SignInNotice, extensionName: String) {
+    init(_ notice: SignInNotice, extension id: ExtensionID?) {
         self.init(
             title: notice.title, message: notice.message,
-            notice: Notice(extensionName: extensionName, actions: notice.actions, symbol: "person.badge.key"),
+            notice: Notice(extensionID: id, actions: notice.actions, symbol: "person.badge.key"),
             commandTitle: notice.commandTitle)
     }
 }

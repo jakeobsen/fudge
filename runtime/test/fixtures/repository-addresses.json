@@ -1,0 +1,803 @@
+{
+  "comment": "Adding a repository (ExtensionRepository.parse in Swift, repository-address.ts in the Extension Store): an address, a branch and the repositories already added in, the repository or the refusal out, checked in the same order on both sides. Every address is made up, except github.com/fudgeapp/development, Fudge's own development folder's repository, here only to be refused. raycastListed false means Raycast's official repository isn't in the list, so its address gives Raycast's own entry; absent means it is. Each refusal's one sentence is in sentences, or in repository-folders.json's for the folder rule's refusals. problems holds the sentence for each kind of problem a copy's status file can name, the same in the Extension Store and in Settings.",
+  "sentences": {
+    "https": "Use an https:// address, such as https://github.com/owner/repository.",
+    "credentials": "Leave the user name and password out of the address.",
+    "development": "Fudge keeps your own builds in that repository's folder, so it can't be added.",
+    "branch": "That branch name can't be used.",
+    "tooMany": "You can add up to 10 repositories.",
+    "raycastBranch": "Raycast's official repository always follows its default branch."
+  },
+  "problems": {
+    "unreachable": "Couldn't reach this repository. It may be private, or the address may be wrong.",
+    "noBranch": "This repository has no branch called <branch>.",
+    "noExtensionsFolder": "This repository has no extensions folder.",
+    "empty": "This repository has no extensions Fudge can list.",
+    "tooMany": "This repository has more than 5,000 extensions.",
+    "noPartialClone": "This repository's server can't send only the files the Extension Store needs.",
+    "failed": "Something went wrong with this repository."
+  },
+  "addresses": [
+    {
+      "address": "https://github.com/Someone/Tools",
+      "repository": {
+        "identity": "https://github.com/someone/tools",
+        "copyId": "8204a7a9998b0604",
+        "name": "Someone/Tools",
+        "folder": "someone/tools"
+      }
+    },
+    {
+      "address": "https://github.com:443/Someone/Tools",
+      "repository": {
+        "identity": "https://github.com/someone/tools",
+        "copyId": "8204a7a9998b0604",
+        "name": "Someone/Tools",
+        "folder": "someone/tools"
+      }
+    },
+    {
+      "address": "https://GitHub.com/Owner/Repository.git/",
+      "repository": {
+        "identity": "https://github.com/owner/repository",
+        "copyId": "96f59fe1cf90499e",
+        "name": "Owner/Repository",
+        "folder": "owner/repository"
+      }
+    },
+    {
+      "address": "https://github.com/owner/repository/",
+      "repository": {
+        "identity": "https://github.com/owner/repository",
+        "copyId": "96f59fe1cf90499e",
+        "name": "owner/repository",
+        "folder": "owner/repository"
+      }
+    },
+    {
+      "address": "HTTPS://github.com/owner/repository",
+      "repository": {
+        "identity": "https://github.com/owner/repository",
+        "copyId": "96f59fe1cf90499e",
+        "name": "owner/repository",
+        "folder": "owner/repository"
+      }
+    },
+    {
+      "address": "https://github.com/owner/repository.git.git",
+      "repository": {
+        "identity": "https://github.com/owner/repository.git",
+        "copyId": "a2116e2c72a3784c",
+        "name": "owner/repository.git",
+        "folder": "owner/repository.git"
+      }
+    },
+    {
+      "address": "  https://github.com/owner/repository\n",
+      "repository": {
+        "identity": "https://github.com/owner/repository",
+        "copyId": "96f59fe1cf90499e",
+        "name": "owner/repository",
+        "folder": "owner/repository"
+      }
+    },
+    {
+      "address": "\thttps://github.com/owner/repository ",
+      "repository": {
+        "identity": "https://github.com/owner/repository",
+        "copyId": "96f59fe1cf90499e",
+        "name": "owner/repository",
+        "folder": "owner/repository"
+      }
+    },
+    {
+      "address": "https://github.com/some-one/tools-1.0_x~y",
+      "repository": {
+        "identity": "https://github.com/some-one/tools-1.0_x~y",
+        "copyId": "01e283aa4283e671",
+        "name": "some-one/tools-1.0_x~y",
+        "folder": "some-one/tools-1.0_x~y"
+      }
+    },
+    {
+      "address": "https://github.com/development/tools",
+      "repository": {
+        "identity": "https://github.com/development/tools",
+        "copyId": "8f6849fcf4117d0a",
+        "name": "development/tools",
+        "folder": "development/tools"
+      }
+    },
+    {
+      "address": "https://github.com/fudgeapp/tools",
+      "repository": {
+        "identity": "https://github.com/fudgeapp/tools",
+        "copyId": "8ef44f81ec1eb8ad",
+        "name": "fudgeapp/tools",
+        "folder": "fudgeapp/tools"
+      }
+    },
+    {
+      "address": "https://git.example.org/Team/Extensions",
+      "repository": {
+        "identity": "https://git.example.org/Team/Extensions",
+        "copyId": "5e3958741b294ee0",
+        "name": "git.example.org/Team/Extensions",
+        "folder": "git.example.org/team/extensions"
+      }
+    },
+    {
+      "address": "https://Git.Example.ORG/Team/Extensions.git",
+      "repository": {
+        "identity": "https://git.example.org/Team/Extensions",
+        "copyId": "5e3958741b294ee0",
+        "name": "git.example.org/Team/Extensions",
+        "folder": "git.example.org/team/extensions"
+      }
+    },
+    {
+      "address": "https://git.example.org:443/Team/Extensions",
+      "repository": {
+        "identity": "https://git.example.org/Team/Extensions",
+        "copyId": "5e3958741b294ee0",
+        "name": "git.example.org/Team/Extensions",
+        "folder": "git.example.org/team/extensions"
+      }
+    },
+    {
+      "address": "https://git.example.org:8443/team/extensions",
+      "repository": {
+        "identity": "https://git.example.org:8443/team/extensions",
+        "copyId": "6df4b047367ff231",
+        "name": "git.example.org:8443/team/extensions",
+        "folder": "git.example.org_8443/team/extensions"
+      }
+    },
+    {
+      "address": "https://github.com:8443/owner/repository",
+      "repository": {
+        "identity": "https://github.com:8443/owner/repository",
+        "copyId": "0169ecb29a4a0526",
+        "name": "github.com:8443/owner/repository",
+        "folder": "github.com_8443/owner/repository"
+      }
+    },
+    {
+      "address": "https://github.com:8443/fudgeapp/development",
+      "repository": {
+        "identity": "https://github.com:8443/fudgeapp/development",
+        "copyId": "a39c416d108d4b2d",
+        "name": "github.com:8443/fudgeapp/development",
+        "folder": "github.com_8443/fudgeapp/development"
+      }
+    },
+    {
+      "address": "https://git.example.org/a/b/c/d/e/f",
+      "repository": {
+        "identity": "https://git.example.org/a/b/c/d/e/f",
+        "copyId": "fb04641ca0aa2e32",
+        "name": "git.example.org/a/b/c/d/e/f",
+        "folder": "git.example.org/a/b/c/d/e/f"
+      }
+    },
+    {
+      "address": "https://github.com/owner/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "repository": {
+        "identity": "https://github.com/owner/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "copyId": "0c2d2c9feb42d8ca",
+        "name": "owner/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "folder": "owner/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "address": "https://github.com/owner/repository",
+      "branch": "main",
+      "repository": {
+        "identity": "https://github.com/owner/repository",
+        "copyId": "96f59fe1cf90499e",
+        "name": "owner/repository",
+        "folder": "owner/repository",
+        "branch": "main"
+      }
+    },
+    {
+      "address": "https://github.com/owner/repository",
+      "branch": " release/v1.2 ",
+      "repository": {
+        "identity": "https://github.com/owner/repository",
+        "copyId": "96f59fe1cf90499e",
+        "name": "owner/repository",
+        "folder": "owner/repository",
+        "branch": "release/v1.2"
+      }
+    },
+    {
+      "address": "https://github.com/owner/repository",
+      "branch": "feature+x_y-z",
+      "repository": {
+        "identity": "https://github.com/owner/repository",
+        "copyId": "96f59fe1cf90499e",
+        "name": "owner/repository",
+        "folder": "owner/repository",
+        "branch": "feature+x_y-z"
+      }
+    },
+    {
+      "address": "https://github.com/owner/repository",
+      "branch": "   ",
+      "repository": {
+        "identity": "https://github.com/owner/repository",
+        "copyId": "96f59fe1cf90499e",
+        "name": "owner/repository",
+        "folder": "owner/repository"
+      }
+    },
+    {
+      "address": "",
+      "refused": "https"
+    },
+    {
+      "address": "   ",
+      "refused": "https"
+    },
+    {
+      "address": "http://github.com/owner/repository",
+      "refused": "https"
+    },
+    {
+      "address": "git@github.com:owner/repository.git",
+      "refused": "https"
+    },
+    {
+      "address": "ssh://git@github.com/owner/repository",
+      "refused": "https"
+    },
+    {
+      "address": "file:///tmp/repository",
+      "refused": "https"
+    },
+    {
+      "address": "github.com/owner/repository",
+      "refused": "https"
+    },
+    {
+      "address": "https://",
+      "refused": "https"
+    },
+    {
+      "address": "https:///owner/repository",
+      "refused": "https"
+    },
+    {
+      "address": "https://:443/owner/repository",
+      "refused": "https"
+    },
+    {
+      "address": "https://user@github.com/owner/repository",
+      "refused": "credentials"
+    },
+    {
+      "address": "https://user:secret@github.com/owner/repository",
+      "refused": "credentials"
+    },
+    {
+      "address": "https://github.com/owner/repository?ref=main",
+      "refused": "characters"
+    },
+    {
+      "address": "https://github.com/owner/repository#readme",
+      "refused": "characters"
+    },
+    {
+      "address": "https://github.com/owner/./tools",
+      "refused": "characters"
+    },
+    {
+      "address": "https://github.com/owner/../tools",
+      "refused": "characters"
+    },
+    {
+      "address": "https://github.com/owner/..",
+      "refused": "characters"
+    },
+    {
+      "address": "https://github.com/owner\\tools",
+      "refused": "characters"
+    },
+    {
+      "address": "https://github.com/owner/repo\tsitory",
+      "refused": "characters"
+    },
+    {
+      "address": "https://github.com/owner/repo\nsitory",
+      "refused": "characters"
+    },
+    {
+      "address": "https://github.com/owner/repo sitory",
+      "refused": "characters"
+    },
+    {
+      "address": "https://github.com/owner/%2e%2e/tools",
+      "refused": "characters"
+    },
+    {
+      "address": "https://github.com/owner/repo%20sitory",
+      "refused": "characters"
+    },
+    {
+      "address": "https://gïthub.com/owner/repository",
+      "refused": "characters"
+    },
+    {
+      "address": "https://github.com/owner/café",
+      "refused": "characters"
+    },
+    {
+      "address": "https://[::1]/team/extensions",
+      "refused": "characters"
+    },
+    {
+      "address": "https://git.example.org:/team/extensions",
+      "refused": "port"
+    },
+    {
+      "address": "https://git.example.org:0/team/extensions",
+      "refused": "port"
+    },
+    {
+      "address": "https://git.example.org:0443/team/extensions",
+      "refused": "port"
+    },
+    {
+      "address": "https://git.example.org:65536/team/extensions",
+      "refused": "port"
+    },
+    {
+      "address": "https://git.example.org:123456/team/extensions",
+      "refused": "port"
+    },
+    {
+      "address": "https://git.example.org:44a/team/extensions",
+      "refused": "port"
+    },
+    {
+      "address": "https://git.example.org:443:443/team/extensions",
+      "refused": "port"
+    },
+    {
+      "address": "https://:/owner/repository",
+      "refused": "port"
+    },
+    {
+      "address": "https://github.com/raycast/extensions",
+      "refused": "alreadyListed"
+    },
+    {
+      "address": "https://github.com/Raycast/Extensions.git",
+      "refused": "alreadyListed"
+    },
+    {
+      "address": "https://github.com:443/Raycast/Extensions",
+      "refused": "alreadyListed"
+    },
+    {
+      "address": "https://github.com/fudgeapp/development",
+      "refused": "development"
+    },
+    {
+      "address": "https://github.com/FudgeApp/Development.git",
+      "refused": "development"
+    },
+    {
+      "address": "https://github.com:443/FudgeApp/Development/",
+      "refused": "development"
+    },
+    {
+      "address": "https://github.com",
+      "refused": "notARepository"
+    },
+    {
+      "address": "https://github.com/",
+      "refused": "notARepository"
+    },
+    {
+      "address": "https://github.com/owner",
+      "refused": "notARepository"
+    },
+    {
+      "address": "https://github.com/owner/repository/tree",
+      "refused": "notARepository"
+    },
+    {
+      "address": "https://github.com/owner/repository//",
+      "refused": "notARepository"
+    },
+    {
+      "address": "https://git.example.org",
+      "refused": "notARepository"
+    },
+    {
+      "address": "https://github.com/owner//tools",
+      "refused": "notARepository"
+    },
+    {
+      "address": "https://git.example.org/team//tools",
+      "refused": "notARepository"
+    },
+    {
+      "address": "https://github.com/owner/.git",
+      "refused": "notARepository"
+    },
+    {
+      "address": "https://github.com/.git",
+      "refused": "notARepository"
+    },
+    {
+      "address": "https://github.com/some_one/tools",
+      "refused": "characters"
+    },
+    {
+      "address": "https://github.com/some.one/tools",
+      "refused": "characters"
+    },
+    {
+      "address": "https://github.com/-someone/tools",
+      "refused": "characters"
+    },
+    {
+      "address": "https://github.com/owner/.hidden",
+      "refused": "startsWithDot"
+    },
+    {
+      "address": "https://git.example.org/team/.hidden",
+      "refused": "startsWithDot"
+    },
+    {
+      "address": "https://localhost/team/extensions",
+      "refused": "serverWithoutDot"
+    },
+    {
+      "address": "https://git.example.org/a/b/c/d/e/f/g",
+      "refused": "tooManyParts"
+    },
+    {
+      "address": "https://github.com/owner/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "refused": "tooLong"
+    },
+    {
+      "address": "https://git.example.org/cccccccccccccccccccccccccccccc/cccccccccccccccccccccccccccccc/cccccccccccccccccccccccccccccc/cccccccccccccccccccccccccccccc/cccccccccccccccccccccccccccccc",
+      "refused": "tooLong"
+    },
+    {
+      "address": "https://github.com./raycast/extensions",
+      "refused": "characters"
+    },
+    {
+      "address": "https://.example.org/team/extensions",
+      "refused": "characters"
+    },
+    {
+      "address": "https://git..example.org/team/extensions",
+      "refused": "characters"
+    },
+    {
+      "address": "https://github.com/owner/repository",
+      "branch": "-main",
+      "refused": "branch"
+    },
+    {
+      "address": "https://github.com/owner/repository",
+      "branch": "a..b",
+      "refused": "branch"
+    },
+    {
+      "address": "https://github.com/owner/repository",
+      "branch": "main.",
+      "refused": "branch"
+    },
+    {
+      "address": "https://github.com/owner/repository",
+      "branch": "a//b",
+      "refused": "branch"
+    },
+    {
+      "address": "https://github.com/owner/repository",
+      "branch": ".hidden",
+      "refused": "branch"
+    },
+    {
+      "address": "https://github.com/owner/repository",
+      "branch": "a/.b",
+      "refused": "branch"
+    },
+    {
+      "address": "https://github.com/owner/repository",
+      "branch": "x.lock",
+      "refused": "branch"
+    },
+    {
+      "address": "https://github.com/owner/repository",
+      "branch": "a b",
+      "refused": "branch"
+    },
+    {
+      "address": "https://github.com/owner/repository",
+      "branch": "main~1",
+      "refused": "branch"
+    },
+    {
+      "address": "https://github.com/owner/repository",
+      "branch": "main^",
+      "refused": "branch"
+    },
+    {
+      "address": "https://github.com/owner/repository",
+      "branch": "a:b",
+      "refused": "branch"
+    },
+    {
+      "address": "https://github.com/owner/repository",
+      "branch": "/main",
+      "refused": "branch"
+    },
+    {
+      "address": "https://github.com/owner/repository",
+      "branch": "main/",
+      "refused": "branch"
+    },
+    {
+      "address": "https://github.com/owner/repository-11",
+      "existing": [
+        "https://github.com/owner/repository-1",
+        "https://github.com/owner/repository-2",
+        "https://github.com/owner/repository-3",
+        "https://github.com/owner/repository-4",
+        "https://github.com/owner/repository-5",
+        "https://github.com/owner/repository-6",
+        "https://github.com/owner/repository-7",
+        "https://github.com/owner/repository-8",
+        "https://github.com/owner/repository-9",
+        "https://github.com/owner/repository-10"
+      ],
+      "refused": "tooMany"
+    },
+    {
+      "address": "https://github.com/owner/repository-1",
+      "existing": [
+        "https://github.com/owner/repository-1",
+        "https://github.com/owner/repository-2",
+        "https://github.com/owner/repository-3",
+        "https://github.com/owner/repository-4",
+        "https://github.com/owner/repository-5",
+        "https://github.com/owner/repository-6",
+        "https://github.com/owner/repository-7",
+        "https://github.com/owner/repository-8",
+        "https://github.com/owner/repository-9",
+        "https://github.com/owner/repository-10"
+      ],
+      "refused": "tooMany"
+    },
+    {
+      "address": "https://github.com/owner/repository.git",
+      "existing": [
+        "https://github.com/Owner/Repository"
+      ],
+      "refused": "alreadyListed"
+    },
+    {
+      "address": "https://GIT.example.org:443/Team/Extensions/",
+      "existing": [
+        "https://git.example.org/Team/Extensions"
+      ],
+      "refused": "alreadyListed"
+    },
+    {
+      "address": "https://git.example.org/team/extensions",
+      "existing": [
+        "https://git.example.org/Team/Extensions"
+      ],
+      "refused": "alreadyListed"
+    },
+    {
+      "address": "https://git.example.org/team/extensions",
+      "existing": [
+        "https://git.example.org/team"
+      ],
+      "refused": "nests"
+    },
+    {
+      "address": "https://git.example.org/team",
+      "existing": [
+        "https://git.example.org/team/extensions"
+      ],
+      "refused": "nests"
+    },
+    {
+      "address": "https://git.example.org/team-2/extensions",
+      "existing": [
+        "https://git.example.org/team"
+      ],
+      "repository": {
+        "identity": "https://git.example.org/team-2/extensions",
+        "copyId": "26340d4988e467cb",
+        "name": "git.example.org/team-2/extensions",
+        "folder": "git.example.org/team-2/extensions"
+      }
+    },
+    {
+      "address": "http://github.com/owner/repository",
+      "existing": [
+        "https://github.com/owner/repository-1",
+        "https://github.com/owner/repository-2",
+        "https://github.com/owner/repository-3",
+        "https://github.com/owner/repository-4",
+        "https://github.com/owner/repository-5",
+        "https://github.com/owner/repository-6",
+        "https://github.com/owner/repository-7",
+        "https://github.com/owner/repository-8",
+        "https://github.com/owner/repository-9",
+        "https://github.com/owner/repository-10"
+      ],
+      "refused": "https"
+    },
+    {
+      "address": "https://github.com/FudgeApp/Development.git",
+      "branch": "a..b",
+      "refused": "development"
+    },
+    {
+      "address": "https://github.com:443/FudgeApp/Development/",
+      "existing": [
+        "https://github.com/owner/repository-1",
+        "https://github.com/owner/repository-2",
+        "https://github.com/owner/repository-3",
+        "https://github.com/owner/repository-4",
+        "https://github.com/owner/repository-5",
+        "https://github.com/owner/repository-6",
+        "https://github.com/owner/repository-7",
+        "https://github.com/owner/repository-8",
+        "https://github.com/owner/repository-9",
+        "https://github.com/owner/repository-10"
+      ],
+      "refused": "development"
+    },
+    {
+      "address": "https://github.com/Raycast/Extensions",
+      "branch": "a..b",
+      "refused": "alreadyListed"
+    },
+    {
+      "address": "https://github.com:443/raycast/extensions.git",
+      "existing": [
+        "https://github.com/owner/repository-1",
+        "https://github.com/owner/repository-2",
+        "https://github.com/owner/repository-3",
+        "https://github.com/owner/repository-4",
+        "https://github.com/owner/repository-5",
+        "https://github.com/owner/repository-6",
+        "https://github.com/owner/repository-7",
+        "https://github.com/owner/repository-8",
+        "https://github.com/owner/repository-9",
+        "https://github.com/owner/repository-10"
+      ],
+      "refused": "alreadyListed"
+    },
+    {
+      "address": "https://github.com/Raycast/Extensions.git",
+      "raycastListed": false,
+      "repository": {
+        "identity": "https://github.com/raycast/extensions",
+        "copyId": "raycast",
+        "name": "raycast/extensions",
+        "folder": "raycast/extensions"
+      }
+    },
+    {
+      "address": " https://github.com:443/raycast/extensions/ ",
+      "branch": "  ",
+      "raycastListed": false,
+      "repository": {
+        "identity": "https://github.com/raycast/extensions",
+        "copyId": "raycast",
+        "name": "raycast/extensions",
+        "folder": "raycast/extensions"
+      }
+    },
+    {
+      "address": "https://github.com:443/raycast/extensions.git",
+      "existing": [
+        "https://github.com/owner/repository-1",
+        "https://github.com/owner/repository-2",
+        "https://github.com/owner/repository-3",
+        "https://github.com/owner/repository-4",
+        "https://github.com/owner/repository-5",
+        "https://github.com/owner/repository-6",
+        "https://github.com/owner/repository-7",
+        "https://github.com/owner/repository-8",
+        "https://github.com/owner/repository-9",
+        "https://github.com/owner/repository-10"
+      ],
+      "raycastListed": false,
+      "repository": {
+        "identity": "https://github.com/raycast/extensions",
+        "copyId": "raycast",
+        "name": "raycast/extensions",
+        "folder": "raycast/extensions"
+      }
+    },
+    {
+      "address": "https://github.com/raycast/extensions",
+      "branch": "main",
+      "raycastListed": false,
+      "refused": "raycastBranch"
+    },
+    {
+      "address": "https://github.com/Raycast/Extensions",
+      "branch": "a..b",
+      "raycastListed": false,
+      "refused": "raycastBranch"
+    },
+    {
+      "address": "https://github.com/raycast/extensions",
+      "branch": "main",
+      "raycastListed": true,
+      "refused": "alreadyListed"
+    },
+    {
+      "address": "https://github.com/Someone/Tools",
+      "raycastListed": false,
+      "repository": {
+        "identity": "https://github.com/someone/tools",
+        "copyId": "8204a7a9998b0604",
+        "name": "Someone/Tools",
+        "folder": "someone/tools"
+      }
+    },
+    {
+      "address": "https://user@́github.com/owner/repository",
+      "refused": "credentials"
+    },
+    {
+      "address": "https://github.com/́owner/repository",
+      "refused": "characters"
+    },
+    {
+      "address": "https:/́/github.com/owner/repository",
+      "refused": "https"
+    },
+    {
+      "address": "https://github.com/owner/K",
+      "refused": "characters"
+    },
+    {
+      "address": "ｈttps://github.com/owner/repository",
+      "refused": "https"
+    },
+    {
+      "address": "\u00a0https://github.com/owner/repository",
+      "refused": "https"
+    },
+    {
+      "address": "https://github.com/owner/repository\u2028",
+      "refused": "characters"
+    }
+  ],
+  "copyIds": {
+    "valid": [
+      "raycast",
+      "0123456789abcdef",
+      "8204a7a9998b0604"
+    ],
+    "invalid": [
+      "",
+      "Raycast",
+      "RAYCAST",
+      "0123456789ABCDEF",
+      "0123456789abcde",
+      "0123456789abcdef0",
+      "012345678g9abcde",
+      "../0123456789abc",
+      "github"
+    ]
+  }
+}

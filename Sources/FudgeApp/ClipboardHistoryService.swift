@@ -134,7 +134,7 @@ final class ClipboardHistoryService {
             do {
                 try store.save(history)
             } catch {
-                FileHandle.standardError.write(Data("fudge: clipboard history: \(error)\n".utf8))
+                FudgeLog.error("clipboard history: \(error)")
             }
         }
     }
@@ -195,7 +195,7 @@ final class ClipboardHistoryService {
 
     /// Answers `clipboardHistory.*`, only for Clipboard History's own sessions.
     func handle(
-        _ method: String, _ params: JSONValue, caller: String?, origin: CallOrigin, hideWindow: () async -> Void
+        _ method: String, _ params: JSONValue, caller: ExtensionID?, origin: CallOrigin, hideWindow: () async -> Void
     ) async throws -> JSONValue {
         guard ClipboardHistory.mayCall(caller) else {
             throw ClipboardHistoryError(ClipboardHistory.notClipboardHistory)
@@ -302,7 +302,7 @@ final class ClipboardHistoryService {
             do {
                 try store.deleteAll()
             } catch {
-                FileHandle.standardError.write(Data("fudge: clipboard history: \(error)\n".utf8))
+                FudgeLog.error("clipboard history: \(error)")
             }
         }
     }

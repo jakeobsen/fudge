@@ -36,7 +36,7 @@ private func names(in directory: URL) throws -> [String] {
     #expect(try names(in: install) == ["a.cjs", "assets", "b.cjs", "package.json"])
     #expect(
         try String(contentsOf: install.appendingPathComponent("a.cjs"), encoding: .utf8) == #"module.exports = "a""#)
-    let installed = try InstalledExtension.load(from: install)
+    let installed = try InstalledExtension.topLevel(from: install)
     #expect(installed.entry(for: "a") == install.appendingPathComponent("a.cjs"))
     #expect(ExtensionLayout.moveUp(install) == nil, "nothing is left to move")
 }
@@ -45,7 +45,7 @@ private func names(in directory: URL) throws -> [String] {
     let install = try oldInstall(in: try Fixtures.temporaryDirectory())
     // Stopped after the first rename.
     try files.moveItem(at: install.appendingPathComponent("dist/a.cjs"), to: install.appendingPathComponent("a.cjs"))
-    let installed = try InstalledExtension.load(from: install)
+    let installed = try InstalledExtension.topLevel(from: install)
     #expect(installed.entry(for: "a") == install.appendingPathComponent("a.cjs"))
     #expect(installed.entry(for: "b") == install.appendingPathComponent("dist/b.cjs"))
 
@@ -68,7 +68,7 @@ func anythingElseInDistLeavesTheInstallAsItIs(_ stray: String) throws {
 
     #expect(ExtensionLayout.moveUp(install) == .leftAlone(.unknownItem))
     #expect(try files.subpathsOfDirectory(atPath: install.path).sorted() == before, "nothing half-moved")
-    let installed = try InstalledExtension.load(from: install)
+    let installed = try InstalledExtension.topLevel(from: install)
     #expect(installed.entry(for: "a") == install.appendingPathComponent("dist/a.cjs"), "the fallback still finds it")
 }
 
@@ -88,7 +88,7 @@ func anythingElseInDistLeavesTheInstallAsItIs(_ stray: String) throws {
     #expect(ExtensionLayout.moveUp(install) == .leftAlone(.inBothPlaces))
     #expect(try String(contentsOf: install.appendingPathComponent("b.cjs"), encoding: .utf8) == "newer")
     #expect(files.fileExists(atPath: install.appendingPathComponent("dist/b.cjs").path))
-    let installed = try InstalledExtension.load(from: install)
+    let installed = try InstalledExtension.topLevel(from: install)
     #expect(installed.entry(for: "b") == install.appendingPathComponent("b.cjs"), "the root comes first")
 }
 
@@ -127,7 +127,7 @@ func anythingElseInDistLeavesTheInstallAsItIs(_ stray: String) throws {
 
 @Test func anEntryIsAtTheRootWhenItsInNeitherPlace() throws {
     let install = try oldInstall(in: try Fixtures.temporaryDirectory())
-    let installed = try InstalledExtension.load(from: install)
+    let installed = try InstalledExtension.topLevel(from: install)
     #expect(installed.entry(for: "missing") == install.appendingPathComponent("missing.cjs"))
 }
 
@@ -157,11 +157,11 @@ func anythingElseInDistLeavesTheInstallAsItIs(_ stray: String) throws {
 /// `${__dirname}/package.json`, as the store's amazon-aws extension does, and whose `plain` command reads nothing.
 @Suite(
     .enabled(
-        if: Fixtures.esbuild != nil && HostFixture.node != nil && HostFixture.runtimeInstalled,
+        if: Fixtures.canBuild && HostFixture.node != nil && HostFixture.runtimeInstalled,
         "needs esbuild and Fudge's Node.js: run `make test`"))
 struct OwnFilesTests {
     static let source = Fixtures.directory.appendingPathComponent("own-files", isDirectory: true)
-    let builder = ExtensionBuilder(esbuild: Fixtures.esbuild ?? URL(fileURLWithPath: "/missing"))
+    let builder = Fixtures.builder()
 
     /// Runs `command` of `installed` through the host, as the app launches it, with the Greeting preference set to
     /// "hi", and returns what it logged, or its error.
@@ -181,7 +181,7 @@ struct OwnFilesTests {
         while true {
             let message = try await next(&messages, timeout: .seconds(30)) { $0.session == command }
             switch message {
-            case .log(_, _, let line): logged.append(line)
+            case .log(_, _, let line, _): logged.append(line)
             case .error(_, let text, _, _, _): return .failure(ExtensionError(message: text))
             case .exit(_, let reason):
                 return reason == "finished" ? .success(logged) : .failure(ExtensionError(message: reason))
@@ -219,7 +219,7 @@ struct OwnFilesTests {
         }
         #expect(error.message.contains("ENOENT"), "\(error.message)")
 
-        #expect(ExtensionLayout.moveUp(in: extensions) == ["own-files": .moved])
+        #expect(ExtensionLayout.moveUp(in: extensions) == ["fudgeapp/development/own-files": .moved])
         let installed = try #require(InstalledExtension.all(in: extensions).first)
         #expect(try names(in: installed.directory) == ["assets", "package.json", "plain.cjs", "read.cjs"])
         #expect(try await run("read", of: installed) == .success(["own-files: s3, ec2; read.cjs"]))
@@ -240,7 +240,7 @@ struct OwnFilesTests {
         #expect(try await run("read", of: installed) == .success(["own-files: s3, ec2; read.cjs"]))
         #expect(try await run("plain", of: installed) == .success(["plain ran: hi"]))
 
-        #expect(ExtensionLayout.moveUp(in: extensions) == ["own-files": .moved])
+        #expect(ExtensionLayout.moveUp(in: extensions) == ["fudgeapp/development/own-files": .moved])
         #expect(try await run("plain", of: installed) == .success(["plain ran: hi"]))
         #expect(!files.fileExists(atPath: dist.path))
     }
@@ -255,7 +255,7 @@ struct OwnFilesTests {
             at: built.directory.appendingPathComponent("plain.cjs"), to: dist.appendingPathComponent("plain.cjs"))
         try write("", to: dist.appendingPathComponent("plain.cjs.map"))
 
-        #expect(ExtensionLayout.moveUp(in: extensions) == ["own-files": .leftAlone(.unknownItem)])
+        #expect(ExtensionLayout.moveUp(in: extensions) == ["fudgeapp/development/own-files": .leftAlone(.unknownItem)])
         let installed = try #require(InstalledExtension.all(in: extensions).first)
         #expect(try await run("plain", of: installed) == .success(["plain ran: hi"]))
         #expect(try await run("read", of: installed) == .success(["own-files: s3, ec2; read.cjs"]))

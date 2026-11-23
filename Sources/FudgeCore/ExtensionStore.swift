@@ -8,11 +8,15 @@ import Foundation
 public enum ExtensionStore {
     /// The bundled extension's name, which a user's extension can't take.
     public static let extensionName = "fudge-extension-store"
+    /// Its id, the key its settings and data are kept under.
+    public static let id = ExtensionID.bundled(extensionName)
 
     /// The switch at the top of the store's Settings page.
     public enum Switch {
         public static let title = "Extension Store"
-        public static let help = "Browse and install extensions from Raycast's open-source repository."
+        public static let help =
+            "Browse and install extensions from Raycast's open-source repository and the extension repositories "
+            + "you add."
     }
 
     /// What opening the store shows while it's off, in place of the store: its code isn't started, so it downloads
@@ -22,10 +26,11 @@ public enum ExtensionStore {
         public static let action = "Open Extension Store Settings"
     }
 
-    /// Whether launching a command of `extensionName` shows the "off" view instead: it's the store, and the store
-    /// isn't on (`FudgeSettings.isExtensionStoreOn`). The app decides this before the store's code would start.
-    public static func isOff(_ extensionName: String, settings: FudgeSettings) -> Bool {
-        extensionName == Self.extensionName && !settings.isExtensionStoreOn
+    /// Whether launching a command of the extension `id` shows the "off" view instead: it's the store, by its whole
+    /// id, and the store isn't on (`FudgeSettings.isExtensionStoreOn`). The app decides this before the store's code
+    /// would start.
+    public static func isOff(_ id: ExtensionID, settings: FudgeSettings) -> Bool {
+        id == Self.id && !settings.isExtensionStoreOn
     }
 
     /// The bundled extension: `store-extension/` in the app's resources, when it's there.
@@ -36,14 +41,40 @@ public enum ExtensionStore {
     /// The store's downloaded copy of the repository. Turning the store off deletes it, and only it: the store's
     /// `installed.json` beside it stays, so the store still knows what it installed when it's turned on again.
     public static func repositoryDirectory(_ paths: FudgePaths) -> URL {
-        paths.supportDirectory(forExtension: extensionName).appendingPathComponent("repo", isDirectory: true)
+        paths.supportDirectory(forExtension: id).appendingPathComponent("repo", isDirectory: true)
     }
 
-    /// Deletes the downloaded repository, if there is one.
+    /// Where the store keeps its running builds' records, output and outcomes (`installing/`, SPEC-153 C.1, SPEC-156 A),
+    /// which the app watches for outcomes.
+    public static func installingDirectory(_ paths: FudgePaths) -> URL {
+        paths.supportDirectory(forExtension: id).appendingPathComponent("installing", isDirectory: true)
+    }
+
+    /// The status of Raycast's copy (FUD-182), beside it.
+    public static func repositoryStatusFile(_ paths: FudgePaths) -> URL {
+        paths.supportDirectory(forExtension: id).appendingPathComponent("repo-status.json")
+    }
+
+    /// The copies of the added repositories, each in `repositories/<copyId>/` with its `repo/` and `status.json`.
+    public static func repositoriesDirectory(_ paths: FudgePaths) -> URL {
+        paths.supportDirectory(forExtension: id).appendingPathComponent("repositories", isDirectory: true)
+    }
+
+    /// The status file of the copy with `copyId`: Raycast's beside `repo/`, an added one's in its folder.
+    public static func statusFile(copyId: String, _ paths: FudgePaths) -> URL {
+        copyId == ExtensionRepository.raycastCopyId
+            ? repositoryStatusFile(paths)
+            : repositoriesDirectory(paths).appendingPathComponent(copyId, isDirectory: true)
+                .appendingPathComponent("status.json")
+    }
+
+    /// Deletes the downloaded copies: Raycast's repository and its status, and the added repositories' copies. The
+    /// list of repositories in `settings.json` and `installed.json` stay.
     public static func deleteRepository(_ paths: FudgePaths) throws {
-        let folder = repositoryDirectory(paths)
-        guard FileManager.default.fileExists(atPath: folder.path) else { return }
-        try FileManager.default.removeItem(at: folder)
+        for item in [repositoryDirectory(paths), repositoryStatusFile(paths), repositoriesDirectory(paths)]
+        where FileManager.default.fileExists(atPath: item.path) {
+            try FileManager.default.removeItem(at: item)
+        }
     }
 
     /// What the extension host tells the store: where the `fudge` tool is, the folder it installs into
@@ -90,6 +121,21 @@ public enum BundledExtensions {
         "store-extension", "file-search-extension", "emoji-extension", "clipboard-history-extension",
     ]
 
+    /// Search Emoji & Symbols' id (`runtime/emoji-extension`).
+    public static let emojiID = ExtensionID.bundled("fudge-emoji")
+
+    /// The id of the bundled extension in `folder`: its manifest's name, as a constant, so the bundled extensions'
+    /// ids never come from a manifest read at run time.
+    public static func id(ofFolder folder: String) -> ExtensionID? {
+        switch folder {
+        case "store-extension": ExtensionStore.id
+        case "file-search-extension": FileSearch.id
+        case "emoji-extension": emojiID
+        case "clipboard-history-extension": ClipboardHistory.id
+        default: nil
+        }
+    }
+
     /// The bundled extension in `folder` of the app's resources, when it's there.
     public static func directory(_ folder: String, resources: URL?) -> URL? {
         guard let directory = resources?.appendingPathComponent(folder, isDirectory: true),
@@ -104,8 +150,11 @@ extension InstalledExtension {
     /// one's name gives way to it. Only the bundled ones' manifests are read here.
     public static func all(paths: FudgePaths, resources: URL?) -> [InstalledExtension] {
         var extensions = all(in: paths.extensionsDirectory)
-        let bundled = BundledExtensions.folders.compactMap { folder in
-            BundledExtensions.directory(folder, resources: resources).flatMap { try? load(from: $0) }
+        let bundled = BundledExtensions.folders.compactMap { folder -> InstalledExtension? in
+            guard let directory = BundledExtensions.directory(folder, resources: resources),
+                let id = BundledExtensions.id(ofFolder: folder)
+            else { return nil }
+            return try? load(from: directory, id: id, repository: .bundled)
         }
         let names = Set(bundled.map(\.manifest.name))
         extensions.removeAll { names.contains($0.manifest.name) }
@@ -114,11 +163,12 @@ extension InstalledExtension {
     }
 
     /// The extensions with a page in the Settings window's sidebar: those with preferences, and the Extension Store
-    /// and Clipboard History, whose pages start with their switches. Enabled or not.
+    /// and Clipboard History, whose pages start with their switches. Enabled or not. The two are known by their whole
+    /// ids, so an extension of either name from another repository gets a page only for preferences of its own.
     public static func settingsPages(of installed: [InstalledExtension]) -> [InstalledExtension] {
         installed.filter { installed in
-            installed.manifest.name == ExtensionStore.extensionName
-                || installed.manifest.name == ClipboardHistory.extensionName || !installed.manifest.preferences.isEmpty
+            installed.id == ExtensionStore.id || installed.id == ClipboardHistory.id
+                || !installed.manifest.preferences.isEmpty
                 || installed.manifest.commands.contains { !$0.preferences.isEmpty }
         }
     }

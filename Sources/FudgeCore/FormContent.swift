@@ -19,7 +19,8 @@ public struct FormContent: Sendable, Equatable {
         public var placeholder: String?
         public var info: String?
         public var error: String?
-        /// Set when the extension controls the value.
+        /// Set when the extension controls the value. A DatePicker's can be `.null`, which shows no date
+        /// (`FormContent.controlledValue`).
         public var value: JSONValue?
         public var defaultValue: JSONValue?
         /// A checkbox's label, or a description's text.
@@ -185,7 +186,7 @@ public struct FormContent: Sendable, Equatable {
             placeholder: node.string("placeholder"),
             info: node.string("info"),
             error: node.string("error"),
-            value: node.props["value"].flatMap(ListContent.present),
+            value: controlledValue(node.props["value"], kind: kind),
             defaultValue: node.props["defaultValue"].flatMap(ListContent.present),
             text: kind == .checkbox ? node.string("label") : node.string("text"),
             autoFocus: node.bool("autoFocus") == true,
@@ -197,6 +198,14 @@ public struct FormContent: Sendable, Equatable {
             dates: kind == .datePicker ? DatePickerOptions(node) : nil,
             files: kind == .filePicker ? FilePickerOptions(node) : nil
         )
+    }
+
+    /// A field's `value` prop as the extension controls it: nil when it sets none. JSON null is none too, except on a
+    /// DatePicker, whose value is `Date | null` in Raycast's types: there `null` is a controlled value that shows no
+    /// date. Raycast's types allow no `null` on the other fields.
+    static func controlledValue(_ json: JSONValue?, kind: Kind) -> JSONValue? {
+        guard let json else { return nil }
+        return kind == .datePicker ? json : ListContent.present(json)
     }
 
     static func tag(_ node: UINode) -> SearchBarDropdown.Item? {
@@ -406,7 +415,8 @@ public enum TagPicking {
 }
 
 /// The values of Form fields with `storeValue`, saved when their form is submitted: one JSON file per extension in
-/// `form-values/`, by command name and field `id`. Dates are kept as `{ "$date": iso }`, as they cross the bridge.
+/// `form-values/`, by the extension's id, then command name and field `id`. Dates are kept as `{ "$date": iso }`, as
+/// they cross the bridge.
 public struct FormValueStore: Sendable {
     public let directory: URL
 
@@ -414,27 +424,27 @@ public struct FormValueStore: Sendable {
         self.directory = directory
     }
 
-    public func load(extension name: String, command: String) -> [String: JSONValue] {
-        loadAll(name)[command] ?? [:]
+    public func load(extension id: ExtensionID, command: String) -> [String: JSONValue] {
+        loadAll(id)[command] ?? [:]
     }
 
     /// Saves `values` for the command, keeping the other fields' and commands' values.
-    public func save(_ values: [String: JSONValue], extension name: String, command: String) throws {
+    public func save(_ values: [String: JSONValue], extension id: ExtensionID, command: String) throws {
         guard !values.isEmpty else { return }
-        var all = loadAll(name)
+        var all = loadAll(id)
         all[command, default: [:]].merge(values) { _, new in new }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(all).write(to: file(name), options: .atomic)
+        try encoder.encode(all).write(to: file(id), options: .atomic)
     }
 
-    private func file(_ name: String) -> URL {
-        directory.appendingPathComponent("\(name).json")
+    private func file(_ id: ExtensionID) -> URL {
+        directory.appendingPathComponent("\(id.key).json")
     }
 
-    private func loadAll(_ name: String) -> [String: [String: JSONValue]] {
-        guard let data = try? Data(contentsOf: file(name)) else { return [:] }
+    private func loadAll(_ id: ExtensionID) -> [String: [String: JSONValue]] {
+        guard let data = try? Data(contentsOf: file(id)) else { return [:] }
         return (try? JSONDecoder().decode([String: [String: JSONValue]].self, from: data)) ?? [:]
     }
 }

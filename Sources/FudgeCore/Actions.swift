@@ -103,7 +103,7 @@ public enum RootAction: Sendable, Equatable {
     /// quit fudge.
     case open
     /// Opens the Settings window on an extension's preferences.
-    case configureExtension(String)
+    case configureExtension(ExtensionID)
     /// Removes an active menu-bar command's item and unloads it, by command id (`FudgeSettings.commandID`).
     case deactivateMenuBarItem(String)
     /// Shows an application in Finder.
@@ -112,7 +112,8 @@ public enum RootAction: Sendable, Equatable {
     case copyAnswer
     /// Copies the Calculator card's question and answer, as `question = answer`.
     case copyQuestionAndAnswer
-    /// Opens Settings on the General page, from the "Currency conversion is off" card.
+    /// Opens Settings on the Calculator page (`RootActions.currencySettingsPage`), from the "Currency conversion is
+    /// off" card.
     case turnOnCurrencyConversion
     /// Downloads the exchange rates again, from the "Couldn't download exchange rates" card.
     case retryExchangeRates
@@ -164,9 +165,13 @@ public enum RootActions {
         }
     }
 
+    /// The Settings page the "Currency conversion is off" card opens, by ↵ or its Turn On Currency Conversion: the
+    /// Calculator page, where its switch is.
+    public static let currencySettingsPage = SettingsSidebar.calculatorPage
+
     /// The one entry of the Extension Store's "off" view: its Settings page, as ⌘⇧, opens it.
     public static let extensionStoreOffSections = section([
-        (ExtensionStore.Off.action, enter, .configureExtension(ExtensionStore.extensionName))
+        (ExtensionStore.Off.action, enter, .configureExtension(ExtensionStore.id))
     ])
 
     /// The entries for `item`, the first one being what ↵ does. A menu-bar command that's active in the menu bar
@@ -175,17 +180,17 @@ public enum RootActions {
         guard let item else { return [] }
         let entries: [(String, KeyShortcut?, RootAction)] =
             switch item.kind {
-            case .command(let extensionName, let commandName, let mode, _):
+            case .command(let id, let commandName, let mode, _):
                 [("Open Command", enter, .open)]
                     + (mode == "menu-bar" && isActiveInMenuBar
                         ? [
                             (
                                 "Deactivate Menu Bar Item", nil,
                                 .deactivateMenuBarItem(
-                                    FudgeSettings.commandID(extension: extensionName, command: commandName))
+                                    FudgeSettings.commandID(owner: .extension(id), command: commandName))
                             )
                         ] : [])
-                    + [("Configure Extension", configureExtensionShortcut, .configureExtension(extensionName))]
+                    + [("Configure Extension", configureExtensionShortcut, .configureExtension(id))]
             case .application(let url):
                 [("Open Application", enter, .open), ("Show in Finder", showInFinderShortcut, .showInFinder(url))]
             case .settings:
@@ -346,6 +351,24 @@ public enum ActionPanelReader {
     public static func primary(_ sections: [ActionSection]) -> ActionEntry? { flat(sections).first }
 
     public static func secondary(_ sections: [ActionSection]) -> ActionEntry? { flat(sections).dropFirst().first }
+
+    /// The key the action panel shows on `entry`. At the panel's top level in a command's view, the primary key
+    /// (`primaryKey`: ↵, or ⌘↵ in a Form) goes on the panel's first entry and the secondary key on its second, counted
+    /// across sections as `primary` and `secondary` count. Their own shortcuts aren't shown, though they still run
+    /// them (Raycast: "while you can specify an alternative shortcut for the primary and secondary actions, it won't
+    /// be displayed in the Action Panel"). Every other entry shows its own shortcut, and so does every entry in a
+    /// submenu (`inSubmenu`) or where there are no such keys (nil: root search and its notices, whose entries carry
+    /// their keys themselves). `sections` is the whole panel, never the filtered one, so a search in the panel keeps
+    /// the keys on the same actions.
+    public static func shownKey(
+        of entry: ActionEntry, in sections: [ActionSection], primaryKey: KeyShortcut?, secondaryKey: KeyShortcut?,
+        inSubmenu: Bool
+    ) -> KeyShortcut? {
+        guard !inSubmenu else { return entry.shortcut }
+        if let primaryKey, primary(sections)?.id == entry.id { return primaryKey }
+        if let secondaryKey, secondary(sections)?.id == entry.id { return secondaryKey }
+        return entry.shortcut
+    }
 
     /// The action whose shortcut is `pressed`, searching submenus too. A submenu's own shortcut (`Action.OpenWith`'s
     /// ⌘O) finds the submenu, which running opens in the action panel.
