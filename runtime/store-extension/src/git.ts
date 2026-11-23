@@ -250,6 +250,30 @@ export const partialCloneWarning = "filtering not recognized by server";
 /** The server ignored the filter, so the clone or fetch was stopped before it downloaded everything (`noPartialClone`). */
 export class NoPartialClone extends GitError {}
 
+/** git's words for a clone or fetch of a branch the remote doesn't have. */
+const missingBranch = /Remote branch .* not found|couldn't find remote ref/;
+
+/** Whether a clone or fetch failed because the remote has no such branch; one stopped by `stopOn` never did. */
+function isMissingBranch(error: unknown): error is GitError {
+    return error instanceof GitError && !(error instanceof NoPartialClone) && missingBranch.test(error.message);
+}
+
+/** A git run's stdout, or the error its exit means: `NoPartialClone` when `stopOn` stopped it, else any exit but 0. */
+function checked(args: string[], result: GitResult): string {
+    const command = ["git", ...args].join(" ");
+    if (result.stopped) throw new NoPartialClone(result.stderr.trim(), command);
+    if (result.code !== 0) throw new GitError(result.stderr.trim() || `git ${args[0]} failed`, command);
+    return result.stdout;
+}
+
+/** The default branch's name, once `isValidBranch` takes it; it comes from the copy or the remote, so it's checked. */
+function usableDefaultBranch(branch: string): string {
+    if (!isValidBranch(branch)) {
+        throw new GitError(`The store's copy names a default branch it can't use: ${JSON.stringify(branch)}`);
+    }
+    return branch;
+}
+
 /** The branch the list names isn't on the remote (`noBranch`). */
 export class NoBranch extends GitError {
     readonly branch: string;
@@ -351,12 +375,19 @@ export class StoreRepository {
         input?: string,
         extra: { env?: NodeJS.ProcessEnv; signal?: AbortSignal; stopOn?: string } = {},
     ): Promise<string> {
+        return checked(args, await this.#start(args, timeout, cwd, input, extra));
+    }
+
+    /** Runs git as `#exec` does, and gives its result whatever the exit. */
+    #start(
+        args: string[],
+        timeout = shortTimeout,
+        cwd = this.path,
+        input?: string,
+        extra: { env?: NodeJS.ProcessEnv; signal?: AbortSignal; stopOn?: string } = {},
+    ): Promise<GitResult> {
         const env = { GIT_ALLOW_PROTOCOL: this.#allowProtocols, GIT_ASKPASS: "", ...extra.env };
-        const result = await this.#run(this.#git, args, { cwd, timeout, stoppable: true, input, ...extra, env });
-        const command = ["git", ...args].join(" ");
-        if (result.stopped) throw new NoPartialClone(result.stderr.trim(), command);
-        if (result.code !== 0) throw new GitError(result.stderr.trim() || `git ${args[0]} failed`, command);
-        return result.stdout;
+        return this.#run(this.#git, args, { cwd, timeout, stoppable: true, input, ...extra, env });
     }
 
     /**
@@ -373,12 +404,7 @@ export class StoreRepository {
                 stopOn: partialCloneWarning,
             });
         } catch (error) {
-            if (
-                this.branch !== undefined &&
-                error instanceof GitError &&
-                !(error instanceof NoPartialClone) &&
-                /Remote branch .* not found|couldn't find remote ref/.test(error.message)
-            ) {
+            if (this.branch !== undefined && isMissingBranch(error)) {
                 throw new NoBranch(error.message, this.branch, error.command);
             }
             throw error;
@@ -424,15 +450,26 @@ export class StoreRepository {
      * the branch there and checks it out, then drops every other ref, the reflogs, and every object they no longer reach
      * (`#keepOnlyReachable`). `.git/shallow` then names only the new commit: the copy stays one commit deep however
      * often it's refreshed. A fetch stopped because the server ignores the filter leaves the copy as it was.
+     * When the default branch's fetch finds no such branch (the remote renamed it since `origin/HEAD` was written),
+     * the remote is asked for its default branch (SPEC-167 B), unless this refresh asked already, and that one is
+     * fetched, once.
      */
     async refresh(): Promise<void> {
-        const branch = this.branch ?? (await this.defaultBranch());
+        let branch: string;
+        let asked = false;
+        if (this.branch !== undefined) branch = this.branch;
+        else ({ branch, asked } = await this.#defaultBranch());
+        try {
+            await this.#fetchBranch(branch);
+        } catch (error) {
+            if (this.branch !== undefined || asked || !isMissingBranch(error)) throw error;
+            const renamed = await this.#askDefaultBranch();
+            if (renamed === branch) throw error;
+            branch = renamed;
+            await this.#fetchBranch(branch);
+        }
         const local = `refs/heads/${branch}`;
         const tracking = `refs/remotes/origin/${branch}`;
-        await this.#download(
-            ["fetch", "--depth", "1", "--filter=blob:none", "--no-tags", "origin", `+${local}:${tracking}`],
-            this.path,
-        );
         // Fetches the manifests that changed.
         await this.#exec(["checkout", "--quiet", "-B", branch, tracking, "--"], longTimeout);
         const kept = new Set([local, tracking, "refs/remotes/origin/HEAD"]);
@@ -475,13 +512,63 @@ export class StoreRepository {
         await this.#exec(["prune", "--expire=now", "--exclude-promisor-objects"], longTimeout);
     }
 
-    /** `main`, from the clone's `origin/HEAD`. A name that isn't a plain branch name is refused (`isValidBranch`). */
+    /** The branch's newest commit, one deep and without blobs, into its remote-tracking ref. */
+    async #fetchBranch(branch: string): Promise<void> {
+        await this.#download(
+            [
+                "fetch",
+                "--depth",
+                "1",
+                "--filter=blob:none",
+                "--no-tags",
+                "origin",
+                `+refs/heads/${branch}:refs/remotes/origin/${branch}`,
+            ],
+            this.path,
+        );
+    }
+
+    /**
+     * `main`, from the clone's `origin/HEAD`, or, when the copy has none (a clone on a named branch never gets one),
+     * from the remote, kept as `origin/HEAD` so the next refresh asks nothing (`#askDefaultBranch`). A name that isn't
+     * a plain branch name is refused (`isValidBranch`).
+     */
     async defaultBranch(): Promise<string> {
-        const ref = (await this.#exec(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])).trim();
-        const branch = ref.replace(/^origin\//, "");
-        if (!isValidBranch(branch)) {
-            throw new GitError(`The store's copy names a default branch it can't use: ${JSON.stringify(branch)}`);
-        }
+        return (await this.#defaultBranch()).branch;
+    }
+
+    /** `defaultBranch()`, and whether it asked the remote. */
+    async #defaultBranch(): Promise<{ branch: string; asked: boolean }> {
+        const args = ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"];
+        const result = await this.#start(args);
+        // With `--quiet`, git exits 1, and says nothing, when there's no symbolic `origin/HEAD`: none, or a plain ref.
+        if (result.code === 1) return { branch: await this.#askDefaultBranch(), asked: true };
+        return { branch: usableDefaultBranch(checked(args, result).trim().replace(/^origin\//, "")), asked: false };
+    }
+
+    /**
+     * Asks the remote for its default branch, and keeps it as `origin/HEAD` (SPEC-167): one listing of the remote's
+     * refs that match `HEAD`, no objects, through the same guards as a fetch, in English (`LC_ALL=C`) so `problemOf`
+     * knows an unreachable server. A remote that names no branch (an empty repository, a detached HEAD, a HEAD naming a
+     * branch that isn't there) or a name `isValidBranch` refuses is a `GitError`, and nothing is written.
+     */
+    async #askDefaultBranch(): Promise<string> {
+        const listing = await this.#exec(
+            [...noCredentialHelper, "ls-remote", "--symref", "origin", "HEAD"],
+            longTimeout,
+            this.path,
+            undefined,
+            { env: { LC_ALL: "C" } },
+        );
+        const named = listing
+            .split("\n")
+            .map((line) => /^ref: refs\/heads\/([^\t]+)\tHEAD$/.exec(line)?.[1])
+            .find((name) => name !== undefined);
+        if (named === undefined) throw new GitError("This repository doesn't name a default branch.");
+        const branch = usableDefaultBranch(named);
+        // Written before the refresh's fetch: if that fetch fails, it stays, pointing at a ref that isn't there yet,
+        // and the next refresh reads it and fetches that branch without asking again.
+        await this.#exec(["symbolic-ref", "refs/remotes/origin/HEAD", `refs/remotes/origin/${branch}`]);
         return branch;
     }
 
