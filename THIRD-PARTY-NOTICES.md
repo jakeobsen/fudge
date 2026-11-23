@@ -3093,6 +3093,18 @@ dealings in these Data Files or Software without prior written
 authorization of the copyright holder.
 ```
 
+## GeoNames town and country names (cities15000)
+
+The calculator's towns and countries (`Contents/Resources/places`), made from GeoNames' cities15000 and countryInfo files. License: CC-BY-4.0.
+
+```text
+This work is licensed under a Creative Commons Attribution 4.0 License,
+see https://creativecommons.org/licenses/by/4.0/
+The Data is provided "as is" without warranty or any representation of accuracy, timeliness or completeness.
+
+Fudge keeps only each town's names, country, population and time zone.
+```
+
 ## Raycast API type definitions (@raycast/api 2.13.1)
 
 `runtime/raycast-api.d.ts`, which `fudge scan` reads, with its own notice beside it (`raycast-api.LICENSE`). License: MIT.

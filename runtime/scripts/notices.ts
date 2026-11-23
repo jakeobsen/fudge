@@ -85,6 +85,14 @@ export const components: Component[] = [
         where: "The emoji, names and keywords of Search Emoji & Symbols (`emoji-extension`), made from Unicode's emoji-test.txt and CLDR's English annotations.",
     },
     {
+        name: "GeoNames town and country names",
+        licenseFile: "vendor/geonames/LICENSE",
+        license: "CC-BY-4.0",
+        // The file it's made from, not its date, so an update of the list doesn't change the notices.
+        version: () => "cities15000",
+        where: "The calculator's towns and countries (`Contents/Resources/places`), made from GeoNames' cities15000 and countryInfo files.",
+    },
+    {
         name: "Raycast API type definitions",
         licenseFile: "vendor/raycast-api/LICENSE",
         license: "MIT",
