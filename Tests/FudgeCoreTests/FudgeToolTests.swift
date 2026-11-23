@@ -188,8 +188,10 @@ private final class Signals: @unchecked Sendable {
 }
 
 /// `Tool.runHere`'s ending of a tool whose pipe a leftover child holds open: `/bin/sh` starts that child, which ignores
-/// SIGTERM (`terminate` signals a tool's subtasks too), writes its pid to `pids`, then runs `then`. Whether the tool is still running is `running`'s answer, so the decision is tested
-/// apart from how fast the shell starts. Returns the tool's status and the signals `runHere` decided to send.
+/// SIGTERM (`terminate` signals a tool's subtasks too) and only then writes its own pid to `pids`, and runs `then`.
+/// Whether the tool is still running is `running`'s answer, given once the child has written its pid, so no signal
+/// comes before the child is ready, however slowly the shell starts. Returns the tool's status and the signals
+/// `runHere` decided to send.
 private func endingATool(then: String, running: Bool) async throws -> (Int32, [Int32]) {
     let folder = try Fixtures.temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: folder) }
@@ -201,14 +203,28 @@ private func endingATool(then: String, running: Bool) async throws -> (Int32, [I
         }
     }
     let signals = Signals()
-    let script = "(trap '' TERM; exec /bin/sleep 600) & echo $! > '\(pids.path)'; \(then)"
-    let ran = try await OffThePool.run(within: Tool.noHang) {
+    // Single quotes, so `$$` is the child's own pid; the path is its argument.
+    let script = "(trap '' TERM; exec /bin/sh -c 'echo $$ > \"$1\"; exec /bin/sleep 600' sh '\(pids.path)') & \(then)"
+    let ran = try await OffThePool.run(within: Tool.noHang * 2) {
         try Tool.runHere(
             URL(fileURLWithPath: "/bin/sh"), ["-c", script], environment: [:], deadline: .milliseconds(200),
-            grace: .milliseconds(200), isRunning: { _ in running }, kill: { _, signal in signals.record(signal) })
+            grace: .milliseconds(200), isRunning: { _ in answer(running, onceAPidIsIn: pids) },
+            kill: { _, signal in signals.record(signal) })
     }
     let (status, _, _) = try #require(ran, "runHere returned")
     return (status, signals.all)
+}
+
+/// `running`, once `file` holds a pid, waiting on the calling thread up to `Tool.noHang`.
+private func answer(_ running: Bool, onceAPidIsIn file: URL) -> Bool {
+    let clock = ContinuousClock()
+    let started = clock.now
+    while clock.now - started < Tool.noHang {
+        let written = (try? String(contentsOf: file, encoding: .utf8)) ?? ""
+        if pid_t(written.trimmingCharacters(in: .whitespacesAndNewlines)) != nil { break }
+        Thread.sleep(forTimeInterval: 0.02)
+    }
+    return running
 }
 
 @Test func aToolThatHasExitedIsntKilledWhileItsChildHoldsThePipe() async throws {
