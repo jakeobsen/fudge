@@ -1,0 +1,11 @@
+The GeoNames files that places.tsv and countries.tsv were made from, by scripts/geonames/update.sh.
+
+url: https://download.geonames.org/export/dump/cities15000.zip
+sha256: a15729cf99546631212e7c9bbb9ef0965d7a4bf213c39a891b279004c73f4da1
+last-modified: Sun, 22 Nov 2026 03:41:49 GMT
+downloaded: Sun, 22 Nov 2026 22:56:49 GMT
+
+url: https://download.geonames.org/export/dump/countryInfo.txt
+sha256: 79f8f59ea01cbb40438bf1856dd6c2ff201f03f8fc72d0530b2646aaf603ef04
+last-modified: Sun, 22 Nov 2026 03:47:31 GMT
+downloaded: Sun, 22 Nov 2026 22:56:50 GMT
