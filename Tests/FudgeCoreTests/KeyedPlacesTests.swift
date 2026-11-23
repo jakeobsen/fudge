@@ -204,14 +204,32 @@ private func signInsArePerGitHubAndSigningOutOfOneLeavesTheOthers(_ three: Three
 }
 
 @Test func aQualifiedIDsLogLinesReachItsOwnFile() throws {
-    let folder = try Fixtures.temporaryDirectory()
-    let url = try #require(LogFile.extension(try id("someone+tools+github")).url(in: folder))
-    #expect(url.lastPathComponent == "someone+tools+github.log")
-    #expect(url.deletingLastPathComponent().lastPathComponent == "Extensions")
-    #expect(
-        LogSource(extension: "someone+tools+github", command: "search")?.extensionID == (try id("someone+tools+github"))
-    )
+    try eachGitHubsLogLinesReachItsOwnFile(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
     #expect(LogSource(extension: "Bad Key", command: "search")?.extensionID == nil)
+}
+
+/// Each GitHub's line goes to its own file, named by its whole id, and a host line naming that id finds it again.
+private func eachGitHubsLogLinesReachItsOwnFile(_ three: ThreeGitHubs) throws {
+    let folder = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let writer = LogWriter(folder: folder, header: nil)
+    for installed in three.all {
+        writer.write(.info, "from \(installed.id.key)", command: "search", to: .extension(installed.id))
+    }
+    writer.flush()
+    let files = folder.appendingPathComponent("Extensions", isDirectory: true)
+    #expect(
+        try FileManager.default.contentsOfDirectory(atPath: files.path).sorted() == [
+            "fudgeapp+development+github.log", "github.log", "someone+tools+github.log",
+        ])
+    for installed in three.all {
+        let url = try #require(LogFile.extension(installed.id).url(in: folder))
+        #expect(url.deletingLastPathComponent().lastPathComponent == "Extensions")
+        let lines = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
+        #expect(lines.count == 1, "\(url.lastPathComponent)")
+        #expect(lines.first?.hasSuffix("[search] from \(installed.id.key)") == true, "\(url.lastPathComponent)")
+        #expect(LogSource(extension: installed.id.key, command: "search")?.extensionID == installed.id)
+    }
 }
 
 @Test func installLinesNameTheRepository() throws {
@@ -658,6 +676,7 @@ struct SideBySideEndToEndTests {
         try rootSearchListsEachGitHubUnderItsOwnIDAndSaysWhereItsFrom(three)
         try signInsArePerGitHubAndSigningOutOfOneLeavesTheOthers(three)
         try installLinesNameTheRepository(three)
+        try eachGitHubsLogLinesReachItsOwnFile(three)
         try todaysMenuBarDropdownAndHistoryFilesAreFoundUnderTheSameKeys(three)
         try launchCommandPicksTheCallerItselfFirst(three)
         try launchCommandPicksTheCallersRepositoryThenRaycastsThenTheDevelopmentBuild(three)
