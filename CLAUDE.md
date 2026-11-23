@@ -319,7 +319,7 @@ Extensions run in a separate Node.js process, the extension host.
       The `CalculatorResult` shows as a card above the results: the question and answer, and a label under each.
       The card's answer has 10 significant digits, or, while it's written out (below 1e15), as many as its integer part has, up to 15, so it never rounds the integer part; a copied answer has up to 15, so floating-point noise (`0.1+0.2`) rounds away.
       A zone's label is its familiar abbreviation where `TimeZoneConversion.named` has one (`Copenhagen, CET`), else Foundation's offset (`GMT+8`).
-      **Places** (SPEC-162): `TimeZoneConversion.place` looks a name up in this order: the abbreviations, offsets from UTC, the IANA zones' cities, `otherCities`, then from the `PlaceTable`, the countries, the towns' own and ASCII names, and the towns' alternate names.
+      **Places** (SPEC-162): `TimeZoneConversion.place` looks a name up in this order: the abbreviations, offsets from UTC, the IANA zones' cities, `otherCities`, then from the `PlaceTable`, the countries, the towns' own and ASCII names, and the towns' alternate names, and last the places Apple Maps found (below).
       So `jamaica` is the zone's city before the town in New York, and `armenia` is the country before the town in Colombia.
       **Offsets** are `utc` or `gmt`, a sign (`+`, `-` or `−`) and `h`, `hh`, `h:mm`, `hh:mm` or `hhmm`, up to 14 hours, shown normalized (`gmt+0530` is `GMT+5:30`, `utc-0` is `UTC+0`) and with no abbreviation after them.
       They're `TimeZone(secondsFromGMT:)`, never `Etc/GMT-2`, whose sign is the other way round.
@@ -337,6 +337,17 @@ Extensions run in a separate Node.js process, the extension host.
       Their folder's `SOURCE` lists each downloaded file's address, sha256 and dates, and its `LICENSE` is GeoNames' licence, credited in the README and the notices.
       **The "Update GeoNames database" workflow** (`.github/workflows/update-geonames.yml`, on Linux) downloads them again and opens a pull request into `development` (`scripts/geonames/open-pull-request.sh`); only the repository's owner can start it, and no agent ever runs, dispatches or re-runs it.
       Builds never go online for the list.
+      **Apple Maps** (SPEC-162 B) looks up other places only while **Look up other places with Apple Maps** (`appleMapsPlaces` in `settings.json`, off by default; the Calculator page's switch and its onboarding step) is on.
+      What may go is decided in core, by the same reading of the query that answers it (`TimeZoneConversion.namesToLookUp`), and only when nothing answers the query already: `time in <name>` and `now in <name>`, `<a> time to <b> time` (or `in`) when that's the whole query, and `<clock> <a> to <b>` when the clock has a colon, a dot, am or pm and starts the query.
+      So `add time to calendar`, `how to save time in excel`, `3 apples to oranges` and `meeting 3pm to 4pm` send nothing, and neither does `<place> time` alone.
+      A name goes only when no table answers it (a state or province name may go), it has a letter and 2 or more characters, it's at most 4 words, it doesn't start with a number (`time in 5 kg`, and so `time in 3pm`), and it's no unit or currency word.
+      A found place answers only in those same shapes, so a name typed elsewhere never converts because of an earlier lookup.
+      `PlaceLookups` (core, `@MainActor`) holds a `PlaceLookup` only while the setting is on: on each root query change it stops the lookup under way, waits 400 ms for the typing to stop, then looks up each name one at a time.
+      Each answer, found or not, is kept in memory for the run by folded name, so a name goes once; a throttled or failed lookup isn't an answer, and turning it off forgets everything.
+      An answer to the query still typed evaluates the card again, keeping the selection (onto the card when nothing was selected); there's no card while it waits.
+      `LauncherModel` hands it queries only once `loadPlaces` has read the table, since the table may know the name.
+      The app's `MapKitPlaceLookup` is only the call: `MKLocalSearch` with `MKLocalSearch.Request(naturalLanguageQuery:)` and `resultTypes = .address`, no region and no location permission, the first `MKMapItem` with a `timeZone`, by its `name`, and `cancel()` when stopped; never `CLGeocoder`, `MKMapItem.placemark` or `MKGeocodingRequest`.
+      The lookup is picked at launch: a snapshot run gets `InertPlaceLookup`, which answers nothing, even with the setting on, and tests use a fake, so nothing goes to Apple from either.
       The card is selected first, and ↵ copies the answer (`RootActions.calculatorSections`, plus Copy Question and Answer ⌘⇧C) and closes the panel with a HUD.
       `now` and the time zone are parameters, so tests fix them.
     - **Currency rates** come from the European Central Bank, and only while `currencyRates` is on in `settings.json` (off by default; the Calculator page's switch).
@@ -514,7 +525,7 @@ Extensions run in a separate Node.js process, the extension host.
       `LoginItemState.change` registers or unregisters, then reads the status back, with any error to show.
       It turns nothing on while Fudge runs from its disk image or a translocated copy (`AppLocation.loginItemRefusal`), since that path goes away, and says to move Fudge to Applications first.
       **Clear Search History…** confirms in a sheet, then `LauncherModel.clearHistory()` empties `LaunchHistory` and `history.json`.
-    - **The Calculator page** (`CalculatorPage.swift`, under Extensions) has the currency switch and the calculator's Number format (Same as macOS, "1,234.5" or "1.234,5", saved through `change {}`; changing it re-evaluates the open query), under the `settingsProblem` banner.
+    - **The Calculator page** (`CalculatorPage.swift`, under Extensions) has the currency switch, the Apple Maps switch (`AppleMapsPlacesToggle`) and the calculator's Number format (Same as macOS, "1,234.5" or "1.234,5", saved through `change {}`; changing it re-evaluates the open query), under the `settingsProblem` banner.
     - **Import / Export** (`BackupSection.swift`, at the bottom of General) writes and reads a `.fudgebackup` (declared in `App/Info.plist`).
       `Backup` (core) collects the parts from the support folder:
       - `colors.json`
@@ -780,8 +791,9 @@ Extensions run in a separate Node.js process, the extension host.
       `Onboarding` (core) keeps the answered step ids in `onboarding.json` and decides what to show (`pending`): the unanswered steps, in order, then Done.
       Once it has been completed, Welcome isn't shown again, and a step added later shows on its own, then Done, under "Something new to decide" (`hasSomethingNew`).
       **`OnboardingStep`'s cases are the one list of steps**: adding a step means adding its case and drawing it.
-      The steps use General's own controls (`LauncherHotkeyControls`, `OpenAtLoginControls`, `HyperkeyControls`, the Calculator page's `CurrencyRatesToggle`, and the Permissions page's `AccessibilityControls`), so an answer takes effect at once.
-      The **Extension Store** step (after Currency) shows the store's consent sheet's own words (`ExtensionStore.Consent`), with **Turn On Extension Store**, which writes what the switch and its sheet write and also ticks the store's Enabled (`FudgeSettings.turnOnExtensionStore`), and **Not Now**, which is ↵.
+      The steps use General's own controls (`LauncherHotkeyControls`, `OpenAtLoginControls`, `HyperkeyControls`, the Calculator page's `CurrencyRatesToggle` and `AppleMapsPlacesToggle`, and the Permissions page's `AccessibilityControls`), so an answer takes effect at once.
+      **Look up places with Apple Maps?** (right after Currency) shows the Calculator page's Apple Maps switch, with **Not Now** as ↵ while it's off.
+      The **Extension Store** step (after Apple Maps) shows the store's consent sheet's own words (`ExtensionStore.Consent`), with **Turn On Extension Store**, which writes what the switch and its sheet write and also ticks the store's Enabled (`FudgeSettings.turnOnExtensionStore`), and **Not Now**, which is ↵.
       The **Sign-in** step is the Sign-in page's own choice (`SignInServerControls`, shared with the page, with `SignInServer.explanation`), whose consent sheets show on the onboarding window (`OnboardingModel.ask`; laid out off-screen in snapshot runs), with Continue as ↵, so Off stays Off.
       The **Raycast** step (after Sign-in, SPEC-132 §3.3, D-88, `RaycastStep`) says that Fudge runs extensions made for Raycast, that with Raycast on the same Mac the two can get in each other's way, and that signing in to some extensions ends with a Raycast link, which has to open Fudge.
       It offers **Open Raycast Links with Fudge**, which does what turning the Sign-in page's switch on does, while another app opens them (saying that Raycast's own links then open Fudge too), and **Turn On** for extensions with their own sign-in, with the switch's own line (`OnboardingStep.optIns` maps `ownAppSignIn` to it).
