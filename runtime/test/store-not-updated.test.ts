@@ -8,7 +8,6 @@ import { allFilter, installedFilter, rowId } from "../store-extension/src/catalo
 import { developmentRowId } from "../store-extension/src/development-builds.ts";
 import { maxManifestBytes } from "../store-extension/src/files.ts";
 import {
-    installPath,
     notUpdatedAccessory,
     notUpdatedDetailMarkdown,
     notUpdatedRowId,
@@ -17,7 +16,7 @@ import {
     uninstallNotUpdated,
     type NotUpdatedInstall,
 } from "../store-extension/src/not-updated.ts";
-import { readInstalled, StoreError } from "../store-extension/src/store.ts";
+import { installFolder, readInstalled, StoreError } from "../store-extension/src/store.ts";
 
 const folders: string[] = [];
 after(async () => {
@@ -166,7 +165,7 @@ test("Uninstall on such a row moves only its install to the Trash and forgets on
     const confirmed = uninstallContext(extensions, support, true);
     assert.equal(await uninstallNotUpdated(acme, confirmed.context), true);
     assert.deepEqual(confirmed.trashed, [path.join(extensions, "acme", "tools", "jira")]);
-    assert.equal(installPath(extensions, switchedOff, "jira"), confirmed.trashed[0]);
+    assert.equal(installFolder(extensions, switchedOff, "jira"), confirmed.trashed[0]);
     const after = await readInstalled(support);
     assert.deepEqual(Object.keys(after).sort(), ["git.example.com+team+extensions+notes", "github", "jira", "owner+on+linear"]);
     assert.ok(await readFile(path.join(extensions, "raycast", "extensions", "jira", "package.json"), "utf8"), "Raycast's jira stays");
@@ -189,7 +188,7 @@ test("Uninstall on such a row: a folder already gone still forgets the record; a
     const rows = await readNotUpdated(await readInstalled(support), new Set([raycastFolder, on]), extensions);
     const notes = rows.find((row) => row.id === "git.example.com+team+extensions+notes");
     assert.ok(notes);
-    await rm(installPath(extensions, removed, "notes"), { recursive: true });
+    await rm(installFolder(extensions, removed, "notes"), { recursive: true });
     const gone = uninstallContext(extensions, support, true);
     assert.equal(await uninstallNotUpdated(notes, gone.context), true);
     assert.deepEqual(gone.trashed, []);

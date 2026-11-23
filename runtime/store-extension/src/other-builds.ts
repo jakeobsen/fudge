@@ -13,8 +13,10 @@ import {
     type FoundBuildRecord,
     type ProcessProbe,
 } from "./build-records.ts";
+import type { InstallRecord } from "./catalog.ts";
 import type { FailureDetails } from "./failure.ts";
 import type { FailureMark, InstallAnswer, InstallEndReport, RowMarks } from "./notices.ts";
+import { raycastFolder } from "./repository-folder.ts";
 import {
     alreadyBuildingStatus,
     doneToast,
@@ -174,13 +176,15 @@ export class OtherBuilds {
      */
     private async settleNow(record: FoundBuildRecord, bound: Date, seen: boolean): Promise<void> {
         const { supportPath, extensionsDir, now = () => new Date(), log } = this.options;
-        const moved = installFolder(extensionsDir, record.name);
+        // Its repository's folder (SPEC-157 E.4): an added repository's when the record names one, else Raycast's.
+        const moved = installFolder(extensionsDir, record.repository ?? raycastFolder, record.name);
         const isFolder = await lstat(moved).then(
             (info) => info.isDirectory(),
             () => false,
         );
-        // The next move files an unmoved one in Raycast's folder, keeping its creation time.
-        const folder = isFolder ? moved : path.join(extensionsDir, record.name);
+        // The next move files an unmoved one in Raycast's folder, keeping its creation time; only Raycast's builds were
+        // ever made at the top level.
+        const folder = isFolder || record.repository !== undefined ? moved : path.join(extensionsDir, record.name);
         const made = async (end: number) =>
             record.tree !== undefined && (await createdBetween(folder, Date.parse(record.startedAt), end));
         const { outcome } = record;
@@ -196,8 +200,16 @@ export class OtherBuilds {
             failed = true;
         }
         if (adopted) {
-            const entry = { tree: record.tree!, commit: record.commit, installedAt: now().toISOString(), dir: record.dir };
-            await writeInstalled(supportPath, { ...(await readInstalled(supportPath)), [record.name]: entry });
+            // The record the dead session would have written (E.1, E.3): under the build's id, with its repository's folder
+            // when that's an added one.
+            const entry: InstallRecord = {
+                tree: record.tree!,
+                commit: record.commit,
+                installedAt: now().toISOString(),
+                dir: record.dir,
+                ...(record.repository === undefined ? {} : { repository: record.repository }),
+            };
+            await writeInstalled(supportPath, { ...(await readInstalled(supportPath)), [record.id ?? record.name]: entry });
         }
         let failure: FailureDetails | undefined;
         if (failed) {

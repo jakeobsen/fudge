@@ -8,6 +8,7 @@ import path from "node:path";
 import { developmentFolder, isValidName } from "../../src/extension-id.ts";
 import { allFilter, installedFilter } from "./catalog.ts";
 import { maxManifestBytes, readRegularFile } from "./files.ts";
+import { installFolder } from "./store.ts";
 
 /** A development build as its row shows it. */
 export type DevelopmentBuild = {
@@ -44,9 +45,10 @@ export function developmentBuildsFolder(extensionsDir: string): string {
     return path.join(extensionsDir, ...developmentFolder.split("/"));
 }
 
-/** The folder of the development build `name`, which its Uninstall moves to the Trash. */
+/** The folder of the development build `name`, which its Uninstall moves to the Trash: `installFolder` in the
+ * development folder (SPEC-157 E.9). */
 export function developmentBuildFolder(extensionsDir: string, name: string): string {
-    return path.join(developmentBuildsFolder(extensionsDir), name);
+    return installFolder(extensionsDir, developmentFolder, name);
 }
 
 /**

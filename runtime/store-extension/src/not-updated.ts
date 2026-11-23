@@ -4,11 +4,10 @@
 // Name.
 
 import { lstat } from "node:fs/promises";
-import path from "node:path";
 import { extensionId, raycastFolder } from "../../src/extension-id.ts";
 import { allFilter, installedFilter, type Installed } from "./catalog.ts";
 import { installedManifest } from "./development-builds.ts";
-import { readInstalled, StoreError, writeInstalled, type StoreContext } from "./store.ts";
+import { installFolder, readInstalled, StoreError, writeInstalled, type StoreContext } from "./store.ts";
 
 /** An install whose repository isn't on, as its row shows it. */
 export type NotUpdatedInstall = {
@@ -36,11 +35,6 @@ export function notUpdatedRowsShown(filter: string): boolean {
     return filter === allFilter || filter === installedFilter;
 }
 
-/** Where the install of `name` from the repository folder `repository` is, under the extensions folder. */
-export function installPath(extensionsDir: string, repository: string, name: string): string {
-    return path.join(extensionsDir, ...repository.split("/"), name);
-}
-
 /** The detail pane of such a row: what it is, since its repository isn't read. */
 export function notUpdatedDetailMarkdown(install: NotUpdatedInstall): string {
     return [`# ${install.title}`, install.description, "Its repository is off or was removed, so it isn't updated."]
@@ -63,7 +57,7 @@ export async function readNotUpdated(
         off.map(async ([id, record]): Promise<NotUpdatedInstall> => {
             const name = id.split("+").at(-1)!;
             const repository = record.repository ?? raycastFolder;
-            const manifest = await installedManifest(installPath(extensionsDir, repository, name), name);
+            const manifest = await installedManifest(installFolder(extensionsDir, repository, name), name);
             return { id, name, repository, title: manifest?.title ?? name, description: manifest?.description ?? "" };
         }),
     );
@@ -91,7 +85,7 @@ export async function uninstallNotUpdated(install: NotUpdatedInstall, context: N
         "Uninstall",
     );
     if (!confirmed) return false;
-    const folder = installPath(context.extensionsDir, install.repository, install.name);
+    const folder = installFolder(context.extensionsDir, install.repository, install.name);
     if (await lstat(folder).then(() => true, () => false)) await context.trash(folder);
     const remaining = await readInstalled(context.supportPath);
     delete remaining[install.id];

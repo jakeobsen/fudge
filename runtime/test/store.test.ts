@@ -1180,8 +1180,19 @@ test("install fetches the source, checks it, asks, builds into FUDGE_EXTENSIONS_
             "raycast/extensions",
         ],
     ]);
-    assert.deepEqual(buildArguments("/src", "/dest"), ["build", "/src", "--into", "/dest", "--repository", "raycast/extensions"]);
-    assert.equal(installFolder("/dest", "alpha"), "/dest/raycast/extensions/alpha", "Raycast's folder (FUD-183)");
+    assert.deepEqual(buildArguments("/src", "/dest", "raycast/extensions"), ["build", "/src", "--into", "/dest", "--repository", "raycast/extensions"]);
+    assert.deepEqual(buildArguments("/src", "/dest", "someone/tools", "build"), [
+        "build",
+        "/src",
+        "--into",
+        "/dest",
+        "--repository",
+        "someone/tools",
+        "--swift-parts",
+        "build",
+    ]);
+    assert.equal(installFolder("/dest", "raycast/extensions", "alpha"), "/dest/raycast/extensions/alpha", "Raycast's folder (FUD-183)");
+    assert.equal(installFolder("/dest", "git.example.org/team/tools", "alpha"), "/dest/git.example.org/team/tools/alpha");
     assert.deepEqual(await readInstalled(supportPath), {
         alpha: { tree: "aaa1", commit: "c0ffee1234", installedAt: "2026-11-20T12:00:00.000Z", dir: "alpha" },
     });
@@ -1346,14 +1357,21 @@ test("the list reads each install's Swift part choice from its folder in Raycast
     const extensionsDir = await temporary();
     const leaveOut = JSON.stringify({ swiftParts: "leave-out" });
     // The store's install, filed in Raycast's folder, and one of another name still at the top level (FUD-183).
-    await mkdir(installFolder(extensionsDir, "say"), { recursive: true });
-    await writeFile(path.join(installFolder(extensionsDir, "say"), swiftPartsFile), leaveOut);
+    await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "say"), { recursive: true });
+    await writeFile(path.join(installFolder(extensionsDir, RAYCAST_COPY.folder, "say"), swiftPartsFile), leaveOut);
     await mkdir(path.join(extensionsDir, "speak"), { recursive: true });
     await writeFile(path.join(extensionsDir, "speak", swiftPartsFile), leaveOut);
-    await mkdir(installFolder(extensionsDir, "built"), { recursive: true });
+    await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "built"), { recursive: true });
     const build = JSON.stringify({ swiftParts: "build" });
-    await writeFile(path.join(installFolder(extensionsDir, "built"), swiftPartsFile), build);
+    await writeFile(path.join(installFolder(extensionsDir, RAYCAST_COPY.folder, "built"), swiftPartsFile), build);
     assert.deepEqual([...(await installsWithoutSwift(extensionsDir, ["say", "speak", "built", "missing"]))], ["say"]);
+    // An added repository's install is read from its own folder, by its id (SPEC-157 E.4); Raycast's of that name isn't
+    // it.
+    await mkdir(installFolder(extensionsDir, "someone/tools", "built"), { recursive: true });
+    await writeFile(path.join(installFolder(extensionsDir, "someone/tools", "built"), swiftPartsFile), leaveOut);
+    assert.deepEqual([...(await installsWithoutSwift(extensionsDir, ["built", "someone+tools+built", "someone+tools+say"]))], [
+        "someone+tools+built",
+    ]);
 });
 
 test("a scan's swift: imports become the store's swiftPart, kept in the cache", () => {
@@ -1384,7 +1402,7 @@ test("a folder whose manifest has another name installs from the folder, under t
     });
     // fudge build installs under the manifest's name, so `<extensions>/raycast/extensions/aws` is what's checked and
     // trashed.
-    await mkdir(installFolder(extensionsDir, "aws"), { recursive: true });
+    await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "aws"), { recursive: true });
     assert.equal(await uninstall(aws, context), true);
 });
 
@@ -1398,13 +1416,13 @@ test("two folders with one name: the second can't install over the first, and up
     const first = parseManifest("world-clock", manifest("world-clock"))!;
     const second = parseManifest("world-clock-2", manifest("world-clock"))!;
     assert.deepEqual(await install(first, context), {});
-    await mkdir(installFolder(extensionsDir, "world-clock"), { recursive: true });
+    await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "world-clock"), { recursive: true });
     await assert.rejects(install(second, context), (error: unknown) => {
         assert.ok(error instanceof StoreError);
         assert.equal(error.message, "Another extension called world-clock is installed. Uninstall it first.");
         return true;
     });
-    await assert.rejects(uninstall(second, context), /wasn't installed by the store/, "nor removed through the other row");
+    await assert.rejects(uninstall(second, context), /wasn't installed by the Extension Store/, "nor removed through the other row");
     assert.deepEqual(await install(first, context), {}, "updating the first one");
     assert.equal(asked.at(-1)!.title, "Update World-clock?");
     assert.equal((await readInstalled(supportPath))["world-clock"]?.dir, "world-clock");
@@ -1445,7 +1463,7 @@ test("cancelling builds nothing and records nothing", async () => {
 
 test("a name clash with an extension the store didn't install is refused before anything else", async () => {
     const { context, git, cli, extensionsDir } = await storeContext();
-    await mkdir(installFolder(extensionsDir, "alpha"), { recursive: true });
+    await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
     await assert.rejects(install(alphaEntry, context), (error: unknown) => {
         assert.ok(error instanceof StoreError);
         assert.equal(error.message, "Another extension called alpha is installed. Uninstall it first.");
@@ -1465,7 +1483,7 @@ test("a development build of the name is kept apart, so an install goes ahead in
     assert.ok((await readInstalled(supportPath)).alpha);
     assert.deepEqual(await readdir(development), ["package.json"]);
     assert.equal(await readFile(path.join(development, "package.json"), "utf8"), "mine");
-    assert.deepEqual(await readdir(installFolder(extensionsDir, "alpha")), ["compatibility.json"], "the fake build's install");
+    assert.deepEqual(await readdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "alpha")), ["compatibility.json"], "the fake build's install");
 });
 
 test("an extension with another package source is refused before asking", async () => {
@@ -1508,7 +1526,7 @@ test("a failure's details say what failed: a build, a git step, or one of the st
 test("updating an installed extension asks to update and records the new tree", async () => {
     const { context, asked, supportPath, extensionsDir } = await storeContext({ tree: "bbb2" });
     await writeInstalled(supportPath, { alpha: { tree: "aaa1", commit: "old", installedAt: "x", dir: "alpha" } });
-    await mkdir(installFolder(extensionsDir, "alpha"), { recursive: true });
+    await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
     assert.deepEqual(await install(alphaEntry, context), {}, "its own folder isn't a clash");
     assert.equal(asked[0]!.title, "Update Alpha?");
     assert.equal((await readInstalled(supportPath)).alpha?.tree, "bbb2");
@@ -1516,8 +1534,8 @@ test("updating an installed extension asks to update and records the new tree", 
 
 test("uninstall trashes only what the store installed, and forgets it", async () => {
     const { context, trashed, supportPath, extensionsDir } = await storeContext();
-    await assert.rejects(uninstall(alphaEntry, context), /wasn't installed by the store/);
-    await mkdir(installFolder(extensionsDir, "alpha"), { recursive: true });
+    await assert.rejects(uninstall(alphaEntry, context), /wasn't installed by the Extension Store/);
+    await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
     await writeInstalled(supportPath, { alpha: { tree: "t", commit: "c", installedAt: "x", dir: "alpha" } });
     assert.equal(await uninstall(alphaEntry, context), true);
     assert.deepEqual(trashed, [path.join(extensionsDir, "raycast/extensions/alpha")]);
@@ -3137,7 +3155,7 @@ test("a second press on a name that's installing does nothing; a press on anothe
 test("two ⌘U presses run one update, and two Try Agains one install", async () => {
     const updating = await storeContext({ tree: "bbb2" });
     await writeInstalled(updating.supportPath, { alpha: { tree: "aaa1", commit: "old", installedAt: "x", dir: "alpha" } });
-    await mkdir(installFolder(updating.extensionsDir, "alpha"), { recursive: true });
+    await mkdir(installFolder(updating.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
     const gated = gatedBuilds(updating.context);
     const shown = pressView();
     const press = pressing(updating.context, shown.view);
@@ -3570,11 +3588,39 @@ test("an ended build is a zombie of the host: a state starting with Z, or <defun
     }
 });
 
+test("an added repository's ended build is adopted from its own folder, under its id with its repository (E.1, E.3, E.4)", async () => {
+    const record = otherRecord({ id: "owner+repository+alpha", repository: "owner/repository" });
+    const adopted = await otherSession([record]);
+    // Raycast's alpha, made in the same window, isn't this build's.
+    await mkdir(installFolder(adopted.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
+    adopted.setClock(() => new Date("2026-11-22T16:00:00.000Z"));
+    await adopted.builds.check();
+    await adopted.allSettled();
+    assert.deepEqual(adopted.settled.map((outcome) => outcome.adopted), [false], "its own folder isn't there");
+    assert.deepEqual(await readInstalled(adopted.supportPath), {});
+
+    const found = await otherSession([record]);
+    await mkdir(installFolder(found.extensionsDir, "owner/repository", "alpha"), { recursive: true });
+    found.setClock(() => new Date("2026-11-22T16:00:00.000Z"));
+    await found.builds.check();
+    await found.allSettled();
+    assert.deepEqual(found.settled.map((outcome) => outcome.adopted), [true]);
+    assert.deepEqual(await readInstalled(found.supportPath), {
+        "owner+repository+alpha": {
+            tree: "t-new",
+            commit: "c-new",
+            installedAt: "2026-11-22T16:00:00.000Z",
+            dir: "alpha",
+            repository: "owner/repository",
+        },
+    });
+});
+
 test("an ended build is adopted only when its folder was made between its start and the end bound", async () => {
     // Found ended at open: the end bound is the deadline.
     const record = otherRecord();
     const adopted = await otherSession([record]);
-    await mkdir(installFolder(adopted.extensionsDir, "alpha"), { recursive: true });
+    await mkdir(installFolder(adopted.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
     adopted.setClock(() => new Date("2026-11-22T16:00:00.000Z"));
     await adopted.builds.check();
     await adopted.allSettled();
@@ -3587,7 +3633,7 @@ test("an ended build is adopted only when its folder was made between its start 
     // Found ended at open, its folder made after the deadline (a build from Terminal, say).
     const start = Date.now() - 2 * 60 * 60 * 1000;
     const late = await otherSession([otherRecord({ startedAt: new Date(start).toISOString(), deadline: new Date(start + 600_000).toISOString() })]);
-    await mkdir(installFolder(late.extensionsDir, "alpha"), { recursive: true });
+    await mkdir(installFolder(late.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
     await late.builds.check();
     await late.allSettled();
     assert.deepEqual(late.settled.map((outcome) => outcome.adopted), [false]);
@@ -3602,7 +3648,7 @@ test("an ended build is adopted only when its folder was made between its start 
 
     // A failed update leaves the older folder, made before the start; the older entry stays.
     const failed = await otherSession([]);
-    await mkdir(installFolder(failed.extensionsDir, "alpha"), { recursive: true });
+    await mkdir(installFolder(failed.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
     const older = { alpha: { tree: "t-old", commit: "c-old", installedAt: "x", dir: "alpha" } };
     await writeInstalled(failed.supportPath, older);
     await delay(20);
@@ -3615,7 +3661,7 @@ test("an ended build is adopted only when its folder was made between its start 
 
     // No tree: the store couldn't have recorded it.
     const treeless = await otherSession([otherRecord({ tree: undefined })]);
-    await mkdir(installFolder(treeless.extensionsDir, "alpha"), { recursive: true });
+    await mkdir(installFolder(treeless.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
     await treeless.builds.check();
     await treeless.allSettled();
     assert.deepEqual(treeless.settled.map((outcome) => outcome.adopted), [false]);
@@ -3627,7 +3673,7 @@ test("a build seen ending while the store is open: the end bound is that moment"
     const seen = await otherSession([record]);
     seen.fake.running(record);
     await seen.builds.check();
-    await mkdir(installFolder(seen.extensionsDir, "alpha"), { recursive: true });
+    await mkdir(installFolder(seen.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
     seen.fake.processes.delete(record.pid);
     await seen.builds.check();
     await seen.allSettled();
@@ -3638,7 +3684,7 @@ test("a build seen ending while the store is open: the end bound is that moment"
     const after = await otherSession([record]);
     after.fake.running(record);
     await after.builds.check();
-    await mkdir(installFolder(after.extensionsDir, "alpha"), { recursive: true });
+    await mkdir(installFolder(after.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
     after.fake.processes.delete(record.pid);
     after.setClock(() => new Date(Date.now() - 30_000));
     await after.builds.check();
@@ -3676,7 +3722,7 @@ test("a reused pid isn't the build: it has ended, and its process is never signa
     const record = otherRecord({ deadline: new Date(Date.now() - 1000).toISOString() });
     const session = await otherSession([record]);
     session.fake.processes.set(record.pid, { stat: "S", args: "/usr/bin/vim notes.txt" });
-    await mkdir(installFolder(session.extensionsDir, "alpha"), { recursive: true });
+    await mkdir(installFolder(session.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
     await session.builds.check();
     await session.allSettled();
     assert.equal(session.settled.length, 1);
@@ -4036,7 +4082,7 @@ test("another build running and a cancel report nothing; a refusal before any bu
     assert.deepEqual(view.reports, []);
 
     const refused = await storeContext();
-    await mkdir(installFolder(refused.extensionsDir, "alpha"), { recursive: true });
+    await mkdir(installFolder(refused.extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
     const refusal = noticesView({ onScreen: false, notified: false });
     await installPressed(alphaEntry, false, refused.context, refusal.view);
     assert.equal(refusal.reports.length, 1);
@@ -4333,7 +4379,7 @@ async function settleWithOutcome(options: {
         await writeFile(path.join(folder, `${record.pid}.ended.json`), JSON.stringify({ pid: record.pid, status: options.status, endedAt }));
     }
     if (options.folder === "top level") await mkdir(path.join(extensionsDir, "alpha"));
-    else if (options.folder) await mkdir(installFolder(extensionsDir, "alpha"), { recursive: true });
+    else if (options.folder) await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
     const settled: Settled[] = [];
     const lines: string[] = [];
     // No process is running: the probe finds none.
@@ -4817,4 +4863,66 @@ test("each row installs from its own copy, and a row whose repository is gone in
     assert.equal(rowCopy(both, gitlabRepository.copyId).repo, toolsRepo);
     // A lookup that answers with another repository's copy is refused too: never another's.
     assert.throws(() => rowCopy({ copyOf: () => ({ entry: gitlabRepository, repo: toolsRepo }) }, "raycast"), StoreError);
+});
+
+/** A store context with Raycast's copy and the made-up GitLab repository's, each with an `alpha`. */
+async function twoCopies(options: Parameters<typeof storeContext>[0] = {}) {
+    const store = await storeContext(options);
+    const toolsPath = path.join(store.supportPath, "repositories", gitlabRepository.copyId, "repo");
+    await writeJSON(path.join(toolsPath, "extensions/alpha/package.json"), manifest("alpha", { dependencies: { a: "^1" } }));
+    const toolsRepo = new StoreRepository(toolsPath, { allowProtocols: "file", run: store.git.run });
+    const both: StoreContext = {
+        ...store.context,
+        copyOf: (copyId) =>
+            copyId === gitlabRepository.copyId ? { entry: gitlabRepository, repo: toolsRepo } : store.context.copyOf(copyId),
+    };
+    const fromGitlab = parseManifest("alpha", manifest("alpha"), copyOfRepository(gitlabRepository))!;
+    return { ...store, both, fromGitlab, toolsPath };
+}
+
+test("an added repository's extension installs into its folder under its id, beside the same name elsewhere (E.1, E.4, E.5)", async () => {
+    const { both, fromGitlab, cli, asked, trashed, supportPath, extensionsDir } = await twoCopies({ built: { disabled: [] } });
+    const raycastRecord = { tree: "t", commit: "c", installedAt: "x", dir: "alpha" };
+    await writeInstalled(supportPath, { alpha: raycastRecord });
+    await mkdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "alpha"), { recursive: true });
+    await mkdir(path.join(extensionsDir, "fudgeapp/development/alpha"), { recursive: true });
+    const id = "gitlab.com+group+tools+alpha";
+
+    assert.deepEqual(await install(fromGitlab, both), {});
+    assert.equal(asked[0]!.title, "Install Alpha?", "Raycast's alpha is another extension, not this one to update");
+    assert.deepEqual(withoutOutcome(cli.calls.at(-1)!.args).slice(-2), ["--repository", "gitlab.com/group/tools"]);
+    assert.deepEqual(await readInstalled(supportPath), {
+        alpha: raycastRecord,
+        [id]: { tree: "aaa1", commit: "c0ffee1234", installedAt: "2026-11-20T12:00:00.000Z", dir: "alpha", repository: "gitlab.com/group/tools" },
+    });
+    assert.deepEqual(await readdir(installFolder(extensionsDir, "gitlab.com/group/tools", "alpha")), ["compatibility.json"]);
+    assert.deepEqual(await readdir(installFolder(extensionsDir, RAYCAST_COPY.folder, "alpha")), [], "Raycast's untouched");
+    assert.deepEqual(await readdir(path.join(extensionsDir, "fudgeapp/development/alpha")), [], "the development build too");
+
+    // Uninstall takes only this row's folder and record.
+    assert.equal(await uninstall(fromGitlab, both), true);
+    assert.deepEqual(trashed, [installFolder(extensionsDir, "gitlab.com/group/tools", "alpha")]);
+    assert.deepEqual(await readInstalled(supportPath), { alpha: raycastRecord });
+    await assert.rejects(uninstall(fromGitlab, both), /wasn't installed by the Extension Store/, "forgotten");
+});
+
+test("still refused in an added repository: an install the store didn't record, and a second folder of one name (E.6)", async () => {
+    const unrecorded = await twoCopies();
+    await mkdir(installFolder(unrecorded.extensionsDir, "gitlab.com/group/tools", "alpha"), { recursive: true });
+    await assert.rejects(install(unrecorded.fromGitlab, unrecorded.both), (error: unknown) => {
+        assert.ok(error instanceof StoreError);
+        assert.equal(error.message, "Another extension called alpha is installed. Uninstall it first.");
+        return true;
+    });
+    assert.equal(unrecorded.git.calls.length + unrecorded.cli.calls.length, 0, "before anything else");
+
+    const second = await twoCopies();
+    await writeInstalled(second.supportPath, {
+        "gitlab.com+group+tools+alpha": { tree: "t", commit: "c", installedAt: "x", dir: "alpha", repository: "gitlab.com/group/tools" },
+    });
+    const otherFolder = parseManifest("alpha-2", manifest("alpha"), copyOfRepository(gitlabRepository))!;
+    await assert.rejects(install(otherFolder, second.both), /Another extension called alpha is installed\. Uninstall it first\./);
+    await assert.rejects(uninstall(otherFolder, second.both), /wasn't installed by the Extension Store/);
+    // Raycast's row of that name isn't this repository's install, so it neither refuses nor is refused by it.
+    assert.deepEqual(await install(alphaEntry, second.both), {});
 });

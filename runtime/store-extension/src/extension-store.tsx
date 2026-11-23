@@ -776,7 +776,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                                     ? undefined
                                     : shownReadme(readmeKey(entry.copyId, entry.dir, tree), readmes, readmeFailed),
                                 compatibilityFor(entry, tree),
-                                state !== "available" && loaded?.withoutSwift.has(entry.name) === true,
+                                state !== "available" && loaded?.withoutSwift.has(entryId(entry)) === true,
                             )}
                         />
                     ) : undefined
