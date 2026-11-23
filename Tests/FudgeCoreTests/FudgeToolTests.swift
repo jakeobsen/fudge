@@ -32,15 +32,17 @@ enum Tool {
     /// The pinned Node.js `make test` hands the tests.
     static let node = Fixtures.node
 
-    /// The tool laid out as in Fudge.app, `<folder>/Contents/Helpers/fudge` (a hard link, else a copy), with `node`
-    /// beside it, as a link, when given. The tool finds Node.js only there. The caller removes `folder`.
+    /// The tool laid out as in Fudge.app, `<folder>/Contents/Helpers/fudge`, a copy of its own, with `node` beside
+    /// it, as a link, when given. The tool finds Node.js only there. The caller removes `folder`.
+    /// Never a hard link: macOS checks each run of the tool by a path it finds for the file, and with one file under
+    /// many names, a name another test had deleted got a run killed (FUD-197).
     static func bundled(in folder: URL, node: URL?) throws -> URL {
         let tool = try #require(fudge, "swift test builds the fudge tool")
         let files = FileManager.default
         let helpers = folder.appendingPathComponent("Contents/Helpers", isDirectory: true)
         try files.createDirectory(at: helpers, withIntermediateDirectories: true)
         let bundled = helpers.appendingPathComponent("fudge")
-        do { try files.linkItem(at: tool, to: bundled) } catch { try files.copyItem(at: tool, to: bundled) }
+        try files.copyItem(at: tool, to: bundled)
         if let node {
             try files.createSymbolicLink(at: helpers.appendingPathComponent("node"), withDestinationURL: node)
         }
@@ -277,6 +279,22 @@ private func answer(_ running: Bool, onceAPidIsIn file: URL) -> Bool {
     #expect(status == 1 && out.isEmpty)
     #expect(err == "fudge: can't find Fudge's own Node.js beside this fudge tool: use the fudge inside Fudge.app\n")
     #expect(!FileManager.default.fileExists(atPath: ran.path), "the other Node.js never ran")
+}
+
+/// Each test runs a copy of the tool that only it names, never a hard link to the one `swift test` built (FUD-197).
+@Test func eachTestRunsItsOwnCopyOfTheTool() throws {
+    let folder = try Fixtures.temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let files = FileManager.default
+    let built = try files.attributesOfItem(atPath: try #require(Tool.fudge, "swift test builds the fudge tool").path)
+    let tool = try Tool.bundled(in: folder.appendingPathComponent("app"), node: nil)
+    let copy = try files.attributesOfItem(atPath: tool.path)
+    #expect(copy[.type] as? FileAttributeType == .typeRegular, "a file, not a link")
+    #expect(copy[.referenceCount] as? Int == 1, "one name")
+    let builtFile = try #require(built[.systemFileNumber] as? Int)
+    let copyFile = try #require(copy[.systemFileNumber] as? Int)
+    #expect(copyFile != builtFile, "not the built file")
+    #expect(files.isExecutableFile(atPath: tool.path))
 }
 
 @Test(.enabled(if: Fixtures.canBuild, "needs esbuild and Fudge's Node.js: run `make test`"))
