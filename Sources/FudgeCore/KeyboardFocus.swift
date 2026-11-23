@@ -7,9 +7,9 @@ public enum KeyboardFocus {
         case root(argument: Int?, argumentIsDropdown: Bool)
         /// A command with a search field: a List, or one that hasn't rendered yet or failed.
         case search
-        /// A Form: the field that had the keyboard last, and the one it starts in. `lastInTimeBox`: the keyboard was
-        /// last in that field's time box (a `DateTime` field's time).
-        case form(lastField: Int?, firstField: Int?, lastInTimeBox: Bool = false)
+        /// A Form: the place the keyboard was last in (`FormKeyboard.last`), a field or its time box (a `DateTime`
+        /// field's time), the editable fields as Tab sees them now, and the field it starts in.
+        case form(last: FormStop?, fields: [TabField], firstField: Int?)
         /// A view with no text field (Detail). Its keys go through the launcher's own key handling.
         case noField
         /// Root search's failure screen, which keeps the search field.
@@ -28,7 +28,9 @@ public enum KeyboardFocus {
     }
 
     /// The field for `screen`. An open action panel or dropdown panel has its own search field, which wins. A
-    /// dropdown argument takes no typing, so root search's search field gets the keyboard instead.
+    /// dropdown argument takes no typing, so root search's search field gets the keyboard instead. A Form's is the
+    /// place an overlay's closing gives back (`formPlaceAfterOverlay`), so a time box whose date was cleared meanwhile
+    /// gives its field.
     public static func target(for screen: Screen, actionPanelOpen: Bool = false, dropdownPanelOpen: Bool = false)
         -> Target
     {
@@ -37,8 +39,12 @@ public enum KeyboardFocus {
         switch screen {
         case .root(let argument?, false): return .argument(argument)
         case .root, .search, .failure: return .search
-        case .form(let last?, _, true): return .formTimeBox(last)
-        case .form(let last, let first, _): return (last ?? first).map(Target.formField) ?? .none
+        case .form(let last, let fields, let first):
+            switch formPlaceAfterOverlay(last: last, fields: fields, first: first) {
+            case .timeBox(let field)?: return .formTimeBox(field)
+            case .field(let field)?: return .formField(field)
+            case nil: return .none
+            }
         case .noField: return .none
         }
     }
@@ -50,7 +56,7 @@ extension KeyboardFocus {
     /// A Form's fields changed (`editable`, in order; `first` is the one it starts in). The field to give the
     /// keyboard to, or nil to leave it as it is: `first`, when no field of the form has it (`focused` is nil or gone).
     /// Never while an overlay holds the keyboard (`overlayOpen`: the action panel, an `Action.PickDate` picker in it,
-    /// or a dropdown's panel): the overlay's closing hands it back (`formFieldAfterOverlay`).
+    /// or a dropdown's panel): the overlay's closing hands it back (`formPlaceAfterOverlay`).
     public static func formFieldAfterFieldsChange(focused: Int?, editable: [Int], first: Int?, overlayOpen: Bool)
         -> Int?
     {
@@ -59,17 +65,50 @@ extension KeyboardFocus {
         return first
     }
 
-    /// An overlay that held the keyboard closed: the Form field that had it last, if it's still there, else the one
-    /// the form starts in.
-    public static func formFieldAfterOverlay(last: Int?, editable: [Int], first: Int?) -> Int? {
-        if let last, editable.contains(last) { return last }
-        return first
+    /// An overlay that held the keyboard closed (the action panel, an `Action.PickDate` picker in it, or a dropdown's
+    /// panel), or the panel was shown: the place to give a Form's keyboard back to, from `last`, the place it was last
+    /// in (`FormKeyboard.last`), with `fields` the editable fields as Tab sees them now. That's the time box while its
+    /// field still shows one; the field when that's where it was, or when its time box went meanwhile (its date was
+    /// cleared); else `first`, the field the form starts in, when the last place is gone or there's none.
+    public static func formPlaceAfterOverlay(last: FormStop?, fields: [TabField], first: Int?) -> FormStop? {
+        if let last, let field = fields.first(where: { $0.id == last.field }) {
+            if case .timeBox = last, field.hasTimeBox { return last }
+            return .field(field.id)
+        }
+        return first.map(FormStop.field)
+    }
+
+    /// A Form appeared: the place to give the keyboard to (through `FormScreen.give`, a turn later). Nil while an
+    /// overlay holds the keyboard; else `formPlaceAfterOverlay`'s place, with `formFieldOnAppear`'s field as the one it
+    /// starts in. A Form that shows for the first time, or after a view was pushed or popped, has a new
+    /// `FormKeyboard` with no last place, so it starts in that field; one that comes back from the sign-in prompt,
+    /// which took its place on screen, gets the place it was last in.
+    public static func formPlaceOnAppear(last: FormStop?, fields: [TabField], autoFocus: Int?, overlayOpen: Bool)
+        -> FormStop?
+    {
+        guard !overlayOpen else { return nil }
+        let first = formFieldOnAppear(editable: fields.map(\.id), first: autoFocus, overlayOpen: false)
+        return formPlaceAfterOverlay(last: last, fields: fields, first: first)
+    }
+
+    /// Which of a Form's fields show a time box changed: when the keyboard was in a time box that went (its date was
+    /// cleared, by ⌫ in an `Action.PickDate` picker, an action or the extension), its field, to give the keyboard to;
+    /// else nil, nothing to do. The place is the keyboard's `now`, or its last place while it's nowhere, since the
+    /// time box can take the keyboard with it before the fields say it went. Nil while an overlay holds the keyboard
+    /// (its closing gives the field, `formPlaceAfterOverlay`), for a field, for a time box still shown, and for a field
+    /// that's gone (`formFieldAfterFieldsChange` sees to that).
+    public static func formFieldAfterTimeBoxGone(keyboard: FormKeyboard, fields: [TabField], overlayOpen: Bool)
+        -> Int?
+    {
+        guard !overlayOpen, case .timeBox(let id)? = keyboard.now ?? keyboard.last else { return nil }
+        guard let field = fields.first(where: { $0.id == id }), !field.hasTimeBox else { return nil }
+        return id
     }
 
     /// A Form appeared: the field it asks to give the keyboard to (through `FormScreen.refocus`, a turn later, since
     /// the launcher's search field going away in the same update would take it back). That's `first`, the first
     /// editable field with `autoFocus`, when it's one of `editable`, else the first of `editable`. Nil while an
-    /// overlay holds the keyboard: the field takes it when the overlay closes (`formFieldAfterOverlay`).
+    /// overlay holds the keyboard: the field takes it when the overlay closes (`formPlaceAfterOverlay`).
     public static func formFieldOnAppear(editable: [Int], first: Int?, overlayOpen: Bool) -> Int? {
         guard !overlayOpen else { return nil }
         if let first, editable.contains(first) { return first }
@@ -122,7 +161,8 @@ extension KeyboardFocus {
 /// Where a Form's keyboard is now, and the field that had it last, which `onBlur` and `onFocus` follow. FormScreen
 /// reports every move, nowhere included (`LauncherModel.formKeyboardMoved`). The two differ once the keyboard has
 /// left every field, after a click on the form's background, say: Tab then starts from the first field, while the
-/// last field still names the one `onBlur` goes to next and the one the panel's showing gives the keyboard back to.
+/// last field still names the one `onBlur` goes to next, and the last place the one an overlay's closing and the
+/// panel's showing give the keyboard back to (`KeyboardFocus.formPlaceAfterOverlay`). A push or a pop starts a new one.
 public struct FormKeyboard: Sendable, Equatable {
     /// Where the keyboard is now; nil when it's in no field.
     public private(set) var now: KeyboardFocus.FormStop?
