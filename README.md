@@ -161,7 +161,7 @@ If Caps Lock is already mapped to another key, Fudge leaves it alone and says so
 
 ### Extension Store
 
-The Extension Store browses the extensions in Raycast's open-source repository and installs the ones you choose.
+The Extension Store browses the extensions in Raycast's open-source repository and the extension repositories you add, and installs the ones you choose.
 It takes two steps:
 
 1. Enable **Extension Store** under **Settings… → Commands**, and it shows up in Fudge.
@@ -190,8 +190,11 @@ In the **Extension Store** command, search the extensions, or pick a category in
   An install that failed after you closed the store is marked on its row the next time you open the store, with **Try Again** and **Show Error**.
   **Settings… → Notifications** chooses which of these notifications Fudge shows.
 - It never touches extensions you installed with `fudge build` yourself.
-  It installs in the folder of Raycast's official repository, so it won't install an extension while one of that name that it didn't install is in that folder: uninstall that one first.
-  A development build of the same name, in the development folder, doesn't stop it: the two are installed side by side.
+  An extension of the same name from another repository, or your own development build in the development folder, doesn't stop an install: each is installed beside the other, with its own settings and data.
+  It installs each extension in its repository's folder, and won't install one there while an extension of that name that it didn't install is in that folder, such as one built with `fudge build --repository <owner>/<repository>`.
+  The Extension Store has no record of such a build, so it can't uninstall it either: to remove it, delete its folder `<owner>/<repository>/<name>` in Fudge's extensions folder, for example `raycast/extensions/<name>`.
+- It never updates your own development builds, but shows each under **Installed** as **Development build**, and ⌃X moves it to the Trash.
+  Those rows are there only while the Extension Store is on (it's off until you turn it on), so with it off, remove a development build by deleting its folder `fudgeapp/development/<name>` in Fudge's extensions folder.
 
 #### Extension repositories
 
@@ -203,6 +206,9 @@ Raycast's official repository is in the list from the start, as `raycast/extensi
 Each repository has a switch, Raycast's official repository too; one that's off keeps its copy, but the Extension Store doesn't list or update its extensions.
 Under each one is what the Extension Store last found there: how many extensions it lists, or what went wrong.
 The minus button removes a repository, Raycast's official repository too; the extensions you installed from it stay installed, but get no more updates.
+They show under **Installed** as **Not updated**, as do those of a repository that's switched off, and ⌃X uninstalls them there.
+Each extension's details name the repository it's from, a row from a repository you added names it too, and with more than one repository on, the dropdown also filters by repository.
+An extension of the same name in two repositories can be installed from both: each is its own extension, with its own settings and data.
 You can add up to 10, and `https://github.com/fudgeapp/development` can't be added, since Fudge keeps your own builds in that repository's folder.
 Changes reach the Extension Store the next time you open it, or when you press ⌘R in it.
 
