@@ -17,7 +17,7 @@ public enum SettingsSidebar {
         }
     }
 
-    // Fudge's own pages are tagged with a leading ":", which no extension name can have, so no extension takes one.
+    // Fudge's own pages are tagged with a leading ":", which no extension id can have, so no extension takes one.
     public static let generalPage = ":general"
     public static let permissionsPage = ":permissions"
     public static let notificationsPage = ":notifications"
@@ -54,34 +54,80 @@ public enum SettingsSidebar {
     /// Every page of Fudge's own, on top or under Extensions.
     public static var fixedTags: Set<String> { Set((top + builtInExtensions).map(\.tag)) }
 
-    /// The page an installed extension's row selects: its manifest name, which Configure Extension and
-    /// `openExtensionPreferences()` open the window on too.
-    public static func tag(of installed: InstalledExtension) -> String { installed.manifest.name }
+    /// The page an installed extension's row selects: its id (FUD-183), which Configure Extension and
+    /// `openExtensionPreferences()` open the window on too, so two extensions of one name have a page each.
+    public static func tag(of installed: InstalledExtension) -> String { installed.id.key }
 
-    /// An installed extension's row title: its own, followed by " (installed)" when it's exactly the title of one of
-    /// Fudge's own pages under Extensions (the store has a "Color Picker"), so the two rows don't look the same.
+    /// An installed extension's row title, so no two rows look the same: a development build's and an added
+    /// repository's say where they're from (`displayTitle`), and one from Raycast's official repository is followed
+    /// by " (installed)" when it's exactly the title of one of Fudge's own pages under Extensions (the Extension Store
+    /// has a "Color Picker"). Never both.
     public static func title(of installed: InstalledExtension) -> String {
-        let title = installed.manifest.title
-        return builtInExtensions.contains { sameTitle($0.title, title) } ? title + " (installed)" : title
+        switch installed.repository {
+        case .development, .added: return installed.displayTitle
+        case .raycast, .bundled:
+            let title = installed.manifest.title
+            return builtInExtensions.contains { sameTitle($0.title, title) } ? title + " (installed)" : title
+        }
     }
 
     /// The Extensions section: Fudge's own pages there and `pages` (`InstalledExtension.settingsPages`), one list
     /// sorted by title, without the suffix, as `InstalledExtension.all` sorts the extensions. Rows with the same title
     /// have a fixed order, so it never changes between reloads: Fudge's own page first, by rule, since an extension's
-    /// tag can start with a digit and sort before ":"; then the extensions by tag.
+    /// tag can start with a digit and sort before ":"; then the copy from Raycast's official repository (or a bundled
+    /// extension), then the development folder's, then the added repositories' by their folder, segment by segment;
+    /// then by tag.
     public static func extensions(_ pages: [InstalledExtension]) -> [Entry] {
         let rows =
-            builtInExtensions.map { (entry: $0, sortTitle: $0.title, own: true) }
+            builtInExtensions.map { (entry: $0, sortTitle: $0.title, own: true, place: Place.raycast) }
             + pages.map {
-                (entry: Entry(tag: tag(of: $0), title: title(of: $0)), sortTitle: $0.manifest.title, own: false)
+                (
+                    entry: Entry(tag: tag(of: $0), title: title(of: $0)), sortTitle: $0.manifest.title, own: false,
+                    place: Place(of: $0.repository)
+                )
             }
         return rows.sorted { first, second in
             switch first.sortTitle.localizedStandardCompare(second.sortTitle) {
-            case .orderedAscending: true
-            case .orderedDescending: false
-            case .orderedSame: first.own != second.own ? first.own : first.entry.tag < second.entry.tag
+            case .orderedAscending: return true
+            case .orderedDescending: return false
+            case .orderedSame:
+                if first.own != second.own { return first.own }
+                if first.place != second.place { return first.place < second.place }
+                return first.entry.tag < second.entry.tag
             }
         }.map(\.entry)
+    }
+
+    /// Where an extension's row goes among rows of one title: Raycast's copy first, then the development folder's,
+    /// then the added repositories' by their folder, compared a segment at a time (`some/tools` before
+    /// `some-one/tools`), so a server's name, which comes first in its folder, sorts like an owner.
+    enum Place: Comparable {
+        case raycast
+        case development
+        case added([Substring])
+
+        init(of repository: InstalledExtension.Repository) {
+            switch repository {
+            case .raycast, .bundled: self = .raycast
+            case .development: self = .development
+            case .added(let folder): self = .added(folder.split(separator: "/"))
+            }
+        }
+
+        static func < (first: Place, second: Place) -> Bool {
+            switch (first, second) {
+            case (.added(let one), .added(let other)): one.lexicographicallyPrecedes(other)
+            default: first.rank < second.rank
+            }
+        }
+
+        private var rank: Int {
+            switch self {
+            case .raycast: 0
+            case .development: 1
+            case .added: 2
+            }
+        }
     }
 
     /// Two titles `localizedStandardCompare` ties, which it does only for the same text: "color picker" is another

@@ -612,6 +612,8 @@ Extensions run in a separate Node.js process, the extension host.
     - **The Commands page** (`CommandsPage.swift`) is the Settings window's second page:
       Fudge's own command groups, then the quicklinks as a group of their own (`SettingsModel.commandGroups`, shown once there is one, its Type "Quicklinks" and theirs "Quicklink", `BuiltInCommandGroup.typeLabels`),
       then every installed extension, each expanded to its commands (menu-bar ones included), with each command's alias, hotkey and Enabled checkbox (an extension's row has its own checkbox).
+      An extension's group is keyed by its id (`CommandOwner.extension`) and titled with its `displayTitle`, so two extensions of one name are two groups that read apart.
+      `CommandsPageRows` (core) builds the rows, and the page only draws them; each command row is identified by its whole command id, since the page's lazy stack keeps one row per id across every group, and two extensions of one name have commands of the same names.
       The bundled Extension Store is listed too, unticked until it's enabled.
       An alias is saved on ↵, and Esc puts the old one back.
       Recording a hotkey suspends all of Fudge's hotkeys (`HotKeyRegistry.suspend`), so pressing one records it instead of firing.
@@ -644,7 +646,7 @@ Extensions run in a separate Node.js process, the extension host.
       On does what onboarding's Open Raycast Links with Fudge does (`RaycastLinks.openWithFudge(helper:location:)`), and is refused while Fudge runs from its disk image or a translocated copy (`AppLocation.raycastLinksRefusal`), as Open at Login is.
       Off gives both schemes back explicitly to the first other app that claims both and isn't Fudge's (`handBackTarget`, `giveBack`), so the choice macOS saves names that app; with no such app it's disabled while on, and its line says there's nothing to give them back to.
       A change that doesn't take shows the system's message, or that macOS didn't make it, and the switch shows what LaunchServices says.
-      Below them, **Signed in** lists each stored sign-in (the extension's title, the provider, when) with Sign Out.
+      Below them, **Signed in** lists each stored sign-in (the extension's `displayTitle`, the provider, when) with Sign Out.
       **Sign-ins** are Keychain generic passwords (`KeychainSecretStore`), service `io.github.jakeobsen.fudge.oauth`, account `<extension id>/<providerId>`, holding a JSON `StoredTokenSet`;
       `OAuthTokenStore` (core) reads and writes them through the `SecretStore` protocol, and the `oauth.tokens.*` calls go through `SignInCalls` (core) with the calling session's extension, never one named in the call, so one extension never reads, sets or removes another's.
       A stored sign-in keeps `relayProvider`, the provider its relay sign-in was for, only when the session prepared that sign-in; a refresh keeps the mark.
@@ -680,7 +682,7 @@ Extensions run in a separate Node.js process, the extension host.
       "Sign-in is off" with Open Extension Settings (↵, ⌘⇧,) and Open Sign-in Settings (⌘⌥,), or the others with Try Again (`RootAction.retryCommand`, as root search runs it).
       A background or menu-bar command shows its `hud` instead.
       Any other error keeps the failure view with its details.
-      Snapshot runs keep sign-ins in memory (`--sign-ins <extension>/<providerId>=<Provider>,…`), and `--sign-in-consent` saves the Sign-in page's consent alert: laid out by `NSAlert.layout()` without being shown, and moved to a `SnapshotSheet` that refuses key status and is never ordered in (`SettingsWindowController.snapshotSheet`).
+      Snapshot runs keep sign-ins in memory (`--sign-ins <extension id>/<providerId>=<Provider>,…`, an id the id rule refuses left out), and `--sign-in-consent` saves the Sign-in page's consent alert: laid out by `NSAlert.layout()` without being shown, and moved to a `SnapshotSheet` that refuses key status and is never ordered in (`SettingsWindowController.snapshotSheet`).
       So the image has the app's icon, which the real sheet leaves out.
       `--sign-in-services "github|atlassian"` is the sign-in server's answer in a snapshot run: relay ids, read, named and limited as a server's are; without it there's no answer, and the line under the choice is the plain one.
       `--sign-in-services-list`, with `--settings :sign-in`, draws Show All's list over the page in place of its popover (`SettingsModel.snapshotServicesList`), and nothing while the line names five services or fewer.
@@ -712,7 +714,7 @@ Extensions run in a separate Node.js process, the extension host.
     - **The Permissions page** (`PermissionsPage.swift`) comes after General: Accessibility's status (`AccessibilityStatus`, read without a prompt when it's shown and every second while it's on screen), its reason, and Open Accessibility Settings.
       The reason (`AccessibilityPermission.reason`, which onboarding's Accessibility step shows too) names Fudge's own commands that need it first, then extensions that read the selection or paste.
       That button asks for macOS's prompt on the first click and opens the pane on later ones, or at once when something in this run already asked for the prompt (`AccessibilityPermission.request`, `SystemAccessibility.promptShown`), so the prompt and the pane never stack.
-      Below it, always shown, are the answers to "Allow <A> to open <B>'s commands?" (`LaunchPermissionsSection`, `LaunchPermissions.entries`), each changeable or forgotten, with the file read again before each change, a line saying none has asked yet when there are none, and the unreadable-file notice.
+      Below it, always shown, are the answers to "Allow <A> to open <B>'s commands?" (`LaunchPermissionsSection`, `LaunchPermissions.entries`, each extension shown by its `displayTitle`), each changeable or forgotten, with the file read again before each change, a line saying none has asked yet when there are none, and the unreadable-file notice.
       Between them is Calendar access as macOS has it, with Open Privacy Settings (`CalendarAccessRow`); My Schedule asks for it, never this page.
       Show Onboarding Again restarts onboarding from Welcome.
     - **The Notifications page** (`NotificationsPage.swift`, SPEC-156) comes after Permissions: macOS's answer for Fudge (`NotificationPermission.statusLine`), read and never asked when the page appears and when the window becomes key, with Ask Now while macOS hasn't been asked and Open Notification Settings otherwise.
@@ -762,10 +764,13 @@ Extensions run in a separate Node.js process, the extension host.
       It's for user-initiated entries only, never a background path: `show` takes the call's `CallOrigin` and does nothing for a background one. ⌘Q closes the window as ⌘W and its close button do (`SettingsNSWindow.performKeyEquivalent`, `WindowShortcut` in core), and Fudge keeps running; while a hotkey is being recorded, the recorder takes ⌘Q like any other key.
       The sidebar lists Fudge's core pages on top: General, Permissions, Notifications, Commands, Sign-in and Development.
       Under Extensions, one list sorted by title with `localizedStandardCompare` holds Fudge's Calculator, Calendar, Color Picker, Quicklinks, Snippets and Window Management pages, the extensions with preferences, and the Extension Store, whose page starts with its switch (`InstalledExtension.settingsPages`), enabled or not.
-      `SettingsSidebar` (core) gives both lists and the tags of Fudge's own pages, which start with `:`, so no extension name can take one; `SettingsView` only draws them.
-      Rows with exactly the same title put Fudge's own page first, then the extensions by tag, so the order never changes; such an extension shows " (installed)" after its title (`SettingsSidebar.title(of:)`; the store has a Color Picker of its own).
+      `SettingsSidebar` (core) gives both lists and the tags of Fudge's own pages, which start with `:`, so no extension id can take one; `SettingsView` only draws them.
+      An extension's page is tagged with its id (`SettingsSidebar.tag(of:)`), so two extensions of one name have a page each, and `--settings <id>` opens one in a snapshot run.
+      Rows with exactly the same title have a fixed order, so it never changes: Fudge's own page first, then the copy from Raycast's official repository, then the development folder's, then the added repositories' by their folder, a segment at a time (`SettingsSidebar.Place`), then by tag.
+      An extension from Raycast's official repository with exactly the title of one of Fudge's own pages shows " (installed)" after its title (`SettingsSidebar.title(of:)`; the Extension Store has a Color Picker of its own).
+      A development build's and an added repository's rows show their `displayTitle` instead ("GitHub (development)", "GitHub (someone/tools)"), never " (installed)" as well.
       A selected page that's no longer listed, such as an extension removed while its page is open, gives way to General (`SettingsSidebar.lists`).
-      The window holds each extension's preferences, stored by `PreferenceStore` in `preferences/<extension id>.json`.
+      The window holds each extension's preferences by its id (`InstalledExtension.index`, so a duplicate can't trap), stored by `PreferenceStore` in `preferences/<extension id>.json`, and each field (`PreferenceField`) reads and saves them by that id.
       Before a launch, `PreferenceResolver` merges stored values, manifest defaults and type defaults.
       It turns appPicker references into Raycast `Application` objects, and the launch message carries the values to `getPreferenceValues()`.
       A command with an unset required preference opens this window instead of running.

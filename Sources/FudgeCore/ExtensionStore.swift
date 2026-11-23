@@ -161,11 +161,12 @@ extension InstalledExtension {
     }
 
     /// The extensions with a page in the Settings window's sidebar: those with preferences, and the Extension Store
-    /// and Clipboard History, whose pages start with their switches. Enabled or not.
+    /// and Clipboard History, whose pages start with their switches. Enabled or not. The two are known by their whole
+    /// ids, so an extension of either name from another repository gets a page only for preferences of its own.
     public static func settingsPages(of installed: [InstalledExtension]) -> [InstalledExtension] {
         installed.filter { installed in
-            installed.manifest.name == ExtensionStore.extensionName
-                || installed.manifest.name == ClipboardHistory.extensionName || !installed.manifest.preferences.isEmpty
+            installed.id == ExtensionStore.id || installed.id == ClipboardHistory.id
+                || !installed.manifest.preferences.isEmpty
                 || installed.manifest.commands.contains { !$0.preferences.isEmpty }
         }
     }

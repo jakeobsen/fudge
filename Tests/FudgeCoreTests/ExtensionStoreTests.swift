@@ -46,6 +46,27 @@ private func storeFixture() throws -> (paths: FudgePaths, resources: URL) {
     return (paths, resources)
 }
 
+@Test func onlyTheBundledStoreAndClipboardHistoryGetAPageForTheirSwitches() throws {
+    func install(
+        _ name: String, id: ExtensionID, repository: InstalledExtension.Repository
+    ) throws -> InstalledExtension {
+        let json = #"{ "name": "\#(name)", "title": "\#(name)", "commands": [] }"#
+        return InstalledExtension(
+            manifest: try JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8)),
+            directory: URL(fileURLWithPath: "/nonexistent/\(id.key)"), id: id, repository: repository)
+    }
+    let bundled = [
+        try install(ExtensionStore.extensionName, id: ExtensionStore.id, repository: .bundled),
+        try install(ClipboardHistory.extensionName, id: ClipboardHistory.id, repository: .bundled),
+    ]
+    let others = try [ExtensionStore.extensionName, ClipboardHistory.extensionName].map { name in
+        try install(
+            name, id: try #require(ExtensionID(name: name, repositoryFolder: "someone/tools")),
+            repository: .added("someone/tools"))
+    }
+    #expect(InstalledExtension.settingsPages(of: bundled + others).map(\.id) == bundled.map(\.id))
+}
+
 @Test func theBundledStoreIsAlwaysListedAndHasASettingsPage() throws {
     let (paths, resources) = try storeFixture()
     #expect(ExtensionStore.bundledDirectory(resources: resources) != nil)

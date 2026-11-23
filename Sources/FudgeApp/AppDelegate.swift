@@ -929,10 +929,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// straight), and `--open-dropdown` presses ⌘P, or in a Form opens its first Dropdown (`--open-tags`: its first
 /// TagPicker; `--open-date`: its first DatePicker's calendar). `--windows <file>` gives Switch Windows made-up
 /// windows.
-/// `--snapshot <file.png> --settings [<extension>]` renders the Settings window instead, with a fake login item
-/// whose status `--login-item <status>` sets (`enabled`, `requiresApproval`, `notRegistered`, `notFound`), and a fake
-/// Accessibility answer that `--accessibility allowed|missing` sets (`missing` by default). `--settings :permissions`
-/// shows the Permissions page.
+/// `--snapshot <file.png> --settings [<page or extension id>]` renders the Settings window instead, with a fake login
+/// item whose status `--login-item <status>` sets (`enabled`, `requiresApproval`, `notRegistered`, `notFound`), and a
+/// fake Accessibility answer that `--accessibility allowed|missing` sets (`missing` by default). `--settings
+/// :permissions` shows the Permissions page, and `--settings someone+tools+github` that extension's.
 /// `--snapshot <file.png> --onboarding [<step>]` renders the onboarding window, with the same fakes, on its pending
 /// steps from `onboarding.json`; with a step id, on every step from the start, at that one.
 /// `--own-app-sign-in` shows **Extensions with their own sign-in** as on, and `--raycast-links fudge|<app name>` says
@@ -977,7 +977,9 @@ struct Snapshot {
     /// `--onboarding [<step>]`: the onboarding window instead, optionally on one step.
     let onboarding: Bool
     let onboardingStep: OnboardingStep?
-    /// `--sign-ins <extension>/<providerId>=<Provider>,…`: sign-ins the Sign-in page lists, kept in memory.
+    /// `--sign-ins <extension id>/<providerId>=<Provider>,…`: sign-ins the Sign-in page lists, kept in memory, each
+    /// under the Keychain account its extension's id gives (`someone+tools+github/github`); one whose id the id rule
+    /// refuses is left out.
     let signIns: MemorySecretStore
     /// `--sign-in-services "<id>|<id>|…"`: what the chosen sign-in server answers it offers (`FixedSignInServices`),
     /// so the line under the choice names up to five of those services, or gives their number with Show All. Without
@@ -1057,7 +1059,10 @@ struct Snapshot {
         signIns = MemorySecretStore()
         for entry in (value("--sign-ins") ?? "").split(separator: ",") {
             let parts = entry.split(separator: "=", maxSplits: 1).map(String.init)
-            guard parts.count == 2 else { continue }
+            // An id has no "/", so the account splits at its first one.
+            guard parts.count == 2, let slash = parts[0].firstIndex(of: "/"),
+                ExtensionID(stored: String(parts[0][..<slash])) != nil
+            else { continue }
             let tokens = StoredTokenSet(
                 accessToken: "snapshot",
                 updatedAt: ISO8601DateFormatter().string(from: Date().addingTimeInterval(-7200)),
@@ -1092,7 +1097,9 @@ struct Snapshot {
         if let settingsIndex = arguments.firstIndex(of: "--settings") {
             settings = true
             let next = settingsIndex + 1
-            settingsExtension = next < arguments.count && !arguments[next].hasPrefix("--") ? arguments[next] : nil
+            let page = next < arguments.count && !arguments[next].hasPrefix("--") ? arguments[next] : nil
+            // A page of Fudge's own starts with ":"; any other is an extension's, by its id (FUD-183).
+            settingsExtension = page.flatMap { $0.hasPrefix(":") ? $0 : ExtensionID(stored: $0)?.key }
         } else {
             // A consent sheet belongs to its Settings page, so its flag implies `--settings` (FUD-135 §4).
             settings = signInConsent || clipboardConsent || addRepository != nil
@@ -1105,8 +1112,8 @@ struct Snapshot {
             signInConsent
             ? SettingsModel.signInPage
             : clipboardConsent
-                ? ClipboardHistory.extensionName
-                : addRepository != nil ? ExtensionStore.extensionName : settingsExtension
+                ? ClipboardHistory.id.key
+                : addRepository != nil ? ExtensionStore.id.key : settingsExtension
         // `--settings :commands --search text` searches the Commands page, as typing in its field does.
         controller.model.commandsSearch = search
         controller.renderOffscreen(extension: page)

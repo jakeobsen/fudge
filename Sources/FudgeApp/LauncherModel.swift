@@ -17,7 +17,7 @@ final class LauncherModel {
         var commandTitle: String?
 
         /// A notice is drawn like an empty view: `symbol`, the title and the message. Its actions take Back's place
-        /// (↵ runs the first, ⌘K lists them, and their shortcuts work), and ⌘⇧, opens `extensionName`'s settings.
+        /// (↵ runs the first, ⌘K lists them, and their shortcuts work), and ⌘⇧, opens `extensionID`'s settings.
         struct Notice: Equatable {
             var extensionID: ExtensionID?
             var actions: [ActionSection]
@@ -283,7 +283,7 @@ final class LauncherModel {
     /// The installed extensions at the last read, for `Fudge.log`'s install lines; nil before the first.
     @ObservationIgnored private var installStamps: [ExtensionID: InstallStamp]?
 
-    /// Unloads every running session of `extensionName`'s commands and waits until each has exited (the host stops a
+    /// Unloads every running session of extension `id`'s commands and waits until each has exited (the host stops a
     /// worker 1 s after `unload` at the latest), or 2 s. Turning the Extension Store off calls it before deleting the
     /// copy the store's git works in; the store ends its git when it's unloaded. A view of it on screen goes back to
     /// root search.
@@ -1758,7 +1758,7 @@ final class LauncherModel {
         guard let id = sessionExtensions[session] else { return nil }
         return SignInNotice(
             notice: notice, message: message, extension: id,
-            extensionTitle: extensions[id]?.manifest.title ?? "",
+            extensionTitle: extensions[id]?.displayTitle ?? "",
             commandID: sessionCommands[session].map { FudgeSettings.commandID(owner: .extension(id), command: $0) },
             commandTitle: commandTitle)
     }
@@ -4012,16 +4012,16 @@ final class LauncherModel {
             if backgroundNotices.first("launch:\(callerName)/\(targetName)") {
                 showHUD(
                     LaunchPermissions.unaskedNotice(
-                        callerTitle: caller.manifest.title, targetTitle: target.installed.manifest.title))
+                        callerTitle: caller.displayTitle, targetTitle: target.installed.displayTitle))
             }
-            let refusal = LaunchCommandError.permissionNeeded(extensionTitle: target.installed.manifest.title)
+            let refusal = LaunchCommandError.permissionNeeded(extensionTitle: target.installed.displayTitle)
             quietSessions[session]?.unasked.insert(refusal.description)
             throw refusal
         case .ask:
             allowed = await confirm(
                 AlertRequest(
                     title:
-                        "“\(caller.manifest.title)” wants to open “\(target.command.title)” from “\(target.installed.manifest.title)”.",
+                        "“\(caller.displayTitle)” wants to open “\(target.command.title)” from “\(target.installed.displayTitle)”.",
                     message: nil,
                     primary: "Allow",
                     dismiss: "Don't Allow",
@@ -4032,7 +4032,7 @@ final class LauncherModel {
             permissions.record(allowed, caller: callerName, target: targetName)
             try? permissions.save(to: file)
         }
-        guard allowed else { throw LaunchCommandError.notAllowed(extensionTitle: target.installed.manifest.title) }
+        guard allowed else { throw LaunchCommandError.notAllowed(extensionTitle: target.installed.displayTitle) }
     }
 
     /// A required argument has no value: root search shows the command, its fields filled with what was given and the

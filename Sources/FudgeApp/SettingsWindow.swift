@@ -56,7 +56,8 @@ final class SettingsModel {
     @ObservationIgnored var accessibility = AccessibilityStatus(access: FixedAccessibility(trusted: false))
     /// Show Onboarding Again; set by the app delegate.
     @ObservationIgnored var showOnboarding: () -> Void = {}
-    private(set) var stored: [String: StoredPreferences] = [:]
+    /// Each settings page's stored preferences, by the extension's id.
+    private(set) var stored: [ExtensionID: StoredPreferences] = [:]
     @ObservationIgnored private let store: PreferenceStore
     @ObservationIgnored private let paths: FudgePaths
     @ObservationIgnored private(set) lazy var applications: [RootItem] = ApplicationIndex.scan()
@@ -70,7 +71,8 @@ final class SettingsModel {
     func reload() {
         let installed = InstalledExtension.all(paths: paths, resources: Bundle.main.resourceURL)
         extensions = InstalledExtension.settingsPages(of: installed)
-        stored = Dictionary(uniqueKeysWithValues: extensions.map { ($0.manifest.name, store.load($0.id)) })
+        // By id through the one index, so two installs of one name never meet here and a duplicate can't trap.
+        stored = InstalledExtension.index(extensions).mapValues { store.load($0.id) }
         allExtensions = installed.sorted {
             $0.manifest.title.localizedStandardCompare($1.manifest.title) == .orderedAscending
         }
@@ -313,9 +315,9 @@ final class SettingsModel {
     /// The file holds something fudge can't read, so the answers can't be changed here.
     private(set) var launchPermissionsUnreadable = false
 
-    /// An installed extension's title, by its id, or nil when it isn't installed.
+    /// An installed extension's title as Fudge shows it (`displayTitle`), by its id, or nil when it isn't installed.
     func extensionTitle(_ id: ExtensionID) -> String? {
-        allExtensions.first { $0.id == id }?.manifest.title
+        allExtensions.first { $0.id == id }?.displayTitle
     }
 
     func setLaunchPermission(_ allowed: Bool, caller: ExtensionID, target: ExtensionID) {
@@ -1287,11 +1289,12 @@ final class SettingsModel {
         fudgeSettings.isEnabledOwn(commandID: commandID)
     }
 
-    /// Why a command is off by default, for its row on the Commands page; nil for one that isn't.
+    /// Why a command is off by default, for its row on the Commands page; nil for one that isn't. The part of its id
+    /// before the first `/` is its extension's id.
     func offByDefaultReason(command commandID: String) -> String? {
         guard let slash = commandID.firstIndex(of: "/") else { return nil }
-        let name = String(commandID[..<slash])
-        return allExtensions.first { $0.manifest.name == name }?.compatibility
+        let owner = String(commandID[..<slash])
+        return allExtensions.first { $0.id.key == owner }?.compatibility
             .reason(for: String(commandID[commandID.index(after: slash)...]))
     }
 
@@ -1344,25 +1347,23 @@ final class SettingsModel {
     }
 
     /// The value shown for a preference: what's stored, else its default.
-    func value(_ preference: ExtensionManifest.Preference, of extensionName: String, command: String?) -> JSONValue? {
-        let values = stored[extensionName] ?? StoredPreferences()
+    func value(_ preference: ExtensionManifest.Preference, of id: ExtensionID, command: String?) -> JSONValue? {
+        let values = stored[id] ?? StoredPreferences()
         let storedValue =
             command.map { values.commandValues[$0]?[preference.name] } ?? values.extensionValues[preference.name]
         return storedValue ?? preference.default ?? PreferenceResolver.typeDefault(preference)
     }
 
     func set(
-        _ value: JSONValue?, for preference: ExtensionManifest.Preference, of extensionName: String, command: String?
+        _ value: JSONValue?, for preference: ExtensionManifest.Preference, of id: ExtensionID, command: String?
     ) {
-        var values = stored[extensionName] ?? StoredPreferences()
+        var values = stored[id] ?? StoredPreferences()
         if let command {
             values.commandValues[command, default: [:]][preference.name] = value
         } else {
             values.extensionValues[preference.name] = value
         }
-        stored[extensionName] = values
-        // A settings page is an installed extension's, so its install is there; the file is kept by its id.
-        guard let id = extensions.first(where: { $0.manifest.name == extensionName })?.id else { return }
+        stored[id] = values
         do {
             try store.save(values, for: id)
         } catch {
@@ -1370,10 +1371,10 @@ final class SettingsModel {
         }
     }
 
-    /// Required preferences of `extensionName` that still have no value, for highlighting.
-    func isMissing(_ preference: ExtensionManifest.Preference, of extensionName: String, command: String?) -> Bool {
+    /// Required preferences of the extension with `id` that still have no value, for highlighting.
+    func isMissing(_ preference: ExtensionManifest.Preference, of id: ExtensionID, command: String?) -> Bool {
         guard preference.required == true else { return false }
-        switch value(preference, of: extensionName, command: command) {
+        switch value(preference, of: id, command: command) {
         case nil, .null, .string(""): return true
         default: return false
         }
@@ -1671,18 +1672,18 @@ private struct ExtensionPreferencesForm: View {
     var body: some View {
         let manifest = installed.manifest
         Form {
-            if manifest.name == ExtensionStore.extensionName {
+            if installed.id == ExtensionStore.id {
                 ExtensionStoreSwitch(model: model)
                 ExtensionRepositoriesSection(model: model)
             }
-            if manifest.name == ClipboardHistory.extensionName {
+            if installed.id == ClipboardHistory.id {
                 ClipboardHistorySettings(model: model)
             }
             if !manifest.preferences.isEmpty {
                 Section(manifest.title) {
                     ForEach(manifest.preferences, id: \.name) { preference in
                         PreferenceField(
-                            model: model, preference: preference, extensionName: manifest.name, command: nil)
+                            model: model, preference: preference, extension: installed.id, command: nil)
                     }
                 }
             }
@@ -1692,7 +1693,7 @@ private struct ExtensionPreferencesForm: View {
                         PreferenceField(
                             model: model,
                             preference: preference,
-                            extensionName: manifest.name,
+                            extension: installed.id,
                             command: command.name
                         )
                     }
@@ -1791,14 +1792,15 @@ private struct ClipboardHistorySettings: View {
 private struct PreferenceField: View {
     let model: SettingsModel
     let preference: ExtensionManifest.Preference
-    let extensionName: String
+    /// The extension whose preference it is: its value is read and saved by this id.
+    let `extension`: ExtensionID
     let command: String?
 
     var body: some View {
         control
             .help(preference.description ?? "")
             .overlay(alignment: .trailing) {
-                if model.isMissing(preference, of: extensionName, command: command) {
+                if model.isMissing(preference, of: `extension`, command: command) {
                     Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red).offset(x: 22)
                 }
             }
@@ -1806,10 +1808,10 @@ private struct PreferenceField: View {
 
     private var title: String { preference.title ?? preference.label ?? preference.name }
 
-    private var current: JSONValue? { model.value(preference, of: extensionName, command: command) }
+    private var current: JSONValue? { model.value(preference, of: `extension`, command: command) }
 
     private func set(_ value: JSONValue?) {
-        model.set(value, for: preference, of: extensionName, command: command)
+        model.set(value, for: preference, of: `extension`, command: command)
     }
 
     private var text: Binding<String> {

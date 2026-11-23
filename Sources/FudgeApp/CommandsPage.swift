@@ -38,10 +38,12 @@ struct CommandsPage: View {
             Divider()
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(rows, id: \.name) { row in
+                    ForEach(rows, id: \.owner) { row in
                         groupRow(row)
-                        if !collapsed.contains(row.name) {
-                            ForEach(row.commands, id: \.name) { command in
+                        if !collapsed.contains(row.owner) {
+                            // By the command's whole id: a lazy stack keeps one row per id across every group, and
+                            // two extensions of one name have commands of the same names.
+                            ForEach(row.commands, id: \.id) { command in
                                 commandRow(command, of: row)
                             }
                         }
@@ -53,66 +55,13 @@ struct CommandsPage: View {
         .onAppear { if let start = model.commandsSearch { search = start } }
     }
 
-    /// One group of rows: a group of Fudge's own commands, or an installed extension. `name` keys its Enabled.
-    private struct GroupRow {
-        var name: CommandOwner
-        var title: String
-        var type: String
-        var icon: RowIcon
-        var commands: [CommandRow]
+    /// The rows, as far as they match the search (`CommandsPageRows`).
+    private var rows: [CommandsPageRows.Group] {
+        CommandsPageRows.rows(groups: model.commandGroups, extensions: model.allExtensions, search: search)
     }
 
-    private struct CommandRow {
-        var name: String
-        var title: String
-        var icon: RowIcon
-        /// The Type column: "Command", or "Quicklink" in the quicklinks' group.
-        var type = "Command"
-    }
-
-    /// Read only when the row is drawn, so the search doesn't load every extension's icon on each keystroke.
-    private enum RowIcon {
-        case app
-        case symbol(String)
-        case asset(String?, InstalledExtension)
-    }
-
-    /// Fudge's own groups first (with the saved window positions and layouts), then the quicklinks
-    /// (`SettingsModel.commandGroups`), then the extensions, as far as they match the search. A group or extension
-    /// that matches keeps all its commands.
-    private var rows: [GroupRow] {
-        // The quicklinks' group shows once there's a quicklink.
-        let groups = model.commandGroups.filter { !$0.commands.isEmpty }.map { group in
-            let types = BuiltInCommandGroup.typeLabels(ofGroup: group.name)
-            return GroupRow(
-                name: .group(group.name), title: group.title, type: types.group, icon: .app,
-                commands: group.commands.map {
-                    CommandRow(name: $0.name, title: $0.title, icon: .symbol($0.symbol), type: types.command)
-                })
-        }
-        let extensions = model.allExtensions.map { installed in
-            GroupRow(
-                name: .extension(installed.id), title: installed.manifest.title, type: "Extension",
-                icon: .asset(installed.manifest.icon, installed),
-                commands: installed.manifest.commands.filter { ["view", "no-view", "menu-bar"].contains($0.mode) }
-                    .map { command in
-                        CommandRow(
-                            name: command.name, title: command.title,
-                            icon: .asset(command.icon ?? installed.manifest.icon, installed))
-                    })
-        }
-        let query = search.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !query.isEmpty else { return groups + extensions }
-        return (groups + extensions).compactMap { row in
-            if row.title.lowercased().contains(query) { return row }
-            var row = row
-            row.commands = row.commands.filter { $0.title.lowercased().contains(query) }
-            return row.commands.isEmpty ? nil : row
-        }
-    }
-
-    private func groupRow(_ row: GroupRow) -> some View {
-        let name = row.name
+    private func groupRow(_ row: CommandsPageRows.Group) -> some View {
+        let name = row.owner
         return HStack(spacing: 0) {
             HStack(spacing: 6) {
                 Image(systemName: collapsed.contains(name) ? "chevron.right" : "chevron.down")
@@ -142,9 +91,9 @@ struct CommandsPage: View {
         }
     }
 
-    private func commandRow(_ command: CommandRow, of row: GroupRow) -> some View {
-        let id = FudgeSettings.commandID(owner: row.name, command: command.name)
-        let enabled = model.isEnabled(command: id) && model.isEnabled(owner: row.name)
+    private func commandRow(_ command: CommandsPageRows.Command, of row: CommandsPageRows.Group) -> some View {
+        let id = command.id
+        let enabled = model.isEnabled(command: id) && model.isEnabled(owner: row.owner)
         let reason = model.offByDefaultReason(command: id)
         return HStack(spacing: 0) {
             HStack(spacing: 6) {
@@ -180,7 +129,7 @@ struct CommandsPage: View {
         .rowStyle()
     }
 
-    private func iconView(_ icon: RowIcon) -> some View {
+    private func iconView(_ icon: CommandsPageRows.Icon) -> some View {
         let placeholder = NSImage(systemSymbolName: "puzzlepiece.extension", accessibilityDescription: nil)!
         let image =
             switch icon {
