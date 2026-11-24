@@ -57,7 +57,8 @@ struct CommandsPage: View {
 
     /// The rows, as far as they match the search (`CommandsPageRows`).
     private var rows: [CommandsPageRows.Group] {
-        CommandsPageRows.rows(groups: model.commandGroups, extensions: model.allExtensions, search: search)
+        CommandsPageRows.rows(
+            groups: model.commandGroups, extensions: model.allExtensions, titles: model.extensionTitles, search: search)
     }
 
     private func groupRow(_ row: CommandsPageRows.Group) -> some View {

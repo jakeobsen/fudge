@@ -50,16 +50,6 @@ private func install(_ name: String, title: String = "GitHub", in folder: String
     #expect(InstalledExtension.Repository.bundled.folder == nil)
 }
 
-@Test func theTitleSaysWhereAnInstallIsFrom() throws {
-    #expect(try install("github", in: "raycast/extensions").displayTitle == "GitHub")
-    #expect(try install("github", in: "fudgeapp/development").displayTitle == "GitHub (development)")
-    #expect(try install("github", in: "someone/tools").displayTitle == "GitHub (someone/tools)")
-    let bundled = InstalledExtension(
-        manifest: try manifest("fudge-extension-store", title: "Extension Store"),
-        directory: URL(fileURLWithPath: "/nonexistent/store-extension"), id: ExtensionStore.id, repository: .bundled)
-    #expect(bundled.displayTitle == "Extension Store")
-}
-
 @Test func theIndexKeepsTwoInstallsOfOneNameApartAndTheFirstOfOneId() throws {
     let raycast = try install("github", in: "raycast/extensions")
     let added = try install("github", in: "someone/tools")
@@ -82,7 +72,7 @@ private func install(_ name: String, title: String = "GitHub", in folder: String
     let found = try #require(InstalledExtension.all(in: extensions).first)
     #expect(found.id.key == "greeter")
     #expect(found.repository == .raycast)
-    #expect(found.displayTitle == found.manifest.title)
+    #expect(ExtensionTitles.forTests([found]).title(of: found) == found.manifest.title)
 }
 
 @Test func anInstallWhoseNameTheIdRuleRefusesIsSkipped() throws {

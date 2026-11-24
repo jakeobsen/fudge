@@ -375,12 +375,14 @@ private func tenAdded() throws -> [ExtensionRepository] {
     draft.address = "https://github.com/owner/repository"
     draft.branch = "main"
     let accepted = draft.add(existing: [], raycastListed: true)
-    let repository = try #require(accepted)
+    let listed = try #require(accepted)
+    let repository = listed.repository
+    #expect(listed.label == nil && listed.on, "no name typed")
     #expect(repository.copyId == ExtensionRepository.copyId(of: "https://github.com/owner/repository"))
     #expect(repository.branch == "main" && repository.name == "owner/repository")
     #expect(draft.reason == nil)
     var settings = FudgeSettings()
-    settings.addRepository(repository)
+    settings.addRepository(listed)
     #expect(settings.extensionRepositories == [ListedRepository(repository: repository, on: true)], "saved on")
 }
 
@@ -390,7 +392,7 @@ private func tenAdded() throws -> [ExtensionRepository] {
     let early = draft.add(existing: [], raycastListed: true)
     #expect(early != nil)
     let now = try added(["https://github.com/Owner/Repository.git"])
-    let atAdd = draft.add(existing: now, raycastListed: true)
+    let atAdd = draft.add(existing: now.map { ListedRepository(repository: $0) }, raycastListed: true)
     #expect(atAdd == nil)
     #expect(draft.reason == "That repository is already in the list.")
 }
@@ -398,7 +400,7 @@ private func tenAdded() throws -> [ExtensionRepository] {
 @Test func tenAddedRepositoriesAreTheMost() throws {
     var draft = ExtensionRepositoryDraft()
     draft.address = "https://github.com/owner/repository-11"
-    let eleventh = draft.add(existing: try tenAdded(), raycastListed: true)
+    let eleventh = draft.add(existing: try tenAdded().map { ListedRepository(repository: $0) }, raycastListed: true)
     #expect(eleventh == nil)
     #expect(draft.reason == "You can add up to 10 repositories.")
 }
@@ -427,14 +429,14 @@ private func tenAdded() throws -> [ExtensionRepository] {
     draft.address = "https://github.com/Raycast/Extensions.git"
     draft.branch = "main"
     let withBranch = draft.add(
-        existing: settings.extensionRepositories.map(\.repository), raycastListed: settings.raycastRepositoryListed)
+        existing: settings.extensionRepositories, raycastListed: settings.raycastRepositoryListed)
     #expect(withBranch == nil)
     #expect(draft.reason == "Raycast's official repository always follows its default branch.")
     draft.branch = ""
     let back = draft.add(
-        existing: settings.extensionRepositories.map(\.repository), raycastListed: settings.raycastRepositoryListed)
+        existing: settings.extensionRepositories, raycastListed: settings.raycastRepositoryListed)
     let raycast = try #require(back)
-    #expect(raycast.copyId == "raycast" && draft.reason == nil, "even with 10 added")
+    #expect(raycast.repository.copyId == "raycast" && draft.reason == nil, "even with 10 added")
     settings.addRepository(raycast)
     #expect(settings.raycastRepositoryState == .on && settings.extensionRepositories.count == 10, "never a second copy")
     guard case .array(let answer) = ExtensionRepository.storeAnswer(settings: settings),
@@ -445,8 +447,7 @@ private func tenAdded() throws -> [ExtensionRepository] {
     }
     #expect(answer.count == 11 && first["copyId"] == .string("raycast"), "first")
     // Once it's back, its address is refused again.
-    let again = draft.add(
-        existing: settings.extensionRepositories.map(\.repository), raycastListed: settings.raycastRepositoryListed)
+    let again = draft.add(existing: settings.extensionRepositories, raycastListed: settings.raycastRepositoryListed)
     #expect(again == nil)
     #expect(draft.reason == "That repository is already in the list.")
 }

@@ -249,14 +249,15 @@ public enum CommandLocator {
     }
 
     /// True when no required preference is missing. Otherwise a user-initiated launch opens Settings on the extension
-    /// instead (false), and a background launch fails.
+    /// instead (false), and a background launch fails, naming the extension as `extensionTitle` (`ExtensionTitles`).
     public static func checkPreferences(
-        _ missing: [ExtensionManifest.Preference], of target: LaunchTarget, type: LaunchRequest.LaunchType
+        _ missing: [ExtensionManifest.Preference], of target: LaunchTarget, extensionTitle: String,
+        type: LaunchRequest.LaunchType
     ) throws -> Bool {
         guard !missing.isEmpty else { return true }
         guard type == .userInitiated else {
             throw LaunchCommandError.missingPreferences(
-                extensionTitle: target.installed.displayTitle, names: missing.map { $0.title ?? $0.name })
+                extensionTitle: extensionTitle, names: missing.map { $0.title ?? $0.name })
         }
         return false
     }

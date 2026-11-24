@@ -172,13 +172,16 @@ private func items(_ quicklinks: [Quicklink], _ settings: FudgeSettings) -> [Roo
     #expect(
         HotKeyConflict.check(launcher, for: ":quicklinks/\(jiraID)", launcher: launcher, commands: [:]) == .launcher)
     let groups = [QuicklinkCommands.group([jira, docs])]
-    #expect(CommandNames.name(of: ":quicklinks/\(jiraID)", in: [], groups: groups) == "Jira Issue")
+    #expect(
+        CommandNames.name(of: ":quicklinks/\(jiraID)", in: [], titles: .forTests([]), groups: groups) == "Jira Issue")
     let twin = Quicklink(name: "First Tool", link: "https://example.com")
     let tools = BuiltInCommandGroup(
         name: .tools, title: "Test Tools",
         commands: [BuiltInCommand(name: "first", title: "First Tool", symbol: "1.circle")])
     #expect(
-        CommandNames.name(of: ":quicklinks/\(twin.id)", in: [], groups: [tools, QuicklinkCommands.group([twin])])
+        CommandNames.name(
+            of: ":quicklinks/\(twin.id)", in: [], titles: .forTests([]),
+            groups: [tools, QuicklinkCommands.group([twin])])
             == "First Tool (Quicklinks)")
     // A deleted quicklink's saved hotkey gives way, as an uninstalled command's does.
     #expect(

@@ -42,8 +42,9 @@ public enum CommandsPageRows {
     /// The page's rows: `groups` (`SettingsModel.commandGroups`) that have commands, then `extensions` in the order
     /// given, each with its view, no-view and menu-bar commands. A non-empty `search` keeps a group whose title has it
     /// with all its commands, and of any other group only the commands whose titles have it, ignoring case.
-    public static func rows(groups: [BuiltInCommandGroup], extensions: [InstalledExtension], search: String) -> [Group]
-    {
+    public static func rows(
+        groups: [BuiltInCommandGroup], extensions: [InstalledExtension], titles: ExtensionTitles, search: String
+    ) -> [Group] {
         // The quicklinks' group shows once there's a quicklink.
         let own = groups.filter { !$0.commands.isEmpty }.map { group in
             let types = BuiltInCommandGroup.typeLabels(ofGroup: group.name)
@@ -59,7 +60,7 @@ public enum CommandsPageRows {
         let installed = extensions.map { installed in
             let owner = CommandOwner.extension(installed.id)
             return Group(
-                owner: owner, title: installed.displayTitle, type: "Extension",
+                owner: owner, title: titles.title(of: installed), type: "Extension",
                 icon: .asset(installed.manifest.icon, installed),
                 commands: installed.manifest.commands.filter { ["view", "no-view", "menu-bar"].contains($0.mode) }
                     .map { command in

@@ -110,7 +110,7 @@ private let inbox = """
 
 @Test func rootItemsShowTheSetSubtitleThenTheManifestsThenTheExtensionTitle() throws {
     let inbox = try installed(inbox)
-    let plain = RootItem.commands(of: inbox)
+    let plain = RootItem.commands(of: inbox, titles: .forTests([inbox]))
     #expect(plain.map(\.title) == ["Unread Count", "Search Mail", "Status"])
     #expect(plain.map(\.subtitle) == ["Inbox", "Mail", "Inbox"])
     #expect(plain.map(\.extensionTitle) == ["Inbox", "Inbox", "Inbox"])
@@ -120,13 +120,17 @@ private let inbox = """
     metadata.setSubtitle("Gmail", extension: id("inbox"), command: "search")
     metadata.setSubtitle("elsewhere", extension: id("other"), command: "unread")
     metadata.setSubtitle("2 new", extension: id("inbox"), command: "status")
-    #expect(RootItem.commands(of: inbox, metadata: metadata).map(\.subtitle) == ["3 unread", "Gmail", "2 new"])
+    #expect(
+        RootItem.commands(of: inbox, titles: .forTests([inbox]), metadata: metadata).map(\.subtitle) == [
+            "3 unread", "Gmail", "2 new",
+        ])
 }
 
 @Test func rootSearchStillFindsACommandByItsExtensionTitleWhenItShowsAnotherSubtitle() throws {
     var metadata = CommandMetadata()
     metadata.setSubtitle("3 unread", extension: id("inbox"), command: "unread")
-    let items = RootItem.commands(of: try installed(inbox), metadata: metadata)
+    let inbox = try installed(inbox)
+    let items = RootItem.commands(of: inbox, titles: .forTests([inbox]), metadata: metadata)
     let found = RootSearch.rank(items, query: "inbox", history: LaunchHistory()).map(\.title)
     #expect(found == ["Search Mail", "Status", "Unread Count"])
     #expect(RootSearch.rank(items, query: "unread", history: LaunchHistory()).first?.title == "Unread Count")

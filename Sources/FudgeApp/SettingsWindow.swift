@@ -24,9 +24,16 @@ final class SettingsModel {
     static let developmentPage = SettingsSidebar.developmentPage
     static let calculatorPage = SettingsSidebar.calculatorPage
     /// Every installed extension, for the Commands page.
-    private(set) var allExtensions: [InstalledExtension] = []
+    private(set) var allExtensions: [InstalledExtension] = [] {
+        didSet { extensionTitles = Self.titles(allExtensions, fudgeSettings) }
+    }
     /// `settings.json`, as the Commands page edits it.
-    private(set) var fudgeSettings = FudgeSettings()
+    private(set) var fudgeSettings = FudgeSettings() {
+        didSet { extensionTitles = Self.titles(allExtensions, fudgeSettings) }
+    }
+    /// How each install is named (SPEC-174), from every install, never only the sidebar's pages, and the repositories'
+    /// names; rebuilt whenever either is set.
+    private(set) var extensionTitles = ExtensionTitles([], names: RepositoryNames(settings: FudgeSettings()))
     /// Which hotkey is being recorded (a command id, or `launcherRecording`).
     private(set) var recorder = HotKeyRecorder()
     var recording: String? { recorder.recording }
@@ -327,9 +334,13 @@ final class SettingsModel {
     /// The file holds something fudge can't read, so the answers can't be changed here.
     private(set) var launchPermissionsUnreadable = false
 
-    /// An installed extension's title as Fudge shows it (`displayTitle`), by its id, or nil when it isn't installed.
+    /// An installed extension's title as Fudge shows it (`ExtensionTitles`), by its id, or nil when it isn't installed.
     func extensionTitle(_ id: ExtensionID) -> String? {
-        allExtensions.first { $0.id == id }?.displayTitle
+        allExtensions.first { $0.id == id }.map(extensionTitles.title(of:))
+    }
+
+    private static func titles(_ installed: [InstalledExtension], _ settings: FudgeSettings) -> ExtensionTitles {
+        ExtensionTitles(installed, names: RepositoryNames(settings: settings))
     }
 
     func setLaunchPermission(_ allowed: Bool, caller: ExtensionID, target: ExtensionID) {
@@ -747,6 +758,9 @@ final class SettingsModel {
     @ObservationIgnored var confirm: (LauncherModel.AlertRequest) async -> Bool = { _ in false }
     /// Tells the launcher the store was turned on or off; set by the app delegate.
     @ObservationIgnored var extensionStoreChanged: () -> Void = {}
+    /// Tells the launcher a repository was added or removed, which can change how extensions are named (SPEC-174);
+    /// set by the app delegate.
+    @ObservationIgnored var repositoryNamesChanged: () -> Void = {}
     /// Unloads a running store, so its git stops before its copy is deleted; set by the app delegate.
     @ObservationIgnored var stopExtensionStore: () async -> Void = {}
 
@@ -825,14 +839,14 @@ final class SettingsModel {
         let settings = readSettings()
         guard
             let added = draft.add(
-                existing: settings.extensionRepositories.map(\.repository),
-                raycastListed: settings.raycastRepositoryListed)
+                existing: settings.extensionRepositories, raycastListed: settings.raycastRepositoryListed)
         else { return false }
         guard change({ $0.addRepository(added) }) else {
             draft.saveFailed(settingsProblem ?? unreadableMessage)
             return false
         }
         loadRepositoryStatuses()
+        repositoryNamesChanged()
         return true
     }
 
@@ -841,6 +855,7 @@ final class SettingsModel {
     func addRaycastRepository() {
         guard change({ $0.restoreRaycastRepository() }) else { return }
         loadRepositoryStatuses()
+        repositoryNamesChanged()
     }
 
     /// The minus button: asks first, then takes the repository out of `settings.json`, Raycast's official one too. The
@@ -849,12 +864,13 @@ final class SettingsModel {
         let raycast = copyId == ExtensionRepository.raycastCopyId
         guard
             let name = raycast
-                ? (raycastRepositoryListed ? ExtensionRepositoryText.raycastName : nil)
-                : extensionRepositories.first(where: { $0.repository.copyId == copyId })?.repository.name
+                ? (raycastRepositoryListed ? ExtensionRepositoryText.raycastLabel : nil)
+                : extensionRepositories.first(where: { $0.repository.copyId == copyId }).map(
+                    ExtensionRepositoryText.rowName)
         else { return }
         Task {
             guard await confirm(Self.removeRequest(name: name, raycast: raycast)) else { return }
-            change { settings in
+            let removed = change { settings in
                 if raycast {
                     settings.removeRaycastRepository()
                 } else {
@@ -862,6 +878,7 @@ final class SettingsModel {
                 }
             }
             loadRepositoryStatuses()
+            if removed { repositoryNamesChanged() }
         }
     }
 
@@ -1339,9 +1356,14 @@ final class SettingsModel {
         switch conflict {
         case .needsModifier: "Use ⌘, ⌥ or ⌃, or an F-key"
         case .launcher: "That's Fudge's own shortcut"
-        case .command(let other):
-            "Used by \(CommandNames.name(of: other, in: allExtensions, groups: commandGroups) ?? QuicklinkCommands.nameWhenGone(other) ?? other)"
+        case .command(let other): "Used by \(conflictName(other))"
         }
+    }
+
+    /// The command a hotkey conflict names (`CommandNames`), or a deleted quicklink's key.
+    private func conflictName(_ commandID: String) -> String {
+        CommandNames.name(of: commandID, in: allExtensions, titles: extensionTitles, groups: commandGroups)
+            ?? QuicklinkCommands.nameWhenGone(commandID) ?? commandID
     }
 
     /// A command's title, from its id: an installed command's, one of Fudge's own or a quicklink's.
@@ -1599,7 +1621,7 @@ struct SettingsView: View {
             List(selection: Binding(get: { model.selected }, set: { model.select($0) })) {
                 ForEach(SettingsSidebar.top, id: \.tag) { SidebarRow(entry: $0).tag($0.tag) }
                 Section("Extensions") {
-                    ForEach(SettingsSidebar.extensions(model.extensions), id: \.tag) {
+                    ForEach(SettingsSidebar.extensions(model.extensions, titles: model.extensionTitles), id: \.tag) {
                         SidebarRow(entry: $0).tag($0.tag)
                     }
                 }

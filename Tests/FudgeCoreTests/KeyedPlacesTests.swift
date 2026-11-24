@@ -158,13 +158,15 @@ private func twoGitHubsKeepTheirOwnHotkeysAliasesAndEnabled(_ three: ThreeGitHub
 private func rootSearchListsEachGitHubUnderItsOwnIDAndSaysWhereItsFrom(_ three: ThreeGitHubs) throws {
     var metadata = CommandMetadata()
     metadata.setSubtitle("Mine", extension: three.added.id, command: "search")
-    let items = three.all.flatMap { RootItem.commands(of: $0, metadata: metadata) }.filter { $0.title == "Search" }
+    let items = three.all.flatMap { RootItem.commands(of: $0, titles: .forTests(three.all), metadata: metadata) }
+        .filter { $0.title == "Search" }
     #expect(
         items.map(\.id) == [
             "command:github/search", "command:someone+tools+github/search",
             "command:fudgeapp+development+github/search",
         ])
-    #expect(items.map(\.subtitle) == ["GitHub", "Mine (someone/tools)", "GitHub (development)"])
+    // SPEC-174: all three are called GitHub, so each says where it's from, Raycast's included.
+    #expect(items.map(\.subtitle) == ["GitHub (raycast)", "Mine (someone/tools)", "GitHub (development)"])
     #expect(metadata.subtitle(extension: three.raycast.id, command: "search") == nil)
     #expect(Set(items.compactMap(\.commandSettingsID)).count == 3)
     let autosaveNames = three.all.map {
@@ -491,11 +493,13 @@ private func anUnsetPreferenceNamesWhichGitHubNeedsIt(_ three: ThreeGitHubs) thr
     let token = try JSONDecoder().decode(
         ExtensionManifest.Preference.self,
         from: Data(#"{"name":"token","type":"password","title":"API Token","required":true}"#.utf8))
-    for (installed, title) in zip(three.all, ["GitHub", "GitHub (someone/tools)", "GitHub (development)"]) {
+    let titles = ExtensionTitles.forTests(three.all)
+    for (installed, title) in zip(three.all, ["GitHub (raycast)", "GitHub (someone/tools)", "GitHub (development)"]) {
         let target = try CommandLocator.locate(
             LaunchRequest(name: "search", type: .background), caller: installed, in: three.all)
         #expect(throws: LaunchCommandError.missingPreferences(extensionTitle: title, names: ["API Token"])) {
-            try CommandLocator.checkPreferences([token], of: target, type: .background)
+            try CommandLocator.checkPreferences(
+                [token], of: target, extensionTitle: titles.title(of: target.installed), type: .background)
         }
     }
     #expect(

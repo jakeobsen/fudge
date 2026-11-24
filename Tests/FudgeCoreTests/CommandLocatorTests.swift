@@ -224,10 +224,12 @@ private func request(_ params: String) throws -> LaunchRequest {
         from: Data(#"{"name":"token","type":"password","title":"API Token","required":true}"#.utf8))
     let host = try JSONDecoder().decode(
         ExtensionManifest.Preference.self, from: Data(#"{"name":"host","type":"textfield","required":true}"#.utf8))
-    #expect(try CommandLocator.checkPreferences([], of: target, type: .background))
-    #expect(try CommandLocator.checkPreferences([token], of: target, type: .userInitiated) == false)
+    #expect(try CommandLocator.checkPreferences([], of: target, extensionTitle: "Tools", type: .background))
+    #expect(
+        try CommandLocator.checkPreferences([token], of: target, extensionTitle: "Tools", type: .userInitiated) == false
+    )
     #expect(throws: LaunchCommandError.missingPreferences(extensionTitle: "Tools", names: ["API Token", "host"])) {
-        try CommandLocator.checkPreferences([token, host], of: target, type: .background)
+        try CommandLocator.checkPreferences([token, host], of: target, extensionTitle: "Tools", type: .background)
     }
     #expect(
         LaunchCommandError.missingPreferences(extensionTitle: "Tools", names: ["API Token", "host"]).description
@@ -381,6 +383,6 @@ private func request(_ params: String) throws -> LaunchRequest {
         LaunchRequest(name: "refresh", type: .userInitiated).asCalled(from: .background),
         caller: installed(named: "tools"), in: extensions())
     #expect(throws: LaunchCommandError.missingPreferences(extensionTitle: "Tools", names: ["token"])) {
-        try CommandLocator.checkPreferences([token], of: refresh, type: .background)
+        try CommandLocator.checkPreferences([token], of: refresh, extensionTitle: "Tools", type: .background)
     }
 }
