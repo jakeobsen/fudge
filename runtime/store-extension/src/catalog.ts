@@ -287,20 +287,21 @@ export const failedUpdateTag = "Couldn't update";
 /** A row's failed install or update this session (SPEC-156 D.3): whether it was an update. */
 export type RowFailure = { updating: boolean };
 
-/** The name of an added repository a row is from, first (SPEC-157 D.2; Raycast's rows show none), the author, the
- * number of commands, Not compatible or Partly compatible when a cached scan says so (`compatibilityTag`), and Installed
- * or Update available, or, while its name is being installed or updated (`busy`), Installing… or Updating… in their
- * place, or else Couldn't install or Couldn't update when it `failed` this session. */
+/** The row's repository's label first, only while it's labeled (`label`, SPEC-175's `rowLabels`; Raycast's rows alike),
+ * the author, the number of commands, Not compatible or Partly compatible when a cached scan says so
+ * (`compatibilityTag`), and Installed or Update available, or, while its name is being installed or updated (`busy`),
+ * Installing… or Updating… in their place, or else Couldn't install or Couldn't update when it `failed` this
+ * session. */
 export function accessoryTexts(
     entry: StoreEntry,
     state: Status,
     compatibility?: string,
     busy?: "installing" | "updating",
     failed?: RowFailure,
-    addedRepositoryName?: string,
+    label?: string,
 ): AccessoryText[] {
     const accessories: AccessoryText[] = [];
-    if (addedRepositoryName && addedRepository(entry) !== undefined) accessories.push({ text: addedRepositoryName });
+    if (label) accessories.push({ text: label });
     if (entry.author) accessories.push({ text: entry.author });
     accessories.push({ text: entry.commands.length === 1 ? "1 command" : `${entry.commands.length} commands` });
     if (compatibility) accessories.push({ tag: compatibility });

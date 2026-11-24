@@ -209,9 +209,10 @@ Each repository has a switch; one that's off keeps its copy, but the Extension S
 Under each one is what the Extension Store last found there: how many extensions it lists, or what went wrong.
 The minus button removes a repository; the extensions you installed from it stay installed, but get no more updates.
 They show under **Installed** as **Not updated**, as do those of a repository that's switched off, and ⌃X uninstalls them there.
-Each extension's details name the repository it's from, a row from a repository you added names it too, and with more than one repository on, the dropdown also filters by repository.
+Each extension's details name the repository it's from, and with more than one repository on, the dropdown also filters by repository.
 An extension of the same name in two repositories can be installed from both: each is its own extension, with its own settings and data.
 When two installed extensions have the same name, Fudge shows where each one is from after its name: its repository's name if it has one, else its `owner/repository`, `development` for your own builds, and `Core` for the extensions that come with Fudge.
+The Extension Store shows it the same way, and also when another extension in its list has the same name, installed or not.
 To name a repository you've already added, or to change its name, remove it and add it again: its extensions stay installed and keep their settings, hotkeys and aliases.
 The list holds up to 12 repositories, and `https://github.com/fudgeapp/development` can't be added, since Fudge keeps your own builds in that repository's folder.
 Changes reach the Extension Store the next time you open it, or when you press ⌘R in it.

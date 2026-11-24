@@ -56,7 +56,7 @@ import {
 import { gitAvailable, stopRunningGit } from "./git.ts";
 import { detailMarkdown, fetchReadme, readmeKey, readmeKeyParts, refetching, shownReadme, type RowRepository } from "./readme.ts";
 import {
-    developmentBuildAccessory,
+    developmentAccessories,
     developmentDetailMarkdown,
     developmentRowId,
     developmentRowsShown,
@@ -69,7 +69,7 @@ import {
     type DevelopmentBuild,
 } from "./development-builds.ts";
 import {
-    notUpdatedAccessory,
+    notUpdatedAccessories,
     notUpdatedDetailMarkdown,
     notUpdatedRowId,
     notUpdatedRowsShown,
@@ -97,7 +97,8 @@ import {
 import { systemProbe } from "./build-records.ts";
 import { heldRefreshMessage, OtherBuilds, settledNotice } from "./other-builds.ts";
 import { openCopies, refreshCopies, type CopySteps } from "./copy-turns.ts";
-import { RAYCAST_COPY } from "./repository-address.ts";
+import { RAYCAST_COPY, type RepositoryEntry } from "./repository-address.ts";
+import { checkSharedLabelsAnswer, rowLabels } from "./row-labels.ts";
 import {
     problemReport,
     problemRows,
@@ -117,6 +118,7 @@ import {
     installEnded,
     logToFudge,
     nextNotificationClick,
+    sharedLabels,
 } from "fudge:app";
 import {
     followClicks,
@@ -150,6 +152,9 @@ type Shared = {
     development: DevelopmentBuild[];
     /** The installs whose repository isn't on, read with `installed.json` (E.8). */
     notUpdated: NotUpdatedInstall[];
+    /** The app's labels of the installs that share a name, by id (SPEC-175), checked again; empty when it couldn't
+     * answer. */
+    sharedLabels: ReadonlyMap<string, string>;
 };
 /** The list: the rows of every copy read so far, and each copy's trees and commit by copy id (SPEC-157 D.1). */
 type Loaded = Shared & {
@@ -195,6 +200,8 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
     const { push } = useNavigation();
     // A copy of each repository that's on, from the last read of the list (C.1), in its order; none until it's read.
     const [copies, setCopies] = useState<StoreCopy[]>();
+    // Every repository listed, on or off, from the last read of the list: a Not updated row's label (SPEC-175).
+    const [listed, setListed] = useState<readonly RepositoryEntry[]>([]);
     const copiesNow = useRef(copies);
     copiesNow.current = copies;
     // Each copy's rows and problem, by copy id (C.6). The ref is the latest, for the end of an open or a ⌘R.
@@ -216,6 +223,20 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
     const loaded = useMemo<Loaded | undefined>(
         () => (shared ? { ...shared, ...shownRows(copies ?? [], copyStates) } : undefined),
         [shared, copies, copyStates],
+    );
+    // Each labeled row's label by its row id (SPEC-175), worked out once per change of the list, never per row.
+    const labels = useMemo<ReadonlyMap<string, string>>(
+        () =>
+            loaded
+                ? rowLabels({
+                      entries: loaded.entries,
+                      development: loaded.development,
+                      notUpdated: loaded.notUpdated,
+                      listed,
+                      shared: loaded.sharedLabels,
+                  })
+                : new Map(),
+        [loaded, listed],
     );
     const [noGit, setNoGit] = useState(false);
     // The list's download failing before anything has loaded: its title and what failed, for `LoadFailure`.
@@ -248,7 +269,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
         const copy = copyOf(copyId);
         if (!copy) return undefined;
         const gitHub = gitHubRepository(copy.entry.identity);
-        return { name: copy.entry.name, ...(gitHub ? { gitHub } : {}) };
+        return { name: copy.entry.label, ...(gitHub ? { gitHub } : {}) };
     };
     // A failure of a row's work names its repository's host when "couldn't reach" applies and it isn't GitHub (C.6).
     const withHost = (details: FailureDetails, copyId: string): FailureDetails => {
@@ -329,10 +350,18 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
         // The records of builds from another session, read with each load, apart from the copies.
         await others.check();
         const scanner = await scannerIdentity(cli);
-        const [installed, results, development] = await Promise.all([
+        const [installed, results, development, labels] = await Promise.all([
             readInstalled(environment.supportPath),
             readCompatibility(environment.supportPath, scanner),
             readDevelopmentBuilds(extensionsDir),
+            // Asked with each load, so an install or uninstall just made counts (SPEC-175); a failure labels nothing
+            // by it.
+            sharedLabels()
+                .then(checkSharedLabelsAnswer)
+                .catch((error: unknown) => {
+                    logFailure("Couldn't ask which installs share a name", error);
+                    return new Map<string, string>();
+                }),
         ]);
         const withoutSwift = await installsWithoutSwift(extensionsDir, Object.keys(installed));
         // None while the list of repositories hasn't been read, since which are on isn't known yet.
@@ -340,7 +369,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
         const notUpdated = copiesOn
             ? await readNotUpdated(installed, new Set(copiesOn.map((copy) => copy.entry.folder)), extensionsDir)
             : [];
-        setShared({ installed, withoutSwift, development, notUpdated });
+        setShared({ installed, withoutSwift, development, notUpdated, sharedLabels: labels });
         setChecked((current) => ({ scanner, results, failed: current.scanner === scanner ? current.failed : new Set() }));
     }, [cli, extensionsDir, others]);
     loadNow.current = load;
@@ -362,7 +391,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             problem: (copy, kind, error) =>
                 changeCopyState(copy.entry.copyId, (state) => ({ ...state, problem: { kind, error } })),
             fetching: (copy, first) => {
-                const name = copy.entry.name;
+                const name = copy.entry.label;
                 const shown = showToast({
                     style: Toast.Style.Animated,
                     title: first ? `Downloading the list from ${name}…` : `Updating the list from ${name}…`,
@@ -392,9 +421,12 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
      */
     const readList = useCallback(async (): Promise<StoreCopy[] | undefined> => {
         let on: StoreCopy[];
+        let all: RepositoryEntry[];
         try {
-            ({ copies: on } = await readRepositoryList(extensionRepositories, environment.supportPath, (key, step) =>
-                others.hold(key, () => oneAtATime(step)),
+            ({ copies: on, listed: all } = await readRepositoryList(
+                extensionRepositories,
+                environment.supportPath,
+                (key, step) => others.hold(key, () => oneAtATime(step)),
             ));
         } catch (error) {
             const title = "Couldn't read the Extension Store's repositories";
@@ -403,6 +435,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             return undefined;
         }
         setCopies(on);
+        setListed(all);
         const kept = new Map([...copyStatesNow.current].filter(([copyId]) => on.some((copy) => copy.entry.copyId === copyId)));
         copyStatesNow.current = kept;
         setCopyStates(kept);
@@ -427,9 +460,12 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             }
             if (!on) return;
             const failure = raycastLoadFailure(on, copyStatesNow.current);
+            // Raycast's copy's error, named by its entry's label, as its Settings row is (SPEC-175).
+            const raycast = on.find((copy) => copy.entry.copyId === RAYCAST_COPY.copyId);
+            const label = raycast?.entry.label ?? RAYCAST_COPY.name;
             setLoadError(
                 failure
-                    ? { title: `Couldn't download the list from ${RAYCAST_COPY.name}`, details: failureDetails(failure.error) }
+                    ? { title: `Couldn't download the list from ${label}`, details: failureDetails(failure.error) }
                     : undefined,
             );
         },
@@ -802,7 +838,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                 accessories={
                     showingDetail
                         ? undefined
-                        : accessoryTexts(entry, state, compatibility, busy, mark, repository.name).map((accessory) =>
+                        : accessoryTexts(entry, state, compatibility, busy, mark, labels.get(id)).map((accessory) =>
                               "tag" in accessory
                                   ? { tag: { value: accessory.tag, color: tagColor(accessory.tag) } }
                                   : { text: accessory.text },
@@ -922,7 +958,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             title={build.title}
             subtitle={showingDetail ? undefined : build.description}
             keywords={[build.name]}
-            accessories={showingDetail ? undefined : [{ text: developmentBuildAccessory }]}
+            accessories={showingDetail ? undefined : developmentAccessories(labels.get(developmentRowId(build.name)))}
             detail={showingDetail ? <List.Item.Detail markdown={developmentDetailMarkdown(build)} /> : undefined}
             actions={installOnlyActions(build.name, () => runUninstallDevelopment(build))}
         />
@@ -937,7 +973,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
             title={install.title}
             subtitle={showingDetail ? undefined : install.description}
             keywords={[install.name]}
-            accessories={showingDetail ? undefined : [{ text: notUpdatedAccessory }]}
+            accessories={showingDetail ? undefined : notUpdatedAccessories(labels.get(notUpdatedRowId(install.id)))}
             detail={showingDetail ? <List.Item.Detail markdown={notUpdatedDetailMarkdown(install)} /> : undefined}
             actions={installOnlyActions(install.name, () => runUninstallNotUpdated(install))}
         />
@@ -1030,7 +1066,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
                             {filteredRepositories.map((copy) => (
                                 <List.Dropdown.Item
                                     key={copy.entry.copyId}
-                                    title={copy.entry.name}
+                                    title={copy.entry.label}
                                     value={repositoryFilter(copy.entry.copyId)}
                                 />
                             ))}

@@ -156,3 +156,85 @@ private func shown(_ installed: [InstalledExtension], _ titles: ExtensionTitles)
     #expect(names.label(of: .raycast) == "raycast/extensions" && names.label(of: .development) == "development")
     #expect(names.label(of: .bundled) == "Core")
 }
+
+// MARK: - One name rule (SPEC-175)
+
+/// The one name rule's fixture, which the Extension Store's `store-names.test.ts` reads too, so the app's
+/// `ExtensionTitles.key` and `RepositoryNames.check` and the store's `repository-name.ts` can't drift apart.
+func repositoryNamesFixture() throws -> [String: Any] {
+    let file = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("runtime/test/fixtures/repository-names.json")
+    return try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+}
+
+/// `text`'s scalars in hex, for a failure's message.
+func scalarsInHex(_ text: String) -> String {
+    text.unicodeScalars.map { String(format: "%04X", $0.value) }.joined(separator: " ")
+}
+
+/// An install titled `title` exactly, whatever characters it has.
+private func titled(_ name: String, _ title: String, in folder: String) throws -> InstalledExtension {
+    let json = try JSONSerialization.data(withJSONObject: ["name": name, "title": title, "commands": []])
+    return InstalledExtension(
+        manifest: try JSONDecoder().decode(ExtensionManifest.self, from: json),
+        directory: URL(fileURLWithPath: "/nonexistent/\(folder)/\(name)"),
+        id: try #require(ExtensionID(name: name, repositoryFolder: folder)),
+        repository: try #require(InstalledExtension.Repository(folder: folder)))
+}
+
+@Test func theNameKeyTrimsFoldsAndDecomposesAsTheFixtureSays() throws {
+    let fixture = try repositoryNamesFixture()
+    let trimmed = try #require(fixture["trimmed"] as? [String])
+    #expect(ExtensionTitles.trimmedScalars.map { String(format: "%04X", $0.value) } == trimmed)
+    let folds = try #require(fixture["folds"] as? [[String]])
+    #expect(folds.count == ExtensionTitles.folds.count)
+    for fold in folds {
+        let scalars = Array(fold[0].unicodeScalars)
+        let mapped = scalars.count == 1 ? ExtensionTitles.folds[scalars[0]] : nil
+        #expect(mapped?.unicodeScalars.elementsEqual(fold[1].unicodeScalars) == true, "\(scalarsInHex(fold[0]))")
+    }
+    let keys = try #require(fixture["keys"] as? [[String: String]])
+    #expect(keys.count == 32)
+    for pair in keys {
+        let text = try #require(pair["text"])
+        let key = try #require(pair["key"])
+        let same = ExtensionTitles.key(text).unicodeScalars.elementsEqual(key.unicodeScalars)
+        #expect(same, "\(scalarsInHex(text)) gave \(scalarsInHex(ExtensionTitles.key(text)))")
+    }
+}
+
+@Test func theFixturesSetsOfTitlesAreLabeledAsTheStoreLabelsThem() throws {
+    let sets = try #require(try repositoryNamesFixture()["sets"] as? [[String: Any]])
+    for set in sets {
+        let titles = try #require(set["titles"] as? [String])
+        let labeled = try #require(set["labeled"] as? [Bool])
+        var installed: [InstalledExtension] = []
+        for (index, title) in titles.enumerated() {
+            installed.append(try titled("scratch", title, in: "someone/tools\(index)"))
+        }
+        let names = ExtensionTitles.forTests(installed)
+        let expected = labeled.enumerated().map { index, yes in yes ? "someone/tools\(index)" : nil }
+        #expect(installed.map { names.label(of: $0) } == expected, "\(titles.map(scalarsInHex))")
+    }
+}
+
+@Test func theStoreAnswerHasEachLabeledInstallsLabelByItsId() throws {
+    let raycast = try install("clipboard-history", "Clipboard History", in: "raycast/extensions")
+    let core = try bundled("fudge-clipboard-history", "Clipboard History")
+    let notes = try install("notes", "Notes", in: "someone/tools")
+    let installed = [raycast, core, notes]
+    let unnamed: JSONValue = .object([
+        "clipboard-history": .string("raycast/extensions"), "fudge-clipboard-history": .string("Core"),
+    ])
+    #expect(
+        ExtensionTitles.forTests(installed).storeAnswer == unnamed,
+        "Raycast's entry with no name, by its folder; Notes shares no name")
+
+    var settings = FudgeSettings()
+    settings.extensionRepositories = [ListedRepository(repository: .raycast, label: "Raycast")]
+    #expect(
+        ExtensionTitles(installed, names: RepositoryNames(settings: settings)).storeAnswer
+            == .object(["clipboard-history": .string("Raycast"), "fudge-clipboard-history": .string("Core")]))
+    #expect(ExtensionTitles.forTests([raycast, notes]).storeAnswer == .object([:]), "no two titles the same")
+}

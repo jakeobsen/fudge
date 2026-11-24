@@ -148,8 +148,8 @@ export function refetching(failed: ReadonlySet<string>, key: string): ReadonlySe
 /** How the detail pane names a command's manifest `mode`; an unknown mode isn't shown. */
 const modeNames: Record<string, string> = { view: "view", "no-view": "no-view", "menu-bar": "menu bar" };
 
-/** The repository a row is from, as its detail names it and links to it (SPEC-157 D.2, D.4): its name, and its
- * `owner/name` when it's on github.com. */
+/** The repository a row is from, as its detail names it and links to it (SPEC-157 D.2, D.4): its label (SPEC-175), and
+ * its `owner/name` when it's on github.com. */
 export type RowRepository = { name: string; gitHub?: string };
 
 /**
@@ -183,7 +183,7 @@ export function detailMarkdown(
         entry.categories.length > 0 && `**Categories:** ${entry.categories.join(", ")}`,
         entry.license && `**License:** ${entry.license}`,
         // The folder passed `isValidFolder`, so it holds nothing markdown reads; the code span keeps `_` literal.
-        // The name is the rule's (letters, digits and a few marks), each mark escaped so none of it reads as Markdown.
+        // The label is the app's or the list's, each Markdown mark escaped so none of it reads as Markdown.
         `**Repository:** ${escapeMarkdown(repository.name)}`,
         entry.dir !== entry.name && `In the repository as \`${entry.dir}\``,
         commit && repository.gitHub && `[Source on GitHub](${folderURL(repository.gitHub, entry.dir, commit)})`,

@@ -35,17 +35,18 @@ public struct RepositoryNames: Sendable, Equatable {
         }
     }
 
-    /// The name in `text`, trimmed of spaces and line breaks at both ends, nil when that leaves nothing; or why it
-    /// can't be used beside `others`, the names of the other repositories in the list. The checks run in this order,
-    /// so a name with more than one problem always gets the same sentence.
+    /// The name in `text`, trimmed of spaces and line breaks at both ends (`ExtensionTitles.trimmed`), nil when that
+    /// leaves nothing; or why it can't be used beside `others`, the names of the other repositories in the list. The
+    /// checks run in this order, the same as the Extension Store's `checkRepositoryName` (SPEC-175), so a name with
+    /// more than one problem always gets the same sentence.
     ///
-    /// No `/`, so no name reads like an unnamed repository's label, which always has one. None of the characters that
-    /// are invisible or change how the rest of the row is drawn, so no name reads the same as another that passed the
-    /// duplicate check.
+    /// No `/` among its scalars, even with a mark after it, so no name reads like an unnamed repository's label, which
+    /// always has one. None of the characters that are invisible or change how the rest of the row is drawn, so no name
+    /// reads the same as another that passed the duplicate check.
     public static func check(_ text: String, others: [String] = []) -> Result<String?, Refusal> {
-        let name = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = ExtensionTitles.trimmed(text)
         guard !name.isEmpty else { return .success(nil) }
-        guard !name.contains("/") else { return .failure(.slash) }
+        guard !name.unicodeScalars.contains("/") else { return .failure(.slash) }
         guard name.unicodeScalars.allSatisfy(isUsable) else { return .failure(.characters) }
         guard name.count <= maxLength else { return .failure(.tooLong) }
         if ExtensionTitles.same(name, development) { return .failure(.development) }

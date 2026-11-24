@@ -167,6 +167,16 @@ export async function extensionRepositories(): Promise<unknown> {
     return await callApp("store.repositories");
 }
 
+/**
+ * The labels of the installs that share a name (SPEC-175), as the app answers them: `{ "<id>": "<label>" }`, the label
+ * search shows for each install whose title another installed extension has, from the installs and `settings.json` read
+ * afresh for each call. Only the store may ask. It comes as it is; the store checks it again with
+ * `checkSharedLabelsAnswer` (`row-labels.ts`) before using any of it.
+ */
+export async function sharedLabels(): Promise<unknown> {
+    return await callApp("store.sharedLabels");
+}
+
 export function createFudgeAppModule() {
     return Object.freeze({
         logToFudge,
@@ -176,6 +186,7 @@ export function createFudgeAppModule() {
         askForNotifications,
         nextNotificationClick,
         extensionRepositories,
+        sharedLabels,
         searchFiles,
         listClipboardHistory,
         clipboardImage,

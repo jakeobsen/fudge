@@ -80,6 +80,7 @@ function fakeCopy(
             address: `https://github.com/owner/${copyId}`,
             ...(branch === undefined ? {} : { branch }),
             on: true,
+            label: raycast ? "Raycast" : `owner/${copyId}`,
         },
         repo,
         copy: { copyId, repositoryFolder: raycast ? "raycast/extensions" : `owner/${copyId}` },

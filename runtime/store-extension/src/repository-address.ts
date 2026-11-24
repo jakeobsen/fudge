@@ -13,6 +13,7 @@ import {
     repositoryFolder,
     repositoryFolderConflict,
 } from "./repository-folder.ts";
+import { checkRepositoryName } from "./repository-name.ts";
 
 /** The most repositories in the list, every one counted, Raycast's official repository too. */
 export const maxRepositories = 12;
@@ -188,8 +189,11 @@ export function parseRepositoryAddress(
     };
 }
 
-/** A repository in the list the app answers `extensionRepositories()` with, checked again here. */
-export type RepositoryEntry = ParsedRepository & { on: boolean };
+/**
+ * A repository in the list the app answers `extensionRepositories()` with, checked again here. `label` is what the
+ * store calls it (SPEC-175): its name when it has one the name rule gives back, else its `name`, Raycast's like any.
+ */
+export type RepositoryEntry = ParsedRepository & { on: boolean; label: string };
 
 function isObject(value: unknown): value is Record<string, unknown> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -199,11 +203,14 @@ function isObject(value: unknown): value is Record<string, unknown> {
  * The app's answer to `extensionRepositories()`, checked again with the shared rule, since the Extension Store never
  * reads `settings.json` itself: every entry the same way, Raycast's included, at any place. An entry counts when it
  * parses again, beside those before it, to the copy id and folder the app answered, so a second Raycast's entry is left
- * out as any duplicate is. Anything else is left out.
+ * out as any duplicate is. Anything else is left out. An entry's `label` is kept only when `checkRepositoryName` gives
+ * it back beside the labels kept before it, as reading `settings.json` does, so a refused name or one an earlier
+ * repository has reads as none, and the entry stays.
  */
 export function checkRepositoriesAnswer(value: unknown): RepositoryEntry[] {
     if (!Array.isArray(value)) return [];
     const entries: RepositoryEntry[] = [];
+    const names: string[] = [];
     for (const entry of value) {
         if (!isObject(entry) || typeof entry.on !== "boolean") continue;
         if (typeof entry.address !== "string" || (entry.branch !== undefined && typeof entry.branch !== "string")) {
@@ -211,7 +218,10 @@ export function checkRepositoriesAnswer(value: unknown): RepositoryEntry[] {
         }
         const parsed = parseRepositoryAddress(entry.address, entry.branch, entries);
         if ("refused" in parsed || parsed.copyId !== entry.copyId || parsed.folder !== entry.folder) continue;
-        entries.push({ ...parsed, on: entry.on });
+        const checked = typeof entry.label === "string" ? checkRepositoryName(entry.label, names) : undefined;
+        const named = typeof checked === "string" ? checked : undefined;
+        if (named !== undefined) names.push(named);
+        entries.push({ ...parsed, on: entry.on, label: named ?? parsed.name });
     }
     return entries;
 }
