@@ -64,6 +64,18 @@ public enum LaunchPermissionStep: Sendable, Equatable {
     case refusedUnasked
 }
 
+/// What to do about which copy a `launchCommand` opens, when two or more installs can run it (SPEC-177).
+public enum CopyChoiceStep: Sendable, Equatable {
+    /// Chosen before: open that copy.
+    case open(ExtensionID)
+    /// Answered "Don't Allow" before.
+    case refused
+    /// Not chosen yet, and the user may be asked.
+    case ask
+    /// Not chosen yet, and the call is a background one: refused without asking, as `LaunchPermissionStep`'s.
+    case refusedUnasked
+}
+
 extension LaunchPermissions {
     /// The step for a call with this stored answer (nil: never answered) and origin.
     public static func step(answer: Bool?, origin: CallOrigin) -> LaunchPermissionStep {
@@ -71,6 +83,15 @@ extension LaunchPermissions {
         case true?: .allowed
         case false?: .refused
         case nil: origin.mayComeForward ? .ask : .refusedUnasked
+        }
+    }
+
+    /// The step for a call among copies, with this stored choice (`choice(caller:among:)`) and origin.
+    public static func step(choice: CopyChoice, origin: CallOrigin) -> CopyChoiceStep {
+        switch choice {
+        case .chosen(let id): .open(id)
+        case .notAllowed: .refused
+        case .unanswered: origin.mayComeForward ? .ask : .refusedUnasked
         }
     }
 

@@ -85,4 +85,10 @@ public struct RepositoryNames: Sendable, Equatable {
         case .added(let folder): listed[folder] ?? folder
         }
     }
+
+    /// One copy of an extension installed from two or more repositories, as the question which copy to open and the
+    /// Permissions page list it: its title, then its repository's label in parentheses, always (SPEC-177).
+    public func copyTitle(of installed: InstalledExtension) -> String {
+        "\(installed.manifest.title) (\(label(of: installed.repository)))"
+    }
 }

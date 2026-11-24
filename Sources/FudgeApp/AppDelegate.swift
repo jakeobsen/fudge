@@ -233,6 +233,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         model.showHUD = { [weak self] title in self?.hud.show(title) }
         model.isVisible = { [weak self] in self?.panel.isVisible ?? false }
         model.confirm = { [weak self] request, origin in await self?.confirm(request, origin: origin) ?? false }
+        model.choose = { [weak self] request, origin in await self?.choose(request, origin: origin) }
         model.openPanel = { [weak self] options in await self?.chooseFiles(options) }
         // The calculator's towns and countries, read from the app's resources; nothing is downloaded.
         model.loadPlaces(waiting: Snapshot(arguments: CommandLine.arguments) != nil)
@@ -919,6 +920,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The plain `activate()` can be declined since macOS 14, which would leave the alert behind the app in front.
         NSApp.activateFromUserAction(origin: origin)
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// A question with a button per option (SPEC-177), shown as `confirm` shows its alert: a sheet on the panel when
+    /// it's open, otherwise a standalone alert brought to the front, and none for a background call. The dismiss button
+    /// comes last, and Esc presses it. The picked option's index, or nil for the dismiss button.
+    private func choose(_ request: LauncherModel.ChoiceRequest, origin: CallOrigin) async -> Int? {
+        if origin.unaskedAnswer != nil { return nil }
+        let alert = NSAlert()
+        alert.messageText = request.title
+        alert.informativeText = request.message
+        for option in request.options { alert.addButton(withTitle: option) }
+        alert.addButton(withTitle: request.dismiss).keyEquivalent = "\u{1b}"
+        // A snapshot run lays the alert out for the run to save, and the answer is the dismiss button.
+        if Snapshot.isRequested(CommandLine.arguments) {
+            snapshotAlert = SnapshotSheet.laidOut(alert)
+            return nil
+        }
+        // The buttons answer the first button's return value and up, one each, in the order they were added.
+        let picked = { (response: NSApplication.ModalResponse) -> Int? in
+            let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+            return request.options.indices.contains(index) ? index : nil
+        }
+        if panel.isVisible {
+            return await withCheckedContinuation { continuation in
+                alert.beginSheetModal(for: panel) { [weak self] response in
+                    // The sheet had the keyboard; give it back to the screen's field.
+                    self?.model.restoreKeyboard()
+                    continuation.resume(returning: picked(response))
+                }
+            }
+        }
+        NSApp.activateFromUserAction(origin: origin)
+        return picked(alert.runModal())
     }
 
     /// An import replaced `settings.json`, the history and extensions' data: read everything again, and register

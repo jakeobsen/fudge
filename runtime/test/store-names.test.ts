@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { developmentFolder, extensionId } from "../src/extension-id.ts";
-import { rowId, type StoreEntry } from "../store-extension/src/catalog.ts";
+import { rowId, sections, type StoreEntry } from "../store-extension/src/catalog.ts";
 import {
     developmentAccessories,
     developmentBuildAccessory,
@@ -30,7 +30,7 @@ import {
     nameKey,
     trimmedScalars,
 } from "../store-extension/src/repository-name.ts";
-import { checkSharedLabelsAnswer, rowLabels } from "../store-extension/src/row-labels.ts";
+import { checkSharedLabelsAnswer, ownLabels, rowLabels, sortLabels } from "../store-extension/src/row-labels.ts";
 
 type NameCase = { text: string; others?: string[]; name?: string | null; refused?: string; other?: string };
 type NamesFixture = {
@@ -319,6 +319,108 @@ test("the installed half labels a row whose install the app labels, with the app
         }).size,
         0,
     );
+});
+
+// MARK: - Same names by repository label (SPEC-177)
+
+test("every row's own label is the one the list half gives it, labeled or not", () => {
+    const raycast = listedEntry("https://github.com/raycast/extensions", "Raycast");
+    const tools = listedEntry("https://github.com/someone/tools", "Tools");
+    const unnamed = listedEntry("https://github.com/Someone/Other");
+    const off = listedEntry("https://github.com/someone/off", "Offline", false);
+    const gone = listedEntry("https://github.com/gone/tools");
+    const entries = [
+        row("Scratch", raycast),
+        row("Scratch", tools),
+        row("Notes", unnamed, "notes"),
+        row("Weather", gone, "weather"),
+    ];
+    const development = [build("scratch", "Scratch"), build("timer", "Timer")];
+    const notUpdatedRows = [
+        notUpdated("clock", "someone/off", "Clock"),
+        notUpdated("scratch", "gone/tools", "Scratch"),
+    ];
+    const sources = { entries, development, notUpdated: notUpdatedRows, listed: [raycast, tools, unnamed, off] };
+    const own = ownLabels(sources);
+    assert.deepEqual(
+        [...own],
+        [
+            [entryRow(entries[0]!), "Raycast"],
+            [entryRow(entries[1]!), "Tools"],
+            [entryRow(entries[2]!), "Someone/Other"],
+            [entryRow(entries[3]!), "gone/tools"],
+            [developmentRowId("scratch"), "development"],
+            [developmentRowId("timer"), "development"],
+            [notUpdatedRowId(notUpdatedRows[0]!.id), "Offline"],
+            [notUpdatedRowId(notUpdatedRows[1]!.id), "gone/tools"],
+        ],
+        "every row, labeled or not",
+    );
+    // The list half labels the four Scratch rows, each with its own label; the others it leaves unlabeled.
+    const labels = rowLabels({ ...sources, shared: new Map() });
+    assert.deepEqual(
+        [...labels.keys()].sort(),
+        [
+            entryRow(entries[0]!),
+            entryRow(entries[1]!),
+            developmentRowId("scratch"),
+            notUpdatedRowId(notUpdatedRows[1]!.id),
+        ].sort(),
+    );
+    for (const [id, label] of labels) assert.equal(label, own.get(id), id);
+    // A row sorts by the label it shows, the app's in the installed half, else by its own.
+    const shared = new Map([[extensionId("scratch", tools.folder)!, "someone's"]]);
+    const labelOf = sortLabels(rowLabels({ ...sources, shared }), own);
+    assert.equal(labelOf(entryRow(entries[1]!)), "someone's", "shown");
+    assert.equal(labelOf(entryRow(entries[2]!)), "Someone/Other", "own, unlabeled");
+    assert.equal(labelOf(developmentRowId("timer")), "development");
+});
+
+test("rows of one title come by repository label, A to Z, whatever order the copies are listed in", () => {
+    const fudge = (label?: string) => listedEntry("https://github.com/fudgeapp/extensions", label);
+    const jake = listedEntry("https://github.com/jakeobsen/raycast");
+    const raycast = listedEntry("https://github.com/raycast/extensions", "Raycast");
+    const jiraRows = (listed: RepositoryEntry[]) => listed.map((repository) => row("Jira", repository, "jira"));
+    const labelsOf = (listed: RepositoryEntry[]) => (entries: StoreEntry[]) => {
+        const sources = { entries, development: [], notUpdated: [], listed };
+        return sortLabels(rowLabels({ ...sources, shared: new Map() }), ownLabels(sources));
+    };
+    const shownLabels = (listed: RepositoryEntry[], entries: StoreEntry[], installed = {}) => {
+        const labelOf = labelsOf(listed)(entries);
+        const split = sections(entries, installed, labelOf);
+        return [split.installed, split.other].map((half) => half.map((entry) => labelOf(entryRow(entry))));
+    };
+
+    const named = [raycast, fudge("Fudge"), jake];
+    assert.deepEqual(shownLabels(named, jiraRows(named)), [[], ["Fudge", "jakeobsen/raycast", "Raycast"]]);
+    assert.deepEqual(
+        shownLabels([...named].reverse(), jiraRows([...named].reverse())),
+        [[], ["Fudge", "jakeobsen/raycast", "Raycast"]],
+        "listed in reverse",
+    );
+    // Labels that sort against the copy ids: fudgeapp's copy id sorts first, its label last.
+    const against = [raycast, fudge("Zed"), jake];
+    const rows = jiraRows(against);
+    assert.deepEqual(
+        rows.map((entry) => entry.copyId).sort(),
+        [fudge().copyId, jake.copyId, "raycast"],
+        "the copy ids alone would give fudgeapp's first",
+    );
+    assert.deepEqual(shownLabels(against, rows), [[], ["jakeobsen/raycast", "Raycast", "Zed"]]);
+    assert.deepEqual(shownLabels([...against].reverse(), [...rows].reverse()), [
+        [],
+        ["jakeobsen/raycast", "Raycast", "Zed"],
+    ]);
+    // Both halves of the list: Raycast's and fudgeapp's installed, jakeobsen's not.
+    const record = (dir: string, repository?: string) => ({
+        tree: "t",
+        commit: "c",
+        installedAt: "2026-11-24T00:00:00.000Z",
+        dir,
+        ...(repository === undefined ? {} : { repository }),
+    });
+    const installed = { jira: record("jira"), "fudgeapp+extensions+jira": record("jira", "fudgeapp/extensions") };
+    assert.deepEqual(shownLabels(against, rows, installed), [["Raycast", "Zed"], ["jakeobsen/raycast"]]);
 });
 
 test("a development build's and a Not updated row's accessories have the label first only while it's labeled", () => {

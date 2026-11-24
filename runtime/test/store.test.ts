@@ -428,7 +428,7 @@ test("two folders with one name: only the folder it was installed from is instal
     assert.equal(status(first, installed, new Map([["world-clock", "t2"]])), "update");
     assert.equal(status(parseManifest("World-Clock", manifest("world-clock"))!, installed, trees), "installed", "APFS ignores case");
     assert.deepEqual(filterEntries([first, second], installedFilter, installed), [first]);
-    assert.deepEqual(sections([first, second], installed, []).other, [second]);
+    assert.deepEqual(sections([first, second], installed, () => "").other, [second]);
 });
 
 test("rows show the author, the commands and the state; search includes keywords, author and name", () => {
@@ -450,7 +450,7 @@ test("the category and Installed filters, and installed ones first", () => {
         filterEntries(entries, "category:Productivity", installed).map((entry) => entry.name),
         ["beta", "alpha"],
     );
-    const split = sections(entries, installed, []);
+    const split = sections(entries, installed, () => "");
     assert.deepEqual(
         split.installed.map((entry) => entry.name),
         ["gamma"],
@@ -4559,7 +4559,7 @@ test("the list's top row is the first of its sections' rows: Repositories, Insta
     assert.equal(topRowId([], [], []), undefined);
     // The Installed section as drawn: a development build titled Alpha comes before an install titled GitHub.
     const github = parseManifest("github", { name: "github", title: "GitHub", commands: [{ name: "a", title: "A" }] })!;
-    const drawn = installedSection([github], [{ name: "alpha-dev", title: "Alpha", description: "" }], []);
+    const drawn = installedSection([github], [{ name: "alpha-dev", title: "Alpha", description: "" }], [], () => "");
     assert.equal(topRowId([], drawn.map(installedSectionRowId), ["y"]), "development:alpha-dev");
 });
 

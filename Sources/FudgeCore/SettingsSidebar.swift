@@ -71,17 +71,16 @@ public enum SettingsSidebar {
     /// The Extensions section: Fudge's own pages there and `pages` (`InstalledExtension.settingsPages`), one list
     /// sorted by title, without the suffix, as `InstalledExtension.all` sorts the extensions. Rows with the same title
     /// have a fixed order, so it never changes between reloads: Fudge's own page first, by rule, since an extension's
-    /// tag can start with a digit and sort before ":"; then the copy from Raycast's official repository (or a bundled
-    /// extension), then the development folder's, then the added repositories' by their folder, segment by segment;
-    /// then by tag.
+    /// tag can start with a digit and sort before ":"; then by repository label, A to Z (`localizedStandardCompare`),
+    /// whatever order the repositories have in the list (SPEC-177); then by tag. Two pages of one title both have a
+    /// label (`ExtensionTitles`); one without would come first.
     public static func extensions(_ pages: [InstalledExtension], titles: ExtensionTitles) -> [Entry] {
         let rows =
-            builtInExtensions.map { (entry: $0, sortTitle: $0.title, own: true, place: Place.raycast) }
+            builtInExtensions.map { (entry: $0, sortTitle: $0.title, own: true, label: String?.none) }
             + pages.map {
                 (
                     entry: Entry(tag: tag(of: $0), title: title(of: $0, titles: titles)), sortTitle: $0.manifest.title,
-                    own: false,
-                    place: Place(of: $0.repository)
+                    own: false, label: titles.label(of: $0)
                 )
             }
         return rows.sorted { first, second in
@@ -90,42 +89,17 @@ public enum SettingsSidebar {
             case .orderedDescending: return false
             case .orderedSame:
                 if first.own != second.own { return first.own }
-                if first.place != second.place { return first.place < second.place }
+                if first.label != second.label {
+                    guard let one = first.label, let other = second.label else { return first.label == nil }
+                    switch one.localizedStandardCompare(other) {
+                    case .orderedAscending: return true
+                    case .orderedDescending: return false
+                    case .orderedSame: break
+                    }
+                }
                 return first.entry.tag < second.entry.tag
             }
         }.map(\.entry)
-    }
-
-    /// Where an extension's row goes among rows of one title: Raycast's copy first, then the development folder's,
-    /// then the added repositories' by their folder, compared a segment at a time (`some/tools` before
-    /// `some-one/tools`), so a server's name, which comes first in its folder, sorts like an owner.
-    enum Place: Comparable {
-        case raycast
-        case development
-        case added([Substring])
-
-        init(of repository: InstalledExtension.Repository) {
-            switch repository {
-            case .raycast, .bundled: self = .raycast
-            case .development: self = .development
-            case .added(let folder): self = .added(folder.split(separator: "/"))
-            }
-        }
-
-        static func < (first: Place, second: Place) -> Bool {
-            switch (first, second) {
-            case (.added(let one), .added(let other)): one.lexicographicallyPrecedes(other)
-            default: first.rank < second.rank
-            }
-        }
-
-        private var rank: Int {
-            switch self {
-            case .raycast: 0
-            case .development: 1
-            case .added: 2
-            }
-        }
     }
 
     /// Two titles `localizedStandardCompare` ties, which it does only for the same text: "color picker" is another

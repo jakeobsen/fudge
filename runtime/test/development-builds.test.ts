@@ -10,14 +10,17 @@ import {
     developmentRowId,
     developmentRowsShown,
     installedSection,
+    installedSectionRowId,
     installOnlyRowActions,
     installOnlyRowsReady,
     readDevelopmentBuilds,
     uninstallDevelopmentBuild,
     type DevelopmentBuild,
+    type InstalledSectionRow,
 } from "../store-extension/src/development-builds.ts";
 import { allFilter, installedFilter, parseManifest } from "../store-extension/src/catalog.ts";
 import { maxManifestBytes } from "../store-extension/src/files.ts";
+import { notUpdatedRowId } from "../store-extension/src/not-updated.ts";
 import { bundledNames } from "../store-extension/src/store.ts";
 
 const folders: string[] = [];
@@ -182,7 +185,7 @@ test("↵ on a row built from an install alone copies its name, and Uninstall co
     assert.deepEqual(installOnlyRowActions, ["copyName", "uninstall"]);
 });
 
-test("the Installed section: by title, and on the same title the installs, then the development build, then Not updated (SPEC-166)", () => {
+test("the Installed section: by title, then repository label, then installs, development builds, Not updated", () => {
     const entry = (name: string, title: string) =>
         parseManifest(name, { name, title, commands: [{ name: "a", title: "A" }] })!;
     const github = entry("github", "GitHub");
@@ -190,16 +193,44 @@ test("the Installed section: by title, and on the same title the installs, then 
     const alpha = entry("alpha", "Alpha");
     const build = { name: "github", title: "GitHub", description: "" };
     const notUpdated = { id: "owner+tools+github", name: "github", repository: "owner/tools", title: "github", description: "" };
-    const rows = installedSection([alpha, github, github2], [build], [notUpdated]);
+    const kinds = (rows: InstalledSectionRow[]) =>
+        rows.map((row) =>
+            row.kind === "entry" ? `entry ${row.entry.name}` : row.kind === "development" ? "development" : "not updated",
+        );
+    const labeled =
+        (labels: Record<string, string>) =>
+        (rowId: string): string =>
+            labels[rowId] ?? "";
+    const githubRow = installedSectionRowId({ kind: "entry", entry: github });
+    const github2Row = installedSectionRowId({ kind: "entry", entry: github2 });
+    const buildRow = developmentRowId("github");
+    const notUpdatedRow = notUpdatedRowId(notUpdated.id);
+
+    // An install labeled Raycast comes after the development build of its title; one labeled Alpha, before it.
     assert.deepEqual(
-        rows.map((row) => (row.kind === "entry" ? `entry ${row.entry.name}` : row.kind === "development" ? "development" : "not updated")),
+        kinds(installedSection([github], [build], [], labeled({ [githubRow]: "Raycast", [buildRow]: "development" }))),
+        ["development", "entry github"],
+    );
+    assert.deepEqual(
+        kinds(installedSection([github], [build], [], labeled({ [githubRow]: "Alpha", [buildRow]: "development" }))),
+        ["entry github", "development"],
+    );
+    // A Not updated row sorts by its label too.
+    const three = labeled({ [githubRow]: "Raycast", [buildRow]: "development", [notUpdatedRow]: "Beta" });
+    assert.deepEqual(kinds(installedSection([alpha, github], [build], [notUpdated], three)), [
+        "entry alpha",
+        "not updated",
+        "development",
+        "entry github",
+    ]);
+    // On the same label, installs, then the development build, then Not updated; two installs keep their order.
+    const same = labeled({ [githubRow]: "x", [github2Row]: "x", [buildRow]: "x", [notUpdatedRow]: "x" });
+    assert.deepEqual(
+        kinds(installedSection([alpha, github, github2], [build], [notUpdated], same)),
         ["entry alpha", "entry github", "entry github-2", "development", "not updated"],
         "the same title in any case; two entries keep the order they come in",
     );
-    assert.deepEqual(
-        installedSection([github2, github], [], []).map((row) => (row.kind === "entry" ? row.entry.name : "")),
-        ["github-2", "github"],
-    );
+    assert.deepEqual(kinds(installedSection([github2, github], [], [], same)), ["entry github-2", "entry github"]);
 });
 
 test("development build rows show under All and Installed only, with a detail that says what they are", () => {

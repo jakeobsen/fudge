@@ -204,6 +204,9 @@ final class LauncherModel {
     /// Asks the user to confirm (title, message, primary, dismiss, destructive); set by the app delegate.
     /// Asks the user, for a call from `origin`; a background call gets `CallOrigin.unaskedAnswer` without an alert.
     @ObservationIgnored var confirm: (AlertRequest, CallOrigin) async -> Bool = { _, _ in false }
+    /// Asks the user to pick one of `options` (SPEC-177), for a call from `origin`; set by the app delegate. The
+    /// option's index, or nil for the dismiss button, and for a background call without asking.
+    @ObservationIgnored var choose: (ChoiceRequest, CallOrigin) async -> Int? = { _, _ in nil }
     /// The system's part of the System commands. `AppDelegate` gives snapshot runs inert ones, which do nothing.
     @ObservationIgnored var systemActions: any SystemActions = MacSystemActions()
     /// My Schedule's calendars: EventKit's, or a snapshot run's made-up ones (`FixedCalendarSource`).
@@ -239,6 +242,14 @@ final class LauncherModel {
             var linkText: String
             var url: URL
         }
+    }
+
+    /// A question with a button per option, in order, then `dismiss`, which Esc presses.
+    struct ChoiceRequest {
+        var title: String
+        var message: String
+        var options: [String]
+        var dismiss: String
     }
 
     @ObservationIgnored private let paths: FudgePaths
@@ -4063,11 +4074,23 @@ final class LauncherModel {
             throw LaunchCommandError.invalid("the calling command isn't running")
         }
         let request = try LaunchRequest(params: params).asCalled(from: origin)
-        let target = try CommandLocator.locate(
-            request, caller: caller, in: Array(extensions.values), settings: settings)
+        let located = try CommandLocator.locate(
+            request, caller: caller, in: Array(extensions.values), settings: settings,
+            names: RepositoryNames(settings: settings))
+        let target: LaunchTarget
+        let chosen: Bool
+        switch located {
+        case .target(let found):
+            (target, chosen) = (found, false)
+        case .choose(let copies, let all):
+            // Choosing a copy allows it too, so no "Allow" question follows (SPEC-177).
+            let copy = try await chooseCopy(
+                of: caller, among: copies, all: all, command: request.name, origin: origin, from: session)
+            (target, chosen) = (try CommandLocator.target(request, in: copy, caller: caller, settings: settings), true)
+        }
         let targetID = FudgeSettings.commandID(owner: .extension(target.installed.id), command: target.command.name)
         try CommandLocator.checkMode(target.command, type: request.type, isActiveInMenuBar: menuBar.isActive(targetID))
-        if target.isOtherExtension {
+        if target.isOtherExtension, !chosen {
             try await checkPermission(of: caller, toOpen: target, origin: origin, from: session)
         }
 
@@ -4184,6 +4207,52 @@ final class LauncherModel {
         }
         guard allowed else {
             throw LaunchCommandError.notAllowed(extensionTitle: targetTitle)
+        }
+    }
+
+    /// Which of two or more copies that can run the call `caller` opens (SPEC-177): the one chosen before, else the
+    /// user picks one, each named with its repository's label, or "Don't Allow". The choice is read among the copies
+    /// that can run the call and recorded among `all`, every install of that name and owner, in
+    /// `launch-permissions.json`. Only a call from a session the user is using may ask, as in `checkPermission`.
+    private func chooseCopy(
+        of caller: InstalledExtension, among copies: [InstalledExtension], all: [ExtensionID], command: String,
+        origin: CallOrigin, from session: String
+    ) async throws -> InstalledExtension {
+        let file = paths.launchPermissionsFile
+        let first = copies[0].manifest
+        let callerTitle = extensionTitles.title(of: caller)
+        let refusal = LaunchCommandError.notAllowed(extensionTitle: first.title)
+        let stored = LaunchPermissions.load(from: file).choice(caller: caller.id, among: copies.map(\.id))
+        switch LaunchPermissions.step(choice: stored, origin: origin) {
+        case .open(let id):
+            guard let copy = copies.first(where: { $0.id == id }) else { throw refusal }
+            return copy
+        case .refused:
+            throw refusal
+        case .refusedUnasked:
+            if backgroundNotices.first("launch:\(caller.id)/\(first.ownerOrAuthorName)/\(first.name)") {
+                showHUD(LaunchPermissions.unaskedNotice(callerTitle: callerTitle, targetTitle: first.title))
+            }
+            let unasked = LaunchCommandError.permissionNeeded(extensionTitle: first.title)
+            quietSessions[session]?.unasked.insert(unasked.description)
+            throw unasked
+        case .ask:
+            let names = RepositoryNames(settings: settings)
+            let commandTitle = first.commands.first { $0.name == command }?.title ?? command
+            let index = await choose(
+                ChoiceRequest(
+                    title: "“\(callerTitle)” wants to open “\(commandTitle)” from “\(first.title)”.",
+                    message: "You have more than one copy of \(first.title). Which one should it open?",
+                    options: copies.map(names.copyTitle(of:)),
+                    dismiss: "Don't Allow"
+                ), origin)
+            let copy = index.flatMap { copies.indices.contains($0) ? copies[$0] : nil }
+            // Read again: another call may have stored an answer while this one waited.
+            var permissions = LaunchPermissions.load(from: file)
+            permissions.recordChoice(copy?.id, caller: caller.id, among: all)
+            try? permissions.save(to: file)
+            guard let copy else { throw refusal }
+            return copy
         }
     }
 

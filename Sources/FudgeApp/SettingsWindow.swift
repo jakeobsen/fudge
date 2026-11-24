@@ -25,11 +25,17 @@ final class SettingsModel {
     static let calculatorPage = SettingsSidebar.calculatorPage
     /// Every installed extension, for the Commands page.
     private(set) var allExtensions: [InstalledExtension] = [] {
-        didSet { extensionTitles = Self.titles(allExtensions, fudgeSettings) }
+        didSet {
+            extensionTitles = Self.titles(allExtensions, fudgeSettings)
+            makeLaunchPermissionRows()
+        }
     }
     /// `settings.json`, as the Commands page edits it.
     private(set) var fudgeSettings = FudgeSettings() {
-        didSet { extensionTitles = Self.titles(allExtensions, fudgeSettings) }
+        didSet {
+            extensionTitles = Self.titles(allExtensions, fudgeSettings)
+            makeLaunchPermissionRows()
+        }
     }
     /// How each install is named (SPEC-174), from every install, never only the sidebar's pages, and the repositories'
     /// names; rebuilt whenever either is set.
@@ -329,8 +335,11 @@ final class SettingsModel {
 
     // MARK: - Extensions that open other extensions
 
-    /// The answers to "Allow <A> to open <B>'s commands?" (`launch-permissions.json`).
-    private(set) var launchPermissions: [LaunchPermissions.Entry] = []
+    /// The answers to "Allow <A> to open <B>'s commands?" (`launch-permissions.json`), as last read.
+    @ObservationIgnored private var launchPermissions = LaunchPermissions()
+    /// Their rows on the Permissions page (`LaunchPermissions.rows`, SPEC-177), made again when the file is read and
+    /// when the installs or the settings change.
+    private(set) var launchPermissionRows: [LaunchPermissions.Row] = []
     /// The file holds something fudge can't read, so the answers can't be changed here.
     private(set) var launchPermissionsUnreadable = false
 
@@ -343,6 +352,11 @@ final class SettingsModel {
         ExtensionTitles(installed, names: RepositoryNames(settings: settings))
     }
 
+    /// A copy of an extension installed from two or more repositories, as a choice row's menu lists it.
+    func copyTitle(_ installed: InstalledExtension) -> String {
+        RepositoryNames(settings: fudgeSettings).copyTitle(of: installed)
+    }
+
     func setLaunchPermission(_ allowed: Bool, caller: ExtensionID, target: ExtensionID) {
         changeLaunchPermissions { $0.record(allowed, caller: caller, target: target) }
     }
@@ -352,9 +366,25 @@ final class SettingsModel {
         changeLaunchPermissions { $0.forget(caller: caller, target: target) }
     }
 
+    /// A choice row's menu: a copy, or nil for "Not allowed", recorded among every copy in the row.
+    func chooseLaunchCopy(_ copy: ExtensionID?, caller: ExtensionID, among copies: [ExtensionID]) {
+        changeLaunchPermissions { $0.recordChoice(copy, caller: caller, among: copies) }
+    }
+
+    /// A choice row's ✕: forgets the answers for every copy in the row, so the user is asked again next time.
+    func forgetLaunchChoice(caller: ExtensionID, among copies: [ExtensionID]) {
+        changeLaunchPermissions { $0.forget(caller: caller, among: copies) }
+    }
+
     private func loadLaunchPermissions() {
-        launchPermissions = LaunchPermissions.load(from: paths.launchPermissionsFile).entries
+        launchPermissions = LaunchPermissions.load(from: paths.launchPermissionsFile)
         launchPermissionsUnreadable = LaunchPermissions.isUnreadable(paths.launchPermissionsFile)
+        makeLaunchPermissionRows()
+    }
+
+    private func makeLaunchPermissionRows() {
+        launchPermissionRows = launchPermissions.rows(
+            installed: allExtensions, names: RepositoryNames(settings: fudgeSettings))
     }
 
     /// Reads the file again first, so an answer given meanwhile isn't lost, then edits and saves it.
