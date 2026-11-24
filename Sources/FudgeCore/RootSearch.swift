@@ -176,11 +176,7 @@ public struct RootItem: Sendable, Equatable, Identifiable {
     /// one from `updateCommandMetadata`) is shown as set.
     static func subtitle(_ subtitle: String?, unlessItRepeats title: String) -> String? {
         guard let subtitle else { return nil }
-        let (shown, named) = (
-            subtitle.trimmingCharacters(in: .whitespacesAndNewlines),
-            title.trimmingCharacters(in: .whitespacesAndNewlines)
-        )
-        return shown.caseInsensitiveCompare(named) == .orderedSame ? nil : subtitle
+        return ExtensionTitles.same(subtitle, title) ? nil : subtitle
     }
 
     /// One item per command of a group of Fudge's own, with the group's title as its subtitle.
@@ -199,13 +195,14 @@ public struct RootItem: Sendable, Equatable, Identifiable {
     }
 
     /// One item per command of the extension (view, no-view and menu-bar), with the subtitles commands set for
-    /// themselves. An install that isn't Raycast's or bundled has its repository after its subtitle, so two installs
-    /// of one name read apart (`InstalledExtension.displayTitle`).
-    public static func commands(of installed: InstalledExtension, metadata: CommandMetadata = CommandMetadata())
-        -> [RootItem]
-    {
+    /// themselves. An install whose title another install shares has its repository's label after its subtitle, so
+    /// the two read apart (`ExtensionTitles`, SPEC-174).
+    public static func commands(
+        of installed: InstalledExtension, titles: ExtensionTitles, metadata: CommandMetadata = CommandMetadata()
+    ) -> [RootItem] {
         let manifest = installed.manifest
-        let suffix = String(installed.displayTitle.dropFirst(manifest.title.count))
+        let suffix = titles.label(of: installed).map { " (\($0))" } ?? ""
+        let title = titles.title(of: installed)
         return manifest.commands.filter { ["view", "no-view", "menu-bar"].contains($0.mode) }.map { command in
             let icon = (command.icon ?? manifest.icon).map { installed.assetsDirectory.appendingPathComponent($0) }
             let shown =
@@ -214,8 +211,9 @@ public struct RootItem: Sendable, Equatable, Identifiable {
             return RootItem(
                 id: commandID(owner: .extension(installed.id), command: command.name),
                 title: command.title,
-                subtitle: suffix.isEmpty ? shown : shown.map { $0 + suffix } ?? installed.displayTitle,
-                extensionTitle: installed.displayTitle,
+                subtitle: suffix.isEmpty ? shown : shown.map { $0 + suffix } ?? title,
+                // What search matches a repository's name in: the title as shown, so only while it's labeled.
+                extensionTitle: title,
                 keywords: command.keywords,
                 kind: .command(
                     extension: installed.id,

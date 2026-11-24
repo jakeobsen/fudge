@@ -80,9 +80,10 @@ public struct FudgeSettings: Sendable, Equatable {
     /// **Install or update failed** (`notifyInstallFailed`): on unless `false`, and only `false` is written.
     public var notifyInstallFailed = true
     /// The repositories added on the Extension Store's page (`extensionRepositories`, FUD-182), in the order added:
-    /// `{ "address", "branch"?, "off"? }` each, written only when there is one, `off` only when true. Reading parses
-    /// each again beside those before it and skips any `ExtensionRepository.parse` refuses, a duplicate included, so a
-    /// hand-edited file never adds what Settings would refuse.
+    /// `{ "address", "branch"?, "off"?, "name"? }` each, written only when there is one, `off` only when true. Reading
+    /// parses each again beside those before it and skips any `ExtensionRepository.parse` refuses, a duplicate
+    /// included, so a hand-edited file never adds what Settings would refuse; a name `RepositoryNames.check` refuses,
+    /// or one an earlier repository has, reads as none (SPEC-174 B4).
     public var extensionRepositories: [ListedRepository] = []
     /// Raycast's official repository in that list (`raycastRepository`, SPEC-160): absent is in the list and on,
     /// `"off"` (or the `false` written before) is switched off, `"removed"` is out of the list, and anything else reads
@@ -267,7 +268,8 @@ public struct FudgeSettings: Sendable, Equatable {
     }
 
     /// `extensionRepositories`' entries that parse, each beside those before it; an entry that isn't an object with a
-    /// text `address` (and a text `branch`, if it has one) is skipped too.
+    /// text `address` (and a text `branch`, if it has one) is skipped too. A `name` that isn't text, that the rule
+    /// refuses or that an earlier entry has is no name, and the entry stays.
     static func listedRepositories(_ value: Any?) -> [ListedRepository] {
         var listed: [ListedRepository] = []
         for case let entry as [String: Any] in value as? [Any] ?? [] {
@@ -275,7 +277,10 @@ public struct FudgeSettings: Sendable, Equatable {
                 case .success(let repository) = ExtensionRepository.parse(
                     address: address, branch: entry["branch"] as? String, existing: listed.map(\.repository))
             else { continue }
-            listed.append(ListedRepository(repository: repository, on: !isJSONTrue(entry["off"])))
+            let label = (entry["name"] as? String).flatMap {
+                try? RepositoryNames.check($0, others: listed.compactMap(\.label)).get()
+            }
+            listed.append(ListedRepository(repository: repository, on: !isJSONTrue(entry["off"]), label: label))
         }
         return listed
     }
@@ -380,6 +385,7 @@ public struct FudgeSettings: Sendable, Equatable {
                 var entry: [String: Any] = ["address": listed.repository.address]
                 entry["branch"] = listed.repository.branch
                 entry["off"] = listed.on ? nil : true
+                entry["name"] = listed.label
                 return entry
             }
         object["raycastRepository"] = raycastRepositoryState.settingsValue

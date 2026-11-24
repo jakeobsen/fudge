@@ -58,17 +58,14 @@ public enum SettingsSidebar {
     /// `openExtensionPreferences()` open the window on too, so two extensions of one name have a page each.
     public static func tag(of installed: InstalledExtension) -> String { installed.id.key }
 
-    /// An installed extension's row title, so no two rows look the same: a development build's and an added
-    /// repository's say where they're from (`displayTitle`), and one from Raycast's official repository is followed
-    /// by " (installed)" when it's exactly the title of one of Fudge's own pages under Extensions (the Extension Store
-    /// has a "Color Picker"). Never both.
-    public static func title(of installed: InstalledExtension) -> String {
-        switch installed.repository {
-        case .development, .added: return installed.displayTitle
-        case .raycast, .bundled:
-            let title = installed.manifest.title
-            return builtInExtensions.contains { sameTitle($0.title, title) } ? title + " (installed)" : title
-        }
+    /// An installed extension's row title, so no two rows look the same: one whose title another install shares says
+    /// where it's from (`ExtensionTitles`, SPEC-174), and one without a label is followed by " (installed)" when it's
+    /// exactly the title of one of Fudge's own pages under Extensions (the Extension Store has a "Color Picker"),
+    /// whichever repository it's from. Never both.
+    public static func title(of installed: InstalledExtension, titles: ExtensionTitles) -> String {
+        if titles.label(of: installed) != nil { return titles.title(of: installed) }
+        let title = installed.manifest.title
+        return builtInExtensions.contains { sameTitle($0.title, title) } ? title + " (installed)" : title
     }
 
     /// The Extensions section: Fudge's own pages there and `pages` (`InstalledExtension.settingsPages`), one list
@@ -77,12 +74,13 @@ public enum SettingsSidebar {
     /// tag can start with a digit and sort before ":"; then the copy from Raycast's official repository (or a bundled
     /// extension), then the development folder's, then the added repositories' by their folder, segment by segment;
     /// then by tag.
-    public static func extensions(_ pages: [InstalledExtension]) -> [Entry] {
+    public static func extensions(_ pages: [InstalledExtension], titles: ExtensionTitles) -> [Entry] {
         let rows =
             builtInExtensions.map { (entry: $0, sortTitle: $0.title, own: true, place: Place.raycast) }
             + pages.map {
                 (
-                    entry: Entry(tag: tag(of: $0), title: title(of: $0)), sortTitle: $0.manifest.title, own: false,
+                    entry: Entry(tag: tag(of: $0), title: title(of: $0, titles: titles)), sortTitle: $0.manifest.title,
+                    own: false,
                     place: Place(of: $0.repository)
                 )
             }

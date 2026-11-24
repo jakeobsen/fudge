@@ -57,16 +57,6 @@ public struct InstalledExtension: Sendable, Equatable {
         self.compatibility = compatibility
     }
 
-    /// Its title as Fudge shows it: the manifest's, then " (development)" for a development build and the repository's
-    /// folder for one from an added repository, so two installs of one name read apart.
-    public var displayTitle: String {
-        switch repository {
-        case .raycast, .bundled: manifest.title
-        case .development: "\(manifest.title) (development)"
-        case .added(let folder): "\(manifest.title) (\(folder))"
-        }
-    }
-
     /// The installs by id. Ids are unique where the loader finds them; should one come twice, the first is kept.
     public static func index(_ installed: [InstalledExtension]) -> [ExtensionID: InstalledExtension] {
         Dictionary(installed.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })

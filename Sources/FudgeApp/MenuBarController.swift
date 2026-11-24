@@ -72,6 +72,8 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     private var installed: [String: (InstalledExtension, ExtensionManifest.Command)] = [:]
     /// `settings.json`, for which commands are enabled.
     private var settings = FudgeSettings()
+    /// How each install is named (`ExtensionTitles`), for the notices that name an extension.
+    private var titles = ExtensionTitles([], names: RepositoryNames(settings: FudgeSettings()))
     /// Snapshots never start: they put nothing in the menu bar.
     private var started = false
 
@@ -99,8 +101,9 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     /// Settings. Commands that are no longer installed are deactivated; the others pick up their new manifest. A
     /// disabled command leaves the menu bar and stops refreshing, but stays active (`MenuBarStore.shown`), so turning
     /// it back on puts it back, loading in the background.
-    func update(installed extensions: [InstalledExtension], settings: FudgeSettings) {
+    func update(installed extensions: [InstalledExtension], titles: ExtensionTitles, settings: FudgeSettings) {
         self.settings = settings
+        self.titles = titles
         installed = [:]
         for installedExtension in extensions {
             for command in installedExtension.manifest.commands where command.mode == "menu-bar" {
@@ -273,7 +276,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
             // A refusal on purpose (sign-in is off, SPEC-095) says so, never as a failure with its trace.
             let signIn = SignInNotice(
                 notice: notice, message: message, extension: item.installed.id,
-                extensionTitle: item.installed.displayTitle, commandID: nil)
+                extensionTitle: titles.title(of: item.installed), commandID: nil)
             let hud = signIn?.hud ?? MessageText.joined("\(item.command.title) failed", message)
             if fatal {
                 if item.lifecycle.failed(session) { host.showHUD(hud) }

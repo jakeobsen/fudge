@@ -94,7 +94,7 @@ private func installed(_ commands: [String], using: [String: [CommandCompatibili
     #expect(settings.commands.isEmpty, "nothing is written for it")
 
     // Root search leaves it out, and its hotkey isn't registered.
-    let items = RootSearch.applying(settings, to: RootItem.commands(of: extensions[0]))
+    let items = RootSearch.applying(settings, to: RootItem.commands(of: extensions[0], titles: .forTests(extensions)))
     #expect(items.compactMap(\.commandSettingsID) == [search])
     settings.commands[emojis] = .init(hotkey: "option+e")
     settings.commands[search] = .init(hotkey: "option+s")

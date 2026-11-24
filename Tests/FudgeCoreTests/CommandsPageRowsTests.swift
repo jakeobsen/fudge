@@ -21,9 +21,9 @@ private func github(in folder: String) throws -> InstalledExtension {
 
 @Test func twoExtensionsOfOneNameBothListTheirCommands() throws {
     let installed = [try github(in: "raycast/extensions"), try github(in: "someone/tools")]
-    let rows = CommandsPageRows.rows(groups: [], extensions: installed, search: "")
+    let rows = CommandsPageRows.rows(groups: [], extensions: installed, titles: .forTests(installed), search: "")
     #expect(rows.map(\.owner) == installed.map { .extension($0.id) })
-    #expect(rows.map(\.title) == ["GitHub", "GitHub (someone/tools)"])
+    #expect(rows.map(\.title) == ["GitHub (raycast)", "GitHub (someone/tools)"], "both labeled (SPEC-174)")
     #expect(rows.map(\.type) == ["Extension", "Extension"])
     #expect(
         rows.map { $0.commands.map(\.id) } == [
@@ -38,7 +38,8 @@ private func github(in folder: String) throws -> InstalledExtension {
     let installed = [
         try github(in: "raycast/extensions"), try github(in: "fudgeapp/development"), try github(in: "someone/tools"),
     ]
-    let rows = CommandsPageRows.rows(groups: BuiltInCommandGroup.all, extensions: installed, search: "")
+    let rows = CommandsPageRows.rows(
+        groups: BuiltInCommandGroup.all, extensions: installed, titles: .forTests(installed), search: "")
     let owners = rows.map(\.owner)
     let ids = rows.flatMap(\.commands).map(\.id)
     #expect(Set(owners).count == owners.count)
@@ -51,19 +52,24 @@ private func github(in folder: String) throws -> InstalledExtension {
 
 @Test func aSearchKeepsAMatchingGroupWholeAndOtherwiseItsMatchingCommands() throws {
     let installed = [try github(in: "raycast/extensions"), try github(in: "someone/tools")]
-    let byTitle = CommandsPageRows.rows(groups: [], extensions: installed, search: " github ")
+    let byTitle = CommandsPageRows.rows(
+        groups: [], extensions: installed, titles: .forTests(installed), search: " github ")
     #expect(byTitle.map { $0.commands.count } == [2, 2], "a group whose title matches keeps all its commands")
-    let byCommand = CommandsPageRows.rows(groups: [], extensions: installed, search: "SEARCH repo")
+    let byCommand = CommandsPageRows.rows(
+        groups: [], extensions: installed, titles: .forTests(installed), search: "SEARCH repo")
     #expect(
         byCommand.map { $0.commands.map(\.id) } == [
             ["github/search-repositories"], ["someone+tools+github/search-repositories"],
         ])
-    #expect(CommandsPageRows.rows(groups: [], extensions: installed, search: "nothing like it").isEmpty)
+    #expect(
+        CommandsPageRows.rows(
+            groups: [], extensions: installed, titles: .forTests(installed), search: "nothing like it"
+        ).isEmpty)
 }
 
 @Test func aGroupWithNoCommandsIsLeftOut() {
     let empty = BuiltInCommandGroup(name: .quicklinks, title: "Quicklinks", commands: [])
-    #expect(CommandsPageRows.rows(groups: [empty], extensions: [], search: "").isEmpty)
+    #expect(CommandsPageRows.rows(groups: [empty], extensions: [], titles: .forTests([]), search: "").isEmpty)
 }
 
 extension Array {

@@ -16,14 +16,14 @@ struct ExtensionRepositoriesSection: View {
         Section {
             if model.raycastRepositoryListed {
                 row(
-                    name: ExtensionRepositoryText.raycastName, detail: ExtensionRepositoryText.raycastAddress,
+                    name: ExtensionRepositoryText.raycastLabel, detail: ExtensionRepositoryText.raycastAddress,
                     copyId: ExtensionRepository.raycastCopyId, branch: nil,
                     isOn: Binding(get: { model.raycastRepository }, set: { model.setRaycastRepository($0) }))
             }
             ForEach(model.extensionRepositories, id: \.repository.copyId) { listed in
                 let repository = listed.repository
                 row(
-                    name: repository.name, detail: ExtensionRepositoryText.detail(repository),
+                    name: ExtensionRepositoryText.rowName(listed), detail: ExtensionRepositoryText.detail(repository),
                     copyId: repository.copyId, branch: repository.branch,
                     isOn: Binding(get: { listed.on }, set: { model.setRepository(repository.copyId, on: $0) }))
             }
@@ -47,7 +47,8 @@ struct ExtensionRepositoriesSection: View {
         .onAppear { model.loadRepositoryStatuses() }
     }
 
-    /// A repository's row: its name, the address (and branch) in secondary text, its status line under that, red for
+    /// A repository's row: its name (`raycast`, the name it was added with, else its `owner/repository`), the address
+    /// (and branch) in secondary text, its status line under that, red for
     /// a problem, its switch and its remove button.
     private func row(name: String, detail: String, copyId: String, branch: String?, isOn: Binding<Bool>) -> some View {
         let status = model.repositoryStatuses[copyId] ?? .notChecked
@@ -70,8 +71,9 @@ struct ExtensionRepositoriesSection: View {
     }
 }
 
-/// The **Add Repository** window (SPEC-160 B): Address, with the cursor in it, Branch, the warning, a refused address's
-/// reason in red, and Cancel (Esc) and Add (↵). The window is the warning, so nothing asks again after Add.
+/// The **Add Repository** window (SPEC-160 B, SPEC-174 B1): Address, with the cursor in it, Branch, Name, a line on
+/// what the name is for, the warning, a refused address's or name's reason in red, and Cancel (Esc) and Add (↵). The
+/// window is the warning, so nothing asks again after Add.
 struct AddRepositoryWindow: View {
     let model: SettingsModel
     @Binding var draft: ExtensionRepositoryDraft
@@ -93,7 +95,16 @@ struct AddRepositoryWindow: View {
                     TextField("", text: $draft.branch, prompt: Text(ExtensionRepositoryText.branchPrompt))
                         .textFieldStyle(.roundedBorder)
                 }
+                GridRow {
+                    Text(ExtensionRepositoryText.nameLabel)
+                    TextField("", text: $draft.label, prompt: Text(ExtensionRepositoryText.namePrompt))
+                        .textFieldStyle(.roundedBorder)
+                }
             }
+            Text(ExtensionRepositoryText.nameHelp)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             Text(ExtensionRepositoryText.addWarning)
                 .font(.callout)
                 .foregroundStyle(.secondary)

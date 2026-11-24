@@ -642,7 +642,8 @@ Extensions run in a separate Node.js process, the extension host.
       Any other extension gets an error.
       **Extension repositories** (FUD-182, SPEC-157 A-B): the store's page has **Extension Repositories** below its switch (`ExtensionRepositoriesSection`), disabled while the store is off.
       Every repository has the same row (SPEC-160): its name, its address (and branch) and its status line, a switch and a remove button.
-      Raycast's official repository is first while it's in the list, named `raycast/extensions` with the address `https://github.com/raycast/extensions` (`ExtensionRepositoryText.raycastName`, `raycastAddress`, and in `storeAnswer`); then the added ones in order.
+      Raycast's official repository is first while it's in the list, shown as `raycast` (`ExtensionRepositoryText.raycastLabel`) with the address `https://github.com/raycast/extensions` (`raycastAddress`); then the added ones in order, each shown by its name (`ListedRepository.label`), else its `owner/repository`.
+      Raycast's name in `raycastEntry` and `storeAnswer` stays `raycast/extensions` (`raycastName`).
       Behind those names nothing changes: its copy id stays `raycast`, its copy `repo/`, and its folder `raycast/extensions`.
       `raycastRepository` in `settings.json` (`RaycastRepositoryState`, core) is absent while it's in the list and on, `"off"` while it's switched off, and `"removed"` once it's removed; the `false` older builds wrote reads as `"off"`, and anything else as on.
       `FudgeSettings.removeRaycastRepository`, `restoreRaycastRepository` and `showsAddRaycastRepository` are its three states' functions, and `storeAnswer` leaves its entry out while it's removed.
@@ -654,8 +655,11 @@ Extensions run in a separate Node.js process, the extension host.
       The identity is `https://`, the server in lowercase with a port other than 443, and the path, in lowercase on `github.com` with no port or port 443; Raycast's identity is refused as already listed while it's in the list, and `https://github.com/fudgeapp/development` with its own sentence, both by identity, before the branch and the list, and again by folder at the end.
       The copy id is the identity's SHA-256's first 16 hex digits (`isValidCopyId`: those or `raycast`), and the name is `owner/repository` as typed on GitHub, else the identity without `https://`.
       The Extension Store's `repository-address.ts` (`parseRepositoryAddress`) is the same rule, step for step, and `runtime/test/fixtures/repository-addresses.json` pins both to the same cases, with each refusal's sentence and the status problems' sentences.
-      Under the rows are **Add Raycast's Repository**, only while it's removed, which puts it back first and on with no window, and **Add Repository…**, which opens the add window (`AddRepositoryWindow`, a sheet): Address, with the cursor in it, Branch, the warning, a refused address's reason in red, and Cancel (Esc) and Add (↵).
+      Under the rows are **Add Raycast's Repository**, only while it's removed, which puts it back first and on with no window, and **Add Repository…**, which opens the add window (`AddRepositoryWindow`, a sheet): Address, with the cursor in it, Branch, Name, a line on what the name is for, the warning, a refused address's or name's reason in red, and Cancel (Esc) and Add (↵).
       The window is the warning, so nothing asks again after Add.
+      The name is optional and is checked after the address (`ExtensionRepositoryDraft.label`): trimmed, then refused with a `/`, a character of Unicode category Cc, Cf, Zl or Zp, or a space other than U+0020, over 40 characters, or the same as `raycast`, `development`, `Fudge` or another listed repository's name, ignoring case.
+      It's stored as `name` in the repository's `extensionRepositories` entry (`ListedRepository.label`), and reading drops one the rule refuses or an earlier repository already has.
+      There's no rename in place: a repository is renamed by removing it and adding it again, which keeps its folder and so its extensions' ids, settings, hotkeys and aliases.
       Its fields live in `ExtensionRepositoryDraft` (core), which the section keeps in its own state and makes new each time the window opens, never in `SettingsModel`.
       `ExtensionRepositoryDraft.add(existing:raycastListed:)` checks the address against the list and Raycast's place as they are when Add is pressed, and `SettingsModel.addRepository(_:)` saves what it accepts through `FudgeSettings.addRepository`; a refusal, or a save that fails, stays in the window as its reason.
       While Raycast's is removed, its address in the window (`parse(…, raycastListed: false)`) gives Raycast's own entry, copy id `raycast`, however many are added, and a branch typed with it is refused (`raycastBranch`); saved lists are always parsed with Raycast's refused, so it never becomes a second copy.
@@ -667,11 +671,11 @@ Extensions run in a separate Node.js process, the extension host.
       The store asks for the list with `extensionRepositories()` in `fudge:app` (`store.repositories`, answered only for the store's sessions, as `fudge.log` is, `BundledCalls.Call.storeRepositories`): `settings.json` is read afresh for each call, and the answer (`ExtensionRepository.storeAnswer`) is `[{ copyId, folder, address, branch?, name, on }]`, Raycast's first.
       The store checks it again (`checkRepositoriesAnswer` in `repository-address.ts`): an entry is Raycast's by its copy id `raycast` and its folder, only in first place, as `RAYCAST_COPY` with its `on`; any other entry, at any place, counts when it parses again, with Raycast's listed, beside those before it, to the copy id and folder answered.
       An array answer with no entry of copy id `raycast` at all means Raycast's was removed (`raycastRemoved`): `readRepositoryList` then deletes `repo/` and `repo-status.json` under the hold key `remove:raycast`, and a failed call, an answer that isn't an array, or a Raycast entry the check leaves out deletes nothing.
-      A snapshot run takes `--add-repository <address>`, which draws the add window over the store's page with the address typed (`SettingsModel.snapshotAddRepository`), since a snapshot run never begins a sheet, and `--add-repository-add`, which presses its Add, so a refused address shows its reason.
+      A snapshot run takes `--add-repository <address>`, which draws the add window over the store's page with the address typed (`SettingsModel.snapshotAddRepository`), since a snapshot run never begins a sheet, `--add-repository-name <text>`, which types a name, and `--add-repository-add`, which presses its Add, so a refused address or name shows its reason.
     - **The Commands page** (`CommandsPage.swift`) is the Settings window's second page:
       Fudge's own command groups, then the quicklinks as a group of their own (`SettingsModel.commandGroups`, shown once there is one, its Type "Quicklinks" and theirs "Quicklink", `BuiltInCommandGroup.typeLabels`),
       then every installed extension, each expanded to its commands (menu-bar ones included), with each command's alias, hotkey and Enabled checkbox (an extension's row has its own checkbox).
-      An extension's group is keyed by its id (`CommandOwner.extension`) and titled with its `displayTitle`, so two extensions of one name are two groups that read apart.
+      An extension's group is keyed by its id (`CommandOwner.extension`) and titled as `ExtensionTitles` names it, so two extensions of one name are two groups that read apart.
       `CommandsPageRows` (core) builds the rows, and the page only draws them; each command row is identified by its whole command id, since the page's lazy stack keeps one row per id across every group, and two extensions of one name have commands of the same names.
       The bundled Extension Store is listed too, unticked until it's enabled.
       An alias is saved on ↵, and Esc puts the old one back.
@@ -705,7 +709,7 @@ Extensions run in a separate Node.js process, the extension host.
       On does what onboarding's Open Raycast Links with Fudge does (`RaycastLinks.openWithFudge(helper:location:)`), and is refused while Fudge runs from its disk image or a translocated copy (`AppLocation.raycastLinksRefusal`), as Open at Login is.
       Off gives both schemes back explicitly to the first other app that claims both and isn't Fudge's (`handBackTarget`, `giveBack`), so the choice macOS saves names that app; with no such app it's disabled while on, and its line says there's nothing to give them back to.
       A change that doesn't take shows the system's message, or that macOS didn't make it, and the switch shows what LaunchServices says.
-      Below them, **Signed in** lists each stored sign-in (the extension's `displayTitle`, the provider, when) with Sign Out.
+      Below them, **Signed in** lists each stored sign-in (the extension's title as `ExtensionTitles` names it, the provider, when) with Sign Out.
       **Sign-ins** are Keychain generic passwords (`KeychainSecretStore`), service `io.github.jakeobsen.fudge.oauth`, account `<extension id>/<providerId>`, holding a JSON `StoredTokenSet`;
       `OAuthTokenStore` (core) reads and writes them through the `SecretStore` protocol, and the `oauth.tokens.*` calls go through `SignInCalls` (core) with the calling session's extension, never one named in the call, so one extension never reads, sets or removes another's.
       A stored sign-in keeps `relayProvider`, the provider its relay sign-in was for, only when the session prepared that sign-in; a refresh keeps the mark.
@@ -773,7 +777,7 @@ Extensions run in a separate Node.js process, the extension host.
     - **The Permissions page** (`PermissionsPage.swift`) comes after General: Accessibility's status (`AccessibilityStatus`, read without a prompt when it's shown and every second while it's on screen), its reason, and Open Accessibility Settings.
       The reason (`AccessibilityPermission.reason`, which onboarding's Accessibility step shows too) names Fudge's own commands that need it first, then extensions that read the selection or paste.
       That button asks for macOS's prompt on the first click and opens the pane on later ones, or at once when something in this run already asked for the prompt (`AccessibilityPermission.request`, `SystemAccessibility.promptShown`), so the prompt and the pane never stack.
-      Below it, always shown, are the answers to "Allow <A> to open <B>'s commands?" (`LaunchPermissionsSection`, `LaunchPermissions.entries`, each extension shown by its `displayTitle`), each changeable or forgotten, with the file read again before each change, a line saying none has asked yet when there are none, and the unreadable-file notice.
+      Below it, always shown, are the answers to "Allow <A> to open <B>'s commands?" (`LaunchPermissionsSection`, `LaunchPermissions.entries`, each extension shown as `ExtensionTitles` names it), each changeable or forgotten, with the file read again before each change, a line saying none has asked yet when there are none, and the unreadable-file notice.
       Between them is Calendar access as macOS has it, with Open Privacy Settings (`CalendarAccessRow`); My Schedule asks for it, never this page.
       Show Onboarding Again restarts onboarding from Welcome.
     - **The Notifications page** (`NotificationsPage.swift`, SPEC-156) comes after Permissions: macOS's answer for Fudge (`NotificationPermission.statusLine`), read and never asked when the page appears and when the window becomes key, with Ask Now while macOS hasn't been asked and Open Notification Settings otherwise.
@@ -827,8 +831,8 @@ Extensions run in a separate Node.js process, the extension host.
       `SettingsSidebar` (core) gives both lists and the tags of Fudge's own pages, which start with `:`, so no extension id can take one; `SettingsView` only draws them.
       An extension's page is tagged with its id (`SettingsSidebar.tag(of:)`), so two extensions of one name have a page each, and `--settings <id>` opens one in a snapshot run.
       Rows with exactly the same title have a fixed order, so it never changes: Fudge's own page first, then the copy from Raycast's official repository, then the development folder's, then the added repositories' by their folder, a segment at a time (`SettingsSidebar.Place`), then by tag.
-      An extension from Raycast's official repository with exactly the title of one of Fudge's own pages shows " (installed)" after its title (`SettingsSidebar.title(of:)`; the Extension Store has a Color Picker of its own).
-      A development build's and an added repository's rows show their `displayTitle` instead ("GitHub (development)", "GitHub (someone/tools)"), never " (installed)" as well.
+      An extension without a label (`ExtensionTitles.label(of:)`) whose title is exactly one of Fudge's own pages shows " (installed)" after its title, from any repository (`SettingsSidebar.title(of:titles:)`; the Extension Store has a Color Picker of its own).
+      An extension with a label shows it instead ("GitHub (raycast)", "GitHub (development)"), never " (installed)" as well.
       A selected page that's no longer listed, such as an extension removed while its page is open, gives way to General (`SettingsSidebar.lists`).
       The window holds each extension's preferences by its id (`InstalledExtension.index`, so a duplicate can't trap), stored by `PreferenceStore` in `preferences/<extension id>.json`, and each field (`PreferenceField`) reads and saves them by that id.
       Before a launch, `PreferenceResolver` merges stored values, manifest defaults and type defaults.
@@ -1006,7 +1010,7 @@ Extensions run in a separate Node.js process, the extension host.
     It fills every manifest argument, and its checks turn away what can't run: view commands in the background, a menu-bar command in the background unless it's active (`checkMode`), and missing required arguments or preferences in the background.
     A menu-bar command goes to `MenuBarController`: Background refreshes it like an interval tick, and UserInitiated activates it if needed and refreshes it, without opening its menu.
     A user-initiated launch with a required argument empty shows root search with the command's fields instead; an unset required preference opens Settings.
-    The refusals for unset preferences and for a missing permission name the extension by its `displayTitle`, so they say which of two installs of one name they mean.
+    The refusals for unset preferences and for a missing permission name the extension as `ExtensionTitles` names it, so they say which of two installs of one name they mean.
     The first time an extension opens another extension's command, the user is asked through `confirm`, and `LaunchPermissions` keeps the answer in `launch-permissions.json`, by the caller's and the target's ids; only a call from a session the user is using may ask, whatever `LaunchType` it requests.
     The caller's origin is read when the call comes in, and a background caller's request runs as Background (`LaunchRequest.asCalled(from:)`), so it fails where a Background launch would instead of showing the panel, argument fields or Settings.
     It never overwrites a file it can't read (`Unreadable`), which the Permissions page then says.
@@ -1248,7 +1252,10 @@ Extensions run in a separate Node.js process, the extension host.
     `ExtensionRepositoryFolder` (core) gives a repository's folder from its parsed address (`folder(host:port:segments:)`): two lowercase segments on GitHub, else the server's name, `_<port>` for a port other than 443, and one to six lowercase segments, at most 160 bytes.
     `isValid(_:)` accepts exactly those folders, `conflict(_:with:)` refuses an equal or nesting folder, and each refusal's sentence is defined there once (`Refusal`).
     The runtime has both rules in `src/extension-id.ts` (`isValidExtensionId`, `isValidRepositoryFolder`) and the Extension Store's `repository-folder.ts`, pinned to Swift's by `runtime/test/fixtures/extension-ids.json` and `repository-folders.json`.
-    `InstalledExtension` carries its `id` and its `repository` (`.raycast`, `.development`, `.added(folder)` or `.bundled`), both from where it was found, and `displayTitle` adds " (development)" or " (<folder>)".
+    `InstalledExtension` carries its `id` and its `repository` (`.raycast`, `.development`, `.added(folder)` or `.bundled`), both from where it was found.
+    `ExtensionTitles` (core) names every install from the whole set, enabled or not: its manifest title, then " (<label>)" only while another install's title is the same, trimmed and ignoring case (SPEC-174).
+    The label (`RepositoryNames.label(of:)`) is `raycast` for Raycast's official repository, a listed repository's name, else its `owner/repository`, the folder of a repository no longer listed, `development` for the development folder, and `Fudge` for a bundled extension.
+    Root search, the menu bar, Settings and the launch, preference and sign-in messages all take it, so one extension reads the same everywhere, and typing a repository's name finds a command only while its extension is labeled.
     **The loader walks the layout** (`ExtensionWalk`, `InstalledExtension.load(walking:)`, which `all(in:)` uses).
     A top-level folder holding `package.json` itself is an unmoved install (below), loaded as Raycast's under its manifest name unless Raycast's folder has that id, which wins.
     Any other top-level folder without a dot is a GitHub owner (`raycast` and `fudgeapp` included): each of its folders is a repository's, and each folder in that holding `package.json` is an install.
@@ -1441,6 +1448,7 @@ Extensions run in a separate Node.js process, the extension host.
   - `--accessibility allowed|missing`, `--input-monitoring allowed|missing` and `--login-item <status>` fix what Accessibility, the Snippets page's Input Monitoring and Open at Login show, so nothing asks the system.
   - `--add-repository <address>` draws the Extension Store's page with the Add Repository window over it and that address typed; it implies `--settings` and that page, as `--clipboard-consent` does.
   - `--add-repository-add`, with `--add-repository`, presses Add in that window, so a refused address shows its reason.
+  - `--add-repository-name <text>`, with `--add-repository`, types that name in the window's Name field.
   - `--calendar-events <file>` gives My Schedule made-up events (`FixedCalendarSource.load`), and without it nothing has been asked.
   - `--clipboard-consent` saves Clipboard History's consent sheet, laid out off-screen like the sign-in one; it implies `--settings` and that page, as `--sign-in-consent` does.
   - `--clipboard-entries <file>` gives Clipboard History made-up entries (a JSON array of `clipboardHistory.list` entries); snapshots never read the clipboard or watch it.

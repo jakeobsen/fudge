@@ -194,26 +194,27 @@ public enum HotKeyConflict: Sendable, Equatable {
 /// How messages name a command: its title, with its extension's (or built-in group's) title when another command has
 /// the same title ("Search Projects (VS Code Project Manager)").
 public enum CommandNames {
-    /// Nil when `commandID` is neither an installed command nor one of Fudge's own in `groups`.
+    /// Nil when `commandID` is neither an installed command nor one of Fudge's own in `groups`. An installed command's
+    /// extension is named as `titles` names it.
     public static func name(
-        of commandID: String, in installed: [InstalledExtension],
+        of commandID: String, in installed: [InstalledExtension], titles: ExtensionTitles,
         groups: [BuiltInCommandGroup] = BuiltInCommandGroup.all
     ) -> String? {
-        var titles: [(id: String, title: String, extensionTitle: String)] = []
+        var named: [(id: String, title: String, extensionTitle: String)] = []
         for group in groups {
-            for command in group.commands { titles.append((group.commandID(command), command.title, group.title)) }
+            for command in group.commands { named.append((group.commandID(command), command.title, group.title)) }
         }
         for item in installed {
             for command in item.manifest.commands {
-                titles.append(
+                named.append(
                     (
                         FudgeSettings.commandID(owner: .extension(item.id), command: command.name), command.title,
-                        item.displayTitle
+                        titles.title(of: item)
                     ))
             }
         }
-        guard let found = titles.first(where: { $0.id == commandID }) else { return nil }
-        let shared = titles.contains { $0.id != commandID && $0.title == found.title }
+        guard let found = named.first(where: { $0.id == commandID }) else { return nil }
+        let shared = named.contains { $0.id != commandID && $0.title == found.title }
         return shared ? "\(found.title) (\(found.extensionTitle))" : found.title
     }
 }

@@ -304,12 +304,15 @@ private func installed(_ json: String) throws -> InstalledExtension {
     let jetbrains = try installed(
         #"{"name":"jetbrains","title":"JetBrains Toolbox","commands":[{"name":"search","title":"Search Projects","mode":"view"},{"name":"open","title":"Open Recent","mode":"view"}]}"#
     )
-    #expect(CommandNames.name(of: "jetbrains/open", in: [vscode, jetbrains]) == "Open Recent")
     #expect(
-        CommandNames.name(of: "vscode/search", in: [vscode, jetbrains]) == "Search Projects (VS Code Project Manager)",
+        CommandNames.name(of: "jetbrains/open", in: [vscode, jetbrains], titles: .forTests([vscode, jetbrains]))
+            == "Open Recent")
+    #expect(
+        CommandNames.name(of: "vscode/search", in: [vscode, jetbrains], titles: .forTests([vscode, jetbrains]))
+            == "Search Projects (VS Code Project Manager)",
         "two installed commands share the title")
-    #expect(CommandNames.name(of: "vscode/search", in: [vscode]) == "Search Projects")
-    #expect(CommandNames.name(of: "gone/old", in: [vscode]) == nil)
+    #expect(CommandNames.name(of: "vscode/search", in: [vscode], titles: .forTests([vscode])) == "Search Projects")
+    #expect(CommandNames.name(of: "gone/old", in: [vscode], titles: .forTests([vscode])) == nil)
 }
 
 @Test func aTakenOverHotkeyIsNamedByItsCommandsTitleAndADeletedQuicklinkAsOne() {

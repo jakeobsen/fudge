@@ -32,7 +32,8 @@ sudo ln -s /Applications/Fudge.app/Contents/Helpers/fudge /usr/local/bin/fudge
 
 - `fudge build <folder>` compiles the Raycast extension in `<folder>` and installs it for Fudge, which picks it up within a second, with nothing to reload.
   Run it again after changing the extension.
-  It goes in the development folder, `fudgeapp/development`, beside any extension of the same name that the Extension Store installed from Raycast's official repository, with its own settings, data and sign-ins, and Fudge shows it as "<title> (development)".
+  It goes in the development folder, `fudgeapp/development`, beside any extension of the same name that the Extension Store installed from Raycast's official repository, with its own settings, data and sign-ins.
+  When another installed extension has the same name, Fudge shows it as "<title> (development)".
   `--repository raycast/extensions` installs it in the folder of Raycast's official repository instead: it replaces the Extension Store's install of that name and keeps its settings, until the Extension Store's next Update of it.
   To get Raycast's official version back, uninstall it with ⌃X in the Extension Store, then Install it there again.
   `--into <folder>` installs it in that extensions folder instead.
@@ -199,16 +200,18 @@ In the **Extension Store** command, search the extensions, or pick a category in
 #### Extension repositories
 
 Besides Raycast's official repository, the Extension Store can list the extensions in repositories you add: any Git repository with an `extensions` folder holding one folder per extension, as Raycast's has.
-Add one under **Settings… → Extension Store → Extension Repositories**: click **Add Repository…**, type its address, such as `https://github.com/owner/repository`, and a branch if it isn't the default one, then click **Add**.
+Add one under **Settings… → Extension Store → Extension Repositories**: click **Add Repository…**, type its address, such as `https://github.com/owner/repository`, a branch if it isn't the default one, and a name if you want one, then click **Add**.
 Only public `https://` addresses work, without a user name or password, and Fudge never asks for a password.
 The **Add Repository** window says that a repository's extensions run their own code on your Mac, like any app you install: only add one you trust.
-Raycast's official repository is in the list from the start, as `raycast/extensions`, and can be switched off or removed like any other; **Add Raycast's Repository** puts it back.
+Raycast's official repository is in the list from the start, as `raycast`, and can be switched off or removed like any other; **Add Raycast's Repository** puts it back.
 Each repository has a switch, Raycast's official repository too; one that's off keeps its copy, but the Extension Store doesn't list or update its extensions.
 Under each one is what the Extension Store last found there: how many extensions it lists, or what went wrong.
 The minus button removes a repository, Raycast's official repository too; the extensions you installed from it stay installed, but get no more updates.
 They show under **Installed** as **Not updated**, as do those of a repository that's switched off, and ⌃X uninstalls them there.
 Each extension's details name the repository it's from, a row from a repository you added names it too, and with more than one repository on, the dropdown also filters by repository.
 An extension of the same name in two repositories can be installed from both: each is its own extension, with its own settings and data.
+When two installed extensions have the same name, Fudge shows where each one is from after its name: `raycast` for Raycast's official repository, a repository's name if you gave it one, else its `owner/repository`, and `development` for your own builds.
+To name a repository you've already added, or to change its name, remove it and add it again: its extensions stay installed and keep their settings, hotkeys and aliases.
 You can add up to 10, and `https://github.com/fudgeapp/development` can't be added, since Fudge keeps your own builds in that repository's folder.
 Changes reach the Extension Store the next time you open it, or when you press ⌘R in it.
 

@@ -399,18 +399,25 @@ final class LauncherModel {
             if let host { try? host.send(.logLevel(settings.logLevel)) }
         }
         panelReset.setting = settings.resetAfter
-        let commands = installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
+        // Needs both the installs and the repositories' names (SPEC-174).
+        extensionTitles = ExtensionTitles(installedExtensions, names: RepositoryNames(settings: settings))
+        let commands = installedExtensions.flatMap {
+            RootItem.commands(of: $0, titles: extensionTitles, metadata: commandMetadata)
+        }
         windowLayouts = WindowLayoutStore.load(from: paths.windowLayoutsFile)
         items =
             RootSearch.applying(settings, to: commands + builtInGroups.flatMap(RootItem.builtInCommands))
             + RootSearch.builtInItems + RootSearch.applying(settings, to: loadQuicklinks()) + applications
-        menuBar.update(installed: installedExtensions, settings: settings)
+        menuBar.update(installed: installedExtensions, titles: extensionTitles, settings: settings)
         clipboardHistory.apply(settings, watch: watchesClipboard)
         refreshResults(keepingSelection: keepingSelection)
         refreshCommandHotkeys()
     }
 
     @ObservationIgnored private var installedExtensions: [InstalledExtension] = []
+    /// How each install is named (`ExtensionTitles`), from all of them and `settings`, rebuilt in `applySettings`.
+    @ObservationIgnored private var extensionTitles = ExtensionTitles(
+        [], names: RepositoryNames(settings: FudgeSettings()))
     @ObservationIgnored private var applications: [RootItem] = []
 
     /// The user's custom window positions and saved layouts (SPEC-094), read again with the settings.
@@ -456,7 +463,9 @@ final class LauncherModel {
         commandMetadata = metadata
         // Through the settings too, so the command keeps its alias.
         let fresh = Dictionary(
-            RootSearch.applying(settings, to: RootItem.commands(of: installed, metadata: metadata)).map { ($0.id, $0) },
+            RootSearch.applying(
+                settings, to: RootItem.commands(of: installed, titles: extensionTitles, metadata: metadata)
+            ).map { ($0.id, $0) },
             uniquingKeysWith: { a, _ in a })
         items = items.map { fresh[$0.id] ?? $0 }
         results = results.map { fresh[$0.id] ?? $0 }
@@ -1887,7 +1896,7 @@ final class LauncherModel {
         guard let id = sessionExtensions[session] else { return nil }
         return SignInNotice(
             notice: notice, message: message, extension: id,
-            extensionTitle: extensions[id]?.displayTitle ?? "",
+            extensionTitle: extensions[id].map(extensionTitles.title(of:)) ?? "",
             commandID: sessionCommands[session].map { FudgeSettings.commandID(owner: .extension(id), command: $0) },
             commandTitle: commandTitle)
     }
@@ -3561,7 +3570,7 @@ final class LauncherModel {
     /// The `FudgeSettings` ids ("<extension>/<command>") of the installed commands, Fudge's own
     /// (`BuiltInCommandGroup`) and the quicklinks (`QuicklinkCommands`), enabled or not.
     var installedCommandIDs: [String] {
-        installedExtensions.flatMap { RootItem.commands(of: $0, metadata: commandMetadata) }
+        installedExtensions.flatMap { RootItem.commands(of: $0, titles: extensionTitles, metadata: commandMetadata) }
             .compactMap(\.commandSettingsID) + BuiltInCommandGroup.commandIDs(in: builtInGroups)
             + QuicklinkCommands.commandIDs(quicklinks)
     }
@@ -4074,7 +4083,11 @@ final class LauncherModel {
             return
         }
         let prepared = prepareLaunch(of: target.installed, command: target.command, userInitiated: userInitiated)
-        guard try CommandLocator.checkPreferences(prepared.preferences.missing, of: target, type: request.type) else {
+        guard
+            try CommandLocator.checkPreferences(
+                prepared.preferences.missing, of: target, extensionTitle: extensionTitles.title(of: target.installed),
+                type: request.type)
+        else {
             answer()
             if onScreen != nil { leaveCommand() }
             showNeedsSettings(
@@ -4134,6 +4147,9 @@ final class LauncherModel {
         var permissions = LaunchPermissions.load(from: file)
         let callerName = caller.id
         let targetName = target.installed.id
+        let (callerTitle, targetTitle) = (
+            extensionTitles.title(of: caller), extensionTitles.title(of: target.installed)
+        )
         let allowed: Bool
         switch LaunchPermissions.step(
             answer: permissions.answer(caller: callerName, target: targetName), origin: origin)
@@ -4146,16 +4162,16 @@ final class LauncherModel {
             if backgroundNotices.first("launch:\(callerName)/\(targetName)") {
                 showHUD(
                     LaunchPermissions.unaskedNotice(
-                        callerTitle: caller.displayTitle, targetTitle: target.installed.displayTitle))
+                        callerTitle: callerTitle, targetTitle: targetTitle))
             }
-            let refusal = LaunchCommandError.permissionNeeded(extensionTitle: target.installed.displayTitle)
+            let refusal = LaunchCommandError.permissionNeeded(extensionTitle: targetTitle)
             quietSessions[session]?.unasked.insert(refusal.description)
             throw refusal
         case .ask:
             allowed = await confirm(
                 AlertRequest(
                     title:
-                        "“\(caller.displayTitle)” wants to open “\(target.command.title)” from “\(target.installed.displayTitle)”.",
+                        "“\(callerTitle)” wants to open “\(target.command.title)” from “\(targetTitle)”.",
                     message: nil,
                     primary: "Allow",
                     dismiss: "Don't Allow",
@@ -4166,7 +4182,9 @@ final class LauncherModel {
             permissions.record(allowed, caller: callerName, target: targetName)
             try? permissions.save(to: file)
         }
-        guard allowed else { throw LaunchCommandError.notAllowed(extensionTitle: target.installed.displayTitle) }
+        guard allowed else {
+            throw LaunchCommandError.notAllowed(extensionTitle: targetTitle)
+        }
     }
 
     /// A required argument has no value: root search shows the command, its fields filled with what was given and the

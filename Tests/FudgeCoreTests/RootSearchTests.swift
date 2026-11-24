@@ -80,7 +80,8 @@ private func bundledCommands(_ folder: String) throws -> [RootItem] {
         .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
         .appendingPathComponent("runtime/\(folder)")
     let manifest = try ExtensionManifest.load(from: directory.appendingPathComponent("package.json"))
-    return RootItem.commands(of: InstalledExtension.topLevel(manifest: manifest, directory: directory))
+    let installed = InstalledExtension.topLevel(manifest: manifest, directory: directory)
+    return RootItem.commands(of: installed, titles: .forTests([installed]))
 }
 
 private func byTitle(_ titles: [String]) -> [String] {
@@ -249,7 +250,7 @@ private func byTitle(_ titles: [String]) -> [String] {
 @Test func commandsBecomeRootItemsWithTheirExtensionAndIcon() throws {
     let manifest = try ExtensionManifest.load(from: Fixtures.greeter.appendingPathComponent("package.json"))
     let installed = InstalledExtension.topLevel(manifest: manifest, directory: Fixtures.greeter)
-    let items = RootItem.commands(of: installed)
+    let items = RootItem.commands(of: installed, titles: .forTests([installed]))
     #expect(items.map(\.id) == ["command:greeter/greet", "command:greeter/quiet"])
     #expect(items.map(\.subtitle) == ["Greeter", "Greeter"])
     #expect(items[0].keywords == ["hello"])
@@ -269,7 +270,7 @@ private func commandItems(_ json: String, metadata: CommandMetadata = CommandMet
     let manifest = try JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8))
     let installed = InstalledExtension.topLevel(
         manifest: manifest, directory: URL(fileURLWithPath: "/nonexistent/\(manifest.name)"))
-    return RootItem.commands(of: installed, metadata: metadata)
+    return RootItem.commands(of: installed, titles: .forTests([installed]), metadata: metadata)
 }
 
 @Test func aCommandNamedLikeItsExtensionHasNoSubtitle() throws {

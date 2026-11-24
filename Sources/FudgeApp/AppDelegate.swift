@@ -151,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let snapshot = Snapshot(arguments: CommandLine.arguments), let address = snapshot.addRepository {
             var draft = ExtensionRepositoryDraft()
             draft.address = address
+            draft.label = snapshot.addRepositoryName ?? ""
             // Add goes through the page's own path, so a refusal's reason shows as the user would see it, and an
             // accepted address closes the window.
             let closes = snapshot.addRepositoryAdd && settingsModel.addRepository(&draft)
@@ -252,6 +253,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settingsModel.resetAfterChanged = { [weak self] setting in self?.model.panelReset.setting = setting }
         // The store stays installed either way; the launcher reads settings.json again.
         settingsModel.extensionStoreChanged = { [weak self] in self?.model.applySettings() }
+        // A repository's name is part of how its extensions are named (SPEC-174).
+        settingsModel.repositoryNamesChanged = { [weak self] in self?.model.applySettings() }
         // A quicklink deleted in Settings takes its hotkey with it.
         settingsModel.quicklinksChanged = { [weak self] in _ = self?.applyCommandHotkeys() }
         model.commandHotkeysChanged = { [weak self] in self?.registerCommandHotkeys() }
@@ -1009,7 +1012,9 @@ struct Snapshot {
     /// `--add-repository <address>`: the Extension Store's page with the **Add Repository** window drawn over it, the
     /// address typed (SPEC-160). It implies `--settings`, as `--clipboard-consent` does.
     let addRepository: String?
-    /// `--add-repository-add`: presses Add in that window, so a refused address shows its reason.
+    /// `--add-repository-name <text>`: with `--add-repository`, types that name in the window's Name field (SPEC-174).
+    let addRepositoryName: String?
+    /// `--add-repository-add`: presses Add in that window, so a refused address or name shows its reason.
     let addRepositoryAdd: Bool
     /// `--own-app-sign-in`: **Extensions with their own sign-in** shows as on, in memory only.
     let ownAppSignIn: Bool
@@ -1087,6 +1092,7 @@ struct Snapshot {
         signInConsent = arguments.contains("--sign-in-consent")
         clipboardConsent = arguments.contains("--clipboard-consent")
         addRepository = value("--add-repository")
+        addRepositoryName = value("--add-repository-name")
         addRepositoryAdd = arguments.contains("--add-repository-add")
         ownAppSignIn = arguments.contains("--own-app-sign-in")
         raycastLinks = value("--raycast-links")

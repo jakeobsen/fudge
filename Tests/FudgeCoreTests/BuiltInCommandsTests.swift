@@ -88,8 +88,8 @@ private let launcher = HotKeySpec.parse("option+space")!
 }
 
 @Test func messagesNameAGroupsCommandByItsTitle() throws {
-    #expect(CommandNames.name(of: ":tools/first", in: [], groups: [tools]) == "First Tool")
-    #expect(CommandNames.name(of: ":tools/third", in: [], groups: [tools]) == nil)
+    #expect(CommandNames.name(of: ":tools/first", in: [], titles: .forTests([]), groups: [tools]) == "First Tool")
+    #expect(CommandNames.name(of: ":tools/third", in: [], titles: .forTests([]), groups: [tools]) == nil)
     let folder = try Fixtures.temporaryDirectory()
     defer { try? FileManager.default.removeItem(at: folder) }
     let manifest = """
@@ -98,6 +98,10 @@ private let launcher = HotKeySpec.parse("option+space")!
     try manifest.write(to: folder.appendingPathComponent("package.json"), atomically: true, encoding: .utf8)
     let other = InstalledExtension.topLevel(
         manifest: try ExtensionManifest.load(from: folder.appendingPathComponent("package.json")), directory: folder)
-    #expect(CommandNames.name(of: ":tools/first", in: [other], groups: [tools]) == "First Tool (Test Tools)")
-    #expect(CommandNames.name(of: "other/first", in: [other], groups: [tools]) == "First Tool (Other)")
+    #expect(
+        CommandNames.name(of: ":tools/first", in: [other], titles: .forTests([other]), groups: [tools])
+            == "First Tool (Test Tools)")
+    #expect(
+        CommandNames.name(of: "other/first", in: [other], titles: .forTests([other]), groups: [tools])
+            == "First Tool (Other)")
 }
