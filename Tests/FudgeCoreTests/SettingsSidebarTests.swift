@@ -133,8 +133,8 @@ private func alone(_ installed: InstalledExtension) -> String {
     ]
     let rows = SettingsSidebar.extensions(pages, titles: .forTests(pages)).filter { !$0.tag.hasPrefix(":") }
     #expect(
-        rows.map(\.tag) == ["github", "fudgeapp+development+github", "someone+tools+github"], "each page by its id")
-    #expect(rows.map(\.title) == ["GitHub (raycast/extensions)", "GitHub (development)", "GitHub (someone/tools)"])
+        rows.map(\.tag) == ["fudgeapp+development+github", "github", "someone+tools+github"], "each page by its id")
+    #expect(rows.map(\.title) == ["GitHub (development)", "GitHub (raycast/extensions)", "GitHub (someone/tools)"])
     #expect(
         SettingsSidebar.extensions(pages.reversed(), titles: .forTests(pages.reversed()))
             == SettingsSidebar.extensions(pages, titles: .forTests(pages)))
@@ -144,35 +144,74 @@ private func alone(_ installed: InstalledExtension) -> String {
     }
 }
 
-@Test func oneTitlesRowsGoRaycastsThenTheDevelopmentFoldersThenTheAddedRepositoriesByFolder() throws {
-    let folders = [
-        "someone/tools", "fudgeapp/development", "some-one/tools", "git.example.org/team/tools", "raycast/extensions",
-        "some/tools",
-    ]
-    let pages = try folders.map { try page("github", "GitHub", in: $0) }
-    let expected = [
-        "GitHub (raycast/extensions)", "GitHub (development)", "GitHub (git.example.org/team/tools)",
-        "GitHub (some/tools)",
-        "GitHub (some-one/tools)", "GitHub (someone/tools)",
-    ]
-    #expect(
-        SettingsSidebar.extensions(pages, titles: .forTests(pages)).filter { !$0.tag.hasPrefix(":") }.map(\.title)
-            == expected)
-    #expect(
-        SettingsSidebar.extensions(pages.reversed(), titles: .forTests(pages.reversed())).filter {
-            !$0.tag.hasPrefix(":")
-        }.map(\.title) == expected,
-        "whichever order they're given in")
-    // Fudge's own page still comes first among rows of its title, then Raycast's copy, then the others.
-    let colorPickers = try ["someone/tools", "raycast/extensions", "fudgeapp/development"].map {
-        try page("color-picker", "Color Picker", in: $0)
+/// A made-up bundled extension with a Settings page, as `InstalledExtension.all(paths:resources:)` lists one.
+private func bundledPage(_ name: String, _ title: String) throws -> InstalledExtension {
+    let json = #"{ "name": "\#(name)", "title": "\#(title)", "preferences": [], "commands": [] }"#
+    return InstalledExtension(
+        manifest: try JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8)),
+        directory: URL(fileURLWithPath: "/nonexistent/resources/\(name)"), id: .bundled(name), repository: .bundled)
+}
+
+/// SPEC-177 test 1: rows of one title come Fudge's own page first, then by repository label, A to Z, whatever order the
+/// repositories are listed in, then by tag.
+@Test func oneTitlesRowsGoByRepositoryLabel() throws {
+    let tools = try ExtensionRepository.parse(address: "https://github.com/someone/tools").get()
+    func settings(raycast: String?, tools label: String?, toolsFirst: Bool = false) -> FudgeSettings {
+        var settings = FudgeSettings()
+        let entries = [
+            ListedRepository(repository: .raycast, label: raycast), ListedRepository(repository: tools, label: label),
+        ]
+        settings.extensionRepositories = toolsFirst ? Array(entries.reversed()) : entries
+        return settings
     }
+    func shown(_ pages: [InstalledExtension], _ settings: FudgeSettings, prefix: String) -> [String] {
+        let titles = ExtensionTitles(pages, names: RepositoryNames(settings: settings))
+        return SettingsSidebar.extensions(pages, titles: titles).map(\.title).filter { $0.hasPrefix(prefix) }
+    }
+    let pages = [
+        try page("clipboard", "Clipboard History", in: "raycast/extensions"),
+        try page("clipboard", "Clipboard History", in: "someone/tools"),
+        try page("clipboard", "Clipboard History", in: "fudgeapp/development"),
+        try bundledPage("clipboard-history", "Clipboard History"),
+    ]
+    let order = [
+        "Clipboard History (Core)", "Clipboard History (development)", "Clipboard History (Fudge)",
+        "Clipboard History (Raycast)",
+    ]
+    for toolsFirst in [false, true] {
+        let named = settings(raycast: "Raycast", tools: "Fudge", toolsFirst: toolsFirst)
+        #expect(shown(pages, named, prefix: "Clipboard") == order, "tools listed first: \(toolsFirst)")
+        #expect(shown(pages.reversed(), named, prefix: "Clipboard") == order, "pages in any order")
+    }
+    // Named Aardvark, the added repository's row comes first, which the tags alone don't give.
     #expect(
-        SettingsSidebar.extensions(colorPickers, titles: .forTests(colorPickers)).map(\.title).filter {
-            $0.hasPrefix("Color Picker")
-        } == [
-            "Color Picker", "Color Picker (raycast/extensions)", "Color Picker (development)",
-            "Color Picker (someone/tools)",
+        shown(pages, settings(raycast: "Raycast", tools: "Aardvark"), prefix: "Clipboard") == [
+            "Clipboard History (Aardvark)", "Clipboard History (Core)", "Clipboard History (development)",
+            "Clipboard History (Raycast)",
+        ])
+    #expect(
+        SettingsSidebar.extensions(pages, titles: .forTests(pages)).map(\.tag).filter { $0.contains("clipboard") } == [
+            "clipboard-history", "fudgeapp+development+clipboard", "clipboard", "someone+tools+clipboard",
+        ], "unnamed: Core, development, raycast/extensions, someone/tools")
+    // Raycast's entry unnamed: its address sorts like any label.
+    #expect(
+        shown(Array(pages.prefix(2)), settings(raycast: nil, tools: nil), prefix: "Clipboard") == [
+            "Clipboard History (raycast/extensions)", "Clipboard History (someone/tools)",
+        ])
+    // Fudge's own Calendar page still comes first among rows of its title.
+    let calendars = [try page("calendar", "Calendar", in: "someone/tools"), try bundledPage("calendar", "Calendar")]
+    #expect(
+        shown(calendars, settings(raycast: nil, tools: "Aardvark"), prefix: "Calendar") == [
+            "Calendar", "Calendar (Aardvark)", "Calendar (Core)",
+        ])
+    // Two of one repository with one title fall back to the tag.
+    let two = [
+        try page("notes-b", "Notes", in: "someone/tools"), try page("notes-a", "Notes", in: "someone/tools"),
+        try page("notes", "Notes", in: "raycast/extensions"),
+    ]
+    #expect(
+        SettingsSidebar.extensions(two, titles: .forTests(two)).map(\.tag).filter { $0.contains("notes") } == [
+            "notes", "someone+tools+notes-a", "someone+tools+notes-b",
         ])
 }
 
@@ -188,12 +227,14 @@ private func alone(_ installed: InstalledExtension) -> String {
             try page("color-picker", "Color Picker", in: folder),
             try page("colors", "Color Picker", in: "raycast/extensions"),
         ]
-        let label = folder == "someone/tools" ? "someone/tools" : "development"
+        // By repository label, after Fudge's own page (SPEC-177).
+        let labeled =
+            folder == "someone/tools"
+            ? ["Color Picker (raycast/extensions)", "Color Picker (someone/tools)"]
+            : ["Color Picker (development)", "Color Picker (raycast/extensions)"]
         #expect(
             SettingsSidebar.extensions(pages, titles: .forTests(pages)).map(\.title)
-                .filter { $0.hasPrefix("Color Picker") } == [
-                    "Color Picker", "Color Picker (raycast/extensions)", "Color Picker (\(label))",
-                ], "\(folder)")
+                .filter { $0.hasPrefix("Color Picker") } == ["Color Picker"] + labeled, "\(folder)")
     }
 }
 

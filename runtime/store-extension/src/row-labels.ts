@@ -26,40 +26,56 @@ export function checkSharedLabelsAnswer(value: unknown): ReadonlyMap<string, str
 
 /** What `rowLabels` reads: every row under All, the list of repositories, and the app's checked answer
  * (`checkSharedLabelsAnswer`). */
-export type RowLabelSources = {
+export type RowLabelSources = OwnLabelSources & { shared: ReadonlyMap<string, string> };
+
+/** What `ownLabels` reads: every row under All and the list of repositories. */
+export type OwnLabelSources = {
     entries: readonly StoreEntry[];
     development: readonly DevelopmentBuild[];
     notUpdated: readonly NotUpdatedInstall[];
     listed: readonly RepositoryEntry[];
-    shared: ReadonlyMap<string, string>;
 };
 
-type LabelRow = { rowId: string; title: string; label: string; id: string | undefined };
+/**
+ * Every row's own label, by its row id, labeled or not (SPEC-177): its listed repository's `label`, `development` for a
+ * development build, and a Not updated row's `notUpdatedLabel`. `rowLabels` gives a row the list half labels this one.
+ */
+export function ownLabels(sources: OwnLabelSources): Map<string, string> {
+    const labels = new Map<string, string>();
+    for (const entry of sources.entries) {
+        const listed = sources.listed.find((each) => each.copyId === entry.copyId);
+        labels.set(rowId(entry.repositoryFolder, entry.dir), listed?.label ?? entry.repositoryFolder);
+    }
+    for (const build of sources.development) labels.set(developmentRowId(build.name), developmentLabel);
+    for (const install of sources.notUpdated) {
+        labels.set(notUpdatedRowId(install.id), notUpdatedLabel(install.repository, sources.listed));
+    }
+    return labels;
+}
+
+type LabelRow = { rowId: string; title: string; id: string | undefined };
 
 /**
  * Each labeled row's label, by its row id, whatever the filter and the search show. A row whose extension's id is in
  * `shared` gets the app's label, so it reads as its install does in search (the installed half); else a row whose name
- * another row has gets its own label (the list half); else none. A row's own label is its listed repository's `label`,
- * `development` for a development build, and a Not updated row's `notUpdatedLabel`.
+ * another row has gets its own label (`ownLabels`, the list half); else none.
  */
 export function rowLabels(sources: RowLabelSources): Map<string, string> {
+    const own = ownLabels(sources);
     const rows: LabelRow[] = [
         ...sources.entries.map((entry) => ({
             rowId: rowId(entry.repositoryFolder, entry.dir),
             title: entry.title,
-            label: sources.listed.find((listed) => listed.copyId === entry.copyId)?.label ?? entry.repositoryFolder,
             id: extensionId(entry.name, entry.repositoryFolder),
         })),
         ...sources.development.map((build) => ({
             rowId: developmentRowId(build.name),
             title: build.title,
-            label: developmentLabel,
             id: extensionId(build.name, developmentFolder),
         })),
         ...sources.notUpdated.map((install) => ({
             rowId: notUpdatedRowId(install.id),
             title: install.title,
-            label: notUpdatedLabel(install.repository, sources.listed),
             id: install.id,
         })),
     ];
@@ -70,7 +86,18 @@ export function rowLabels(sources: RowLabelSources): Map<string, string> {
     rows.forEach((row, index) => {
         const shared = row.id === undefined ? undefined : sources.shared.get(row.id);
         if (shared !== undefined) labels.set(row.rowId, shared);
-        else if (groups.get(keys[index]!)! > 1) labels.set(row.rowId, row.label);
+        else if (groups.get(keys[index]!)! > 1) labels.set(row.rowId, own.get(row.rowId)!);
     });
     return labels;
+}
+
+/**
+ * The label a row sorts by among rows of its title (SPEC-177): the one it shows when it's labeled (`rowLabels`' map),
+ * else its own (`ownLabels`').
+ */
+export function sortLabels(
+    shown: ReadonlyMap<string, string>,
+    own: ReadonlyMap<string, string>,
+): (rowId: string) => string {
+    return (rowId) => shown.get(rowId) ?? own.get(rowId) ?? "";
 }

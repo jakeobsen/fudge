@@ -138,7 +138,8 @@ struct PermissionsPage: View {
 }
 
 /// The answers to "Allow <A> to open <B>'s commands?": each can be changed, or forgotten so it's asked again.
-/// Always shown, so there's one place to look even before any extension has asked.
+/// Always shown, so there's one place to look even before any extension has asked. Answers to an extension installed
+/// from two or more repositories are one row per caller, whose menu picks the copy (`LaunchPermissions.rows`).
 struct LaunchPermissionsSection: View {
     let model: SettingsModel
 
@@ -146,33 +147,15 @@ struct LaunchPermissionsSection: View {
         Section {
             if model.launchPermissionsUnreadable {
                 Text(LaunchPermissions.Unreadable().description).font(.callout).foregroundStyle(.red)
-            } else if model.launchPermissions.isEmpty {
+            } else if model.launchPermissionRows.isEmpty {
                 Text("No extension has asked to open another yet.").foregroundStyle(.secondary)
             }
-            ForEach(model.launchPermissions) { entry in
-                HStack(spacing: 6) {
-                    name(entry.caller)
-                    Image(systemName: "arrow.right").foregroundStyle(.secondary).imageScale(.small)
-                    name(entry.target)
-                    Spacer()
-                    Picker(
-                        "",
-                        selection: Binding(
-                            get: { entry.allowed },
-                            set: { model.setLaunchPermission($0, caller: entry.caller, target: entry.target) })
-                    ) {
-                        Text("Allowed").tag(true)
-                        Text("Not allowed").tag(false)
+            ForEach(model.launchPermissionRows) { row in
+                Group {
+                    switch row {
+                    case .answer(let entry): answerRow(entry)
+                    case .choice(let choice): choiceRow(choice)
                     }
-                    .labelsHidden()
-                    .fixedSize()
-                    Button {
-                        model.forgetLaunchPermission(caller: entry.caller, target: entry.target)
-                    } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Forget: ask again the next time")
                 }
                 .disabled(model.launchPermissionsUnreadable)
             }
@@ -182,6 +165,70 @@ struct LaunchPermissionsSection: View {
             Text("When one extension opens another, Fudge asks you once. Your answers are here.")
                 .font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    /// One answer: caller → target, "Allowed" or "Not allowed", and ✕.
+    private func answerRow(_ entry: LaunchPermissions.Entry) -> some View {
+        HStack(spacing: 6) {
+            name(entry.caller)
+            Image(systemName: "arrow.right").foregroundStyle(.secondary).imageScale(.small)
+            name(entry.target)
+            Spacer()
+            Picker(
+                "",
+                selection: Binding(
+                    get: { entry.allowed },
+                    set: { model.setLaunchPermission($0, caller: entry.caller, target: entry.target) })
+            ) {
+                Text("Allowed").tag(true)
+                Text("Not allowed").tag(false)
+            }
+            .labelsHidden()
+            .fixedSize()
+            forgetButton { model.forgetLaunchPermission(caller: entry.caller, target: entry.target) }
+        }
+    }
+
+    /// A caller's choice among copies: caller → a menu of each copy, "Not allowed", and "Ask next time" only while
+    /// nothing is chosen, so the menu always shows what's stored; and ✕, which forgets the choice.
+    private func choiceRow(_ choice: LaunchPermissions.Choice) -> some View {
+        let copies = choice.copies.map(\.id)
+        return HStack(spacing: 6) {
+            name(choice.caller)
+            Image(systemName: "arrow.right").foregroundStyle(.secondary).imageScale(.small)
+            Picker(
+                "",
+                selection: Binding(
+                    get: { choice.selection },
+                    set: { picked in
+                        switch picked {
+                        case .chosen(let copy): model.chooseLaunchCopy(copy, caller: choice.caller, among: copies)
+                        case .notAllowed: model.chooseLaunchCopy(nil, caller: choice.caller, among: copies)
+                        case .unanswered: break
+                        }
+                    })
+            ) {
+                ForEach(choice.copies, id: \.id) { copy in
+                    Text(model.copyTitle(copy)).tag(LaunchPermissions.CopyChoice.chosen(copy.id))
+                }
+                Text("Not allowed").tag(LaunchPermissions.CopyChoice.notAllowed)
+                if choice.selection == .unanswered {
+                    Text("Ask next time").tag(LaunchPermissions.CopyChoice.unanswered)
+                }
+            }
+            .labelsHidden()
+            .fixedSize()
+            Spacer()
+            forgetButton { model.forgetLaunchChoice(caller: choice.caller, among: copies) }
+        }
+    }
+
+    private func forgetButton(_ forget: @escaping () -> Void) -> some View {
+        Button(action: forget) {
+            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .help("Forget: ask again the next time")
     }
 
     /// The extension's title, or its id in grey when it isn't installed.

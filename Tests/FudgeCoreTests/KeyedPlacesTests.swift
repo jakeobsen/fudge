@@ -396,10 +396,11 @@ private func todaysMenuBarDropdownAndHistoryFilesAreFoundUnderTheSameKeys(_ thre
         ])
 }
 
-// MARK: - launchCommand with two extensions of one name (F)
+// MARK: - launchCommand with two extensions of one name (F, SPEC-177)
 
-private func request(_ name: String = "github", owner: String = "someone") -> LaunchRequest {
-    LaunchRequest(name: "search", type: .userInitiated, extensionName: name, ownerOrAuthorName: owner)
+private func request(_ name: String = "github", owner: String = "someone", command: String = "search") -> LaunchRequest
+{
+    LaunchRequest(name: command, type: .userInitiated, extensionName: name, ownerOrAuthorName: owner)
 }
 
 @Test func launchCommandPicksTheCallerItselfFirst() throws {
@@ -408,7 +409,7 @@ private func request(_ name: String = "github", owner: String = "someone") -> La
 
 private func launchCommandPicksTheCallerItselfFirst(_ three: ThreeGitHubs) throws {
     for caller in three.all {
-        let target = try CommandLocator.locate(request(), caller: caller, in: three.all)
+        let target = try CommandLocator.locate(request(), caller: caller, in: three.all).launchTarget
         #expect(target.installed.id == caller.id && !target.isOtherExtension)
     }
 }
@@ -425,46 +426,206 @@ private func caller(in folder: String) throws -> InstalledExtension {
     return try InstalledExtension.load(from: directory, id: id, repository: repository)
 }
 
-@Test func launchCommandPicksTheCallersRepositoryThenRaycastsThenTheDevelopmentBuild() throws {
-    try launchCommandPicksTheCallersRepositoryThenRaycastsThenTheDevelopmentBuild(
-        try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+/// Settings where Raycast's official repository is named `raycast`, if given, and `someone/tools` is listed and named
+/// `tools`, if given.
+private func named(raycast: String?, tools: String?) throws -> FudgeSettings {
+    var settings = FudgeSettings()
+    let added = try ExtensionRepository.parse(address: "https://github.com/someone/tools").get()
+    settings.extensionRepositories = [
+        ListedRepository(repository: .raycast, label: raycast), ListedRepository(repository: added, label: tools),
+    ]
+    return settings
 }
 
-private func launchCommandPicksTheCallersRepositoryThenRaycastsThenTheDevelopmentBuild(_ three: ThreeGitHubs) throws {
-    // A caller from `someone/tools` gets its own repository's `github`.
-    let fromTools = try caller(in: "someone/tools")
-    let target = try CommandLocator.locate(request(), caller: fromTools, in: three.all + [fromTools])
-    #expect(target.installed.id == three.added.id && target.isOtherExtension)
-    #expect(target.rootItemID == "command:someone+tools+github/search")
-    // A caller from anywhere else gets Raycast's, then the development build.
+/// `installed` without its command `name`.
+private func without(_ name: String, _ installed: InstalledExtension) -> InstalledExtension {
+    var copy = installed
+    copy.manifest.commands.removeAll { $0.name == name }
+    return copy
+}
+
+@Test func launchCommandAsksWhichCopyInRepositoryLabelOrder() throws {
+    try launchCommandAsksWhichCopyInRepositoryLabelOrder(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+/// SPEC-177 test 2: two or more installs of one name and owner are a choice, sorted by repository label, never picked
+/// by repository.
+private func launchCommandAsksWhichCopyInRepositoryLabelOrder(_ three: ThreeGitHubs) throws {
     let elsewhere = try caller(in: "other/place")
-    #expect(try CommandLocator.locate(request(), caller: elsewhere, in: three.all).installed.id == three.raycast.id)
+    let two = [three.raycast, three.added]
+    let fudge = RepositoryNames(settings: try named(raycast: "Raycast", tools: "Fudge"))
     #expect(
-        try CommandLocator.locate(request(), caller: elsewhere, in: [three.added, three.development]).installed.id
-            == three.development.id)
-    // A development build's caller gets the development build first.
-    let fromDevelopment = try caller(in: "fudgeapp/development")
+        try CommandLocator.locate(request(), caller: elsewhere, in: two, names: fudge)
+            == .choose(copies: [three.added, three.raycast], all: [three.added.id, three.raycast.id]))
     #expect(
-        try CommandLocator.locate(request(), caller: fromDevelopment, in: three.all).installed.id
-            == three.development.id)
-}
-
-@Test func launchCommandRefusesTwoAddedOnesItCantTellApart() throws {
-    try launchCommandRefusesTwoAddedOnesItCantTellApart(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
-}
-
-private func launchCommandRefusesTwoAddedOnesItCantTellApart(_ three: ThreeGitHubs) throws {
+        fudge.copyTitle(of: three.added) == "GitHub (Fudge)" && fudge.copyTitle(of: three.raycast) == "GitHub (Raycast)"
+    )
+    let zed = RepositoryNames(settings: try named(raycast: "Raycast", tools: "Zed"))
+    #expect(
+        try CommandLocator.locate(request(), caller: elsewhere, in: two, names: zed)
+            == .choose(copies: [three.raycast, three.added], all: [three.raycast.id, three.added.id]))
+    // The caller among them is the target, and one install alone is.
+    let own = try CommandLocator.locate(request(), caller: three.added, in: two, names: fudge).launchTarget
+    #expect(own.installed.id == three.added.id && !own.isOtherExtension)
+    let alone = try CommandLocator.locate(request(), caller: elsewhere, in: [three.added], names: fudge).launchTarget
+    #expect(alone.installed.id == three.added.id && alone.isOtherExtension)
+    #expect(alone.rootItemID == "command:someone+tools+github/search")
+    // What the caller's repository, Raycast's or the development build got first before is a choice now.
+    let fromTools = try caller(in: "someone/tools")
+    let sorted = [three.development, three.added, three.raycast]
+    #expect(
+        try CommandLocator.locate(request(), caller: fromTools, in: three.all + [fromTools], names: fudge)
+            == .choose(copies: sorted, all: sorted.map(\.id)))
+    #expect(
+        try CommandLocator.locate(request(), caller: elsewhere, in: three.all, names: fudge)
+            == .choose(copies: sorted, all: sorted.map(\.id)))
+    #expect(
+        try CommandLocator.locate(request(), caller: elsewhere, in: [three.added, three.development])
+            == .choose(copies: [three.development, three.added], all: [three.development.id, three.added.id]))
+    // Two added ones, unnamed, by their folders.
     let others = try ThreeGitHubs(in: try Fixtures.temporaryDirectory())
     let otherTools = InstalledExtension(
         manifest: others.added.manifest, directory: others.added.directory, id: try id("other+tools+github"),
         repository: .added("other/tools"))
-    let elsewhere = try caller(in: "other/place")
-    #expect(throws: LaunchCommandError.ambiguous(name: "github")) {
-        try CommandLocator.locate(request(), caller: elsewhere, in: [three.added, otherTools])
-    }
     #expect(
-        LaunchCommandError.ambiguous(name: "github").description
-            == "More than one extension called github is installed, so Fudge can't tell which one to open.")
+        try CommandLocator.locate(request(), caller: elsewhere, in: [three.added, otherTools])
+            == .choose(copies: [otherTools, three.added], all: [otherTools.id, three.added.id]))
+}
+
+@Test func launchCommandOffersOnlyCopiesThatCanRunTheCall() throws {
+    try launchCommandOffersOnlyCopiesThatCanRunTheCall(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+/// SPEC-177 test 2, R2: a copy without the command, or with the extension or the command switched off, isn't offered;
+/// with none left, the refusal is the one a single install gives.
+private func launchCommandOffersOnlyCopiesThatCanRunTheCall(_ three: ThreeGitHubs) throws {
+    let elsewhere = try caller(in: "other/place")
+    let two = [three.raycast, three.added]
+    var off = FudgeSettings()
+    off.extensions[.extension(three.added.id)] = .init(enabled: false)
+    let other = try CommandLocator.locate(request(), caller: elsewhere, in: two, settings: off).launchTarget
+    #expect(other.installed.id == three.raycast.id && other.isOtherExtension, "the extension switched off")
+    let noSearch = without("search", three.raycast)
+    #expect(
+        try CommandLocator.locate(request(), caller: elsewhere, in: [noSearch, three.added]).launchTarget.installed.id
+            == three.added.id, "no such command")
+    var commandOff = FudgeSettings()
+    commandOff.commands[FudgeSettings.commandID(owner: .extension(three.raycast.id), command: "search")] = .init(
+        enabled: false)
+    #expect(
+        try CommandLocator.locate(request(), caller: elsewhere, in: two, settings: commandOff).launchTarget.installed.id
+            == three.added.id, "the command switched off")
+    // Of three, one without the command: a choice of two, recorded among all three.
+    #expect(
+        try CommandLocator.locate(request(), caller: elsewhere, in: [noSearch, three.added, three.development])
+            == .choose(
+                copies: [three.development, three.added], all: [three.development.id, noSearch.id, three.added.id]))
+    // None left: the refusal a single install gives.
+    off.extensions[.extension(three.raycast.id)] = .init(enabled: false)
+    #expect(throws: LaunchCommandError.disabled(command: "search")) {
+        try CommandLocator.locate(request(), caller: elsewhere, in: two, settings: off)
+    }
+    #expect(throws: LaunchCommandError.commandNotFound(command: "missing", extension: "github")) {
+        try CommandLocator.locate(request(command: "missing"), caller: elsewhere, in: two)
+    }
+}
+
+@Test func aChoiceRemovedOrSwitchedOffIsAskedAgain() throws {
+    try aChoiceRemovedOrSwitchedOffIsAskedAgain(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+/// SPEC-177 test 6: removing the chosen copy asks again, the usual Allow question with one copy left; and a copy chosen
+/// in Settings, then switched off, never holds `true` beside the next answer.
+private func aChoiceRemovedOrSwitchedOffIsAskedAgain(_ three: ThreeGitHubs) throws {
+    let elsewhere = try caller(in: "other/place")
+    let caller = elsewhere.id
+    var permissions = LaunchPermissions()
+    permissions.recordChoice(three.raycast.id, caller: caller, among: [three.raycast.id, three.added.id])
+    let left = try CommandLocator.locate(request(), caller: elsewhere, in: [three.added]).launchTarget
+    #expect(left.installed.id == three.added.id)
+    #expect(permissions.answer(caller: caller, target: three.added.id) == nil)
+    #expect(
+        LaunchPermissions.step(
+            answer: permissions.answer(caller: caller, target: left.installed.id), origin: .userInitiated)
+            == .ask)
+    // Three copies, the chosen one removed: two left, and neither chosen.
+    permissions = LaunchPermissions()
+    permissions.recordChoice(three.raycast.id, caller: caller, among: three.all.map(\.id))
+    guard
+        case .choose(let copies, _) = try CommandLocator.locate(
+            request(), caller: elsewhere, in: [three.added, three.development])
+    else {
+        Issue.record("two copies left are a choice")
+        return
+    }
+    #expect(permissions.choice(caller: caller, among: copies.map(\.id)) == .unanswered)
+    // C chosen, then switched off: A and B are asked about, and the answer is recorded among all three.
+    permissions = LaunchPermissions()
+    let all = three.all.map(\.id)
+    permissions.recordChoice(three.development.id, caller: caller, among: all)
+    var off = FudgeSettings()
+    off.extensions[.extension(three.development.id)] = .init(enabled: false)
+    guard
+        case .choose(let runnable, let recorded) = try CommandLocator.locate(
+            request(), caller: elsewhere, in: three.all, settings: off)
+    else {
+        Issue.record("two copies that can run it are a choice")
+        return
+    }
+    #expect(Set(runnable.map(\.id)) == [three.raycast.id, three.added.id] && Set(recorded) == Set(all))
+    #expect(permissions.choice(caller: caller, among: runnable.map(\.id)) == .unanswered)
+    permissions.recordChoice(three.raycast.id, caller: caller, among: recorded)
+    #expect(all.map { permissions.answer(caller: caller, target: $0) } == [true, nil, nil])
+    #expect(permissions.choice(caller: caller, among: all) == .chosen(three.raycast.id))
+}
+
+@Test func thePermissionsPageMakesOneChoiceRowPerCallerAndCopies() throws {
+    try thePermissionsPageMakesOneChoiceRowPerCallerAndCopies(try ThreeGitHubs(in: try Fixtures.temporaryDirectory()))
+}
+
+/// SPEC-177 test 7: answers to an extension installed two or more times are one choice row per caller, with every copy
+/// sorted; any other answer is a row as before.
+private func thePermissionsPageMakesOneChoiceRowPerCallerAndCopies(_ three: ThreeGitHubs) throws {
+    let fromPlace = try caller(in: "other/place")
+    let fromTools = try caller(in: "someone/tools")
+    let solo = InstalledExtension(
+        manifest: try JSONDecoder().decode(
+            ExtensionManifest.self, from: Data(#"{"name":"solo","title":"Solo","author":"someone","commands":[]}"#.utf8)
+        ),
+        directory: three.added.directory, id: try id("other+tools+solo"), repository: .added("other/tools"))
+    let names = RepositoryNames(settings: try named(raycast: "Raycast", tools: "Fudge"))
+    let copies = [three.added, three.raycast]
+    var permissions = LaunchPermissions()
+    permissions.record(true, caller: fromPlace.id, target: three.raycast.id)
+    permissions.record(false, caller: fromPlace.id, target: three.added.id)
+    permissions.record(false, caller: fromTools.id, target: three.raycast.id)
+    permissions.record(true, caller: fromPlace.id, target: try id("gone"))
+    permissions.record(false, caller: fromTools.id, target: solo.id)
+    #expect(
+        permissions.rows(installed: copies + [fromPlace, fromTools, solo], names: names) == [
+            .answer(.init(caller: fromPlace.id, target: try id("gone"), allowed: true)),
+            .choice(.init(caller: fromPlace.id, copies: copies, selection: .chosen(three.raycast.id))),
+            .answer(.init(caller: fromTools.id, target: solo.id, allowed: false)),
+            .choice(.init(caller: fromTools.id, copies: copies, selection: .unanswered)),
+        ], "one choice row per caller and copies; a target not installed, or installed once, as before")
+    // With one copy installed, its answers are rows as before.
+    #expect(
+        permissions.rows(installed: [three.raycast, solo, fromPlace, fromTools], names: names) == [
+            .answer(.init(caller: fromPlace.id, target: three.raycast.id, allowed: true)),
+            .answer(.init(caller: fromPlace.id, target: try id("gone"), allowed: true)),
+            .answer(.init(caller: fromPlace.id, target: three.added.id, allowed: false)),
+            .answer(.init(caller: fromTools.id, target: three.raycast.id, allowed: false)),
+            .answer(.init(caller: fromTools.id, target: solo.id, allowed: false)),
+        ])
+    // Every copy is in the row, the development build too, though no answer names it.
+    let rows = permissions.rows(installed: three.all + [fromPlace], names: names)
+    #expect(rows.count == 4)
+    guard case .choice(let choice) = rows.first(where: { $0.id == [fromPlace.id.key, three.development.id.key] }) else {
+        Issue.record("a choice row for three copies")
+        return
+    }
+    #expect(choice.copies == [three.development, three.added, three.raycast])
+    #expect(choice.selection == .chosen(three.raycast.id))
 }
 
 @Test func launchCommandTellsInstallsOfOneNameApartByID() throws {
@@ -474,12 +635,14 @@ private func launchCommandRefusesTwoAddedOnesItCantTellApart(_ three: ThreeGitHu
 private func launchCommandTellsInstallsOfOneNameApartByID(_ three: ThreeGitHubs) throws {
     // The caller's own command, named without an extension, is the caller's, never another `github`'s.
     let own = try CommandLocator.locate(
-        LaunchRequest(name: "search", type: .userInitiated), caller: three.development, in: three.all)
+        LaunchRequest(name: "search", type: .userInitiated), caller: three.development, in: three.all
+    ).launchTarget
     #expect(own.installed.id == three.development.id && !own.isOtherExtension)
     // Another owner's `github` is another extension, though it has the caller's name, so it needs the permission.
     let raycasts = try ThreeGitHubs(in: try Fixtures.temporaryDirectory(), owner: "raycast")
     let other = try CommandLocator.locate(
-        request(owner: "raycast"), caller: three.development, in: [raycasts.raycast, three.development])
+        request(owner: "raycast"), caller: three.development, in: [raycasts.raycast, three.development]
+    ).launchTarget
     #expect(other.installed.id == raycasts.raycast.id && other.isOtherExtension)
 }
 
@@ -498,7 +661,8 @@ private func anUnsetPreferenceNamesWhichGitHubNeedsIt(_ three: ThreeGitHubs) thr
         three.all, ["GitHub (raycast/extensions)", "GitHub (someone/tools)", "GitHub (development)"])
     {
         let target = try CommandLocator.locate(
-            LaunchRequest(name: "search", type: .background), caller: installed, in: three.all)
+            LaunchRequest(name: "search", type: .background), caller: installed, in: three.all
+        ).launchTarget
         #expect(throws: LaunchCommandError.missingPreferences(extensionTitle: title, names: ["API Token"])) {
             try CommandLocator.checkPreferences(
                 [token], of: target, extensionTitle: titles.title(of: target.installed), type: .background)
@@ -685,8 +849,10 @@ struct SideBySideEndToEndTests {
         try eachGitHubsLogLinesReachItsOwnFile(three)
         try todaysMenuBarDropdownAndHistoryFilesAreFoundUnderTheSameKeys(three)
         try launchCommandPicksTheCallerItselfFirst(three)
-        try launchCommandPicksTheCallersRepositoryThenRaycastsThenTheDevelopmentBuild(three)
-        try launchCommandRefusesTwoAddedOnesItCantTellApart(three)
+        try launchCommandAsksWhichCopyInRepositoryLabelOrder(three)
+        try launchCommandOffersOnlyCopiesThatCanRunTheCall(three)
+        try aChoiceRemovedOrSwitchedOffIsAskedAgain(three)
+        try thePermissionsPageMakesOneChoiceRowPerCallerAndCopies(three)
         try launchCommandTellsInstallsOfOneNameApartByID(three)
         try anUnsetPreferenceNamesWhichGitHubNeedsIt(three)
         try aLaunchPermissionIsKeptByID(three)

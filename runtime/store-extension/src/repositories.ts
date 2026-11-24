@@ -2,7 +2,7 @@
 // each copy and its status file are, what went wrong with a copy, and the copies of repositories no longer listed.
 import { lstat, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { byTitleIn, catalogFolders, readCatalog, repositoryHost, type RepositoryCopy, type StoreEntry } from "./catalog.ts";
+import { byTitle, catalogFolders, readCatalog, repositoryHost, type RepositoryCopy, type StoreEntry } from "./catalog.ts";
 import { cleanOutput, type FailureDetails } from "./failure.ts";
 import { readRegularFile } from "./files.ts";
 import { GitError, NoBranch, NoPartialClone, StoreRepository, type Run } from "./git.ts";
@@ -303,8 +303,8 @@ export type CopyRows = { entries: StoreEntry[]; trees: Map<string, string>; comm
  * is what failed, none for a problem its status file gave. */
 export type CopyState = { rows?: CopyRows; problem?: { kind: ProblemKind; error?: unknown } };
 
-/** The rows of every copy that's on, by title and then the copies' order (SPEC-166), with each copy's trees and commit by
- * copy id (D.1); a copy with no rows yet adds none, and one no longer on adds none. */
+/** The rows of every copy that's on, by title (`byTitle`; the list orders them by label, `sections`), with each copy's
+ * trees and commit by copy id (D.1); a copy with no rows yet adds none, and one no longer on adds none. */
 export function shownRows(
     copies: readonly StoreCopy[],
     states: ReadonlyMap<string, CopyState>,
@@ -319,7 +319,7 @@ export function shownRows(
         trees.set(copy.entry.copyId, rows.trees);
         commits.set(copy.entry.copyId, rows.commit);
     }
-    return { entries: entries.sort(byTitleIn(copies.map((copy) => copy.entry.copyId))), trees, commits };
+    return { entries: entries.sort(byTitle), trees, commits };
 }
 
 /**

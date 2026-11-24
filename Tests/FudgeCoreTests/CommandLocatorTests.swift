@@ -3,6 +3,18 @@ import Testing
 
 @testable import FudgeCore
 
+extension CommandLocator.Located {
+    struct NotATarget: Error {}
+
+    /// The command `.target` holds; a `.choose` fails the test.
+    var launchTarget: LaunchTarget {
+        get throws {
+            guard case .target(let target) = self else { throw NotATarget() }
+            return target
+        }
+    }
+}
+
 private func installed(_ json: String) throws -> InstalledExtension {
     let manifest = try JSONDecoder().decode(ExtensionManifest.self, from: Data(json.utf8))
     return InstalledExtension.topLevel(
@@ -91,7 +103,8 @@ private func request(_ params: String) throws -> LaunchRequest {
         LaunchRequest(
             name: "list", type: .userInitiated, arguments: ["query": "x", "extra": "dropped"],
             context: .object(["from": .string("a")]), fallbackText: "typed"),
-        caller: installed(named: "tools"), in: extensions())
+        caller: installed(named: "tools"), in: extensions()
+    ).launchTarget
     #expect(target.installed.manifest.name == "tools")
     #expect(target.command.name == "list")
     #expect(!target.isOtherExtension)
@@ -116,11 +129,13 @@ private func request(_ params: String) throws -> LaunchRequest {
     settings.commands["made-up/caffeinateWhile"] = .init(hotkey: "option+w")
     let target = try CommandLocator.locate(
         try request(#"{"name":"caffeinateWhile","type":"background"}"#), caller: camel, in: [camel],
-        settings: settings)
+        settings: settings
+    ).launchTarget
     #expect(target.command.name == "caffeinateWhile")
     #expect(target.rootItemID == "command:made-up/caffeinateWhile")
     let dotted = try CommandLocator.locate(
-        LaunchRequest(name: "show-recent.command", type: .userInitiated), caller: camel, in: [camel])
+        LaunchRequest(name: "show-recent.command", type: .userInitiated), caller: camel, in: [camel]
+    ).launchTarget
     #expect(dotted.command.name == "show-recent.command")
     #expect(throws: LaunchCommandError.commandNotFound(command: "caffeinatewhile", extension: "made-up")) {
         try CommandLocator.locate(
@@ -137,13 +152,15 @@ private func request(_ params: String) throws -> LaunchRequest {
 @Test func findsAnotherExtensionsCommandByOwnerOrElseAuthor() throws {
     let byOwner = try CommandLocator.locate(
         LaunchRequest(name: "show", type: .userInitiated, extensionName: "other", ownerOrAuthorName: "acme"),
-        caller: installed(named: "tools"), in: extensions())
+        caller: installed(named: "tools"), in: extensions()
+    ).launchTarget
     #expect(byOwner.installed.manifest.name == "other")
     #expect(byOwner.isOtherExtension)
 
     let byAuthor = try CommandLocator.locate(
         LaunchRequest(name: "run", type: .background, extensionName: "solo", ownerOrAuthorName: "bob"),
-        caller: installed(named: "tools"), in: extensions())
+        caller: installed(named: "tools"), in: extensions()
+    ).launchTarget
     #expect(byAuthor.installed.manifest.name == "solo")
     #expect(byAuthor.launchProps.launchType == "background")
 
@@ -200,7 +217,8 @@ private func request(_ params: String) throws -> LaunchRequest {
 @Test func aMissingRequiredArgumentShowsTheFieldsOrFailsInTheBackground() throws {
     let target = try CommandLocator.locate(
         LaunchRequest(name: "list", type: .userInitiated, arguments: ["mode": "all"]),
-        caller: installed(named: "tools"), in: extensions())
+        caller: installed(named: "tools"), in: extensions()
+    ).launchTarget
     #expect(target.missingArgument?.name == "query")
     #expect(try CommandLocator.checkArguments(target, type: .userInitiated) == false)
     #expect(throws: LaunchCommandError.missingArgument(argument: "query", command: "list")) {
@@ -212,13 +230,15 @@ private func request(_ params: String) throws -> LaunchRequest {
 
     let filled = try CommandLocator.locate(
         LaunchRequest(name: "list", type: .background, arguments: ["query": "x"]), caller: installed(named: "tools"),
-        in: extensions())
+        in: extensions()
+    ).launchTarget
     #expect(try CommandLocator.checkArguments(filled, type: .background))
 }
 
 @Test func anUnsetRequiredPreferenceOpensSettingsOrFailsInTheBackground() throws {
     let target = try CommandLocator.locate(
-        LaunchRequest(name: "refresh", type: .background), caller: installed(named: "tools"), in: extensions())
+        LaunchRequest(name: "refresh", type: .background), caller: installed(named: "tools"), in: extensions()
+    ).launchTarget
     let token = try JSONDecoder().decode(
         ExtensionManifest.Preference.self,
         from: Data(#"{"name":"token","type":"password","title":"API Token","required":true}"#.utf8))
@@ -311,6 +331,56 @@ private func request(_ params: String) throws -> LaunchRequest {
         "other answers are kept")
 }
 
+/// SPEC-177 test 3: a choice among copies is exactly one `true`; all `false` is Don't Allow; anything else is asked.
+@Test func aChoiceIsExactlyOneCopyAllowed() {
+    let (caller, a, b) = (id("caller"), id("a"), id("b"))
+    func choice(_ answers: [ExtensionID: Bool]) -> LaunchPermissions.CopyChoice {
+        LaunchPermissions(answers: [caller: answers]).choice(caller: caller, among: [a, b])
+    }
+    #expect(choice([a: true]) == .chosen(a), "one true among two")
+    #expect(choice([a: true, b: false]) == .chosen(a), "true and false")
+    #expect(choice([b: true, a: false]) == .chosen(b))
+    #expect(choice([a: true, b: true]) == .unanswered, "two trues, allowed one by one before")
+    #expect(choice([a: false, b: false]) == .notAllowed)
+    #expect(choice([a: false]) == .unanswered, "false and none")
+    #expect(choice([:]) == .unanswered, "none at all")
+    #expect(LaunchPermissions().choice(caller: caller, among: [a, b]) == .unanswered)
+    // Another caller's answers don't count.
+    #expect(LaunchPermissions(answers: [id("other"): [a: true]]).choice(caller: caller, among: [a, b]) == .unanswered)
+}
+
+/// SPEC-177 test 4: choosing a copy stores `true` for it and forgets the other copies' answers for that caller only;
+/// Don't Allow stores `false` for each; forgetting clears them all; the file keeps its shape.
+@Test func recordingAChoiceReplacesTheCallersAnswersForEveryCopy() throws {
+    let (caller, other, a, b, c) = (id("caller"), id("other"), id("a"), id("b"), id("c"))
+    var permissions = LaunchPermissions(answers: [caller: [a: true, b: false, id("x"): true], other: [a: false]])
+    permissions.recordChoice(c, caller: caller, among: [a, b, c])
+    #expect(permissions.answers == [caller: [c: true, id("x"): true], other: [a: false]])
+    permissions.recordChoice(nil, caller: caller, among: [a, b, c])
+    #expect(permissions.answers == [caller: [a: false, b: false, c: false, id("x"): true], other: [a: false]])
+    permissions.forget(caller: caller, among: [a, b, c])
+    #expect(permissions.answers == [caller: [id("x"): true], other: [a: false]])
+    permissions.forget(caller: other, among: [a, b, c])
+    #expect(permissions.answers == [caller: [id("x"): true]], "a caller with no answers left is gone")
+
+    let file = try Fixtures.temporaryDirectory().appendingPathComponent("launch-permissions.json")
+    var stored = LaunchPermissions()
+    stored.recordChoice(b, caller: caller, among: [a, b])
+    try stored.save(to: file)
+    #expect(
+        String(decoding: try Data(contentsOf: file), as: UTF8.self) == "{\n  \"caller\" : {\n    \"b\" : true\n  }\n}")
+    #expect(LaunchPermissions.load(from: file) == stored)
+}
+
+/// SPEC-177 test 5: what a call among copies does with the stored choice.
+@Test func aChoiceStepOpensRefusesOrAsks() {
+    #expect(LaunchPermissions.step(choice: .chosen(id("a")), origin: .background) == .open(id("a")))
+    #expect(LaunchPermissions.step(choice: .chosen(id("a")), origin: .userInitiated) == .open(id("a")))
+    #expect(LaunchPermissions.step(choice: .notAllowed, origin: .userInitiated) == .refused)
+    #expect(LaunchPermissions.step(choice: .unanswered, origin: .userInitiated) == .ask)
+    #expect(LaunchPermissions.step(choice: .unanswered, origin: .background) == .refusedUnasked)
+}
+
 @Test func launchPermissionsNeverOverwriteAFileTheyCantRead() throws {
     let file = try Fixtures.temporaryDirectory().appendingPathComponent("launch-permissions.json")
     #expect(!LaunchPermissions.isUnreadable(file), "a missing file is fine")
@@ -347,7 +417,8 @@ private func request(_ params: String) throws -> LaunchRequest {
     }
     let enabled = try CommandLocator.locate(
         request(#"{"name":"refresh","type":"background"}"#), caller: installed(named: "tools"), in: extensions(),
-        settings: FudgeSettings())
+        settings: FudgeSettings()
+    ).launchTarget
     #expect(enabled.command.name == "refresh")
 }
 
@@ -372,7 +443,7 @@ private func request(_ params: String) throws -> LaunchRequest {
         try CommandLocator.checkMode(
             commands[2], type: LaunchRequest(name: "status", type: .userInitiated).asCalled(from: .background).type)
     }
-    let target = try CommandLocator.locate(downgraded, caller: installed(named: "tools"), in: extensions())
+    let target = try CommandLocator.locate(downgraded, caller: installed(named: "tools"), in: extensions()).launchTarget
     #expect(target.launchProps.launchType == "background", "the launched command sees how it really runs")
     #expect(throws: LaunchCommandError.missingArgument(argument: "query", command: "list")) {
         try CommandLocator.checkArguments(target, type: downgraded.type)
@@ -381,7 +452,8 @@ private func request(_ params: String) throws -> LaunchRequest {
         ExtensionManifest.Preference.self, from: Data(#"{"name":"token","type":"password","required":true}"#.utf8))
     let refresh = try CommandLocator.locate(
         LaunchRequest(name: "refresh", type: .userInitiated).asCalled(from: .background),
-        caller: installed(named: "tools"), in: extensions())
+        caller: installed(named: "tools"), in: extensions()
+    ).launchTarget
     #expect(throws: LaunchCommandError.missingPreferences(extensionTitle: "Tools", names: ["token"])) {
         try CommandLocator.checkPreferences([token], of: refresh, extensionTitle: "Tools", type: .background)
     }

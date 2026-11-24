@@ -61,14 +61,16 @@ const sectionTitle = (row: InstalledSectionRow) =>
     row.kind === "entry" ? row.entry.title : row.kind === "development" ? row.build.title : row.install.title;
 
 /**
- * The Installed section in order (SPEC-166): by title, and on the same title (base sensitivity) the store's installs
- * first, which come in the copies' order (`byTitleIn`), then the development builds, then the installs whose repository
- * isn't on. Each kind keeps the order it's given.
+ * The Installed section in order (SPEC-177): by title, and on the same title (base sensitivity) by repository label,
+ * A to Z, on every kind of row (`labelOf`, by row id, as `byTitleAndLabel`); on the same label the store's installs
+ * first, then the development builds, then the installs whose repository isn't on. Each kind keeps the order it's
+ * given.
  */
 export function installedSection(
     entries: readonly StoreEntry[],
     development: readonly DevelopmentBuild[],
     notUpdated: readonly NotUpdatedInstall[],
+    labelOf: (rowId: string) => string,
 ): InstalledSectionRow[] {
     const rows: InstalledSectionRow[] = [
         ...entries.map((entry) => ({ kind: "entry" as const, entry })),
@@ -77,7 +79,11 @@ export function installedSection(
     ];
     return rows.sort(
         (a, b) =>
-            sectionTitle(a).localeCompare(sectionTitle(b), "en", { sensitivity: "base" }) || kindOrder[a.kind] - kindOrder[b.kind],
+            sectionTitle(a).localeCompare(sectionTitle(b), "en", { sensitivity: "base" }) ||
+            labelOf(installedSectionRowId(a)).localeCompare(labelOf(installedSectionRowId(b)), "en", {
+                sensitivity: "base",
+            }) ||
+            kindOrder[a.kind] - kindOrder[b.kind],
     );
 }
 

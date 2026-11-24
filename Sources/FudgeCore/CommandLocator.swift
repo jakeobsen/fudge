@@ -114,8 +114,6 @@ public enum LaunchCommandError: Error, Equatable, CustomStringConvertible {
     /// A background call can't ask "Allow A to open B?"; the question comes when the user opens the caller.
     case permissionNeeded(extensionTitle: String)
     case disabled(command: String)
-    /// Two or more installs of the name, from repositories the order doesn't choose between (F).
-    case ambiguous(name: String)
 
     public var description: String {
         switch self {
@@ -132,8 +130,6 @@ public enum LaunchCommandError: Error, Equatable, CustomStringConvertible {
         case .permissionNeeded(let title):
             "Not allowed to launch commands of \"\(title)\" yet: Fudge asks the user when they open this command"
         case .disabled(let command): "Command \"\(command)\" is disabled"
-        case .ambiguous(let name):
-            "More than one extension called \(name) is installed, so Fudge can't tell which one to open."
         }
     }
 }
@@ -159,28 +155,68 @@ public struct LaunchTarget: Sendable, Equatable {
 
 /// Finds the command a `launchCommand` call names, and decides whether it can run as asked.
 public enum CommandLocator {
+    /// What a `launchCommand` call opens: one command, or a choice the user makes between copies (SPEC-177).
+    public enum Located: Sendable, Equatable {
+        /// The command to launch.
+        case target(LaunchTarget)
+        /// Two or more installs can run the call: `copies`, those, sorted by repository label (`sorted(_:names:)`);
+        /// `all`, every install with that name and owner, which a choice is recorded among (`LaunchPermissions`).
+        case choose(copies: [InstalledExtension], all: [ExtensionID])
+    }
+
     /// The command `request` names: in `caller`'s own extension, or in an installed extension with that `name` whose
-    /// owner (or, without one, author) is `ownerOrAuthorName`, picked by `pick`'s order when there are several.
+    /// owner (or, without one, author) is `ownerOrAuthorName`. Of several such installs, the caller itself is the
+    /// target if it's one of them; else those that can't run the call (no such command, or the extension or the
+    /// command switched off) are left out, one left is the target, two or more are a choice, and none gives the
+    /// refusal of the first by repository label, as a single install would.
     public static func locate(
         _ request: LaunchRequest, caller: InstalledExtension, in installed: [InstalledExtension],
-        settings: FudgeSettings = FudgeSettings()
-    ) throws -> LaunchTarget {
-        let found: InstalledExtension
-        if let extensionName = request.extensionName {
-            let owner = request.ownerOrAuthorName ?? ""
-            let matches = installed.filter {
-                $0.manifest.name == extensionName && $0.manifest.ownerOrAuthorName == owner
-            }
-            guard !matches.isEmpty else {
-                throw LaunchCommandError.extensionNotInstalled(owner: owner, name: extensionName)
-            }
-            found = try pick(matches, caller: caller)
-        } else {
+        settings: FudgeSettings = FudgeSettings(), names: RepositoryNames = RepositoryNames(settings: FudgeSettings())
+    ) throws -> Located {
+        guard let extensionName = request.extensionName else {
             guard let match = installed.first(where: { $0.id == caller.id }) else {
                 throw LaunchCommandError.extensionNotInstalled(owner: "", name: caller.manifest.name)
             }
-            found = match
+            return .target(try target(request, in: match, caller: caller, settings: settings))
         }
+        let owner = request.ownerOrAuthorName ?? ""
+        let matches = sorted(
+            installed.filter { $0.manifest.name == extensionName && $0.manifest.ownerOrAuthorName == owner },
+            names: names)
+        guard let first = matches.first else {
+            throw LaunchCommandError.extensionNotInstalled(owner: owner, name: extensionName)
+        }
+        if let own = matches.first(where: { $0.id == caller.id }) {
+            return .target(try target(request, in: own, caller: caller, settings: settings))
+        }
+        let copies = matches.filter { canRun(request, in: $0, settings: settings) }
+        if copies.count > 1 { return .choose(copies: copies, all: matches.map(\.id)) }
+        return .target(try target(request, in: copies.first ?? first, caller: caller, settings: settings))
+    }
+
+    /// Whether `found` can run the call: it has the command, and neither the extension nor the command is switched off.
+    static func canRun(_ request: LaunchRequest, in found: InstalledExtension, settings: FudgeSettings) -> Bool {
+        found.manifest.commands.contains { $0.name == request.name }
+            && settings.isEnabled(owner: .extension(found.id), command: request.name)
+    }
+
+    /// Installs of one name and owner in the order the question and the Permissions page list them: by repository
+    /// label, A to Z (`localizedStandardCompare`), then by id.
+    public static func sorted(_ copies: [InstalledExtension], names: RepositoryNames) -> [InstalledExtension] {
+        copies.map { (copy: $0, label: names.label(of: $0.repository)) }.sorted { first, second in
+            switch first.label.localizedStandardCompare(second.label) {
+            case .orderedAscending: true
+            case .orderedDescending: false
+            case .orderedSame: first.copy.id.key < second.copy.id.key
+            }
+        }.map(\.copy)
+    }
+
+    /// The command `request` names in `found`, launched by `caller`, when it can be: it exists, and neither it nor its
+    /// extension is switched off. `locate` uses it, and the app after the user chooses a copy.
+    public static func target(
+        _ request: LaunchRequest, in found: InstalledExtension, caller: InstalledExtension, settings: FudgeSettings
+    ) throws -> LaunchTarget {
         guard let command = found.manifest.commands.first(where: { $0.name == request.name }) else {
             throw LaunchCommandError.commandNotFound(command: request.name, extension: found.manifest.name)
         }
@@ -202,23 +238,6 @@ public enum CommandLocator {
             ),
             isOtherExtension: found.id != caller.id
         )
-    }
-
-    /// Which of several installs of one name and owner a call means (F): the caller itself, then the one from the
-    /// caller's own repository, then Raycast's, then the development build. Two or more left after that, from
-    /// repositories none of those name, are refused. A bundled extension is the only one with its name.
-    static func pick(_ matches: [InstalledExtension], caller: InstalledExtension) throws -> InstalledExtension {
-        if matches.count == 1 { return matches[0] }
-        let order: [(InstalledExtension) -> Bool] = [
-            { $0.id == caller.id },
-            { $0.repository == caller.repository },
-            { $0.repository == .raycast },
-            { $0.repository == .development },
-        ]
-        for step in order {
-            if let found = matches.first(where: step) { return found }
-        }
-        throw LaunchCommandError.ambiguous(name: matches[0].manifest.name)
     }
 
     /// Whether the command's mode can be launched as `type`. A view command never runs in the background. A
@@ -335,6 +354,101 @@ public struct LaunchPermissions: Sendable, Equatable, Codable {
                 Entry(caller: caller, target: $0.key, allowed: $0.value)
             }
         }
+    }
+
+    /// A caller's choice among copies of one extension (SPEC-177): the copy it opens, none, or not made yet.
+    public enum CopyChoice: Sendable, Hashable {
+        case chosen(ExtensionID)
+        case notAllowed
+        case unanswered
+    }
+
+    /// The choice stored for `caller` among `copies`: exactly one copy answered `true` is chosen, whatever the others
+    /// hold; every copy answered `false` is not allowed; anything else, two `true`s included, is unanswered.
+    public func choice(caller: ExtensionID, among copies: [ExtensionID]) -> CopyChoice {
+        let allowed = copies.filter { answer(caller: caller, target: $0) == true }
+        if allowed.count == 1 { return .chosen(allowed[0]) }
+        if !copies.isEmpty, copies.allSatisfy({ answer(caller: caller, target: $0) == false }) { return .notAllowed }
+        return .unanswered
+    }
+
+    /// Records the user's choice among `copies`, every install of one name and owner: a copy stores `true` for it and
+    /// forgets the others' answers for `caller`; nil ("Don't Allow") stores `false` for each.
+    public mutating func recordChoice(_ chosen: ExtensionID?, caller: ExtensionID, among copies: [ExtensionID]) {
+        guard let chosen else {
+            for copy in copies { record(false, caller: caller, target: copy) }
+            return
+        }
+        forget(caller: caller, among: copies)
+        record(true, caller: caller, target: chosen)
+    }
+
+    /// Forgets `caller`'s answers for each of `copies`, so the user is asked again.
+    public mutating func forget(caller: ExtensionID, among copies: [ExtensionID]) {
+        for copy in copies { forget(caller: caller, target: copy) }
+    }
+
+    /// A row of the Permissions page's "Extensions that open other extensions".
+    public enum Row: Sendable, Equatable, Identifiable {
+        /// One stored answer, "Allowed" or "Not allowed".
+        case answer(Entry)
+        /// A caller's answers to an extension installed two or more times, as one choice among its copies.
+        case choice(Choice)
+
+        public var caller: ExtensionID {
+            switch self {
+            case .answer(let entry): entry.caller
+            case .choice(let choice): choice.caller
+            }
+        }
+
+        /// The caller and the target, or a choice's first copy, so a change updates the row instead of replacing it.
+        public var id: [String] {
+            switch self {
+            case .answer(let entry): entry.id
+            case .choice(let choice): [choice.caller.key, choice.copies.first?.id.key ?? ""]
+            }
+        }
+    }
+
+    /// A choice row: the caller, every install of the target's name and owner, switched off or not, sorted as
+    /// `CommandLocator.sorted` sorts them, and what's stored (`choice(caller:among:)`).
+    public struct Choice: Sendable, Equatable {
+        public var caller: ExtensionID
+        public var copies: [InstalledExtension]
+        public var selection: CopyChoice
+    }
+
+    /// The page's rows: a stored answer whose target is installed beside other installs of its name and owner joins
+    /// the one choice row of its caller and those installs; every other answer is a row as before. By caller, then
+    /// target, a choice row by its first copy's id.
+    public func rows(installed: [InstalledExtension], names: RepositoryNames) -> [Row] {
+        let byID = InstalledExtension.index(installed)
+        var rows: [(row: Row, target: String)] = []
+        var choices: Set<[String]> = []
+        for entry in entries {
+            if let target = byID[entry.target] {
+                let group = byID.values.filter {
+                    $0.manifest.name == target.manifest.name
+                        && $0.manifest.ownerOrAuthorName == target.manifest.ownerOrAuthorName
+                }
+                if group.count > 1 {
+                    let copies = CommandLocator.sorted(group, names: names)
+                    let ids = copies.map(\.id)
+                    if choices.insert([entry.caller.key] + ids.map(\.key)).inserted {
+                        let selection = choice(caller: entry.caller, among: ids)
+                        let row = Row.choice(Choice(caller: entry.caller, copies: copies, selection: selection))
+                        rows.append((row, ids[0].key))
+                    }
+                    continue
+                }
+            }
+            rows.append((.answer(entry), entry.target.key))
+        }
+        return rows.sorted { first, second in
+            let (one, other) = (first.row.caller.key, second.row.caller.key)
+            return one != other ? one < other : first.target < second.target
+        }.map(\.row)
     }
 
     /// The file holds something `load` can't read, so `save` won't overwrite it.

@@ -98,7 +98,7 @@ import { systemProbe } from "./build-records.ts";
 import { heldRefreshMessage, OtherBuilds, settledNotice } from "./other-builds.ts";
 import { openCopies, refreshCopies, type CopySteps } from "./copy-turns.ts";
 import { RAYCAST_COPY, type RepositoryEntry } from "./repository-address.ts";
-import { checkSharedLabelsAnswer, rowLabels } from "./row-labels.ts";
+import { checkSharedLabelsAnswer, ownLabels, rowLabels, sortLabels } from "./row-labels.ts";
 import {
     problemReport,
     problemRows,
@@ -224,20 +224,22 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
         () => (shared ? { ...shared, ...shownRows(copies ?? [], copyStates) } : undefined),
         [shared, copies, copyStates],
     );
-    // Each labeled row's label by its row id (SPEC-175), worked out once per change of the list, never per row.
-    const labels = useMemo<ReadonlyMap<string, string>>(
-        () =>
-            loaded
-                ? rowLabels({
-                      entries: loaded.entries,
-                      development: loaded.development,
-                      notUpdated: loaded.notUpdated,
-                      listed,
-                      shared: loaded.sharedLabels,
-                  })
-                : new Map(),
-        [loaded, listed],
-    );
+    // Each labeled row's label by its row id (SPEC-175), and every row's sort label (SPEC-177), worked out once per
+    // change of the list, never per row.
+    const { labels, labelOf } = useMemo<{
+        labels: ReadonlyMap<string, string>;
+        labelOf: (rowId: string) => string;
+    }>(() => {
+        if (!loaded) return { labels: new Map(), labelOf: () => "" };
+        const sources = {
+            entries: loaded.entries,
+            development: loaded.development,
+            notUpdated: loaded.notUpdated,
+            listed,
+        };
+        const labels = rowLabels({ ...sources, shared: loaded.sharedLabels });
+        return { labels, labelOf: sortLabels(labels, ownLabels(sources)) };
+    }, [loaded, listed]);
     const [noGit, setNoGit] = useState(false);
     // The list's download failing before anything has loaded: its title and what failed, for `LoadFailure`.
     const [loadError, setLoadError] = useState<{ title: string; details: FailureDetails }>();
@@ -749,11 +751,7 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
     };
 
     const shown = loaded ? filterEntries(loaded.entries, filter, loaded.installed) : [];
-    const { installed: installedRows, other } = sections(
-        shown,
-        loaded?.installed ?? {},
-        (copies ?? []).map((copy) => copy.entry.copyId),
-    );
+    const { installed: installedRows, other } = sections(shown, loaded?.installed ?? {}, labelOf);
     // A row's id is its repository's folder and its folder there (`rowId`), which `readCatalog` checked.
     const entryRowId = (entry: StoreEntry) => rowId(entry.repositoryFolder, entry.dir);
     // The load-error view while no copy has rows (C.6): Raycast's failure, in place of the whole list, as today. Any copy
@@ -761,14 +759,15 @@ function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsD
     const loadFailureShown = loadError !== undefined && (loaded?.entries.length ?? 0) === 0;
     const problems = loadFailureShown ? [] : problemRows(copies ?? [], copyStates);
     // The Installed section: the store's installs, the development builds and the installs whose repository isn't on, by
-    // title and in that order on the same title (SPEC-166). The last two come with the first copy's rows, so none is
-    // selected before them.
+    // title and by repository label on the same title (SPEC-177). The last two come with the first copy's rows, so none
+    // is selected before them.
     const installOnly =
         loaded && !loadFailureShown && installOnlyRowsReady(loaded.entries.length, reading) ? loaded : undefined;
     const installedRowsShown = installedSection(
         installedRows,
         installOnly && developmentRowsShown(filter) ? installOnly.development : [],
         installOnly && notUpdatedRowsShown(filter) ? installOnly.notUpdated : [],
+        labelOf,
     );
     // The list's top row as drawn, followed until the user acts (SPEC-166): recorded at commit, asked for after.
     const topRow = noGit

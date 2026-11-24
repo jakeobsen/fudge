@@ -158,18 +158,16 @@ export function byTitle(a: StoreEntry, b: StoreEntry): number {
 }
 
 /**
- * Rows from several copies by title (SPEC-166): the same title (base sensitivity) puts the copies in `order`, the copy
- * ids of the list as read, in its Settings order, a copy not in it after every one that is; then `byTitle`'s name,
- * folder and copy id.
+ * Rows from several copies by title (SPEC-177): the same title (base sensitivity) puts the rows by their repository
+ * label, A to Z, compared as the titles are, whatever order the repositories have in the list; then `byTitle`'s name,
+ * folder and copy id. `labelOf` gives a row's sort label by its row id (`sortLabels`).
  */
-export function byTitleIn(order: readonly string[]): (a: StoreEntry, b: StoreEntry) => number {
-    const place = (copyId: string) => {
-        const index = order.indexOf(copyId);
-        return index === -1 ? order.length : index;
-    };
+export function byTitleAndLabel(labelOf: (rowId: string) => string): (a: StoreEntry, b: StoreEntry) => number {
     return (a, b) =>
         a.title.localeCompare(b.title, "en", { sensitivity: "base" }) ||
-        place(a.copyId) - place(b.copyId) ||
+        labelOf(rowId(a.repositoryFolder, a.dir)).localeCompare(labelOf(rowId(b.repositoryFolder, b.dir)), "en", {
+            sensitivity: "base",
+        }) ||
         byTitle(a, b);
 }
 
@@ -255,13 +253,14 @@ export function filterEntries(entries: StoreEntry[], filter: string, installed: 
     return entries;
 }
 
-/** The installed ones first, then the rest; each by title, with the copies in `order` on the same title (`byTitleIn`). */
+/** The installed ones first, then the rest; each by title, and by repository label on the same title
+ * (`byTitleAndLabel`). */
 export function sections(
     entries: StoreEntry[],
     installed: Installed,
-    order: readonly string[],
+    labelOf: (rowId: string) => string,
 ): { installed: StoreEntry[]; other: StoreEntry[] } {
-    const sorted = [...entries].sort(byTitleIn(order));
+    const sorted = [...entries].sort(byTitleAndLabel(labelOf));
     return {
         installed: sorted.filter((entry) => installedRecord(entry, installed) !== undefined),
         other: sorted.filter((entry) => installedRecord(entry, installed) === undefined),
