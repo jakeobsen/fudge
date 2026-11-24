@@ -336,8 +336,8 @@ export function raycastLoadFailure(
     return problem?.error === undefined ? undefined : { error: problem.error };
 }
 
-/** A repository's problem row (C.6), in the list's first section, Repositories: `<name>: <sentence>`, and what its Show
- * Details and Copy Error show. */
+/** A repository's problem row (C.6), in the list's first section, Repositories: `<label>: <sentence>`, and what its
+ * Show Details and Copy Error show. */
 export type ProblemRow = { copyId: string; title: string; details: FailureDetails };
 
 /**
@@ -363,7 +363,7 @@ export function problemRows(copies: readonly StoreCopy[], states: ReadonlyMap<st
         return [
             {
                 copyId: copy.entry.copyId,
-                title: `${copy.entry.name}: ${problemSentence(problem.kind, copy.entry.branch)}`,
+                title: `${copy.entry.label}: ${problemSentence(problem.kind, copy.entry.branch)}`,
                 details: problemDetails(copy.entry, problem),
             },
         ];

@@ -97,9 +97,9 @@ test("the app's answer is checked again: every entry the same way, each that par
         { ...team, on: false },
     ];
     assert.deepEqual(checkRepositoriesAnswer(answer), [
-        { ...tools, on: true },
-        { ...raycast, on: false },
-        { ...team, on: false },
+        { ...tools, on: true, label: tools.name },
+        { ...raycast, on: false, label: raycast.name },
+        { ...team, on: false, label: team.name },
     ]);
     assert.deepEqual(checkRepositoriesAnswer({ repositories: answer }), []);
     assert.deepEqual(checkRepositoriesAnswer(null), []);
@@ -119,7 +119,11 @@ test("Raycast's entry counts at any place, once, and only as its address parses 
         [tools, team, raycast],
     ]) {
         const answer = list.map((entry, index) => ({ ...entry, on: index !== 1 }));
-        assert.deepEqual(checkRepositoriesAnswer(answer), answer, JSON.stringify(list.map((entry) => entry.copyId)));
+        assert.deepEqual(
+            checkRepositoriesAnswer(answer),
+            answer.map((entry) => ({ ...entry, label: entry.name })),
+            JSON.stringify(list.map((entry) => entry.copyId)),
+        );
     }
     // A second is left out, as any duplicate is, however its address is typed.
     const typed = {
@@ -129,8 +133,8 @@ test("Raycast's entry counts at any place, once, and only as its address parses 
         on: true,
     };
     assert.deepEqual(checkRepositoriesAnswer([{ ...tools, on: true }, { ...raycast, on: true }, typed]), [
-        { ...tools, on: true },
-        { ...raycast, on: true },
+        { ...tools, on: true, label: tools.name },
+        { ...raycast, on: true, label: raycast.name },
     ]);
     assert.deepEqual(checkRepositoriesAnswer([typed, { ...raycast, on: false }]), [
         {
@@ -140,19 +144,20 @@ test("Raycast's entry counts at any place, once, and only as its address parses 
             name: "Raycast/Extensions",
             folder: "raycast/extensions",
             on: true,
+            label: "Raycast/Extensions",
         },
     ]);
     // Raycast's copy id with another folder is left out, and so is its address answered with another copy id: never a
     // second copy of Raycast's.
     assert.deepEqual(checkRepositoriesAnswer([{ ...raycast, folder: "someone/tools", on: true }, { ...tools, on: true }]), [
-        { ...tools, on: true },
+        { ...tools, on: true, label: tools.name },
     ]);
     assert.deepEqual(
         checkRepositoriesAnswer([
             { ...raycast, copyId: copyIdOf(RAYCAST_COPY.identity), on: true },
             { ...tools, on: true },
         ]),
-        [{ ...tools, on: true }],
+        [{ ...tools, on: true, label: tools.name }],
     );
     // An entry with no address, or with a branch, is left out, Raycast's as any other.
     assert.deepEqual(checkRepositoriesAnswer([{ copyId: "raycast", folder: "raycast/extensions", on: true }]), []);

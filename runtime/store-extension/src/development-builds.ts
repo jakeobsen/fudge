@@ -23,6 +23,11 @@ export type DevelopmentBuild = {
 /** The row's accessory text. */
 export const developmentBuildAccessory = "Development build";
 
+/** The row's accessories: its label first while it's labeled (`development`, SPEC-175), then "Development build". */
+export function developmentAccessories(label?: string): { text: string }[] {
+    return [...(label ? [{ text: label }] : []), { text: developmentBuildAccessory }];
+}
+
 /** A development build row's list id, which no catalog row's id can be. */
 export function developmentRowId(name: string): string {
     return `development:${name}`;

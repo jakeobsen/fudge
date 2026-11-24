@@ -7,7 +7,8 @@ import Testing
     let bundled = [ExtensionStore.id, ClipboardHistory.id, FileSearch.id, BundledExtensions.emojiID]
     let allowed: [BundledCalls.Call: ExtensionID] = [
         .fudgeLog: ExtensionStore.id, .commandLineTools: ExtensionStore.id, .storeNotifications: ExtensionStore.id,
-        .storeRepositories: ExtensionStore.id, .clipboardHistory: ClipboardHistory.id, .filesSearch: FileSearch.id,
+        .storeRepositories: ExtensionStore.id, .storeSharedLabels: ExtensionStore.id,
+        .clipboardHistory: ClipboardHistory.id, .filesSearch: FileSearch.id,
     ]
     #expect(Set(allowed.keys) == Set(BundledCalls.Call.allCases))
     // The same names from another repository, or built in the development folder, are other extensions.

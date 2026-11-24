@@ -1140,8 +1140,9 @@ async function storeContext(
 }
 const alphaEntry = parseManifest("alpha", manifest("alpha"))!;
 
-/** Raycast's repository as a row's detail names it and links to it. */
-const raycastRow: RowRepository = { name: RAYCAST_COPY.name, gitHub: "raycast/extensions" };
+/** Raycast's repository as a row's detail names it and links to it: by its entry's label (SPEC-175), here the name its
+ * button gives it. */
+const raycastRow: RowRepository = { name: "Raycast", gitHub: "raycast/extensions" };
 /** The copies a context looks rows up in: Raycast's only, at `repo`. */
 function raycastOnly(repo: StoreRepository): StoreContext["copyOf"] {
     return (copyId) => (copyId === RAYCAST_COPY.copyId ? { entry: RAYCAST_COPY, repo } : undefined);
@@ -4968,19 +4969,28 @@ const toolsRepository = parseRepositoryAddress("https://github.com/Someone/Tools
 const gitlabRepository = parseRepositoryAddress("https://gitlab.com/group/tools", undefined, [toolsRepository]) as ParsedRepository;
 const copyOfRepository = (repository: ParsedRepository) => ({ copyId: repository.copyId, repositoryFolder: repository.folder });
 
-test("a row from an added repository names it first among its accessories; Raycast's rows don't (D.2)", () => {
+test("a row given its label shows it first, Raycast's like any; one given none shows none (SPEC-175)", () => {
     const fromTools = parseManifest("alpha", manifest("alpha"), copyOfRepository(toolsRepository))!;
+    assert.deepEqual(accessoryTexts(alphaEntry, "available", undefined, undefined, undefined, "Raycast"), [
+        { text: "Raycast" },
+        { text: "someone" },
+        { text: "1 command" },
+    ]);
     assert.deepEqual(accessoryTexts(fromTools, "installed", undefined, undefined, undefined, "Someone/Tools"), [
         { text: "Someone/Tools" },
         { text: "someone" },
         { text: "1 command" },
         { tag: "Installed" },
     ]);
-    assert.deepEqual(accessoryTexts(alphaEntry, "available", undefined, undefined, undefined, "Raycast"), [
+    assert.deepEqual(
+        accessoryTexts(fromTools, "installed"),
+        [{ text: "someone" }, { text: "1 command" }, { tag: "Installed" }],
+        "not labeled, none shown",
+    );
+    assert.deepEqual(accessoryTexts(fromTools, "available", undefined, undefined, undefined, ""), [
         { text: "someone" },
         { text: "1 command" },
     ]);
-    assert.deepEqual(accessoryTexts(fromTools, "available"), [{ text: "someone" }, { text: "1 command" }], "no name, none shown");
 });
 
 test("the Repositories filter shows one repository's rows, and is there only with more than one on (D.3)", () => {
@@ -5043,9 +5053,14 @@ test("links follow the row's repository: its owner and name on github.com, none 
     assert.ok(elsewhere.endsWith("---\n\nShot"), elsewhere);
 });
 
-test("every row's detail has a Repository line with its repository's name (D.2)", () => {
+test("every row's detail has a Repository line with its repository's label (D.2, SPEC-175)", () => {
     const fromTools = parseManifest("alpha", manifest("alpha"), copyOfRepository(toolsRepository))!;
-    assert.match(detailMarkdown(alphaEntry, raycastRow, "c0ffee", ""), /\*\*Repository:\*\* raycast\\\/extensions(  \n|$)/m);
+    assert.match(detailMarkdown(alphaEntry, raycastRow, "c0ffee", ""), /\*\*Repository:\*\* Raycast(  \n|$)/m);
+    assert.match(
+        detailMarkdown(alphaEntry, { name: "raycast/extensions", gitHub: "raycast/extensions" }, "c0ffee", ""),
+        /\*\*Repository:\*\* raycast\\\/extensions(  \n|$)/m,
+        "an unnamed entry's label is its name",
+    );
     assert.match(detailMarkdown(fromTools, { name: "Someone/Tools", gitHub: "someone/tools" }, "c0ffee", ""), /\*\*Repository:\*\* Someone\\\/Tools/);
     // The name's marks are escaped, so none of it reads as Markdown.
     assert.match(detailMarkdown(fromTools, { name: "gitlab.com/a_b/~c" }, "c0ffee", ""), /\*\*Repository:\*\* gitlab\\\.com\\\/a\\_b\\\/\\~c/);

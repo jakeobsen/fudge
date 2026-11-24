@@ -192,3 +192,36 @@ private func read(_ entries: [[String: Any]]) throws -> [ListedRepository] {
     #expect(NSDictionary(dictionary: try #require(after["commands"] as? [String: Any])).isEqual(before["commands"]))
     #expect(NSDictionary(dictionary: try #require(after["extensions"] as? [String: Any])).isEqual(before["extensions"]))
 }
+
+@Test func theFixturesNamesAreCheckedInTheSameOrderAsTheStoreChecksThem() throws {
+    let names = try #require(try repositoryNamesFixture()["names"] as? [[String: Any]])
+    for item in names {
+        let text = try #require(item["text"] as? String)
+        let result = RepositoryNames.check(text, others: item["others"] as? [String] ?? [])
+        let refusal: RepositoryNames.Refusal? =
+            switch item["refused"] as? String {
+            case "slash": .slash
+            case "characters": .characters
+            case "tooLong": .tooLong
+            case "development": .development
+            case "core": .core
+            case "taken": .taken(item["other"] as? String ?? "")
+            default: nil
+            }
+        if let refusal {
+            #expect(result == .failure(refusal), "\(scalarsInHex(text))")
+            continue
+        }
+        guard case .success(let name) = result else {
+            Issue.record("\(scalarsInHex(text)) was refused: \(String(describing: result))")
+            continue
+        }
+        let same: Bool =
+            switch (name, item["name"] as? String) {
+            case (nil, nil): true
+            case (let name?, let expected?): name.unicodeScalars.elementsEqual(expected.unicodeScalars)
+            default: false
+            }
+        #expect(same, "\(scalarsInHex(text)) gave \(String(describing: name))")
+    }
+}

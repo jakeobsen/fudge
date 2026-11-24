@@ -320,8 +320,8 @@ test("a removed repository's copy is deleted, held under remove:<copyId>; listed
     const off = added("https://github.com/owner/other", undefined, false, [kept.parsed]);
     const gone = added("https://github.com/owner/gone");
     const listed: RepositoryEntry[] = [
-        { ...kept.parsed, on: true },
-        { ...off.parsed, on: false },
+        { ...kept.parsed, on: true, label: kept.parsed.name },
+        { ...off.parsed, on: false, label: off.parsed.name },
     ];
     const root = path.join(support, "repositories");
     for (const copyId of [kept.parsed.copyId, off.parsed.copyId, gone.parsed.copyId, "raycast", "not-a-copy"]) {
@@ -453,12 +453,15 @@ test("Raycast's copy stays after a failed call, an answer that isn't an array, o
 
 // MARK: - Problem rows (C.6)
 
-test("each repository with a problem gets one row, in the list's order, with its name and sentence", () => {
+test("each repository with a problem gets one row, in the list's order, with its label and sentence (SPEC-175)", () => {
     const support = "/support";
     const tools = added("https://gitlab.com/group/tools");
     const pinned = added("https://github.com/Someone/Pinned", "release", true, [tools.parsed]);
     const fine = added("https://github.com/someone/fine", undefined, true, [tools.parsed, pinned.parsed]);
-    const { copies } = storeCopies([raycastAnswer(), tools.answer, pinned.answer, fine.answer], support);
+    const { copies } = storeCopies(
+        [raycastAnswer(), tools.answer, { ...pinned.answer, label: "Release builds" }, fine.answer],
+        support,
+    );
     const unreachable = new GitError(
         "fatal: unable to access 'https://gitlab.com/group/tools/': Could not resolve host: gitlab.com",
         "git clone --filter=blob:none -- https://gitlab.com/group/tools",
@@ -475,7 +478,7 @@ test("each repository with a problem gets one row, in the list's order, with its
         [
             ["raycast", "raycast/extensions: This repository's server can't send only the files the Extension Store needs."],
             [tools.parsed.copyId, "gitlab.com/group/tools: Couldn't reach this repository. It may be private, or the address may be wrong."],
-            [pinned.parsed.copyId, "Someone/Pinned: This repository has no branch called release."],
+            [pinned.parsed.copyId, "Release builds: This repository has no branch called release."],
         ],
         "in the list's order; a copy with rows and no problem has none",
     );

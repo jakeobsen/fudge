@@ -6,6 +6,7 @@
 import { lstat } from "node:fs/promises";
 import { extensionId, raycastFolder } from "../../src/extension-id.ts";
 import { allFilter, installedFilter, type Installed } from "./catalog.ts";
+import type { RepositoryEntry } from "./repository-address.ts";
 import { installedManifest } from "./development-builds.ts";
 import { installFolder, readInstalled, StoreError, writeInstalled, type StoreContext } from "./store.ts";
 
@@ -24,6 +25,17 @@ export type NotUpdatedInstall = {
 
 /** The row's accessory text. */
 export const notUpdatedAccessory = "Not updated";
+
+/** The row's accessories: its label first while it's labeled (SPEC-175), then "Not updated". */
+export function notUpdatedAccessories(label?: string): { text: string }[] {
+    return [...(label ? [{ text: label }] : []), { text: notUpdatedAccessory }];
+}
+
+/** Such a row's label (SPEC-175): its repository's while that one is listed, switched off, else its folder, Raycast's
+ * like any. */
+export function notUpdatedLabel(repositoryFolder: string, listed: readonly RepositoryEntry[]): string {
+    return listed.find((entry) => entry.folder === repositoryFolder)?.label ?? repositoryFolder;
+}
 
 /** Such a row's list id, which no catalog row's (`<folder>:<dir>`, and a folder holds a `/`) or development build's can be. */
 export function notUpdatedRowId(id: string): string {

@@ -398,7 +398,7 @@ extension ExtensionRepository {
                     "on": .bool(listed.on),
                 ]
                 if let branch = repository.branch { entry["branch"] = .string(branch) }
-                // SPEC-174 B6: the Extension Store doesn't read it yet.
+                // SPEC-174 B6: the Extension Store shows it as the repository's label (SPEC-175).
                 if let label = listed.label { entry["label"] = .string(label) }
                 return .object(entry)
             })

@@ -26,6 +26,7 @@ import {
     pasteClipboardEntry,
     pinClipboardEntry,
     searchFiles,
+    sharedLabels,
     type ClipboardEntry,
 } from "../src/fudge-app.ts";
 import type { JsonValue, UINode } from "../src/renderer/serialize.ts";
@@ -81,6 +82,7 @@ beforeEach(() => {
             else if (request.method === "clipboardHistory.list") settle(request.id, history);
             else if (request.method === "alert.confirm") settle(request.id, confirms);
             else if (request.method === "store.repositories") settle(request.id, [{ copyId: "raycast", on: true }]);
+            else if (request.method === "store.sharedLabels") settle(request.id, { "clipboard-history": "Raycast" });
             else settle(request.id, null);
         });
     });
@@ -184,6 +186,7 @@ test("the fudge:app module is frozen and holds every call", () => {
         askForNotifications,
         nextNotificationClick,
         extensionRepositories,
+        sharedLabels,
         searchFiles,
         listClipboardHistory,
         clipboardImage,
@@ -200,6 +203,13 @@ test("extensionRepositories asks the app for the list and gives its answer as it
     assert.deepEqual(methods(), ["store.repositories"]);
     failures["store.repositories"] = "Only the Extension Store asks for the list of repositories";
     await assert.rejects(extensionRepositories(), /Only the Extension Store asks for the list of repositories/);
+});
+
+test("sharedLabels asks the app which installs share a name and gives its answer as it is (SPEC-175)", async () => {
+    assert.deepEqual(await sharedLabels(), { "clipboard-history": "Raycast" });
+    assert.deepEqual(methods(), ["store.sharedLabels"]);
+    failures["store.sharedLabels"] = "Only the Extension Store asks which installs share a name";
+    await assert.rejects(sharedLabels(), /Only the Extension Store asks which installs share a name/);
 });
 
 // Raycast's `offset` (§5)

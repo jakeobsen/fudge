@@ -4620,6 +4620,27 @@ final class LauncherModel {
                     .rpcResult(
                         session: session, id: id, result: ExtensionRepository.storeAnswer(settings: settings),
                         error: nil))
+            case "store.sharedLabels":
+                // The labels of the installs that share a name (SPEC-175), from the installs and `settings.json` read
+                // from disk afresh for each call, so an install the store just finished counts before the extensions
+                // folder's watcher reloads: the Extension Store's call, refused for any other extension.
+                guard BundledCalls.mayCall(.storeSharedLabels, from: sessionExtensions[session]) else {
+                    send(
+                        .rpcResult(
+                            session: session, id: id, result: nil,
+                            error: "Only the Extension Store asks which installs share a name"))
+                    break
+                }
+                let paths = self.paths
+                let resources = Bundle.main.resourceURL
+                Task {
+                    let answer = await Task.detached(priority: .userInitiated) {
+                        let installed = InstalledExtension.all(paths: paths, resources: resources)
+                        let settings = FudgeSettings.load(from: paths.settingsFile)
+                        return ExtensionTitles(installed, names: RepositoryNames(settings: settings)).storeAnswer
+                    }.value
+                    send(.rpcResult(session: session, id: id, result: answer, error: nil))
+                }
             case "commandLineTools.ready", "commandLineTools.openSettings":
                 // The Extension Store's questions about extensions with a part written in Swift (SPEC-145 §3), refused
                 // for any other extension.
