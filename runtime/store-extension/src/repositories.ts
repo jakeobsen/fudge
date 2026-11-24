@@ -43,8 +43,8 @@ export type CopyOptions = { run?: Run; git?: string; allowProtocols?: string };
 
 /**
  * The app's answer to `extensionRepositories()`, checked again (`checkRepositoriesAnswer`): every repository listed,
- * on or off, and a copy of each one that's on, Raycast's first, then the added ones in the list's order (C.3). An added
- * copy follows its branch, and is cloned from its address as typed, which the rule has checked.
+ * on or off, and a copy of each one that's on, in the list's order (C.3). A copy other than Raycast's follows its
+ * branch, and is cloned from its address as typed, which the rule has checked; Raycast's is cloned from `repositoryURL`.
  */
 export function storeCopies(
     answer: unknown,
@@ -355,7 +355,7 @@ export function problemDetails(
     return { ...failureDetails(problem.error), ...(host === undefined ? {} : { host }) };
 }
 
-/** One row per repository that's on and has a problem, in the list's order, Raycast's first (C.6). */
+/** One row per repository that's on and has a problem, in the list's order (C.6). */
 export function problemRows(copies: readonly StoreCopy[], states: ReadonlyMap<string, CopyState>): ProblemRow[] {
     return copies.flatMap((copy) => {
         const problem = states.get(copy.entry.copyId)?.problem;

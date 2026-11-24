@@ -1,5 +1,5 @@
 // Opening and refreshing the copies (SPEC-157 C.1, C.3, C.6, C.7): each copy that's on gets turns of its own, in the
-// list's order, Raycast's first. A copy's clone or refresh, with its checkout and the reading of its rows, is one step
+// list's order. A copy's clone or refresh, with its checkout and the reading of its rows, is one step
 // in the queue, and the next copy's step enters the queue only after it, so an install pressed meanwhile waits for at
 // most the copy being fetched, never for all of them.
 import { heldRefresh, openCopy, type OtherBuilds } from "./other-builds.ts";

@@ -64,7 +64,7 @@ enum Layout {
     let load = InstalledExtension.load(walking: extensions)
     #expect(load.installed.map(\.id.key).sorted() == ["fudgeapp+development+github", "github"])
     let titles = ExtensionTitles.forTests(load.installed)
-    #expect(load.installed.map(titles.title(of:)).sorted() == ["GitHub (development)", "GitHub (raycast)"])
+    #expect(load.installed.map(titles.title(of:)).sorted() == ["GitHub (development)", "GitHub (raycast/extensions)"])
     #expect(load.skipped.isEmpty, "neither is skipped, and nothing is logged")
     let development = try #require(load.installed.first { $0.repository == .development })
     #expect(development.id == Development.id("github"))

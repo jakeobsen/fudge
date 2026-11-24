@@ -4,7 +4,7 @@ import Testing
 @testable import FudgeCore
 
 extension ExtensionTitles {
-    /// `installed` named with no repository in the list, as a fresh `settings.json` has it.
+    /// `installed` named with the defaults: Raycast's official repository alone in the list, with no name.
     static func forTests(_ installed: [InstalledExtension]) -> ExtensionTitles {
         ExtensionTitles(installed, names: RepositoryNames(settings: FudgeSettings()))
     }
@@ -53,8 +53,11 @@ private func shown(_ installed: [InstalledExtension], _ titles: ExtensionTitles)
     let added = try install("scratch", "Scratch", in: "jakeobsen/raycast")
     let other = try install("notes", "Notes", in: "jakeobsen/raycast")
     let titles = ExtensionTitles.forTests([raycast, added, other])
-    #expect(shown([raycast, added, other], titles) == ["Scratch (raycast)", "Scratch (jakeobsen/raycast)", "Notes"])
-    #expect(titles.label(of: raycast) == "raycast" && titles.label(of: added) == "jakeobsen/raycast")
+    #expect(
+        shown([raycast, added, other], titles) == [
+            "Scratch (raycast/extensions)", "Scratch (jakeobsen/raycast)", "Notes",
+        ])
+    #expect(titles.label(of: raycast) == "raycast/extensions" && titles.label(of: added) == "jakeobsen/raycast")
     #expect(titles.label(of: other) == nil)
 }
 
@@ -66,7 +69,7 @@ private func shown(_ installed: [InstalledExtension], _ titles: ExtensionTitles)
     ]
     #expect(
         shown(three, .forTests(three)) == [
-            "Clipboard History (Fudge)", "Clipboard History (raycast)", "Clipboard History (development)",
+            "Clipboard History (Core)", "Clipboard History (raycast/extensions)", "Clipboard History (development)",
         ])
 }
 
@@ -78,7 +81,7 @@ private func shown(_ installed: [InstalledExtension], _ titles: ExtensionTitles)
     let titles = ExtensionTitles.forTests([raycast, lower, spaced, inside])
     #expect(
         shown([raycast, lower, spaced, inside], titles) == [
-            "Scratch (raycast)", "scratch (jakeobsen/raycast)", " Scratch\n (development)", "Scr atch",
+            "Scratch (raycast/extensions)", "scratch (jakeobsen/raycast)", " Scratch\n (development)", "Scr atch",
         ], "each shows its own title as written")
 
     let precomposed = try install("cafe", "Caf\u{E9}", in: "raycast/extensions")
@@ -88,9 +91,9 @@ private func shown(_ installed: [InstalledExtension], _ titles: ExtensionTitles)
     let street = try install("street", "Stra\u{DF}e", in: "raycast/extensions")
     let upper = try install("street", "STRASSE", in: "someone/tools")
     let more = ExtensionTitles.forTests([precomposed, decomposed, picker, doubled, street, upper])
-    #expect(more.label(of: precomposed) == "raycast" && more.label(of: decomposed) == "someone/tools")
+    #expect(more.label(of: precomposed) == "raycast/extensions" && more.label(of: decomposed) == "someone/tools")
     #expect(more.label(of: picker) == nil && more.label(of: doubled) == nil, "two spaces inside are another name")
-    #expect(more.label(of: street) == "raycast" && more.label(of: upper) == "someone/tools")
+    #expect(more.label(of: street) == "raycast/extensions" && more.label(of: upper) == "someone/tools")
     #expect(ExtensionTitles.same("Scratch", " scratch\n") && !ExtensionTitles.same("Scratch", "Scr atch"))
 }
 
@@ -125,16 +128,20 @@ private func shown(_ installed: [InstalledExtension], _ titles: ExtensionTitles)
     let jakeobsen = try ExtensionRepository.parse(address: "https://github.com/JakeObsen/Raycast").get()
     let tools = try ExtensionRepository.parse(address: "https://github.com/someone/tools", existing: [jakeobsen]).get()
     #expect(jakeobsen.folder == "jakeobsen/raycast" && jakeobsen.name == "JakeObsen/Raycast")
-    settings.extensionRepositories = [
-        ListedRepository(repository: jakeobsen), ListedRepository(repository: tools, label: "mine"),
+    let others = [ListedRepository(repository: jakeobsen), ListedRepository(repository: tools, label: "mine")]
+    // Raycast's official repository's entry is named as any other is: none, its name, or its folder once removed.
+    let raycastEntries: [([ListedRepository], String)] = [
+        ([ListedRepository(repository: .raycast)], "raycast/extensions"),
+        ([ListedRepository(repository: .raycast, on: false, label: "Raycast")], "Raycast"),
+        ([], "raycast/extensions"),
     ]
-    for state in RaycastRepositoryState.allCases {
-        settings.raycastRepositoryState = state
+    for (raycastEntry, label) in raycastEntries {
+        settings.extensionRepositories = others + raycastEntry
         let titles = ExtensionTitles(installed, names: RepositoryNames(settings: settings))
         #expect(
             shown(installed, titles) == [
-                "Scratch (raycast)", "Scratch (JakeObsen/Raycast)", "Scratch (mine)", "Scratch (gone/tools)",
-            ], "Raycast's \(state); a listed one without a name as typed, one no longer listed by its folder")
+                "Scratch (\(label))", "Scratch (JakeObsen/Raycast)", "Scratch (mine)", "Scratch (gone/tools)",
+            ], "Raycast's \(label); a listed one without a name as typed, one no longer listed by its folder")
     }
 
     settings.extensionRepositories = [ListedRepository(repository: tools, label: "mine")]
@@ -146,6 +153,6 @@ private func shown(_ installed: [InstalledExtension], _ titles: ExtensionTitles)
     #expect(renamed.title(of: named) == "Scratch (someone/tools)")
 
     let names = RepositoryNames(settings: settings)
-    #expect(names.label(of: .raycast) == "raycast" && names.label(of: .development) == "development")
-    #expect(names.label(of: .bundled) == "Fudge" && ExtensionRepositoryText.raycastLabel == "raycast")
+    #expect(names.label(of: .raycast) == "raycast/extensions" && names.label(of: .development) == "development")
+    #expect(names.label(of: .bundled) == "Core")
 }

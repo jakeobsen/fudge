@@ -1,14 +1,13 @@
 import Foundation
 
 /// What each repository is called (SPEC-174 B), from `settings.json`: the label an install shows after its title when
-/// another installed extension has the same title (`ExtensionTitles`).
+/// another installed extension has the same title (`ExtensionTitles`). No repository has a fixed name (SPEC-176):
+/// Raycast's official one is named as any other is.
 public struct RepositoryNames: Sendable, Equatable {
-    /// Raycast's official repository's label, fixed, also once it's removed and added back.
-    public static let raycast = ExtensionRepositoryText.raycastLabel
     /// The development folder's label.
     public static let development = "development"
-    /// The label of the extensions in Fudge's own resources.
-    public static let fudge = "Fudge"
+    /// The label of the extensions in Fudge's own resources (D-179).
+    public static let core = "Core"
     /// The longest name, in characters.
     public static let maxLength = 40
 
@@ -18,9 +17,9 @@ public struct RepositoryNames: Sendable, Equatable {
         /// A control or format character, a line or paragraph separator, or a space other than U+0020.
         case characters
         case tooLong
-        case raycast
         case development
-        case fudge
+        /// The included extensions' label, `Core`.
+        case core
         /// Another repository in the list has that name, as it's written there.
         case taken(String)
 
@@ -29,9 +28,8 @@ public struct RepositoryNames: Sendable, Equatable {
             case .slash: "A name can't have a slash in it."
             case .characters: "That name has characters Fudge can't use."
             case .tooLong: "Use a name of up to \(RepositoryNames.maxLength) characters."
-            case .raycast: "Raycast's official repository is called raycast."
             case .development: "Fudge uses that name for your development builds."
-            case .fudge: "Fudge uses that name for its own extensions."
+            case .core: "Fudge uses that name for its own extensions."
             case .taken(let name): "Another repository is already called \(name)."
             }
         }
@@ -50,9 +48,8 @@ public struct RepositoryNames: Sendable, Equatable {
         guard !name.contains("/") else { return .failure(.slash) }
         guard name.unicodeScalars.allSatisfy(isUsable) else { return .failure(.characters) }
         guard name.count <= maxLength else { return .failure(.tooLong) }
-        if ExtensionTitles.same(name, raycast) { return .failure(.raycast) }
         if ExtensionTitles.same(name, development) { return .failure(.development) }
-        if ExtensionTitles.same(name, fudge) { return .failure(.fudge) }
+        if ExtensionTitles.same(name, core) { return .failure(.core) }
         if let other = others.first(where: { ExtensionTitles.same(name, $0) }) { return .failure(.taken(other)) }
         return .success(name)
     }
@@ -66,7 +63,8 @@ public struct RepositoryNames: Sendable, Equatable {
         }
     }
 
-    /// Each listed repository's label by its folder: its name, else its `owner/repository` as typed.
+    /// Each listed repository's label by its folder, Raycast's official one's included: its name, else its
+    /// `owner/repository` as typed.
     private let listed: [String: String]
 
     public init(settings: FudgeSettings) {
@@ -75,14 +73,14 @@ public struct RepositoryNames: Sendable, Equatable {
             uniquingKeysWith: { first, _ in first })
     }
 
-    /// The label of an install from `repository`: `raycast` for Raycast's official repository, listed or not; a listed
-    /// repository's name, else its `owner/repository`; the folder of a repository no longer in the list; `development`
-    /// for the development folder; and `Fudge` for an extension in Fudge's own resources.
+    /// The label of an install from `repository`: a listed repository's name, else its `owner/repository`, Raycast's
+    /// official one's included; the folder of a repository no longer in the list; `development` for the development
+    /// folder; and `Core` for an extension in Fudge's own resources.
     public func label(of repository: InstalledExtension.Repository) -> String {
         switch repository {
-        case .raycast: Self.raycast
+        case .raycast: listed[ExtensionRepositoryFolder.raycast] ?? ExtensionRepositoryFolder.raycast
         case .development: Self.development
-        case .bundled: Self.fudge
+        case .bundled: Self.core
         case .added(let folder): listed[folder] ?? folder
         }
     }

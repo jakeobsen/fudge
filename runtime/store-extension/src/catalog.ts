@@ -159,8 +159,8 @@ export function byTitle(a: StoreEntry, b: StoreEntry): number {
 
 /**
  * Rows from several copies by title (SPEC-166): the same title (base sensitivity) puts the copies in `order`, the copy
- * ids of the list as read (Raycast's official repository first, then the added ones in their Settings order), a copy not
- * in it after every one that is; then `byTitle`'s name, folder and copy id.
+ * ids of the list as read, in its Settings order, a copy not in it after every one that is; then `byTitle`'s name,
+ * folder and copy id.
  */
 export function byTitleIn(order: readonly string[]): (a: StoreEntry, b: StoreEntry) => number {
     const place = (copyId: string) => {
@@ -230,8 +230,8 @@ export function repositoryFilter(copyId: string): string {
     return `repository:${copyId}`;
 }
 
-/** The repositories the dropdown lists (D.3): every one that's on, in the list's order, Raycast's first, and only when
- * more than one is on. */
+/** The repositories the dropdown lists (D.3): every one that's on, in the list's order, and only when more than one is
+ * on. */
 export function filterRepositories<T>(on: readonly T[]): readonly T[] {
     return on.length > 1 ? on : [];
 }

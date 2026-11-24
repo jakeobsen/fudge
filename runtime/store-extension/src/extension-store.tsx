@@ -193,7 +193,7 @@ export default function Command(props: LaunchProps) {
 
 function Store({ cli, extensionsDir, launchContext }: { cli: string; extensionsDir: string; launchContext?: unknown }) {
     const { push } = useNavigation();
-    // A copy of each repository that's on, from the last read of the list (C.1), Raycast's first; none until it's read.
+    // A copy of each repository that's on, from the last read of the list (C.1), in its order; none until it's read.
     const [copies, setCopies] = useState<StoreCopy[]>();
     const copiesNow = useRef(copies);
     copiesNow.current = copies;

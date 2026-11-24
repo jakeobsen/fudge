@@ -19,7 +19,6 @@ type AddressCase = {
     address: string;
     branch?: string;
     existing?: string[];
-    raycastListed?: boolean;
     repository?: Omit<ParsedRepository, "address">;
     refused?: AddressRefusal;
 };
@@ -54,8 +53,7 @@ test("an address gives the fixture's repository, or its refusal", async () => {
     const { addresses } = await fixture<AddressFixture>("repository-addresses.json");
     assert.ok(addresses.some((one) => one.repository) && addresses.some((one) => one.refused));
     for (const one of addresses) {
-        const listed = one.raycastListed ?? true;
-        const result = parseRepositoryAddress(one.address, one.branch, added(one.existing ?? []), listed);
+        const result = parseRepositoryAddress(one.address, one.branch, added(one.existing ?? []));
         const label = JSON.stringify(one);
         if (one.refused === undefined) {
             assert.deepEqual(result, { address: one.address.trim(), ...one.repository }, label);
@@ -73,26 +71,17 @@ test("a copy id is the identity's SHA-256, and only Fudge's shape is valid", asy
     assert.ok(!isValidCopyId(undefined) && !isValidCopyId(16));
 });
 
-test("the app's answer is checked again: Raycast's first, then each added one that parses to its copy and folder", () => {
+test("the app's answer is checked again: every entry the same way, each that parses to its copy and folder", () => {
     const tools = parseRepositoryAddress("https://github.com/Someone/Tools", "main", []);
     const team = parseRepositoryAddress("https://git.example.org/Team/Extensions", undefined, []);
-    assert.ok(!("refused" in tools) && !("refused" in team));
+    const raycast = parseRepositoryAddress("https://github.com/raycast/extensions", undefined, []);
+    assert.ok(!("refused" in tools) && !("refused" in team) && !("refused" in raycast));
     const answer = [
-        {
-            copyId: "raycast",
-            folder: "raycast/extensions",
-            address: repositoryURL,
-            name: "Raycast",
-            on: false,
-        },
         { ...tools, on: true },
-        // Raycast's anywhere but first, a copy id or folder the parse doesn't give, a duplicate, a refused address.
-        {
-            copyId: "raycast",
-            folder: "raycast/extensions",
-            address: repositoryURL,
-            on: true,
-        },
+        // Raycast's second, named: the name the app answers isn't read here.
+        { ...raycast, name: "Raycast", on: false },
+        // A second Raycast's, a copy id or folder the parse doesn't give, a duplicate, a refused address.
+        { ...raycast, on: true },
         { ...team, copyId: "0123456789abcdef", on: true },
         { ...team, folder: "git.example.org/elsewhere", on: true },
         { ...tools, on: false },
@@ -108,62 +97,69 @@ test("the app's answer is checked again: Raycast's first, then each added one th
         { ...team, on: false },
     ];
     assert.deepEqual(checkRepositoriesAnswer(answer), [
-        { ...RAYCAST_COPY, on: false },
         { ...tools, on: true },
+        { ...raycast, on: false },
         { ...team, on: false },
     ]);
     assert.deepEqual(checkRepositoriesAnswer({ repositories: answer }), []);
     assert.deepEqual(checkRepositoriesAnswer(null), []);
 });
 
-test("Raycast's entry is known by its copy id, and counts only in first place (SPEC-160 point 10b)", () => {
+test("Raycast's entry counts at any place, once, and only as its address parses (SPEC-176)", () => {
     const tools = parseRepositoryAddress("https://github.com/someone/tools", undefined, []);
     assert.ok(!("refused" in tools));
     const team = parseRepositoryAddress("https://git.example.org/team/extensions", undefined, [tools]);
     assert.ok(!("refused" in team));
-    const raycast = { copyId: "raycast", folder: "raycast/extensions", on: true };
-    // With no Raycast entry, the first entry is an added one like any other.
-    assert.deepEqual(
-        checkRepositoriesAnswer([
-            { ...tools, on: false },
-            { ...team, on: true },
-        ]),
-        [
-            { ...tools, on: false },
-            { ...team, on: true },
-        ],
-    );
-    assert.deepEqual(checkRepositoriesAnswer([raycast, { ...tools, on: true }]), [
-        { ...RAYCAST_COPY, on: true },
+    const raycast = parseRepositoryAddress("https://github.com/raycast/extensions", undefined, []);
+    assert.ok(!("refused" in raycast));
+    // First, second and last alike, in the list's order.
+    for (const list of [
+        [raycast, tools, team],
+        [tools, raycast, team],
+        [tools, team, raycast],
+    ]) {
+        const answer = list.map((entry, index) => ({ ...entry, on: index !== 1 }));
+        assert.deepEqual(checkRepositoriesAnswer(answer), answer, JSON.stringify(list.map((entry) => entry.copyId)));
+    }
+    // A second is left out, as any duplicate is, however its address is typed.
+    const typed = {
+        address: "https://github.com/Raycast/Extensions.git",
+        copyId: "raycast",
+        folder: "raycast/extensions",
+        on: true,
+    };
+    assert.deepEqual(checkRepositoriesAnswer([{ ...tools, on: true }, { ...raycast, on: true }, typed]), [
         { ...tools, on: true },
+        { ...raycast, on: true },
     ]);
-    // Raycast's anywhere but first is left out, never parsed as an added one.
-    assert.deepEqual(checkRepositoriesAnswer([{ ...tools, on: true }, raycast]), [{ ...tools, on: true }]);
-    // A duplicate goes, in first place as anywhere.
-    assert.deepEqual(
-        checkRepositoriesAnswer([
-            { ...tools, on: false },
-            { ...tools, on: true },
-        ]),
-        [{ ...tools, on: false }],
-    );
-    // Raycast's copy id with another folder is left out, and so is Raycast's address among the added ones: never a
+    assert.deepEqual(checkRepositoriesAnswer([typed, { ...raycast, on: false }]), [
+        {
+            address: typed.address,
+            identity: RAYCAST_COPY.identity,
+            copyId: "raycast",
+            name: "Raycast/Extensions",
+            folder: "raycast/extensions",
+            on: true,
+        },
+    ]);
+    // Raycast's copy id with another folder is left out, and so is its address answered with another copy id: never a
     // second copy of Raycast's.
-    assert.deepEqual(checkRepositoriesAnswer([{ ...raycast, folder: "someone/tools" }, { ...tools, on: true }]), [
+    assert.deepEqual(checkRepositoriesAnswer([{ ...raycast, folder: "someone/tools", on: true }, { ...tools, on: true }]), [
         { ...tools, on: true },
     ]);
-    const typed = "https://github.com/Raycast/Extensions";
     assert.deepEqual(
         checkRepositoriesAnswer([
-            { address: typed, copyId: copyIdOf(RAYCAST_COPY.identity), folder: "raycast/extensions", on: true },
+            { ...raycast, copyId: copyIdOf(RAYCAST_COPY.identity), on: true },
             { ...tools, on: true },
         ]),
         [{ ...tools, on: true }],
     );
-    assert.deepEqual(checkRepositoriesAnswer([{ copyId: "raycast", folder: "raycast/extensions" }]), []);
+    // An entry with no address, or with a branch, is left out, Raycast's as any other.
+    assert.deepEqual(checkRepositoriesAnswer([{ copyId: "raycast", folder: "raycast/extensions", on: true }]), []);
+    assert.deepEqual(checkRepositoriesAnswer([{ ...raycast, branch: "main", on: true }]), []);
 });
 
-test("Raycast's repository is named as any GitHub repository is, and cloned from git.ts' address (SPEC-160 point 6)", () => {
+test("Raycast's copy as the store knows it: its fixed place, cloned from git.ts' address", () => {
     assert.equal(RAYCAST_COPY.name, "raycast/extensions");
     assert.equal(RAYCAST_COPY.identity, "https://github.com/raycast/extensions");
     assert.equal(RAYCAST_COPY.address, repositoryURL);
@@ -171,49 +167,57 @@ test("Raycast's repository is named as any GitHub repository is, and cloned from
     assert.equal(RAYCAST_COPY.folder, "raycast/extensions");
 });
 
-test("Raycast's address while it isn't listed gives Raycast's own entry, or the branch sentence (SPEC-160 point 9)", () => {
-    const ten = added(Array.from({ length: 10 }, (_, index) => `https://git.example.org/team-${index}/extensions`));
+test("Raycast's address goes through every check any address does, and gives Raycast's own entry (SPEC-176)", () => {
+    const others = Array.from({ length: 12 }, (_, index) => `https://git.example.org/team-${index}/extensions`);
+    const eleven = added(others.slice(0, 11));
+    const twelve = added(others);
+    const listed = added(["https://github.com/raycast/extensions"]);
     const raycast = {
         identity: "https://github.com/raycast/extensions",
         copyId: "raycast",
-        name: "raycast/extensions",
         folder: "raycast/extensions",
     };
     const refused = (reason: AddressRefusal) => ({ refused: addressRefusalSentences[reason], reason });
-    for (const address of ["https://github.com/Raycast/Extensions.git", " https://github.com:443/raycast/extensions/ "]) {
+    for (const [address, name] of [
+        ["https://github.com/Raycast/Extensions.git", "Raycast/Extensions"],
+        [" https://github.com:443/raycast/extensions/ ", "raycast/extensions"],
+    ] as const) {
         const label = JSON.stringify(address);
-        assert.deepEqual(parseRepositoryAddress(address, undefined, [], false), { address: address.trim(), ...raycast }, label);
-        assert.deepEqual(
-            parseRepositoryAddress(address, " \t", ten, false),
-            { address: address.trim(), ...raycast },
-            `${label}: 10 added don't count, and spaces are no branch`,
-        );
-        assert.deepEqual(parseRepositoryAddress(address, undefined, []), refused("alreadyListed"), `${label}: listed`);
-        assert.deepEqual(parseRepositoryAddress(address, "main", ten, true), refused("alreadyListed"), `${label}: listed`);
-        // Any branch, a name the rule refuses too, gives Raycast's sentence.
+        const entry = { address: address.trim(), ...raycast, name };
+        assert.deepEqual(parseRepositoryAddress(address, undefined, []), entry, `${label}: named as typed`);
+        assert.deepEqual(parseRepositoryAddress(address, " \t", eleven), entry, `${label}: the twelfth; spaces are no branch`);
+        assert.deepEqual(parseRepositoryAddress(address, undefined, twelve), refused("tooMany"), `${label}: counted`);
+        assert.deepEqual(parseRepositoryAddress(address, undefined, listed), refused("alreadyListed"), `${label}: listed`);
+        // Any branch, a name the rule refuses too, gives Raycast's sentence, before the list is looked at.
         for (const branch of ["main", " main ", "a..b"]) {
-            assert.deepEqual(parseRepositoryAddress(address, branch, [], false), refused("raycastBranch"), `${label} ${branch}`);
+            assert.deepEqual(parseRepositoryAddress(address, branch, []), refused("raycastBranch"), `${label} ${branch}`);
+            assert.deepEqual(parseRepositoryAddress(address, branch, listed), refused("raycastBranch"), `${label} ${branch}`);
         }
     }
     // Any other address is parsed as before.
-    assert.deepEqual(parseRepositoryAddress("https://github.com/someone/tools", undefined, ten, false), refused("tooMany"));
-    assert.deepEqual(parseRepositoryAddress("https://github.com/someone/tools", "a..b", [], false), refused("branch"));
+    assert.deepEqual(parseRepositoryAddress("https://github.com/someone/tools", undefined, twelve), refused("tooMany"));
+    assert.deepEqual(parseRepositoryAddress("https://github.com/someone/tools", "a..b", []), refused("branch"));
 });
 
-test("the answer keeps to 10 added repositories, as Settings does", () => {
-    const list = added(
-        Array.from({ length: 11 }, (_, index) => `https://git.example.org/team-${index}/extensions`).slice(0, 10),
-    );
-    const eleventh = {
-        address: "https://git.example.org/team-10/extensions",
-        copyId: copyIdOf("https://git.example.org/team-10/extensions"),
-        folder: "git.example.org/team-10/extensions",
-        on: true,
+test("the answer keeps to 12 repositories, Raycast's counted, as Settings does", () => {
+    const entry = (address: string) => {
+        const parsed = parseRepositoryAddress(address, undefined, []);
+        assert.ok(!("refused" in parsed), address);
+        return { ...parsed, on: true };
     };
-    const answer = [
-        { copyId: "raycast", folder: "raycast/extensions", on: true },
-        ...list.map((one) => ({ ...one, on: true })),
-        eleventh,
-    ];
-    assert.equal(checkRepositoriesAnswer(answer).length, 11);
+    const raycast = entry("https://github.com/raycast/extensions");
+    const others = Array.from({ length: 12 }, (_, index) => entry(`https://git.example.org/team-${index}/extensions`));
+    const copyIds = (entries: readonly { copyId: string }[]) => entries.map((one) => one.copyId);
+    assert.deepEqual(copyIds(checkRepositoriesAnswer(others)), copyIds(others), "12 others");
+    assert.deepEqual(
+        copyIds(checkRepositoriesAnswer([raycast, ...others])),
+        ["raycast", ...copyIds(others.slice(0, 11))],
+        "Raycast's first and 11 others; the twelfth is left out",
+    );
+    assert.deepEqual(
+        copyIds(checkRepositoriesAnswer([...others.slice(0, 11), raycast])),
+        [...copyIds(others.slice(0, 11)), "raycast"],
+        "Raycast's twelfth and last",
+    );
+    assert.deepEqual(copyIds(checkRepositoriesAnswer([...others, raycast])), copyIds(others), "a thirteenth is left out");
 });

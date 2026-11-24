@@ -1,10 +1,11 @@
 import FudgeCore
 import SwiftUI
 
-/// **Extension Repositories** (FUD-182, SPEC-160), right below the Extension Store's switch on its page: every
-/// repository in the list with the same row, Raycast's official one first while it's there, then the added ones in
-/// order; under them **Add Raycast's Repository** (only while it's removed) and **Add Repository…**, which opens the
-/// add window. Its controls are off while the store is.
+/// **Extension Repositories** (FUD-182, SPEC-160, SPEC-176), right below the Extension Store's switch on its page:
+/// every repository in the list, Raycast's official one included, with the same row, in the list's order; under them
+/// an add button per row of `RepositoryButton.all` that isn't hidden (disabled with the reason as its help while the
+/// add window's checks refuse it), and **Add Repository…**, which opens the add window. Its controls are off while the
+/// store is.
 struct ExtensionRepositoriesSection: View {
     @Bindable var model: SettingsModel
     /// The add window's fields, made new each time it opens, as the Quicklinks page's sheet's draft is, so a window
@@ -14,12 +15,6 @@ struct ExtensionRepositoriesSection: View {
 
     var body: some View {
         Section {
-            if model.raycastRepositoryListed {
-                row(
-                    name: ExtensionRepositoryText.raycastLabel, detail: ExtensionRepositoryText.raycastAddress,
-                    copyId: ExtensionRepository.raycastCopyId, branch: nil,
-                    isOn: Binding(get: { model.raycastRepository }, set: { model.setRaycastRepository($0) }))
-            }
             ForEach(model.extensionRepositories, id: \.repository.copyId) { listed in
                 let repository = listed.repository
                 row(
@@ -29,8 +24,12 @@ struct ExtensionRepositoriesSection: View {
             }
             HStack {
                 Spacer()
-                if model.showsAddRaycastRepository {
-                    Button(ExtensionRepositoryText.addRaycastButton) { model.addRaycastRepository() }
+                ForEach(model.repositoryButtons, id: \.button.title) { button, state in
+                    switch state {
+                    case .hidden: EmptyView()
+                    case .enabled: Button(button.title) { model.addRepository(button: button) }
+                    case .disabled(let reason): Button(button.title) {}.disabled(true).help(reason)
+                    }
                 }
                 Button(ExtensionRepositoryText.addRepositoryButton) {
                     draft = ExtensionRepositoryDraft()
@@ -47,7 +46,7 @@ struct ExtensionRepositoriesSection: View {
         .onAppear { model.loadRepositoryStatuses() }
     }
 
-    /// A repository's row: its name (`raycast`, the name it was added with, else its `owner/repository`), the address
+    /// A repository's row: its name (the name it was added with, else its `owner/repository`), the address
     /// (and branch) in secondary text, its status line under that, red for
     /// a problem, its switch and its remove button.
     private func row(name: String, detail: String, copyId: String, branch: String?, isOn: Binding<Bool>) -> some View {

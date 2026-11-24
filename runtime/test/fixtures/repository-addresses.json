@@ -1,11 +1,11 @@
 {
-  "comment": "Adding a repository (ExtensionRepository.parse in Swift, repository-address.ts in the Extension Store): an address, a branch and the repositories already added in, the repository or the refusal out, checked in the same order on both sides. Every address is made up, except github.com/fudgeapp/development, Fudge's own development folder's repository, here only to be refused. raycastListed false means Raycast's official repository isn't in the list, so its address gives Raycast's own entry; absent means it is. Each refusal's one sentence is in sentences, or in repository-folders.json's for the folder rule's refusals. problems holds the sentence for each kind of problem a copy's status file can name, the same in the Extension Store and in Settings.",
+  "comment": "Adding a repository (ExtensionRepository.parse in Swift, repository-address.ts in the Extension Store): an address, a branch and the repositories already in the list in, the repository or the refusal out, checked in the same order on both sides. Every address is made up, except github.com/fudgeapp/development, Fudge's own development folder's repository, here only to be refused. Raycast's official repository is a repository like any other: its address gives Raycast's own entry, whose copy id is raycast, and it counts toward the limit of 12. Each refusal's one sentence is in sentences, or in repository-folders.json's for the folder rule's refusals. problems holds the sentence for each kind of problem a copy's status file can name, the same in the Extension Store and in Settings.",
   "sentences": {
     "https": "Use an https:// address, such as https://github.com/owner/repository.",
     "credentials": "Leave the user name and password out of the address.",
     "development": "Fudge keeps your own builds in that repository's folder, so it can't be added.",
     "branch": "That branch name can't be used.",
-    "tooMany": "You can add up to 10 repositories.",
+    "tooMany": "You can have up to 12 repositories in the list.",
     "raycastBranch": "Raycast's official repository always follows its default branch."
   },
   "problems": {
@@ -370,14 +370,23 @@
     },
     {
       "address": "https://github.com/raycast/extensions",
+      "existing": [
+        "https://github.com/raycast/extensions"
+      ],
       "refused": "alreadyListed"
     },
     {
       "address": "https://github.com/Raycast/Extensions.git",
+      "existing": [
+        "https://github.com/raycast/extensions"
+      ],
       "refused": "alreadyListed"
     },
     {
       "address": "https://github.com:443/Raycast/Extensions",
+      "existing": [
+        "https://github.com/raycast/extensions"
+      ],
       "refused": "alreadyListed"
     },
     {
@@ -559,6 +568,29 @@
         "https://github.com/owner/repository-9",
         "https://github.com/owner/repository-10"
       ],
+      "repository": {
+        "identity": "https://github.com/owner/repository-11",
+        "copyId": "8f7963f13990a304",
+        "name": "owner/repository-11",
+        "folder": "owner/repository-11"
+      }
+    },
+    {
+      "address": "https://github.com/owner/repository-13",
+      "existing": [
+        "https://github.com/owner/repository-1",
+        "https://github.com/owner/repository-2",
+        "https://github.com/owner/repository-3",
+        "https://github.com/owner/repository-4",
+        "https://github.com/owner/repository-5",
+        "https://github.com/owner/repository-6",
+        "https://github.com/owner/repository-7",
+        "https://github.com/owner/repository-8",
+        "https://github.com/owner/repository-9",
+        "https://github.com/owner/repository-10",
+        "https://github.com/owner/repository-11",
+        "https://github.com/owner/repository-12"
+      ],
       "refused": "tooMany"
     },
     {
@@ -573,7 +605,9 @@
         "https://github.com/owner/repository-7",
         "https://github.com/owner/repository-8",
         "https://github.com/owner/repository-9",
-        "https://github.com/owner/repository-10"
+        "https://github.com/owner/repository-10",
+        "https://github.com/owner/repository-11",
+        "https://github.com/owner/repository-12"
       ],
       "refused": "tooMany"
     },
@@ -636,7 +670,9 @@
         "https://github.com/owner/repository-7",
         "https://github.com/owner/repository-8",
         "https://github.com/owner/repository-9",
-        "https://github.com/owner/repository-10"
+        "https://github.com/owner/repository-10",
+        "https://github.com/owner/repository-11",
+        "https://github.com/owner/repository-12"
       ],
       "refused": "https"
     },
@@ -657,18 +693,24 @@
         "https://github.com/owner/repository-7",
         "https://github.com/owner/repository-8",
         "https://github.com/owner/repository-9",
-        "https://github.com/owner/repository-10"
+        "https://github.com/owner/repository-10",
+        "https://github.com/owner/repository-11",
+        "https://github.com/owner/repository-12"
       ],
       "refused": "development"
     },
     {
       "address": "https://github.com/Raycast/Extensions",
       "branch": "a..b",
-      "refused": "alreadyListed"
+      "existing": [
+        "https://github.com/raycast/extensions"
+      ],
+      "refused": "raycastBranch"
     },
     {
       "address": "https://github.com:443/raycast/extensions.git",
       "existing": [
+        "https://github.com/raycast/extensions",
         "https://github.com/owner/repository-1",
         "https://github.com/owner/repository-2",
         "https://github.com/owner/repository-3",
@@ -684,18 +726,16 @@
     },
     {
       "address": "https://github.com/Raycast/Extensions.git",
-      "raycastListed": false,
       "repository": {
         "identity": "https://github.com/raycast/extensions",
         "copyId": "raycast",
-        "name": "raycast/extensions",
+        "name": "Raycast/Extensions",
         "folder": "raycast/extensions"
       }
     },
     {
       "address": " https://github.com:443/raycast/extensions/ ",
       "branch": "  ",
-      "raycastListed": false,
       "repository": {
         "identity": "https://github.com/raycast/extensions",
         "copyId": "raycast",
@@ -715,9 +755,9 @@
         "https://github.com/owner/repository-7",
         "https://github.com/owner/repository-8",
         "https://github.com/owner/repository-9",
-        "https://github.com/owner/repository-10"
+        "https://github.com/owner/repository-10",
+        "https://github.com/owner/repository-11"
       ],
-      "raycastListed": false,
       "repository": {
         "identity": "https://github.com/raycast/extensions",
         "copyId": "raycast",
@@ -726,26 +766,43 @@
       }
     },
     {
+      "address": "https://github.com:443/raycast/extensions.git",
+      "existing": [
+        "https://github.com/owner/repository-1",
+        "https://github.com/owner/repository-2",
+        "https://github.com/owner/repository-3",
+        "https://github.com/owner/repository-4",
+        "https://github.com/owner/repository-5",
+        "https://github.com/owner/repository-6",
+        "https://github.com/owner/repository-7",
+        "https://github.com/owner/repository-8",
+        "https://github.com/owner/repository-9",
+        "https://github.com/owner/repository-10",
+        "https://github.com/owner/repository-11",
+        "https://github.com/owner/repository-12"
+      ],
+      "refused": "tooMany"
+    },
+    {
       "address": "https://github.com/raycast/extensions",
       "branch": "main",
-      "raycastListed": false,
       "refused": "raycastBranch"
     },
     {
       "address": "https://github.com/Raycast/Extensions",
       "branch": "a..b",
-      "raycastListed": false,
       "refused": "raycastBranch"
     },
     {
       "address": "https://github.com/raycast/extensions",
       "branch": "main",
-      "raycastListed": true,
-      "refused": "alreadyListed"
+      "existing": [
+        "https://github.com/raycast/extensions"
+      ],
+      "refused": "raycastBranch"
     },
     {
       "address": "https://github.com/Someone/Tools",
-      "raycastListed": false,
       "repository": {
         "identity": "https://github.com/someone/tools",
         "copyId": "8204a7a9998b0604",

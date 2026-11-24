@@ -85,7 +85,7 @@ test("Raycast's copy stays at repo/ with its status beside it; an added one's ar
     assert.equal(statusPath("/support", "0123456789abcdef"), "/support/repositories/0123456789abcdef/status.json");
 });
 
-test("a copy of each repository that's on, Raycast's first, then the added ones in order, each with its own git", async () => {
+test("a copy of each repository that's on, in the list's order, each with its own git", async () => {
     const support = await temporary();
     const tools = added("https://github.com/Owner/Tools", "dev");
     const off = added("https://git.example.org/team/extensions", undefined, false, [tools.parsed]);
@@ -477,7 +477,7 @@ test("each repository with a problem gets one row, in the list's order, with its
             [tools.parsed.copyId, "gitlab.com/group/tools: Couldn't reach this repository. It may be private, or the address may be wrong."],
             [pinned.parsed.copyId, "Someone/Pinned: This repository has no branch called release."],
         ],
-        "Raycast's first, then the list's order; a copy with rows and no problem has none",
+        "in the list's order; a copy with rows and no problem has none",
     );
     // A problem with git's output: its command and output, and the repository's host when it isn't GitHub.
     assert.deepEqual(rows[1]!.details, {

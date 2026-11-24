@@ -166,7 +166,7 @@ private func rootSearchListsEachGitHubUnderItsOwnIDAndSaysWhereItsFrom(_ three: 
             "command:fudgeapp+development+github/search",
         ])
     // SPEC-174: all three are called GitHub, so each says where it's from, Raycast's included.
-    #expect(items.map(\.subtitle) == ["GitHub (raycast)", "Mine (someone/tools)", "GitHub (development)"])
+    #expect(items.map(\.subtitle) == ["GitHub (raycast/extensions)", "Mine (someone/tools)", "GitHub (development)"])
     #expect(metadata.subtitle(extension: three.raycast.id, command: "search") == nil)
     #expect(Set(items.compactMap(\.commandSettingsID)).count == 3)
     let autosaveNames = three.all.map {
@@ -494,7 +494,9 @@ private func anUnsetPreferenceNamesWhichGitHubNeedsIt(_ three: ThreeGitHubs) thr
         ExtensionManifest.Preference.self,
         from: Data(#"{"name":"token","type":"password","title":"API Token","required":true}"#.utf8))
     let titles = ExtensionTitles.forTests(three.all)
-    for (installed, title) in zip(three.all, ["GitHub (raycast)", "GitHub (someone/tools)", "GitHub (development)"]) {
+    for (installed, title) in zip(
+        three.all, ["GitHub (raycast/extensions)", "GitHub (someone/tools)", "GitHub (development)"])
+    {
         let target = try CommandLocator.locate(
             LaunchRequest(name: "search", type: .background), caller: installed, in: three.all)
         #expect(throws: LaunchCommandError.missingPreferences(extensionTitle: title, names: ["API Token"])) {
