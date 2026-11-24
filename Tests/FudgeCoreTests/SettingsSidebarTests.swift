@@ -134,7 +134,7 @@ private func alone(_ installed: InstalledExtension) -> String {
     let rows = SettingsSidebar.extensions(pages, titles: .forTests(pages)).filter { !$0.tag.hasPrefix(":") }
     #expect(
         rows.map(\.tag) == ["github", "fudgeapp+development+github", "someone+tools+github"], "each page by its id")
-    #expect(rows.map(\.title) == ["GitHub (raycast)", "GitHub (development)", "GitHub (someone/tools)"])
+    #expect(rows.map(\.title) == ["GitHub (raycast/extensions)", "GitHub (development)", "GitHub (someone/tools)"])
     #expect(
         SettingsSidebar.extensions(pages.reversed(), titles: .forTests(pages.reversed()))
             == SettingsSidebar.extensions(pages, titles: .forTests(pages)))
@@ -151,7 +151,8 @@ private func alone(_ installed: InstalledExtension) -> String {
     ]
     let pages = try folders.map { try page("github", "GitHub", in: $0) }
     let expected = [
-        "GitHub (raycast)", "GitHub (development)", "GitHub (git.example.org/team/tools)", "GitHub (some/tools)",
+        "GitHub (raycast/extensions)", "GitHub (development)", "GitHub (git.example.org/team/tools)",
+        "GitHub (some/tools)",
         "GitHub (some-one/tools)", "GitHub (someone/tools)",
     ]
     #expect(
@@ -170,7 +171,8 @@ private func alone(_ installed: InstalledExtension) -> String {
         SettingsSidebar.extensions(colorPickers, titles: .forTests(colorPickers)).map(\.title).filter {
             $0.hasPrefix("Color Picker")
         } == [
-            "Color Picker", "Color Picker (raycast)", "Color Picker (development)", "Color Picker (someone/tools)",
+            "Color Picker", "Color Picker (raycast/extensions)", "Color Picker (development)",
+            "Color Picker (someone/tools)",
         ])
 }
 
@@ -190,7 +192,7 @@ private func alone(_ installed: InstalledExtension) -> String {
         #expect(
             SettingsSidebar.extensions(pages, titles: .forTests(pages)).map(\.title)
                 .filter { $0.hasPrefix("Color Picker") } == [
-                    "Color Picker", "Color Picker (raycast)", "Color Picker (\(label))",
+                    "Color Picker", "Color Picker (raycast/extensions)", "Color Picker (\(label))",
                 ], "\(folder)")
     }
 }

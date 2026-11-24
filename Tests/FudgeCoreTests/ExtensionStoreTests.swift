@@ -201,7 +201,7 @@ private func storeFixture() throws -> (paths: FudgePaths, resources: URL) {
         withIntermediateDirectories: true)
     try Data("{}".utf8).write(to: added)
     let settings = paths.settingsFile
-    try Data(#"{"extensionRepositories":[{"address":"https://github.com/someone/tools"}]}"#.utf8).write(to: settings)
+    try Data(#"{"repositories":[{"address":"https://github.com/someone/tools"}]}"#.utf8).write(to: settings)
     try ExtensionStore.deleteRepository(paths)
     #expect(!FileManager.default.fileExists(atPath: repository.path))
     #expect(!FileManager.default.fileExists(atPath: status.path))

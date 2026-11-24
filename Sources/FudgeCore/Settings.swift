@@ -79,16 +79,14 @@ public struct FudgeSettings: Sendable, Equatable {
     public var notifyInstallFinished = true
     /// **Install or update failed** (`notifyInstallFailed`): on unless `false`, and only `false` is written.
     public var notifyInstallFailed = true
-    /// The repositories added on the Extension Store's page (`extensionRepositories`, FUD-182), in the order added:
-    /// `{ "address", "branch"?, "off"?, "name"? }` each, written only when there is one, `off` only when true. Reading
-    /// parses each again beside those before it and skips any `ExtensionRepository.parse` refuses, a duplicate
-    /// included, so a hand-edited file never adds what Settings would refuse; a name `RepositoryNames.check` refuses,
-    /// or one an earlier repository has, reads as none (SPEC-174 B4).
-    public var extensionRepositories: [ListedRepository] = []
-    /// Raycast's official repository in that list (`raycastRepository`, SPEC-160): absent is in the list and on,
-    /// `"off"` (or the `false` written before) is switched off, `"removed"` is out of the list, and anything else reads
-    /// as on. Only off and removed are written.
-    public var raycastRepositoryState: RaycastRepositoryState = .on
+    /// Every repository in the Extension Store's list (`repositories`, FUD-182, SPEC-176), Raycast's official one
+    /// included, in the list's order: `{ "address", "branch"?, "off"?, "name"? }` each, `off` only when true, written
+    /// at every save, `[]` included, so once written the file is the only truth. Reading parses each again beside
+    /// those before it and skips any `ExtensionRepository.parse` refuses, a duplicate included, so a hand-edited file
+    /// never adds what Settings would refuse; a name `RepositoryNames.check` refuses, or one an earlier repository
+    /// has, reads as none (SPEC-174 B4). A file without the key is read from the keys before it
+    /// (`migratedRepositories`), and the defaults are Raycast's alone, with no name.
+    public var extensionRepositories: [ListedRepository] = [ListedRepository(repository: .raycast)]
     /// The Color Picker's **Copy Format** (`colorFormat`): HEX unless set. An unknown value reads as HEX.
     public var colorFormat: ColorFormat = .default
     /// The calendars My Schedule leaves out (`calendarHidden`, by EventKit's calendar id), so a new one shows.
@@ -267,11 +265,29 @@ public struct FudgeSettings: Sendable, Equatable {
         return number.boolValue
     }
 
-    /// `extensionRepositories`' entries that parse, each beside those before it; an entry that isn't an object with a
-    /// text `address` (and a text `branch`, if it has one) is skipped too. A `name` that isn't text, that the rule
-    /// refuses or that an earlier entry has is no name, and the entry stays.
-    static func listedRepositories(_ value: Any?) -> [ListedRepository] {
-        var listed: [ListedRepository] = []
+    /// The list in `object`, a `settings.json`'s: `repositories` when it's there, else the keys from before SPEC-176
+    /// (`migratedRepositories`). Reading never adds a repository the file doesn't name: only
+    /// `writeRepositoryListOnce` gives a new install its list.
+    static func repositoryList(in object: [String: Any]) -> [ListedRepository] {
+        if let list = object["repositories"] { return listedRepositories(list) }
+        return migratedRepositories(object)
+    }
+
+    /// The list in a file from before SPEC-176: Raycast's official repository first, on, with no name, unless
+    /// `raycastRepository` reads as removed, and off when it reads as off; then each `extensionRepositories` entry
+    /// beside it. A file with neither key, an empty one included, has Raycast's alone, as it meant then.
+    static func migratedRepositories(_ object: [String: Any]) -> [ListedRepository] {
+        let state = RaycastRepositoryState(settingsValue: object["raycastRepository"])
+        let raycast = state == .removed ? [] : [ListedRepository(repository: .raycast, on: state == .on)]
+        return listedRepositories(object["extensionRepositories"], after: raycast)
+    }
+
+    /// The entries in `value` that parse, each beside those before it, `start` first; a value that isn't an array is
+    /// none, and an entry that isn't an object with a text `address` (and a text `branch`, if it has one) is skipped
+    /// too. A `name` that isn't text, that the rule refuses or that an earlier entry has is no name, and the entry
+    /// stays.
+    static func listedRepositories(_ value: Any?, after start: [ListedRepository] = []) -> [ListedRepository] {
+        var listed = start
         for case let entry as [String: Any] in value as? [Any] ?? [] {
             guard let address = entry["address"] as? String, entry["branch"] == nil || entry["branch"] is String,
                 case .success(let repository) = ExtensionRepository.parse(
@@ -325,8 +341,7 @@ public struct FudgeSettings: Sendable, Equatable {
         // Only a JSON false turns one off; `as? Bool` would read a 0 as false too.
         settings.notifyInstallFinished = !isJSONFalse(object["notifyInstallFinished"])
         settings.notifyInstallFailed = !isJSONFalse(object["notifyInstallFailed"])
-        settings.extensionRepositories = listedRepositories(object["extensionRepositories"])
-        settings.raycastRepositoryState = RaycastRepositoryState(settingsValue: object["raycastRepository"])
+        settings.extensionRepositories = repositoryList(in: object)
         settings.colorFormat = (object["colorFormat"] as? String).flatMap(ColorFormat.init(rawValue:)) ?? .default
         settings.calendarHidden = (object["calendarHidden"] as? [Any] ?? []).compactMap { $0 as? String }
         if let days = object["calendarDaysAhead"] as? Int, Schedule.daysAheadChoices.contains(days) {
@@ -346,6 +361,24 @@ public struct FudgeSettings: Sendable, Equatable {
             settings.extensions[owner] = ExtensionSettings(enabled: entry["enabled"] as? Bool)
         }
         return settings
+    }
+
+    /// Writes the Extension Store's list into `settings`, the `settings.json`, once, at launch (SPEC-176), so from
+    /// then on the file is the only truth: a file that has `repositories` is left alone. A new install, whose settings
+    /// object is empty (a missing or blank file, or `{}`) and which has no `onboarding` file (`onboarding.json`, written
+    /// as soon as any onboarding step is answered), gets `RepositoryButton.seed`; any other file gets the list it reads
+    /// as (`migratedRepositories`), which also removes the keys from before. This is the only place a new install is
+    /// told apart. A file that isn't a JSON object throws `Unreadable` and is left as it is, for the next launch to try
+    /// again. If the write fails on a new install, the next launch may already find `onboarding.json`, and then writes
+    /// Raycast's official repository alone, never the seed.
+    public static func writeRepositoryListOnce(settings file: URL, onboarding: URL) throws {
+        let object = try existingObject(at: file)
+        guard object["repositories"] == nil else { return }
+        var settings = load(from: file)
+        if object.isEmpty, !FileManager.default.fileExists(atPath: onboarding.path) {
+            settings.extensionRepositories = RepositoryButton.seed
+        }
+        try settings.save(to: file)
     }
 
     /// Writes to `file` atomically. Keys fudge doesn't know, at any level, are kept; only non-default values are
@@ -378,17 +411,16 @@ public struct FudgeSettings: Sendable, Equatable {
         object["hyperkeyQuickPress"] = hyperkeyQuickPress ? true : nil
         object["notifyInstallFinished"] = notifyInstallFinished ? nil : false
         object["notifyInstallFailed"] = notifyInstallFailed ? nil : false
-        object["extensionRepositories"] =
-            extensionRepositories.isEmpty
-            ? nil
-            : extensionRepositories.map { listed -> [String: Any] in
-                var entry: [String: Any] = ["address": listed.repository.address]
-                entry["branch"] = listed.repository.branch
-                entry["off"] = listed.on ? nil : true
-                entry["name"] = listed.label
-                return entry
-            }
-        object["raycastRepository"] = raycastRepositoryState.settingsValue
+        object["repositories"] = extensionRepositories.map { listed -> [String: Any] in
+            var entry: [String: Any] = ["address": listed.repository.address]
+            entry["branch"] = listed.repository.branch
+            entry["off"] = listed.on ? nil : true
+            entry["name"] = listed.label
+            return entry
+        }
+        // The keys from before SPEC-176: `repositories` holds the whole list now.
+        object["extensionRepositories"] = nil
+        object["raycastRepository"] = nil
         object["colorFormat"] = colorFormat == .default ? nil : colorFormat.rawValue
         object["calendarHidden"] = calendarHidden.isEmpty ? nil : calendarHidden
         object["calendarDaysAhead"] = calendarDaysAhead == Schedule.defaultDaysAhead ? nil : calendarDaysAhead

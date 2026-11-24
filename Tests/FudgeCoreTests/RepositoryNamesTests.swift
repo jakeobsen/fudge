@@ -24,13 +24,12 @@ private func listed(_ address: String, label: String? = nil, existing: [ListedRe
 
 /// The Add window with `address` and `name` typed, pressed: the reason, or the name it accepted.
 private func add(
-    _ name: String, address: String = "https://github.com/owner/repository", existing: [ListedRepository] = [],
-    raycastListed: Bool = true
+    _ name: String, address: String = "https://github.com/owner/repository", existing: [ListedRepository] = []
 ) -> (accepted: ListedRepository?, reason: String?) {
     var draft = ExtensionRepositoryDraft()
     draft.address = address
     draft.label = name
-    let accepted = draft.add(existing: existing, raycastListed: raycastListed)
+    let accepted = draft.add(existing: existing)
     #expect(draft.label == name, "what was typed stays")
     return (accepted, draft.reason)
 }
@@ -46,9 +45,8 @@ private let refusedCharacters = ["\u{200B}", "\u{202E}", "\u{2028}", "\u{2029}",
         ("a/\u{200B}" + String(repeating: "x", count: 41), "A name can't have a slash in it."),
         ("x\u{200B}" + String(repeating: "x", count: 41), "That name has characters Fudge can't use."),
         (String(repeating: "x", count: 41), "Use a name of up to 40 characters."),
-        ("Raycast", "Raycast's official repository is called raycast."),
         (" DEVELOPMENT ", "Fudge uses that name for your development builds."),
-        ("fudge", "Fudge uses that name for its own extensions."),
+        ("core", "Fudge uses that name for its own extensions."),
         ("JakeObsen", "Another repository is already called jakeobsen."),
     ]
     for (name, sentence) in sentences {
@@ -76,10 +74,11 @@ private let refusedCharacters = ["\u{200B}", "\u{202E}", "\u{2028}", "\u{2029}",
     let none = add("   ")
     #expect(none.reason == nil && none.accepted != nil && none.accepted?.label == nil, "empty is no name")
 
-    // Raycast's own entry, while it's removed, has a fixed name.
-    let raycast = add("mine", address: "https://github.com/raycast/extensions", raycastListed: false)
-    #expect(raycast.accepted == nil && raycast.reason == "Raycast's official repository is called raycast.")
-    let plain = add("", address: "https://github.com/raycast/extensions", raycastListed: false)
+    // Raycast's own entry takes the name typed with it, as any repository does.
+    let raycast = add("mine", address: "https://github.com/raycast/extensions")
+    #expect(raycast.reason == nil && raycast.accepted?.repository.copyId == "raycast")
+    #expect(raycast.accepted?.label == "mine")
+    let plain = add("", address: "https://github.com/raycast/extensions")
     #expect(plain.accepted?.repository.copyId == "raycast" && plain.accepted?.label == nil)
 }
 
@@ -91,15 +90,17 @@ private let refusedCharacters = ["\u{200B}", "\u{202E}", "\u{2028}", "\u{2029}",
     settings.addRepository(jakeobsen)
     settings.addRepository(tools)
     try settings.save(to: file)
-    let entries = try #require(try object(file)["extensionRepositories"] as? [[String: Any]])
-    #expect(entries.count == 2)
-    #expect(entries[0]["name"] as? String == "jakeobsen")
-    #expect(Set(entries[1].keys) == ["address"], "no name, no key")
+    let entries = try #require(try object(file)["repositories"] as? [[String: Any]])
+    #expect(entries.count == 3)
+    #expect(Set(entries[0].keys) == ["address"], "Raycast's, with no name")
+    #expect(entries[1]["name"] as? String == "jakeobsen")
+    #expect(Set(entries[2].keys) == ["address"], "no name, no key")
     let read = FudgeSettings.load(from: file)
     #expect(read == settings)
-    #expect(read.extensionRepositories.map(\.label) == ["jakeobsen", nil])
-    #expect(ExtensionRepositoryText.rowName(read.extensionRepositories[0]) == "jakeobsen")
-    #expect(ExtensionRepositoryText.rowName(read.extensionRepositories[1]) == "someone/tools")
+    #expect(read.extensionRepositories.map(\.label) == [nil, "jakeobsen", nil])
+    #expect(ExtensionRepositoryText.rowName(read.extensionRepositories[0]) == "raycast/extensions")
+    #expect(ExtensionRepositoryText.rowName(read.extensionRepositories[1]) == "jakeobsen")
+    #expect(ExtensionRepositoryText.rowName(read.extensionRepositories[2]) == "someone/tools")
     guard case .array(let answer) = ExtensionRepository.storeAnswer(settings: read),
         case .object(let named) = answer[1], case .object(let unnamed) = answer[2]
     else {
@@ -112,7 +113,7 @@ private let refusedCharacters = ["\u{200B}", "\u{202E}", "\u{2028}", "\u{2029}",
 
 /// `settings.json`'s repositories, read from `entries`.
 private func read(_ entries: [[String: Any]]) throws -> [ListedRepository] {
-    let data = try JSONSerialization.data(withJSONObject: ["extensionRepositories": entries])
+    let data = try JSONSerialization.data(withJSONObject: ["repositories": entries])
     return FudgeSettings.load(from: try settingsFile(String(decoding: data, as: UTF8.self))).extensionRepositories
 }
 
@@ -127,20 +128,31 @@ private func read(_ entries: [[String: Any]]) throws -> [ListedRepository] {
     #expect(three[1].label == nil, "a later duplicate is no name; the earlier one keeps it")
     #expect(three[2].label == nil, "not text")
     let refused =
-        ["a/b", String(repeating: "x", count: 41), "raycast", "Development", "FUDGE"]
+        ["a/b", String(repeating: "x", count: 41), "Core", "CORE", "development", "Development"]
         + refusedCharacters.map { "jake\($0)obsen" }
     for name in refused {
         let one = try read([["address": "https://github.com/someone/tools", "name": name]])
         #expect(one.count == 1 && one[0].label == nil, "\(name.debugDescription)")
     }
+    for name in ["raycast", "Raycast", "Fudge"] {
+        let one = try read([["address": "https://github.com/someone/tools", "name": name]])
+        #expect(one.count == 1 && one[0].label == name, "kept: \(name)")
+    }
 }
 
-@Test func raycastIsRefusedWhetherOrNotRaycastsRepositoryIsListed() {
-    for listed in [true, false] {
-        let (accepted, reason) = add("raycast", raycastListed: listed)
-        #expect(accepted == nil && reason == "Raycast's official repository is called raycast.", "listed: \(listed)")
+@Test func raycastAndFudgeAreNamesLikeAnyOther() throws {
+    for name in ["raycast", "Raycast", "Fudge", "fudge"] {
+        let (accepted, reason) = add(name)
+        #expect(reason == nil && accepted?.label == name, "accepted with nothing listed: \(name)")
+        #expect(RepositoryNames.check(name) == .success(name))
     }
-    #expect(RepositoryNames.check("RayCast") == .failure(.raycast))
+    for name in ["Raycast", "Fudge"] {
+        let named = try listed("https://github.com/someone/tools", label: name)
+        let (accepted, reason) = add(name.uppercased(), existing: [named])
+        #expect(accepted == nil && reason == "Another repository is already called \(name).", "taken: \(name)")
+    }
+    #expect(RepositoryNames.check("cOrE") == .failure(.core))
+    #expect(RepositoryNames.core == "Core")
 }
 
 /// SPEC-174 B5: naming a repository means removing it and adding it back, which keeps its extensions' ids and
@@ -149,7 +161,7 @@ private func read(_ entries: [[String: Any]]) throws -> [ListedRepository] {
     let file = try settingsFile(
         #"""
         {
-          "extensionRepositories": [{ "address": "https://github.com/Someone/Tools", "branch": "main" }],
+          "repositories": [{ "address": "https://github.com/Someone/Tools", "branch": "main" }],
           "commands": { "someone+tools+github/search": { "alias": "gh", "hotkey": "option+g", "enabled": false } },
           "extensions": { "someone+tools+github": { "enabled": false } }
         }
@@ -167,7 +179,7 @@ private func read(_ entries: [[String: Any]]) throws -> [ListedRepository] {
     var draft = ExtensionRepositoryDraft()
     draft.address = "https://github.com/someone/tools.git"
     draft.label = "tools"
-    let added = draft.add(existing: adding.extensionRepositories, raycastListed: adding.raycastRepositoryListed)
+    let added = draft.add(existing: adding.extensionRepositories)
     let accepted = try #require(added)
     adding.addRepository(accepted)
     try adding.save(to: file)

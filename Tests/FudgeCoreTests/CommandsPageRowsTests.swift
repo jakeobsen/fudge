@@ -23,7 +23,7 @@ private func github(in folder: String) throws -> InstalledExtension {
     let installed = [try github(in: "raycast/extensions"), try github(in: "someone/tools")]
     let rows = CommandsPageRows.rows(groups: [], extensions: installed, titles: .forTests(installed), search: "")
     #expect(rows.map(\.owner) == installed.map { .extension($0.id) })
-    #expect(rows.map(\.title) == ["GitHub (raycast)", "GitHub (someone/tools)"], "both labeled (SPEC-174)")
+    #expect(rows.map(\.title) == ["GitHub (raycast/extensions)", "GitHub (someone/tools)"], "both labeled (SPEC-174)")
     #expect(rows.map(\.type) == ["Extension", "Extension"])
     #expect(
         rows.map { $0.commands.map(\.id) } == [

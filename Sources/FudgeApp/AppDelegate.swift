@@ -99,6 +99,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 folder: FudgePaths.logsDirectory(),
                 header: "Fudge \(FudgeVersion.current) (\(FudgeVersion.describe))"),
             level: FudgeSettings.load(from: paths.settingsFile).logLevel)
+        // The Extension Store's list goes into `settings.json` once (SPEC-176), before the model first reads it: a new
+        // install gets the add buttons' repositories, any other its list as it was. Snapshot runs too, in their own
+        // support folder. Logged when it fails, and tried again at the next launch.
+        do {
+            try FudgeSettings.writeRepositoryListOnce(settings: paths.settingsFile, onboarding: paths.onboardingFile)
+        } catch {
+            FudgeLog.error("couldn't write the list of repositories into \(paths.settingsFile.path): \(error)")
+        }
         NSApp.mainMenu = Self.mainMenu()
         // Before the extensions first load (in the model's `init`) and before the watcher starts, so it never sees
         // the moves. Snapshot runs change nothing.

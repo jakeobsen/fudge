@@ -198,7 +198,8 @@ private let calendars = [
     var settings = FudgeSettings()
     #expect(settings.calendarHidden.isEmpty && settings.calendarDaysAhead == 7)
     try settings.save(to: file)
-    #expect(String(decoding: try Data(contentsOf: file), as: UTF8.self) == "{\n\n}", "defaults aren't written")
+    let written = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+    #expect(written.keys.sorted() == ["repositories"], "defaults aren't written; the list of repositories always is")
     settings.calendarHidden = ["home"]
     settings.calendarDaysAhead = 14
     try settings.save(to: file)

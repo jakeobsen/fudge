@@ -14,8 +14,8 @@ import {
     repositoryFolderConflict,
 } from "./repository-folder.ts";
 
-/** The most repositories that can be added, Raycast's not counted. */
-export const maxAddedRepositories = 10;
+/** The most repositories in the list, every one counted, Raycast's official repository too. */
+export const maxRepositories = 12;
 
 const raycastIdentity = "https://github.com/raycast/extensions";
 /** The repository whose folder holds the extensions built on this Mac, which can't be added. */
@@ -31,7 +31,7 @@ export const addressRefusalSentences: Record<AddressRefusal, string> = {
     development: "Fudge keeps your own builds in that repository's folder, so it can't be added.",
     branch: "That branch name can't be used.",
     raycastBranch: "Raycast's official repository always follows its default branch.",
-    tooMany: "You can add up to 10 repositories.",
+    tooMany: "You can have up to 12 repositories in the list.",
     ...refusalSentences,
 };
 
@@ -53,8 +53,9 @@ export type ParsedRepository = {
 export type ParseResult = ParsedRepository | { refused: string; reason: AddressRefusal };
 
 /**
- * Raycast's official repository, first in the list while it's there, named as any GitHub repository is (SPEC-160 point
- * 6). Its `address` is the one its copy is cloned from; anything shown to a person says its identity.
+ * Raycast's official repository as the Extension Store's own code knows it: its copy's fixed place, the address its copy
+ * is cloned from (`repositoryURL`, whatever the list's entry says) and the name the load-error view gives it. In the
+ * list it's an entry like any other, parsed by the same rule (SPEC-176).
  */
 export const RAYCAST_COPY = Object.freeze({
     copyId: "raycast",
@@ -66,16 +67,6 @@ export const RAYCAST_COPY = Object.freeze({
 
 function refuse(reason: AddressRefusal): ParseResult {
     return { refused: addressRefusalSentences[reason], reason };
-}
-
-/**
- * Raycast's address while it isn't in the list (SPEC-160 point 9): Raycast's own entry, never a second copy, or, with a
- * branch (trimmed, so spaces are none), the refusal saying it always follows its default branch.
- */
-function raycastEntry(text: string, branch: string | undefined): ParseResult {
-    if (trimmed(branch ?? "") !== "") return refuse("raycastBranch");
-    const { identity, copyId, name, folder } = RAYCAST_COPY;
-    return { address: text, identity, copyId, name, folder };
 }
 
 /** ASCII spaces, tabs and line breaks only, so both sides trim the same characters. */
@@ -131,15 +122,14 @@ export function isValidCopyId(copyId: unknown): copyId is string {
 
 /**
  * The repository at `address` on `branch` (empty or undefined for the default branch), when it can be added beside
- * `list`, the repositories already added; else the refusal's sentence and reason. The checks run in the app's order, so
- * both give the same refusal for an address with more than one problem. Raycast's address is refused while
- * `raycastListed`, and otherwise gives Raycast's own entry, whatever the list holds, since Raycast's isn't counted.
+ * `list`, the repositories already in the list; else the refusal's sentence and reason. The checks run in the app's
+ * order, so both give the same refusal for an address with more than one problem. Raycast's address goes through every
+ * check any address does, and gives Raycast's own entry, which differs from any other only in its copy id, `raycast`.
  */
 export function parseRepositoryAddress(
     address: string,
     branch: string | undefined,
     list: readonly { identity: string; folder: string }[],
-    raycastListed = true,
 ): ParseResult {
     const text = trimmed(address);
     const schemeEnd = text.indexOf("://");
@@ -169,29 +159,29 @@ export function parseRepositoryAddress(
     const gitHub = isGitHub(host) && (port === undefined || port === 443);
     const server = asciiLowercase(host) + (port === undefined || port === 443 ? "" : `:${port}`);
     const identity = `https://${server}${path === "" ? "" : `/${gitHub ? asciiLowercase(path) : path}`}`;
-    if (identity === raycastIdentity) return raycastListed ? refuse("alreadyListed") : raycastEntry(text, branch);
     if (identity === developmentIdentity) return refuse("development");
 
     const found = repositoryFolder(host, port, segments);
     if ("refused" in found) return refuse(found.refused);
     const { folder } = found;
     const branchName = trimmed(branch ?? "");
+    // Raycast's official repository always follows its default branch: the store clones it from its own address.
+    if (branchName !== "" && identity === raycastIdentity) return refuse("raycastBranch");
     if (branchName !== "" && !isValidBranch(branchName)) return refuse("branch");
-    if (list.length >= maxAddedRepositories) return refuse("tooMany");
+    if (list.length >= maxRepositories) return refuse("tooMany");
     if (list.some((other) => other.identity === identity)) return refuse("alreadyListed");
     const conflict = repositoryFolderConflict(
         folder,
         list.map((other) => other.folder),
     );
     if (conflict !== undefined) return refuse(conflict);
-    // A second guard, last: only github.com with no port or port 443 gives these folders, and the identity check above
-    // already refuses those addresses, before the branch and the list are looked at.
-    if (folder === raycastFolder) return raycastListed ? refuse("alreadyListed") : raycastEntry(text, branch);
+    // A second guard, last: only github.com with no port or port 443 gives these folders. The development folder's
+    // identity is refused above, before the branch and the list are looked at.
     if (folder === developmentFolder) return refuse("development");
     return {
         address: text,
         identity,
-        copyId: copyIdOf(identity),
+        copyId: folder === raycastFolder ? RAYCAST_COPY.copyId : copyIdOf(identity),
         name: gitHub ? segments.join("/") : identity.slice("https://".length),
         folder,
         ...(branchName === "" ? {} : { branch: branchName }),
@@ -207,30 +197,21 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 /**
  * The app's answer to `extensionRepositories()`, checked again with the shared rule, since the Extension Store never
- * reads `settings.json` itself: Raycast's entry first (as `RAYCAST_COPY` with its `on`, and only in first place), then
- * each added repository that parses again, beside those before it, to the copy id and folder the app answered. Anything
- * else is left out.
+ * reads `settings.json` itself: every entry the same way, Raycast's included, at any place. An entry counts when it
+ * parses again, beside those before it, to the copy id and folder the app answered, so a second Raycast's entry is left
+ * out as any duplicate is. Anything else is left out.
  */
 export function checkRepositoriesAnswer(value: unknown): RepositoryEntry[] {
     if (!Array.isArray(value)) return [];
     const entries: RepositoryEntry[] = [];
-    const added: ParsedRepository[] = [];
-    value.forEach((entry, index) => {
-        if (!isObject(entry) || typeof entry.on !== "boolean") return;
-        // Raycast's by its copy id (SPEC-160 point 10b), only in first place and with its folder; with none there, the
-        // first entry is an added one like any other.
-        if (entry.copyId === RAYCAST_COPY.copyId) {
-            if (index === 0 && entry.folder === RAYCAST_COPY.folder) entries.push({ ...RAYCAST_COPY, on: entry.on });
-            return;
-        }
+    for (const entry of value) {
+        if (!isObject(entry) || typeof entry.on !== "boolean") continue;
         if (typeof entry.address !== "string" || (entry.branch !== undefined && typeof entry.branch !== "string")) {
-            return;
+            continue;
         }
-        // Parsed with Raycast's listed, so Raycast's address among the added ones is left out, never a second copy of it.
-        const parsed = parseRepositoryAddress(entry.address, entry.branch, added);
-        if ("refused" in parsed || parsed.copyId !== entry.copyId || parsed.folder !== entry.folder) return;
-        added.push(parsed);
+        const parsed = parseRepositoryAddress(entry.address, entry.branch, entries);
+        if ("refused" in parsed || parsed.copyId !== entry.copyId || parsed.folder !== entry.folder) continue;
         entries.push({ ...parsed, on: entry.on });
-    });
+    }
     return entries;
 }

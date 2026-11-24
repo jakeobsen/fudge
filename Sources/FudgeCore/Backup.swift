@@ -16,12 +16,13 @@ public enum Backup {
     /// (D-52), the sign-in server and its consent, and the switch for extensions with their own sign-in and its
     /// consent, whose sign-ins are in this Mac's Keychain, and clipboard history's switch and consent, whose history
     /// and key are this Mac's only. Also the Command Line Tools' folder, a path on this Mac (SPEC-145 §1), and the
-    /// Extension Store's repositories and Raycast's switch among them (FUD-182): adding a repository is a choice to
-    /// trust its code, like turning the store on. This Mac's stay as they are.
+    /// Extension Store's list of repositories (`repositories`, FUD-182): adding a repository is a choice to trust its
+    /// code, like turning the store on. The keys that held the list before SPEC-176 (`extensionRepositories`,
+    /// `raycastRepository`) are kept out too, so an old backup never brings them back. This Mac's stay as they are.
     public static let consentKeys = [
         "extensionStore", "extensionStoreConsentAt", "signInServer", "signInServerConsentAt", "ownAppSignIn",
         "ownAppSignInConsentAt", "clipboardHistory", "clipboardHistoryConsentAt", "commandLineTools",
-        "extensionRepositories", "raycastRepository",
+        "repositories", "extensionRepositories", "raycastRepository",
     ]
     /// The consents themselves never go into a backup. The switch does, so an import can say the store was on.
     static let exportStrippedKeys = [

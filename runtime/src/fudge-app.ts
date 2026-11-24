@@ -159,9 +159,9 @@ export async function nextNotificationClick(): Promise<NotificationClick | null>
 // The Extension Store's repositories (FUD-182). Only the store may ask; the app refuses any other extension.
 
 /**
- * The list of repositories from Settings, as the app answers it: Raycast's official repository first, then each added
- * one, `{ copyId, folder, address, branch?, name, on }`. It comes as it is; the store checks it again with
- * `checkRepositoriesAnswer` (`repository-address.ts`) before using any of it.
+ * The list of repositories from Settings, as the app answers it: every repository in the list, Raycast's official one
+ * included, in the list's order, `{ copyId, folder, address, branch?, name, label?, on }`. It comes as it is; the store
+ * checks it again with `checkRepositoriesAnswer` (`repository-address.ts`) before using any of it.
  */
 export async function extensionRepositories(): Promise<unknown> {
     return await callApp("store.repositories");

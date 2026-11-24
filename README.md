@@ -199,20 +199,21 @@ In the **Extension Store** command, search the extensions, or pick a category in
 
 #### Extension repositories
 
-Besides Raycast's official repository, the Extension Store can list the extensions in repositories you add: any Git repository with an `extensions` folder holding one folder per extension, as Raycast's has.
+The Extension Store lists the extensions in the repositories in its list: any Git repository with an `extensions` folder holding one folder per extension, as Raycast's has.
 Add one under **Settings… → Extension Store → Extension Repositories**: click **Add Repository…**, type its address, such as `https://github.com/owner/repository`, a branch if it isn't the default one, and a name if you want one, then click **Add**.
 Only public `https://` addresses work, without a user name or password, and Fudge never asks for a password.
 The **Add Repository** window says that a repository's extensions run their own code on your Mac, like any app you install: only add one you trust.
-Raycast's official repository is in the list from the start, as `raycast`, and can be switched off or removed like any other; **Add Raycast's Repository** puts it back.
-Each repository has a switch, Raycast's official repository too; one that's off keeps its copy, but the Extension Store doesn't list or update its extensions.
+A new install's list starts with Raycast's official repository, named Raycast, and Fudge's own, named Fudge; each can be switched off or removed like any other, and **Add Raycast's Repository** or **Add Fudge's Repository** puts it back.
+If you used Fudge before, your list stays as it was, with Raycast's repository shown as `raycast/extensions`, and **Add Fudge's Repository** adds Fudge's.
+Each repository has a switch; one that's off keeps its copy, but the Extension Store doesn't list or update its extensions.
 Under each one is what the Extension Store last found there: how many extensions it lists, or what went wrong.
-The minus button removes a repository, Raycast's official repository too; the extensions you installed from it stay installed, but get no more updates.
+The minus button removes a repository; the extensions you installed from it stay installed, but get no more updates.
 They show under **Installed** as **Not updated**, as do those of a repository that's switched off, and ⌃X uninstalls them there.
 Each extension's details name the repository it's from, a row from a repository you added names it too, and with more than one repository on, the dropdown also filters by repository.
 An extension of the same name in two repositories can be installed from both: each is its own extension, with its own settings and data.
-When two installed extensions have the same name, Fudge shows where each one is from after its name: `raycast` for Raycast's official repository, a repository's name if you gave it one, else its `owner/repository`, and `development` for your own builds.
+When two installed extensions have the same name, Fudge shows where each one is from after its name: its repository's name if it has one, else its `owner/repository`, `development` for your own builds, and `Core` for the extensions that come with Fudge.
 To name a repository you've already added, or to change its name, remove it and add it again: its extensions stay installed and keep their settings, hotkeys and aliases.
-You can add up to 10, and `https://github.com/fudgeapp/development` can't be added, since Fudge keeps your own builds in that repository's folder.
+The list holds up to 12 repositories, and `https://github.com/fudgeapp/development` can't be added, since Fudge keeps your own builds in that repository's folder.
 Changes reach the Extension Store the next time you open it, or when you press ⌘R in it.
 
 ### Signing in

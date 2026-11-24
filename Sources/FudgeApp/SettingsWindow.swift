@@ -797,31 +797,28 @@ final class SettingsModel {
 
     // MARK: - Extension repositories (FUD-182)
 
-    /// Raycast's official repository's switch in the Extension Store's list, while it's there.
-    var raycastRepository: Bool { fudgeSettings.raycastRepository }
-    /// Whether Raycast's official repository is in the list, first.
-    var raycastRepositoryListed: Bool { fudgeSettings.raycastRepositoryListed }
-    /// **Add Raycast's Repository** under the list: only while Raycast's has been removed.
-    var showsAddRaycastRepository: Bool { fudgeSettings.showsAddRaycastRepository }
-    /// The added repositories, in the order added.
+    /// Every repository in the Extension Store's list, Raycast's official one included, in the list's order.
     var extensionRepositories: [ListedRepository] { fudgeSettings.extensionRepositories }
+    /// The add buttons under the list (`RepositoryButton.all`), each with what the page shows for it.
+    var repositoryButtons: [(button: RepositoryButton, state: RepositoryButton.State)] {
+        RepositoryButton.all.map { ($0, $0.state(in: extensionRepositories)) }
+    }
     /// Each copy's status, by copy id, read when the page appears and when the window becomes key.
     private(set) var repositoryStatuses: [String: ExtensionRepositoryStatus] = [:]
     /// A snapshot run's **Add Repository** window, drawn in the page, since it never begins a sheet
     /// (`--add-repository`).
     var snapshotAddRepository: ExtensionRepositoryDraft?
 
-    /// Reads each copy's status file again: Raycast's and every added repository's.
+    /// Reads each listed repository's copy's status file again.
     func loadRepositoryStatuses() {
-        let copyIds = [ExtensionRepository.raycastCopyId] + extensionRepositories.map(\.repository.copyId)
         repositoryStatuses = Dictionary(
-            uniqueKeysWithValues: copyIds.map {
-                ($0, ExtensionRepositoryStatus.read(ExtensionStore.statusFile(copyId: $0, paths)))
-            })
-    }
-
-    func setRaycastRepository(_ on: Bool) {
-        change { $0.raycastRepository = on }
+            extensionRepositories.map {
+                (
+                    $0.repository.copyId,
+                    ExtensionRepositoryStatus.read(ExtensionStore.statusFile(copyId: $0.repository.copyId, paths))
+                )
+            },
+            uniquingKeysWith: { first, _ in first })
     }
 
     func setRepository(_ copyId: String, on: Bool) {
@@ -832,15 +829,11 @@ final class SettingsModel {
         }
     }
 
-    /// The **Add Repository** window's Add: `draft` is checked against the list and Raycast's place as they are now,
-    /// in `settings.json`. A refusal, or a save that fails, stays in the draft as its reason, and the window stays
-    /// open; an accepted one is saved on, and the statuses are read again. Returns whether the window can close.
+    /// The **Add Repository** window's Add: `draft` is checked against the list as it is now, in `settings.json`. A
+    /// refusal, or a save that fails, stays in the draft as its reason, and the window stays open; an accepted one is
+    /// saved on, and the statuses are read again. Returns whether the window can close.
     func addRepository(_ draft: inout ExtensionRepositoryDraft) -> Bool {
-        let settings = readSettings()
-        guard
-            let added = draft.add(
-                existing: settings.extensionRepositories, raycastListed: settings.raycastRepositoryListed)
-        else { return false }
+        guard let added = draft.add(existing: readSettings().extensionRepositories) else { return false }
         guard change({ $0.addRepository(added) }) else {
             draft.saveFailed(settingsProblem ?? unreadableMessage)
             return false
@@ -850,42 +843,39 @@ final class SettingsModel {
         return true
     }
 
-    /// **Add Raycast's Repository**: Raycast's official repository back in the list, first and on, with no window,
-    /// since it's the repository the list starts with.
-    func addRaycastRepository() {
-        guard change({ $0.restoreRaycastRepository() }) else { return }
+    /// An add button (`RepositoryButton`): its repository, on, with its name, at the end of the list in
+    /// `settings.json` at this moment, with no window; the add window's checks refuse as they would there, and then
+    /// nothing is saved.
+    func addRepository(button: RepositoryButton) {
+        guard case .success(let added) = button.entry(beside: readSettings().extensionRepositories),
+            change({ $0.addRepository(added) })
+        else { return }
         loadRepositoryStatuses()
         repositoryNamesChanged()
     }
 
-    /// The minus button: asks first, then takes the repository out of `settings.json`, Raycast's official one too. The
-    /// Extension Store deletes its copy the next time it opens, and what was installed from it stays.
+    /// The minus button: asks first, then takes the repository out of `settings.json`, the same for every repository.
+    /// The Extension Store deletes its copy the next time it opens, and what was installed from it stays.
     func removeRepository(_ copyId: String) {
-        let raycast = copyId == ExtensionRepository.raycastCopyId
-        guard
-            let name = raycast
-                ? (raycastRepositoryListed ? ExtensionRepositoryText.raycastLabel : nil)
-                : extensionRepositories.first(where: { $0.repository.copyId == copyId }).map(
-                    ExtensionRepositoryText.rowName)
-        else { return }
+        guard let listed = extensionRepositories.first(where: { $0.repository.copyId == copyId }) else { return }
         Task {
-            guard await confirm(Self.removeRequest(name: name, raycast: raycast)) else { return }
+            guard
+                await confirm(
+                    Self.removeRequest(
+                        name: ExtensionRepositoryText.rowName(listed),
+                        message: ExtensionRepositoryText.removeMessage(for: listed.repository)))
+            else { return }
             let removed = change { settings in
-                if raycast {
-                    settings.removeRaycastRepository()
-                } else {
-                    settings.extensionRepositories.removeAll { $0.repository.copyId == copyId }
-                }
+                settings.extensionRepositories.removeAll { $0.repository.copyId == copyId }
             }
             loadRepositoryStatuses()
             if removed { repositoryNamesChanged() }
         }
     }
 
-    static func removeRequest(name: String, raycast: Bool) -> LauncherModel.AlertRequest {
+    static func removeRequest(name: String, message: String) -> LauncherModel.AlertRequest {
         LauncherModel.AlertRequest(
-            title: ExtensionRepositoryText.removeTitle(name),
-            message: ExtensionRepositoryText.removeMessage(raycast: raycast),
+            title: ExtensionRepositoryText.removeTitle(name), message: message,
             primary: ExtensionRepositoryText.remove, dismiss: ExtensionRepositoryText.cancel, destructive: true)
     }
 

@@ -97,13 +97,15 @@ func everyRecordableKeyRoundTrips(text: String, keyCode: UInt32) throws {
     #expect(FudgeSettings.load(from: file).commandHotkeys == ["scratch/scratch-folders": HotKeySpec.parse("option+s")!])
 
     // Defaults aren't written, and an entry left empty goes away. A command's Enabled is the user's choice when it's
-    // set, true included (SPEC-109), so only an unset one is a default.
+    // set, true included (SPEC-109), so only an unset one is a default. The list of repositories is written at every
+    // save (SPEC-176).
     settings.commands["scratch/scratch-folders"] = .init()
     settings.commands["scratch/create-scratch"] = .init()
     settings.extensions[nextTask] = .init()
     try settings.save(to: file)
     let object = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
-    #expect(object.keys.sorted() == ["hotkey"])
+    #expect(object.keys.sorted() == ["hotkey", "repositories"])
+    #expect(object["repositories"] as? [[String: String]] == [["address": "https://github.com/raycast/extensions"]])
 }
 
 /// SPEC-143: a command named as Raycast accepts it keeps its hotkey, alias and Enabled under its own case.
